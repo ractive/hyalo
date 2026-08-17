@@ -448,6 +448,14 @@ const LINK_INFO_FULL_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\" [\(.la
 /// - a `[label]` suffix is appended when present.
 const LINK_INFO_ANCHORED_FILTER: &str = r#""  \"\(.target)#\(.fragment)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)""#;
 
+/// `LinkInfo` whose target resolves above the vault root (iter-193).
+///
+/// One filter for every out-of-vault shape: `path` is always absent, while
+/// `fragment` and `label` are optional and read as `null` when missing.
+/// Renders `(out of vault)` rather than `(unresolved)` so a target that is
+/// merely out of scope never reads as a broken link.
+const LINK_INFO_OUT_OF_VAULT_FILTER: &str = r##""  \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\" (out of vault)\(if .label then " [\(.label)]" else "" end)""##;
+
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 
@@ -473,7 +481,7 @@ const TASK_DRY_RUN_RESULT_FILTER: &str =
 
 /// `VaultSummary`: `{dir, dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
 /// Compact single-line-per-section format (~20-30 lines regardless of vault size).
-const VAULT_SUMMARY_FILTER: &str = r#""kb dir: \(.dir)\nFiles: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+const VAULT_SUMMARY_FILTER: &str = r#""kb dir: \(.dir)\nFiles: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\(if .links.out_of_vault > 0 then ", \(.links.out_of_vault) out of vault" else "" end)\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -520,7 +528,7 @@ const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No 
 /// count (fixes whose on-disk text no longer matched the plan) gets its own
 /// section so a stale or partially-applied run is never silently reported as
 /// fully applied.
-const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.fuzzy_fixes | length) > 0 then "\nFuzzy matches (low-confidence, \(if .fuzzy_applied then "applied" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [fuzzy \((.confidence * 1000 | floor) / 1000)]") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)""#;
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .out_of_vault > 0 then "\nOut of vault (target above vault root): \(.out_of_vault)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.fuzzy_fixes | length) > 0 then "\nFuzzy matches (low-confidence, \(if .fuzzy_applied then "applied" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [fuzzy \((.confidence * 1000 | floor) / 1000)]") | join("\n"))" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [link-case-mismatch]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)""#;
 
 /// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, files_applied, files_failed, files_skipped, matches, scanned, total}`
 /// Format: summary line + per-match details.
@@ -576,6 +584,12 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         | "fragment,label,path,target"
         | "broken_anchor,fragment,path,target"
         | "broken_anchor,fragment,label,path,target" => Some(LINK_INFO_ANCHORED_FILTER),
+        // LinkInfo whose target escapes the vault root (iter-193). `path` is
+        // never present; `fragment` / `label` are optional.
+        "out_of_vault,target"
+        | "label,out_of_vault,target"
+        | "fragment,out_of_vault,target"
+        | "fragment,label,out_of_vault,target" => Some(LINK_INFO_OUT_OF_VAULT_FILTER),
         // TaskCount
         "done,total" => Some(TASK_COUNT_FILTER),
         // OutlineSection (with and without tasks)
@@ -609,7 +623,7 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)
-        "ambiguous,ambiguous_links,applied,applied_fixes,broken,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_fixes,fuzzy_min_confidence,ignored,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
+        "ambiguous,ambiguous_links,applied,applied_fixes,broken,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_fixes,fuzzy_min_confidence,ignored,out_of_vault,out_of_vault_links,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
         // LinksAuto result (iter-187 adds per-file apply outcome fields for L-11)
@@ -874,7 +888,7 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
     // with LINK_INFO_ANCHORED_FILTER, which renders the standalone shape.
     if map.contains_key("links") {
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else (if .out_of_vault then " (out of vault)" else " (unresolved)" end) end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 

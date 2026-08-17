@@ -85,6 +85,12 @@ pub struct LinkInfo {
     /// links keep today's shape.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub broken_anchor: bool,
+    /// `true` when the link's target normalizes to a path *above* the vault
+    /// root, so it can never resolve to a scanned file. Implies `path: None`,
+    /// but is deliberately distinguished from a broken target: the file is out
+    /// of scope, not missing (iter-193). Skipped from JSON when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub out_of_vault: bool,
 }
 
 /// A single backlink: another file that links to this one.
@@ -196,6 +202,18 @@ pub struct VaultSummary {
 pub struct LinkHealthSummary {
     pub total: usize,
     pub broken: usize,
+    /// Links pointing above the scanned vault root (`../..` escapes). Kept out
+    /// of `broken` because the target is out of scope rather than missing
+    /// (iter-193). Omitted from JSON when zero so vaults with no such links
+    /// keep the previous output shape.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub out_of_vault: usize,
+}
+
+/// Serde helper: skip a `usize` field when it is zero.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// File counts by directory.

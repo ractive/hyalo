@@ -757,12 +757,22 @@ pub fn find(
                             }
                             _ => false,
                         };
+                        // iter-193: a target that walks above the vault root
+                        // is out of scope, not broken — flag it so
+                        // `--broken-links` can leave it out of the headline.
+                        let out_of_vault = path.is_none()
+                            && discovery::link_target_escapes_vault(
+                                &entry.rel_path,
+                                link.kind,
+                                &link.target,
+                            );
                         LinkInfo {
                             target: link.target.clone(),
                             path,
                             label: link.label.clone(),
                             fragment: link.fragment.clone(),
                             broken_anchor,
+                            out_of_vault,
                         }
                     })
                     .collect::<Vec<_>>(),
@@ -870,7 +880,7 @@ pub fn find(
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .any(|l| l.path.is_none() || l.broken_anchor);
+                .any(|l| (l.path.is_none() && !l.out_of_vault) || l.broken_anchor);
             if !has_broken {
                 continue;
             }

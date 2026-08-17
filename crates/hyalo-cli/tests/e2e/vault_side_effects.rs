@@ -240,3 +240,121 @@ fn create_index_sweeps_orphaned_case_probe_files() {
         "the sweep must not touch real vault files"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Out-of-vault link targets (iteration 193, part C)
+// ---------------------------------------------------------------------------
+
+/// A vault whose `sub/note.md` links both above the vault root (out of scope)
+/// and to a missing in-vault file (genuinely broken).
+fn out_of_vault_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "sub/note.md",
+        md!(r"
+---
+title: Note
+---
+Escapes the vault: [contributing](../../CONTRIBUTING.md).
+Missing in-vault file: [gone](../gone.md).
+"),
+    );
+    tmp
+}
+
+#[test]
+fn out_of_vault_links_are_reported_separately_from_broken() {
+    let tmp = out_of_vault_vault();
+    let dir = tmp.path().to_str().expect("temp path should be UTF-8");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "links", "--format", "json"])
+        .output()
+        .expect("hyalo links should run");
+    assert!(
+        output.status.success(),
+        "links failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("links output should be JSON");
+    let results = json.get("results").unwrap_or(&json);
+
+    assert_eq!(
+        results["out_of_vault"].as_u64(),
+        Some(1),
+        "the ../../ target belongs in out_of_vault: {results}"
+    );
+    assert_eq!(
+        results["broken"].as_u64(),
+        Some(1),
+        "only the in-vault miss counts as broken: {results}"
+    );
+    let listed = results["out_of_vault_links"]
+        .as_array()
+        .expect("out_of_vault_links should be an array");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["target"].as_str(), Some("../../CONTRIBUTING.md"));
+}
+
+#[test]
+fn summary_keeps_out_of_vault_out_of_the_broken_count() {
+    let tmp = out_of_vault_vault();
+    let dir = tmp.path().to_str().expect("temp path should be UTF-8");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "summary", "--format", "json"])
+        .output()
+        .expect("hyalo summary should run");
+    assert!(output.status.success(), "summary failed");
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("summary output should be JSON");
+    let links = &json.get("results").unwrap_or(&json)["links"];
+
+    assert_eq!(links["broken"].as_u64(), Some(1), "links: {links}");
+    assert_eq!(links["out_of_vault"].as_u64(), Some(1), "links: {links}");
+}
+
+#[test]
+fn find_broken_links_skips_files_whose_only_miss_is_out_of_vault() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "sub/only-escape.md",
+        md!(r"
+---
+title: Only Escape
+---
+[contributing](../../CONTRIBUTING.md)
+"),
+    );
+    write_md(
+        tmp.path(),
+        "sub/real-break.md",
+        md!(r"
+---
+title: Real Break
+---
+[gone](../gone.md)
+"),
+    );
+    let dir = tmp.path().to_str().expect("temp path should be UTF-8");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--broken-links", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert!(output.status.success(), "find failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("real-break.md"),
+        "a genuine in-vault miss must still be reported: {stdout}"
+    );
+    assert!(
+        !stdout.contains("only-escape.md"),
+        "a file whose only unresolved link escapes the vault must not be \
+         reported as broken: {stdout}"
+    );
+}

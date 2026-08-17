@@ -353,6 +353,8 @@ pub fn summary(
         LinkHealthSummary {
             total: report.total_links,
             broken: report.broken.len() + report.ambiguous.len(),
+            // Targets above the vault root are out of scope, not broken.
+            out_of_vault: report.out_of_vault.len(),
         }
     };
 
