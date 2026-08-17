@@ -725,7 +725,11 @@ mod tests {
         let before = probe_count();
         let first = probe_case_insensitive_cached(dir);
         let after_first = probe_count();
-        assert_eq!(after_first, before + 1, "first call should probe exactly once");
+        assert_eq!(
+            after_first,
+            before + 1,
+            "first call should probe exactly once"
+        );
 
         // Repeat the way a command's several `mode_enabled` call sites would.
         for _ in 0..7 {
