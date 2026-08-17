@@ -11,6 +11,16 @@ and this project adheres to
 
 ### Added
 
+- **Out-of-vault link targets are reported separately from broken ones**
+  (iter-193). A relative link whose target normalizes to a path *above* the
+  scanned vault root (`../../CONTRIBUTING.md`) cannot resolve to a scanned file
+  no matter what — it is out of scope, not missing. `hyalo links` now reports
+  it under `out_of_vault` / `out_of_vault_links`, `hyalo summary` counts it as
+  `links.out_of_vault` (omitted when zero), `hyalo find` flags the link with
+  `out_of_vault: true`, and `find --broken-links` no longer surfaces a file
+  whose only unresolved link escapes the vault. Site-absolute targets
+  (`/src/foo.md`) deliberately stay in `broken`: a vault that *is* the site root
+  makes those genuine misses.
 - **`list` / `summary` verb aliases across every subcommand group** (iter-192).
   `properties` and `tags` used `summary`; `types`, `views`, and `lint-rules`
   used `list`. Each group now accepts both spellings, so the verb learned in one
@@ -25,6 +35,23 @@ and this project adheres to
 
 ### Changed
 
+- **Read-only commands no longer write into the vault** (iter-193). With the
+  default `[links] case_insensitive = "auto"`, hyalo detected the filesystem's
+  case behaviour by creating and deleting a `.hyalo-case-probe-*` file in the
+  vault root — uncached, at seven call sites, so `hyalo find --count` bumped the
+  vault directory's mtime. Detection is now stat-only (an existing entry, or the
+  vault directory itself, looked up under a case-flipped name) and memoized once
+  per run. The write-based probe survives only for a vault that offers no
+  candidate at all, and `create-index` sweeps orphaned probe files older than a
+  minute. A side effect of the change: a **read-only vault that contains files
+  now resolves case-insensitive links correctly** instead of silently falling
+  back to case-sensitive resolution. See `docs/configuration.md`.
+- **`mdbook-lint-core` / `mdbook-lint-rulesets` bumped 0.14 to 0.15** (iter-193).
+  Upstream dropped its unused `mdbook` dependency, taking hyalo's normal
+  dependency tree from 168 to 135 crates and a clean release build from 121 s to
+  112 s. No source changes were required. The scoped MPL-2.0 license exception
+  in `deny.toml` existed only for `mdbook` and is gone, so `cargo deny check`
+  now passes with zero license exceptions.
 - **`hyalo config --format json` now uses the standard envelope** (iter-192) —
   **breaking for JSON consumers**. The settings moved from the document root
   into `results`, and the config's own on/off switch is reported as

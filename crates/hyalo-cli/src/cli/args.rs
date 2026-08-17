@@ -353,7 +353,9 @@ pub(crate) struct FindFilters {
     #[arg(short = 'n', long, value_parser = parse_limit)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
-    /// Only return files with at least one unresolved link (auto-includes links field)
+    /// Only return files with at least one unresolved link (auto-includes links field).
+    /// Targets that resolve above the vault root are out of scope, not broken: they are
+    /// flagged `out_of_vault` on the link and do not qualify a file here
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
@@ -1083,6 +1085,10 @@ Repeatable (AND).\n\
             reports applied_fixes (fixes actually written to disk) plus \
             unapplied/unapplied_fixes for plans whose on-disk text no longer \
             matched — only applied_fixes were durably written.\n\
+            OUT OF VAULT: a target that normalizes above the vault root \
+            (../../CONTRIBUTING.md) can never resolve to a scanned file, so it is \
+            counted under out_of_vault / out_of_vault_links instead of broken and is \
+            never offered a fix. Site-absolute targets (/src/foo.md) stay in broken.\n\
             SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
