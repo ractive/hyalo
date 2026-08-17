@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 198 — --no-first-only counter-flag for links auto
 date: 2026-08-17
-status: planned
+status: in-progress
 tags:
   - iteration
   - links
@@ -25,11 +25,9 @@ without editing `.hyalo.toml`. It was out of iter-195a's fixed three-key
 scope. The decision log's own text: "File a backlog item if a real user hits
 it" — i.e. this was NOT judged urgent; it was deferred pending real demand.
 
-**This is a NEW plan filed by the iter-195a review/merge sweep on
-2026-08-18, not yet scoped or committed to.** Re-check whether a real user
-has actually hit this gap before implementing — DEC-067 judged the existing
-workarounds (narrower `--file`/`--glob` scope, or a temporary config edit)
-adequate absent evidence otherwise.
+**Filed by the iter-195a review/merge sweep on 2026-08-18 with the
+re-evaluation gate below as its first task.** That gate has since concluded
+**proceed** — see "Re-evaluation outcome" and [[decision-log#DEC-068]].
 
 ## Context
 
@@ -48,19 +46,42 @@ adequate absent evidence otherwise.
 
 ## Tasks
 
-- [ ] Re-evaluate demand: has any user actually hit this gap since iter-195a
+- [x] Re-evaluate demand: has any user actually hit this gap since iter-195a
       shipped? If not, consider `wont-do` with evidence.
-- [ ] If proceeding: design the flag (`--no-first-only`, or a tri-state
+- [x] If proceeding: design the flag (`--no-first-only`, or a tri-state
       `--first-only=<true|false>`) and its precedence over
       `[links.auto] first_only`.
-- [ ] Unit tests for the new override in `AutoFilters::effective_first_only`
+- [x] Unit tests for the new override in `AutoFilters::effective_first_only`
       (or its replacement).
-- [ ] e2e coverage.
-- [ ] Docs: `links auto --help`, `docs/configuration.md`.
+- [x] e2e coverage.
+- [x] Docs: `links auto --help`, `docs/configuration.md`.
+
+## Re-evaluation outcome (2026-08-18): PROCEED
+
+No external user report surfaced since iter-195a shipped. The evidence that
+tipped it was internal instead: `warn_common_titles` — the other boolean in
+`[links.auto]` — already has `--no-warn-common-titles`, leaving `first_only`
+the only setting in the section a single run cannot opt out of. Both
+documented workarounds are poor substitutes: narrowing `--file`/`--glob`
+changes *what is scanned* rather than *how it is linked*, and a temporary
+`.hyalo.toml` edit mutates shared vault state that a killed run leaves behind.
+The change is ~10 lines of merge logic on an existing flag surface, so the
+cost side of "defer pending demand" was near zero. Recorded as
+[[decision-log#DEC-068]].
 
 ## Acceptance criteria
 
-- [ ] TBD once the re-evaluation task above concludes proceed vs. wont-do.
+- [x] `hyalo links auto --no-first-only` links every mention in a vault whose
+      `.hyalo.toml` sets `[links.auto] first_only = true`, dry-run and
+      `--apply` alike.
+- [x] `--no-first-only` is a no-op when `first_only` is not enabled.
+- [x] `--first-only --no-first-only` together is a clap conflict error, not a
+      silent precedence rule; `effective_first_only` still tie-breaks to off.
+- [x] Unit tests cover all `--no-first-only` × config combinations; e2e tests
+      cover override, `--apply`, no-op, and conflict.
+- [x] `links auto --help`, the COMMAND REFERENCE synopsis, `docs/configuration.md`,
+      `CHANGELOG.md`, and the bundled knowledgebase rule template all describe
+      the flag.
 
 ## Non-goals
 

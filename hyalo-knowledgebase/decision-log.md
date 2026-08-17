@@ -1203,3 +1203,37 @@ with `first_only = true` could get an all-mentions run without editing
 three keys and no new flags), and the workaround — `hyalo links auto` on a
 narrower `--file`/`--glob` scope, or a temporary config edit — is adequate.
 File a backlog item if a real user hits it.
+
+## DEC-068: `links auto --no-first-only` ships as a conflicting counter-flag (2026-08-18)
+
+**Decision:** `hyalo links auto` gains `--no-first-only`. It forces
+first-mention-only **off** for a single run, overriding
+`[links.auto] first_only = true`, and clap rejects it alongside `--first-only`
+(`conflicts_with`). `AutoFilters::effective_first_only` becomes
+`if cli_no_first_only { false } else { cli_first_only || config_first_only }`.
+No other `[links.auto]` key gets a counter-flag.
+
+**Why:** [[iterations/iteration-195a-auto-link-config-exclusions]] made
+`first_only` persistable, and [[decision-log#DEC-067]] deferred the counter-flag
+"pending a real user hitting it". The re-evaluation this iteration opened with
+found no external report — but it did find an internal inconsistency that is
+evidence enough on its own: `warn_common_titles`, the other boolean key in the
+section, already has `--no-warn-common-titles`. `first_only` was the only
+`[links.auto]` setting a run could not opt out of, and the documented
+workarounds are both bad — narrowing `--file`/`--glob` changes *what is
+scanned*, not *how it is linked* (a different result, not the same result on a
+smaller set), and editing `.hyalo.toml` for one run is a mutation of shared
+vault state that a killed process leaves behind. The implementation is ~10
+lines of merge logic on an existing flag surface, so the cost side of "defer
+pending demand" was near zero.
+
+**Why conflict rather than precedence:** `--first-only --no-first-only` on one
+command line has no defensible meaning. Silently letting one win makes a typo
+in a scripted invocation produce a quietly different vault; a clap error makes
+it a build failure. `effective_first_only` still tie-breaks to *off* if the
+pair somehow reaches it, so no non-CLI caller can get a surprise first-only
+run.
+
+**Not done:** counter-flags for `exclude_titles` / `exclude_target_globs`. They
+are unioned lists, so "ignore the config's list for this run" is a different
+and larger question (partial vs. total override) with no demand behind it.
