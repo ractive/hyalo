@@ -17,8 +17,8 @@ serde_json = { workspace = true }
 hyalo-core = { workspace = true }
 
 # Markdown linting engine
-mdbook-lint-core = "0.14"
-mdbook-lint-rulesets = { version = "0.14", default-features = false, features = ["standard"] }
+mdbook-lint-core = "0.15"
+mdbook-lint-rulesets = { version = "0.15", default-features = false, features = ["standard"] }
 comrak = "0.21"
 
 [dev-dependencies]

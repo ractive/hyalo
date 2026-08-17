@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Mode for case-insensitive link resolution fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -177,7 +179,195 @@ impl CaseInsensitiveIndex {
     }
 }
 
+/// Filename prefix used by the write-based fallback probe.
+///
+/// Public so callers can sweep orphaned probe files (see
+/// [`sweep_stale_case_probes`]) without duplicating the literal.
+pub const CASE_PROBE_PREFIX: &str = ".hyalo-case-probe-";
+
+/// Number of times a filesystem probe actually ran in this process.
+///
+/// Incremented by [`probe_case_insensitive_cached`] only on a cache miss, so a
+/// test can assert that a whole command invocation resolves the mode at most
+/// once. Not part of the public API surface on purpose.
+static PROBE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Per-process memo of resolved case sensitivity, keyed by canonical vault dir.
+static PROBE_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+
+/// How many filesystem probes this process has actually performed.
+///
+/// Exposed for tests and diagnostics; the count only grows on cache misses.
+#[must_use]
+pub fn probe_count() -> usize {
+    PROBE_COUNT.load(Ordering::Relaxed)
+}
+
+/// Flip the ASCII case of every ASCII letter in `name`.
+///
+/// Returns `None` when `name` has no ASCII letters — such a name cannot
+/// distinguish a case-sensitive filesystem from a case-insensitive one.
+/// Deliberately ASCII-only: non-ASCII case folding differs between
+/// filesystems (and between Unicode versions), so a flipped non-ASCII name is
+/// not a reliable probe.
+fn flip_ascii_case(name: &str) -> Option<String> {
+    if !name.bytes().any(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(
+        name.chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() {
+                    c.to_ascii_uppercase()
+                } else if c.is_ascii_uppercase() {
+                    c.to_ascii_lowercase()
+                } else {
+                    c
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Whether two stat results describe the same filesystem object.
+#[cfg(unix)]
+fn same_object(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Whether two stat results describe the same filesystem object.
+///
+/// Windows has no cheap stat-level inode, so this compares the observable
+/// attributes instead. A false positive would require two same-case-folded
+/// names in one directory (only possible with per-directory case sensitivity
+/// enabled) that also agree on type, size and both timestamps.
+#[cfg(not(unix))]
+fn same_object(a: &std::fs::Metadata, b: &std::fs::Metadata) -> bool {
+    a.is_dir() == b.is_dir()
+        && a.is_file() == b.is_file()
+        && a.is_symlink() == b.is_symlink()
+        && a.len() == b.len()
+        && a.modified().ok() == b.modified().ok()
+        && a.created().ok() == b.created().ok()
+}
+
+/// Stat-only probe against one existing path.
+///
+/// Returns `Some(true)` when the case-flipped sibling name resolves to the
+/// very same object (case-insensitive filesystem), `Some(false)` when the
+/// flipped name is absent or resolves to a *different* object
+/// (case-sensitive filesystem), and `None` when `path` is unusable as a probe
+/// candidate (no ASCII letters, non-UTF-8 name, no parent, vanished).
+fn probe_via_existing_path(path: &Path) -> Option<bool> {
+    let name = path.file_name()?.to_str()?;
+    let flipped = flip_ascii_case(name)?;
+    let flipped_path = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(&flipped),
+        _ => PathBuf::from(&flipped),
+    };
+
+    let Ok(flipped_meta) = std::fs::symlink_metadata(&flipped_path) else {
+        // Flipped name does not exist → the filesystem distinguishes case.
+        return Some(false);
+    };
+    let real_meta = std::fs::symlink_metadata(path).ok()?;
+    Some(same_object(&real_meta, &flipped_meta))
+}
+
+/// Probe the filesystem under `dir` for case-insensitive behavior **without
+/// writing anything**.
+///
+/// Tries, in order:
+///
+/// 1. The first directory entry of `dir` whose name contains an ASCII letter —
+///    this measures `dir`'s own semantics, which matters on Windows where
+///    case sensitivity can be set per directory.
+/// 2. `dir` itself, looked up under a case-flipped final component.
+///
+/// Returns `None` when neither candidate exists (an empty vault whose own
+/// path has no ASCII letters, or an unreadable directory), leaving the caller
+/// to fall back to [`probe_case_insensitive`].
+pub fn probe_case_insensitive_stat(dir: &Path) -> Option<bool> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Never probe with our own leftovers: an orphaned probe file would
+            // make the answer depend on a previous run's crash.
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(CASE_PROBE_PREFIX))
+            {
+                continue;
+            }
+            if let Some(result) = probe_via_existing_path(&path) {
+                return Some(result);
+            }
+        }
+    }
+
+    if let Some(result) = probe_via_existing_path(dir) {
+        return Some(result);
+    }
+    // A relative path such as `.` has no usable final component; retry against
+    // its absolute form before giving up.
+    let canonical = std::fs::canonicalize(dir).ok()?;
+    probe_via_existing_path(&canonical)
+}
+
+/// Remove orphaned `.hyalo-case-probe-*` files left in `dir` by a fallback
+/// probe that was killed between creating and deleting its probe file.
+///
+/// Only files older than 60 seconds are removed, so a probe running
+/// concurrently in another process is never yanked out from under it. Errors
+/// are ignored — this is a best-effort sweep. Returns the number of files
+/// removed.
+pub fn sweep_stale_case_probes(dir: &Path) -> usize {
+    sweep_case_probes_older_than(dir, std::time::Duration::from_mins(1))
+}
+
+/// Implementation of [`sweep_stale_case_probes`] with the age threshold
+/// injected, so tests can exercise the sweep without waiting a minute.
+fn sweep_case_probes_older_than(dir: &Path, min_age: std::time::Duration) -> usize {
+    use std::time::SystemTime;
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // A case-insensitive filesystem may surface the probe under either
+        // casing, so match without regard to case.
+        if !name.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let old_enough = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age >= min_age);
+        if old_enough && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Probe the filesystem under `dir` for case-insensitive behavior.
+///
+/// **Write-based fallback probe.** Prefer [`probe_case_insensitive_stat`],
+/// which answers the same question with stat calls only; this variant is used
+/// when the vault holds no usable probe candidate.
 ///
 /// Creates a temporary file with a lowercase-only name, then stat's its
 /// uppercase variant. Returns `Ok(true)` if the filesystem is
@@ -206,7 +396,7 @@ pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
             attempt
         );
 
-        let lower_name = format!(".hyalo-case-probe-{suffix}");
+        let lower_name = format!("{CASE_PROBE_PREFIX}{suffix}");
         let upper_name = lower_name.to_ascii_uppercase();
 
         let lower_path = dir.join(&lower_name);
@@ -241,16 +431,52 @@ pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
     Ok(false)
 }
 
+/// Resolve case sensitivity for `dir`, probing at most once per process.
+///
+/// The result is memoized in a process-global map keyed by the canonical form
+/// of `dir` (falling back to the path as given when it cannot be
+/// canonicalized), so the several `mode_enabled` call sites in a single
+/// command invocation share one answer — and one probe.
+///
+/// The probe itself is stat-only ([`probe_case_insensitive_stat`]) whenever
+/// the vault contains any usable candidate; the write-based
+/// [`probe_case_insensitive`] runs only for a vault that offers none.
+pub fn probe_case_insensitive_cached(dir: &Path) -> bool {
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let cache = PROBE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(map) = cache.lock()
+        && let Some(&cached) = map.get(&key)
+    {
+        return cached;
+    }
+
+    PROBE_COUNT.fetch_add(1, Ordering::Relaxed);
+    let resolved = match probe_case_insensitive_stat(dir) {
+        Some(result) => result,
+        None => probe_case_insensitive(dir).unwrap_or(false),
+    };
+
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, resolved);
+    }
+    resolved
+}
+
 /// Resolve a `CaseInsensitiveMode` to a concrete `bool` given a directory.
 ///
 /// - `Off` → always `false`.
 /// - `On` → always `true`.
-/// - `Auto` → runs [`probe_case_insensitive`]; falls back to `false` on error.
+/// - `Auto` → runs [`probe_case_insensitive_cached`]; falls back to `false`
+///   when the filesystem cannot be probed at all (for example a read-only
+///   mount holding an empty vault). That fallback means case-insensitive link
+///   resolution silently turns **off**; set `[links] case_insensitive = "true"`
+///   to force it on.
 pub fn mode_enabled(mode: CaseInsensitiveMode, dir: &Path) -> bool {
     match mode {
         CaseInsensitiveMode::Off => false,
         CaseInsensitiveMode::On => true,
-        CaseInsensitiveMode::Auto => probe_case_insensitive(dir).unwrap_or(false),
+        CaseInsensitiveMode::Auto => probe_case_insensitive_cached(dir),
     }
 }
 
@@ -410,5 +636,138 @@ mod tests {
         let dir = tmp.path();
         assert!(!mode_enabled(CaseInsensitiveMode::Off, dir));
         assert!(mode_enabled(CaseInsensitiveMode::On, dir));
+    }
+
+    // ---- Stat-only probe ----
+
+    #[test]
+    fn flip_ascii_case_flips_letters_only() {
+        assert_eq!(flip_ascii_case("Foo.md").as_deref(), Some("fOO.MD"));
+        assert_eq!(flip_ascii_case("a1-B").as_deref(), Some("A1-b"));
+        // No ASCII letters → unusable as a probe candidate.
+        assert!(flip_ascii_case("1234").is_none());
+        assert!(flip_ascii_case("").is_none());
+        assert!(flip_ascii_case("日本語").is_none());
+    }
+
+    #[test]
+    fn stat_probe_agrees_with_write_probe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("Note.md"), "x").unwrap();
+
+        let stat = probe_case_insensitive_stat(dir).expect("candidate file exists");
+        let write = probe_case_insensitive(dir).unwrap();
+        assert_eq!(
+            stat, write,
+            "stat-only probe disagreed with the write-based probe"
+        );
+    }
+
+    #[test]
+    fn stat_probe_writes_nothing_into_the_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("Note.md"), "x").unwrap();
+
+        let before: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let _ = probe_case_insensitive_stat(dir);
+        let after: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(before, after, "stat-only probe created or removed a file");
+    }
+
+    #[test]
+    fn stat_probe_ignores_orphaned_probe_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // Only candidate is an orphaned probe file; it must be skipped, so the
+        // answer comes from the vault dir itself (still `Some`).
+        std::fs::write(dir.join(format!("{CASE_PROBE_PREFIX}deadbeef")), "x").unwrap();
+        assert!(probe_case_insensitive_stat(dir).is_some());
+    }
+
+    #[test]
+    fn stat_probe_handles_empty_vault_via_dir_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Vault");
+        std::fs::create_dir(&dir).unwrap();
+        // Empty vault: no entry candidate, but the dir's own name works.
+        assert!(probe_case_insensitive_stat(&dir).is_some());
+    }
+
+    #[test]
+    fn stat_probe_detects_distinct_case_variants() {
+        // When both casings exist as *different* files, the filesystem is
+        // necessarily case-sensitive. On a case-insensitive filesystem the
+        // second write just overwrites the first, so the setup is skipped.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.md"), "one").unwrap();
+        std::fs::write(dir.join("A.MD"), "two").unwrap();
+        if std::fs::read_to_string(dir.join("a.md")).unwrap() != "one" {
+            return; // case-insensitive filesystem — nothing to assert here
+        }
+        assert_eq!(probe_case_insensitive_stat(dir), Some(false));
+    }
+
+    #[test]
+    fn cached_probe_runs_at_most_once_per_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("Note.md"), "x").unwrap();
+
+        let before = probe_count();
+        let first = probe_case_insensitive_cached(dir);
+        let after_first = probe_count();
+        assert_eq!(
+            after_first,
+            before + 1,
+            "first call should probe exactly once"
+        );
+
+        // Repeat the way a command's several `mode_enabled` call sites would.
+        for _ in 0..7 {
+            assert_eq!(mode_enabled(CaseInsensitiveMode::Auto, dir), first);
+        }
+        assert_eq!(
+            probe_count(),
+            after_first,
+            "cached probe re-probed the same directory"
+        );
+    }
+
+    // ---- Stale probe sweep ----
+
+    #[test]
+    fn sweep_removes_only_old_probe_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let probe = dir.join(format!("{CASE_PROBE_PREFIX}cafe"));
+        std::fs::write(&probe, "x").unwrap();
+        std::fs::write(dir.join("note.md"), "x").unwrap();
+
+        // Fresh probe file is left alone by the real 60s threshold.
+        assert_eq!(sweep_stale_case_probes(dir), 0);
+        assert!(probe.exists());
+
+        // With no minimum age it is swept, and unrelated files survive.
+        assert_eq!(
+            sweep_case_probes_older_than(dir, std::time::Duration::ZERO),
+            1
+        );
+        assert!(!probe.exists());
+        assert!(dir.join("note.md").exists());
+    }
+
+    #[test]
+    fn sweep_on_missing_dir_is_a_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(sweep_stale_case_probes(&tmp.path().join("nope")), 0);
     }
 }

@@ -70,6 +70,15 @@ pub struct BrokenLinkReport {
     /// These are left untouched by `--apply` because the correct target is
     /// ambiguous and auto-picking would be wrong.
     pub ambiguous: Vec<BrokenLinkInfo>,
+    /// Links whose target resolves *above* the scanned vault root (`../..`
+    /// walks out of the directory hyalo was pointed at). They cannot be
+    /// checked — the file they name is out of scope — so they are reported
+    /// separately instead of inflating the headline `broken` count
+    /// (iter-193; same treatment iter-184 gave broken anchors).
+    ///
+    /// Site-absolute targets (`/src/foo.md`) deliberately stay in `broken`:
+    /// a vault that is itself the site root makes those genuine misses.
+    pub out_of_vault: Vec<BrokenLinkInfo>,
 }
 
 /// A single actionable fix: rewrite `old_target` → `new_target` in `source`.
@@ -169,6 +178,7 @@ pub fn detect_broken_links_from_index(
             broken: Vec::new(),
             case_mismatches: Vec::new(),
             ambiguous: Vec::new(),
+            out_of_vault: Vec::new(),
         };
     };
 
@@ -182,12 +192,13 @@ pub fn detect_broken_links_from_index(
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
     let mut case_mismatches: Vec<FixPlan> = Vec::new();
     let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
+    let mut out_of_vault: Vec<BrokenLinkInfo> = Vec::new();
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
             total_links += 1;
 
-            let (_resolved_target, resolution) = classify_link_from_source(
+            let (resolved_target, resolution) = classify_link_from_source(
                 &canonical,
                 &entry.rel_path,
                 link,
@@ -228,11 +239,19 @@ pub fn detect_broken_links_from_index(
                     });
                 }
                 LinkResolution::Broken => {
-                    broken.push(BrokenLinkInfo {
+                    let info = BrokenLinkInfo {
                         source: entry.rel_path.clone(),
                         line: *line,
                         target: link.target.clone(),
-                    });
+                    };
+                    // A target that still starts with `..` after normalization
+                    // names a file above the vault root — out of scope, not
+                    // broken (iter-193).
+                    if crate::discovery::normalized_target_escapes_vault(&resolved_target) {
+                        out_of_vault.push(info);
+                    } else {
+                        broken.push(info);
+                    }
                 }
             }
         }
@@ -241,12 +260,14 @@ pub fn detect_broken_links_from_index(
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    out_of_vault.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
         broken,
         case_mismatches,
         ambiguous,
+        out_of_vault,
     }
 }
 
@@ -1311,6 +1332,60 @@ See [broken](old-name.md) here.
         assert_eq!(report.total_links, 2);
         assert_eq!(report.broken.len(), 1);
         assert_eq!(report.broken[0].target, "missing");
+    }
+
+    // --- detect_broken_links_from_index: out-of-vault bucket (iter-193) ---
+
+    #[test]
+    fn detect_broken_links_buckets_out_of_vault_targets() {
+        use crate::links::{Link, LinkKind};
+
+        let tmp = vault_with_files(&[("sub/a.md", ""), ("existing.md", "")]);
+
+        let index = mock_index(
+            "sub/a.md",
+            vec![
+                // Walks above the vault root — out of scope, not broken.
+                (
+                    1,
+                    Link {
+                        target: "../../outside/thing.md".to_string(),
+                        label: None,
+                        kind: LinkKind::Markdown,
+                        fragment: None,
+                    },
+                ),
+                // Stays inside the vault and simply misses — genuinely broken.
+                (
+                    2,
+                    Link {
+                        target: "../gone.md".to_string(),
+                        label: None,
+                        kind: LinkKind::Markdown,
+                        fragment: None,
+                    },
+                ),
+            ],
+            &["existing.md"],
+        );
+
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, None, false);
+
+        assert_eq!(report.total_links, 2);
+        assert_eq!(
+            report.out_of_vault.len(),
+            1,
+            "escaping target belongs in out_of_vault: {:?}",
+            report.out_of_vault
+        );
+        assert_eq!(report.out_of_vault[0].target, "../../outside/thing.md");
+        assert_eq!(
+            report.broken.len(),
+            1,
+            "in-vault miss must stay broken: {:?}",
+            report.broken
+        );
+        assert_eq!(report.broken[0].target, "../gone.md");
     }
 
     // --- detect_broken_links_from_index: sorted output ---

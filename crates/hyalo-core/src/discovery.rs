@@ -843,6 +843,38 @@ fn normalize_link_target<'a>(
     }
 }
 
+/// Whether an already-normalized link target points outside the scanned vault.
+///
+/// After [`normalize_link_target`] has resolved `.`/`..` components, a target
+/// that still starts with `..` could only be reached by walking above the
+/// vault root — it is out of scope rather than broken (iter-193).
+///
+/// Note the deliberate narrowness: a site-absolute target (`/src/foo.md`) is
+/// **not** classified here, because a vault that *is* the site root makes such
+/// a link a genuine miss, and silently hiding those would be worse than the
+/// noise it saves.
+#[must_use]
+pub fn normalized_target_escapes_vault(normalized: &str) -> bool {
+    normalized == ".." || normalized.starts_with("../")
+}
+
+/// Whether a link written in `source_rel` points outside the scanned vault.
+///
+/// Applies the same kind-dependent normalization as the read-side resolvers,
+/// then asks [`normalized_target_escapes_vault`]. Touches no filesystem.
+#[must_use]
+pub fn link_target_escapes_vault(
+    source_rel: &str,
+    kind: crate::links::LinkKind,
+    target: &str,
+) -> bool {
+    // `|_| false` for the bare-basename seam: an unresolvable bare basename
+    // falls back to the raw target, which has no path separators and so can
+    // never escape the vault.
+    let normalized = normalize_link_target(kind, source_rel, target, |_| false);
+    normalized_target_escapes_vault(normalized.as_ref())
+}
+
 /// Resolve a single parsed link (from `source_rel`) to a vault-relative path,
 /// or `None` when it does not resolve to a known vault file.
 ///
@@ -2645,5 +2677,49 @@ mod tests {
             resolve_target(&canonical, "docs/guide.md", None, Some(&idx)),
             Some("docs/guide.md".to_owned())
         );
+    }
+
+    // --- out-of-vault classification (iter-193) ---
+
+    #[test]
+    fn normalized_target_escapes_vault_only_on_parent_walks() {
+        assert!(normalized_target_escapes_vault(".."));
+        assert!(normalized_target_escapes_vault("../outside/x.md"));
+        assert!(!normalized_target_escapes_vault("sub/x.md"));
+        assert!(!normalized_target_escapes_vault("..x.md"));
+        assert!(!normalized_target_escapes_vault(""));
+        // Site-absolute targets stay classified as ordinary (possibly broken)
+        // vault links — see the doc comment for why.
+        assert!(!normalized_target_escapes_vault("/src/x.md"));
+    }
+
+    #[test]
+    fn link_target_escapes_vault_normalizes_against_source() {
+        use crate::links::LinkKind;
+
+        // `sub/a.md` + `../../outside.md` climbs above the vault root.
+        assert!(link_target_escapes_vault(
+            "sub/a.md",
+            LinkKind::Markdown,
+            "../../outside.md"
+        ));
+        // One `..` from `sub/` only reaches the vault root.
+        assert!(!link_target_escapes_vault(
+            "sub/a.md",
+            LinkKind::Markdown,
+            "../sibling.md"
+        ));
+        // Wikilinks are vault-relative by definition.
+        assert!(!link_target_escapes_vault(
+            "sub/a.md",
+            LinkKind::Wikilink,
+            "other"
+        ));
+        // A bare markdown basename can never escape.
+        assert!(!link_target_escapes_vault(
+            "sub/a.md",
+            LinkKind::Markdown,
+            "other.md"
+        ));
     }
 }

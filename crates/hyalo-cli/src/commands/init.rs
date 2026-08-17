@@ -134,7 +134,7 @@ fn run_init_in(
         if !target.exists() {
             fs::create_dir_all(&target)
                 .with_context(|| format!("failed to create directory {}", target.display()))?;
-            writeln!(summary, "created  {dir_value}/").unwrap();
+            let _ = writeln!(summary, "created  {dir_value}/");
         }
     }
 
@@ -144,7 +144,7 @@ fn run_init_in(
     let toml_path = cwd.join(".hyalo.toml");
     let toml_existed = toml_path.exists();
     if toml_existed && !dir_explicit {
-        writeln!(summary, "skipped  .hyalo.toml (already exists)").unwrap();
+        let _ = writeln!(summary, "skipped  .hyalo.toml (already exists)");
     } else {
         let toml_content = if toml_existed {
             // Read and parse the existing file; update only the `dir` key so
@@ -161,11 +161,10 @@ fn run_init_in(
                 doc.to_string()
             } else {
                 // Malformed existing file — overwrite with just dir and note it.
-                writeln!(
+                let _ = writeln!(
                     summary,
                     "warning  .hyalo.toml was malformed; existing content replaced"
-                )
-                .unwrap();
+                );
                 minimal_toml_dir(&dir_value)
             }
         } else {
@@ -174,9 +173,9 @@ fn run_init_in(
         fs::write(&toml_path, &toml_content)
             .with_context(|| format!("failed to write {}", toml_path.display()))?;
         if toml_existed {
-            writeln!(summary, "updated  .hyalo.toml  (dir = \"{dir_value}\")").unwrap();
+            let _ = writeln!(summary, "updated  .hyalo.toml  (dir = \"{dir_value}\")");
         } else {
-            writeln!(summary, "created  .hyalo.toml  (dir = \"{dir_value}\")").unwrap();
+            let _ = writeln!(summary, "created  .hyalo.toml  (dir = \"{dir_value}\")");
         }
     }
 
@@ -206,19 +205,17 @@ fn run_init_in(
             crate::warn::warn(conflict.line(profile.name));
         }
         if profile_unchanged {
-            writeln!(
+            let _ = writeln!(
                 summary,
                 "unchanged  .hyalo.toml  ('{}' profile already applied)",
                 profile.name
-            )
-            .unwrap();
+            );
         } else {
-            writeln!(
+            let _ = writeln!(
                 summary,
                 "updated  .hyalo.toml  (merged '{}' profile)",
                 profile.name
-            )
-            .unwrap();
+            );
         }
 
         // Changelog profile: when the vault dir is a subdirectory and the repo
@@ -251,11 +248,10 @@ fn run_init_in(
                         }
                         fs::write(&toml_path, doc.to_string())
                             .with_context(|| format!("failed to write {}", toml_path.display()))?;
-                        writeln!(
+                        let _ = writeln!(
                             summary,
                             "updated  .hyalo.toml  ([changelog] path = \"CHANGELOG.md\")"
-                        )
-                        .unwrap();
+                        );
                     }
                 }
             }
@@ -288,9 +284,9 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
         if skill_existed {
-            writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md").unwrap();
+            let _ = writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md");
         } else {
-            writeln!(summary, "created  .claude/skills/hyalo/SKILL.md").unwrap();
+            let _ = writeln!(summary, "created  .claude/skills/hyalo/SKILL.md");
         }
 
         // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
@@ -311,9 +307,9 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
         if tidy_skill_existed {
-            writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
+            let _ = writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md");
         } else {
-            writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md").unwrap();
+            let _ = writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md");
         }
 
         // Step 4: write (overwrite) .claude/rules/knowledgebase.md
@@ -328,9 +324,9 @@ fn run_init_in(
         fs::write(&rules_path, &rule_content)
             .with_context(|| format!("failed to write {}", rules_path.display()))?;
         if rules_existed {
-            writeln!(summary, "updated  .claude/rules/knowledgebase.md").unwrap();
+            let _ = writeln!(summary, "updated  .claude/rules/knowledgebase.md");
         } else {
-            writeln!(summary, "created  .claude/rules/knowledgebase.md").unwrap();
+            let _ = writeln!(summary, "created  .claude/rules/knowledgebase.md");
         }
 
         // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md.
@@ -355,7 +351,7 @@ fn run_init_in(
             let (new_content, action) = upsert_managed_section(&existing, &managed_section);
             fs::write(&claude_md_path, &new_content)
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            writeln!(summary, "updated  .claude/CLAUDE.md ({action})").unwrap();
+            let _ = writeln!(summary, "updated  .claude/CLAUDE.md ({action})");
         } else {
             // Create the file and any parent directories.
             let claude_dir = claude_md_path
@@ -366,7 +362,7 @@ fn run_init_in(
             let content = format!("{managed_section}\n");
             fs::write(&claude_md_path, content)
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            writeln!(summary, "created  .claude/CLAUDE.md (with managed section)").unwrap();
+            let _ = writeln!(summary, "created  .claude/CLAUDE.md (with managed section)");
         }
 
         // Step 6: install any profile-specific skills (e.g. `okf`).
@@ -386,7 +382,7 @@ fn run_init_in(
                 fs::write(&profile_skill_path, skill_body)
                     .with_context(|| format!("failed to write {}", profile_skill_path.display()))?;
                 let verb = if existed { "updated" } else { "created" };
-                writeln!(summary, "{verb}  .claude/skills/{skill_dir}/SKILL.md").unwrap();
+                let _ = writeln!(summary, "{verb}  .claude/skills/{skill_dir}/SKILL.md");
             }
         }
     }
@@ -413,9 +409,9 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
         if pi_skill_existed {
-            writeln!(summary, "updated  .pi/skills/hyalo/SKILL.md").unwrap();
+            let _ = writeln!(summary, "updated  .pi/skills/hyalo/SKILL.md");
         } else {
-            writeln!(summary, "created  .pi/skills/hyalo/SKILL.md").unwrap();
+            let _ = writeln!(summary, "created  .pi/skills/hyalo/SKILL.md");
         }
 
         // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
@@ -437,9 +433,9 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
         if pi_tidy_skill_existed {
-            writeln!(summary, "updated  .pi/skills/hyalo-tidy/SKILL.md").unwrap();
+            let _ = writeln!(summary, "updated  .pi/skills/hyalo-tidy/SKILL.md");
         } else {
-            writeln!(summary, "created  .pi/skills/hyalo-tidy/SKILL.md").unwrap();
+            let _ = writeln!(summary, "created  .pi/skills/hyalo-tidy/SKILL.md");
         }
 
         // Step 8: write (overwrite) .pi/extensions/hyalo.ts
@@ -454,9 +450,9 @@ fn run_init_in(
         fs::write(&pi_extension_path, PI_EXTENSION_CONTENT)
             .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
         if pi_extension_existed {
-            writeln!(summary, "updated  .pi/extensions/hyalo.ts").unwrap();
+            let _ = writeln!(summary, "updated  .pi/extensions/hyalo.ts");
         } else {
-            writeln!(summary, "created  .pi/extensions/hyalo.ts").unwrap();
+            let _ = writeln!(summary, "created  .pi/extensions/hyalo.ts");
         }
 
         // Step 9: write (overwrite) .pi/package.json
@@ -470,9 +466,9 @@ fn run_init_in(
         fs::write(&pi_package_path, PI_PACKAGE_JSON_CONTENT)
             .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
         if pi_package_existed {
-            writeln!(summary, "updated  .pi/package.json").unwrap();
+            let _ = writeln!(summary, "updated  .pi/package.json");
         } else {
-            writeln!(summary, "created  .pi/package.json").unwrap();
+            let _ = writeln!(summary, "created  .pi/package.json");
         }
     }
 
@@ -562,25 +558,23 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
             if stripped.is_empty() {
                 fs::remove_file(&claude_md_path)
                     .with_context(|| format!("failed to remove {}", claude_md_path.display()))?;
-                writeln!(
+                let _ = writeln!(
                     summary,
                     "removed  .claude/CLAUDE.md (empty after stripping)"
-                )
-                .unwrap();
+                );
             } else {
                 fs::write(&claude_md_path, &stripped)
                     .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-                writeln!(
+                let _ = writeln!(
                     summary,
                     "updated  .claude/CLAUDE.md (stripped managed section)"
-                )
-                .unwrap();
+                );
             }
         } else {
-            writeln!(summary, "skipped  .claude/CLAUDE.md (no managed section)").unwrap();
+            let _ = writeln!(summary, "skipped  .claude/CLAUDE.md (no managed section)");
         }
     } else {
-        writeln!(summary, "skipped  .claude/CLAUDE.md (not found)").unwrap();
+        let _ = writeln!(summary, "skipped  .claude/CLAUDE.md (not found)");
     }
 
     // Clean up .claude/ itself if now empty.
@@ -652,11 +646,11 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
 fn remove_artifact(path: &Path, label: &str, summary: &mut String) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => {
-            writeln!(summary, "removed  {label}").unwrap();
+            let _ = writeln!(summary, "removed  {label}");
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            writeln!(summary, "skipped  {label} (not found)").unwrap();
+            let _ = writeln!(summary, "skipped  {label} (not found)");
             Ok(false)
         }
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
@@ -673,7 +667,7 @@ fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<
         if is_empty {
             fs::remove_dir(dir)
                 .with_context(|| format!("failed to remove directory {}", dir.display()))?;
-            writeln!(summary, "removed  {label}").unwrap();
+            let _ = writeln!(summary, "removed  {label}");
         }
     }
     Ok(())

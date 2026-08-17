@@ -26,6 +26,39 @@ type = "enum"
 values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
+## Case-insensitive link resolution
+
+`[links] case_insensitive` controls whether a link whose target differs only in
+casing (`[[Foo]]` → `foo.md`) still resolves:
+
+| Value | Behaviour |
+| --- | --- |
+| `"auto"` (default) | Detect the filesystem's case behaviour once per run and follow it |
+| `"true"` | Always resolve case-insensitively |
+| `"false"` | Never resolve case-insensitively — casing must match exactly |
+
+Under `"auto"`, hyalo detects case behaviour with **stat calls only**: it looks
+up an existing vault entry (or the vault directory itself) under a
+case-flipped name and checks whether it lands on the same object. Read-only
+commands therefore write nothing into the vault — no probe file, no directory
+mtime change.
+
+The one case that still needs a write is a vault that offers no usable
+candidate at all: an empty directory whose own path has no ASCII letters. Then
+hyalo falls back to creating and deleting a short-lived `.hyalo-case-probe-*`
+file in the vault root. **If that write fails — a read-only mount, for example
+— case-insensitive resolution silently turns off** and links are resolved
+case-sensitively, which can report casing-mismatched links as broken. Set
+`case_insensitive = "true"` explicitly when working against a read-only vault
+on a case-insensitive filesystem.
+
+If a process is killed between creating and deleting a fallback probe file,
+the orphan is dot-prefixed and invisible to `hyalo find`; the next
+`hyalo create-index` run sweeps `.hyalo-case-probe-*` files older than a
+minute from the vault root.
+
+## Schemas
+
 Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list` — with regex patterns, enum values, and length bounds), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.
 
 ## Saved views

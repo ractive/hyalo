@@ -264,7 +264,7 @@ default in interactive terminals).
 - **mv** — move/rename a file and rewrite all inbound links across the vault. Single-file mode
   writes immediately (`--dry-run` to preview; `--apply` is rejected there). Batch mode
   (`--glob`/`--property`/`--tag`/`--type`) defaults to dry-run and needs `--apply` to commit
-- **links fix** — detect broken wikilinks/markdown links and auto-repair (dry-run by default; `--apply` to write). Also detects case mismatches when `[links] case_insensitive` is enabled (default `"auto"` on macOS/Windows). Low-confidence fuzzy matches are reported separately and excluded from `--apply` unless you pass `--apply-fuzzy` (optionally `--min-confidence <0.0-1.0>`)
+- **links fix** — detect broken wikilinks/markdown links and auto-repair (dry-run by default; `--apply` to write). Targets that normalize above the vault root (`../../CONTRIBUTING.md`) are counted under `out_of_vault`, not `broken`, and are never offered a fix. Also detects case mismatches when `[links] case_insensitive` is enabled (default `"auto"` on macOS/Windows; detection is stat-only and writes nothing into the vault). Low-confidence fuzzy matches are reported separately and excluded from `--apply` unless you pass `--apply-fuzzy` (optionally `--min-confidence <0.0-1.0>`)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
 - **drop-index** — delete a snapshot index file created with create-index

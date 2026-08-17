@@ -100,6 +100,15 @@ pub fn links_fix(
         .filter(|b| in_scope(b.source.as_str()))
         .collect();
 
+    // Out-of-vault targets (`../..` above the vault root) are reported in
+    // their own bucket — see `BrokenLinkReport::out_of_vault`.
+    let out_of_vault_links: Vec<_> = report
+        .out_of_vault
+        .into_iter()
+        .filter(|b| in_scope(b.source.as_str()))
+        .collect();
+    let out_of_vault_count = out_of_vault_links.len();
+
     // Filter out ignored targets (--ignore-target substrings).
     let (broken, ignored_count) = if ignore_target.is_empty() {
         (broken, 0usize)
@@ -266,6 +275,11 @@ pub fn links_fix(
         "case_mismatch_fixes": case_mismatches,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
+        // iter-193: targets resolving above the vault root are out of scope,
+        // not broken. Reported so they stay visible, but excluded from
+        // `broken`/`unfixable` — there is nothing in the vault to fix them to.
+        "out_of_vault": out_of_vault_count,
+        "out_of_vault_links": out_of_vault_links,
         // Fuzzy-match fixes are reported in their own bucket. They are excluded
         // from --apply unless --apply-fuzzy / --min-confidence opts in; the
         // `fuzzy_applied` flag tells the caller whether they were written.
