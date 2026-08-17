@@ -6,12 +6,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"`
 - **Title regex**: `hyalo find --property 'title~=link'`
-- **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix.
+- **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
+  and the `[links.auto]` auto-link settings.
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
 - **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`
-- **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`
+- **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`.
+  Persist the noisy-title exclusions instead of retyping them: `[links.auto] exclude_titles = [...]`,
+  `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
+  rather than replacing them, and a run whose config exclusions removed candidates reports
+  `config_excluded`
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
 - **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton with `TBD` placeholders; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild)

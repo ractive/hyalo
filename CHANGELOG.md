@@ -37,6 +37,17 @@ and this project adheres to
   gate harvests every hint the CLI emits across a fixture vault and *runs* each
   one, failing on any the CLI rejects — the substring assertions it replaces
   could not distinguish a runnable command from a plausible-looking one.
+- **Persistent `hyalo links auto` exclusions in `.hyalo.toml`** (iter-195a).
+  A new `[links.auto]` section persists `exclude_titles`,
+  `exclude_target_globs`, and `first_only`, so the incantation that makes
+  auto-linking usable on a title-heavy vault no longer has to be retyped every
+  run. The two lists are unioned with `--exclude-title` /
+  `--exclude-target-glob` (flags extend the config, never replace it) and
+  `--first-only` still forces first-mention-only for a single run. When config
+  exclusions actually removed candidates the report says so: `config_excluded`
+  in the JSON envelope (omitted when zero) and an
+  `Excluded by [links.auto] config: N titles` line in text output.
+  `hyalo config` reports the effective settings in both formats.
 
 ### Changed
 

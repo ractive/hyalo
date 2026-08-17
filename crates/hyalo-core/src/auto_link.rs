@@ -2054,4 +2054,138 @@ mod tests {
             "error should mention 'absolute': {err:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // count_config_excluded_titles (iter-195a)
+    // -----------------------------------------------------------------------
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// Vault with three candidate pages, one of them under `templates/`.
+    fn attribution_index() -> MockIndex {
+        MockIndex::new(vec![
+            make_entry("permissions.md", vec![("title", Value::from("Permissions"))]),
+            make_entry("daily.md", vec![("title", Value::from("Daily"))]),
+            make_entry("templates/widget.md", vec![("title", Value::from("Widget"))]),
+        ])
+    }
+
+    #[test]
+    fn config_excluded_counts_titles_only_the_config_removed() {
+        let index = attribution_index();
+        let config_titles = strings(&["permissions"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &config_titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        // `permissions.md` contributes the stem and the title, which share one
+        // lowercased key — one candidate title lost.
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn config_excluded_ignores_titles_the_cli_already_excluded() {
+        let index = attribution_index();
+        let cli_titles = strings(&["permissions"]);
+        let effective = strings(&["permissions", "daily"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets {
+                exclude_titles: &cli_titles,
+                exclude_target_globs: &[],
+            },
+            ExclusionSets {
+                exclude_titles: &effective,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 1, "only `daily` is attributable to the config");
+    }
+
+    #[test]
+    fn config_excluded_counts_glob_excluded_target_pages() {
+        let index = attribution_index();
+        let globs = strings(&["templates/*"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &[],
+                exclude_target_globs: &globs,
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 1, "templates/widget.md contributes one title key");
+    }
+
+    #[test]
+    fn config_excluded_is_zero_when_nothing_matches() {
+        let index = attribution_index();
+        let titles = strings(&["nonexistent"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn config_excluded_is_zero_for_an_empty_vault() {
+        let index = MockIndex::new(vec![]);
+        let titles = strings(&["permissions"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &titles,
+                exclude_target_globs: &[],
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn config_excluded_does_not_count_titles_unambiguated_by_a_glob() {
+        // `a/dup.md` and `b/dup.md` are ambiguous together; excluding one via a
+        // glob makes the other linkable. That is a candidate *gained*, so the
+        // count stays at the pages the glob actually removed.
+        let index = MockIndex::new(vec![
+            make_entry("a/dup.md", vec![("title", Value::from("Dup"))]),
+            make_entry("b/dup.md", vec![("title", Value::from("Dup"))]),
+        ]);
+        let globs = strings(&["b/*"]);
+        let count = count_config_excluded_titles(
+            &index,
+            3,
+            ExclusionSets::default(),
+            ExclusionSets {
+                exclude_titles: &[],
+                exclude_target_globs: &globs,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            count, 0,
+            "both `dup` keys were ambiguous (no candidates) before the glob"
+        );
+    }
 }

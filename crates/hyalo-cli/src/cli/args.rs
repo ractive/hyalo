@@ -1970,6 +1970,15 @@ pub(crate) enum LinksAction {
             \u{00a0}                      plain-text mention appears earlier in the file than the link.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
+            PERSISTING THESE: put them in the [links.auto] section of .hyalo.toml so they apply to every run:\n\
+            \u{00a0} [links.auto]\n\
+            \u{00a0} exclude_titles = [\"permissions\", \"README\"]\n\
+            \u{00a0} exclude_target_globs = [\"templates/*\"]\n\
+            \u{00a0} first_only = true\n\
+            The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
+            config, they never replace it. --first-only turns first-only on for a single run whatever the \
+            config says. When config exclusions actually remove candidates, the report adds a \
+            config_excluded count so a bare run stays explainable.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
             COMMON MISTAKES:\n\
             - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
