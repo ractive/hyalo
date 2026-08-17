@@ -714,6 +714,49 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // --no-first-only (iter-198): the one input that forces first_only OFF
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_first_only_flag_overrides_config_first_only() {
+        let filters = AutoFilters {
+            cli_no_first_only: true,
+            config_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(
+            !filters.effective_first_only(),
+            "--no-first-only must win over [links.auto] first_only = true"
+        );
+    }
+
+    #[test]
+    fn no_first_only_flag_alone_is_a_no_op() {
+        let filters = AutoFilters {
+            cli_no_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(
+            !filters.effective_first_only(),
+            "first-only is already off without the config key"
+        );
+    }
+
+    #[test]
+    fn no_first_only_wins_over_first_only_if_both_arrive() {
+        // Clap declares the two flags as conflicting, so this pair cannot come
+        // from the CLI. The tie-break is asserted anyway: any other caller of
+        // AutoFilters gets "off wins", never an accidental first-only run.
+        let filters = AutoFilters {
+            cli_first_only: true,
+            cli_no_first_only: true,
+            config_first_only: true,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_first_only());
+    }
+
+    // -----------------------------------------------------------------------
     // list unions: flags extend the config, never replace it
     // -----------------------------------------------------------------------
 
