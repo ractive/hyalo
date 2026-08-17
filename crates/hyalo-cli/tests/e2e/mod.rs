@@ -48,6 +48,7 @@ mod site_prefix;
 mod skills_profile;
 mod suggest;
 mod summary;
+mod symlinks;
 mod tags;
 mod task;
 mod types;

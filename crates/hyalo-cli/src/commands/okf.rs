@@ -360,7 +360,8 @@ pub fn run_index(
     if apply {
         for plan in &changed {
             let full = dir.join(&plan.rel_path);
-            if let Err(err) = hyalo_core::fs_util::atomic_write(&full, plan.new_content.as_bytes())
+            if let Err(err) =
+                hyalo_core::fs_util::atomic_write_within(dir, &full, plan.new_content.as_bytes())
             {
                 crate::warn::warn(format!(
                     "failed to write {}: {} — skipping this file, continuing",
@@ -994,7 +995,7 @@ pub fn run_log(
     let new_content = prepend_log_entry(&old_content, &today, &entry_line);
 
     if apply {
-        hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
+        hyalo_core::fs_util::atomic_write_within(dir, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {rel_path}"))?;
     }
 

@@ -232,7 +232,7 @@ pub fn task_toggle(
         )));
     }
 
-    match hyalo_core::tasks::toggle_tasks(&full_path, &resolved) {
+    match hyalo_core::tasks::toggle_tasks(dir, &full_path, &resolved) {
         Ok(infos) => {
             for info in &infos {
                 patch_index(&full_path, &rel_path, info, snapshot_index, index_path)?;
@@ -338,7 +338,7 @@ pub fn task_set_status(
         )));
     }
 
-    match hyalo_core::tasks::set_tasks_status(&full_path, &resolved, status) {
+    match hyalo_core::tasks::set_tasks_status(dir, &full_path, &resolved, status) {
         Ok(infos) => {
             for info in &infos {
                 patch_index(&full_path, &rel_path, info, snapshot_index, index_path)?;

@@ -510,7 +510,7 @@ pub fn set(
 
         if file_changed && !dry_run {
             frontmatter::check_mtime(full_path, mtime)?;
-            match frontmatter::write_frontmatter(full_path, &props) {
+            match frontmatter::write_frontmatter_within(dir, full_path, &props) {
                 Ok(()) => {}
                 Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
                     let budget_err = frontmatter::as_budget_error(e).unwrap();

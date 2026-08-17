@@ -1059,3 +1059,52 @@ link-semantics feature prove itself in an opt-in query surface before it can
 fail a CI gate. The HYALO006 rule description and the README lint section state
 that anchors are not checked by the rule. See
 [[iterations/iteration-190-link-anchors]].
+
+## DEC-062: `atomic_write` follows intra-vault symlinks and writes the target (2026-08-06)
+
+**Decision:** When the destination of a mutating write is a symlink,
+`fs_util::atomic_write` **follows** the link and replaces the *target* file,
+leaving the symlink itself intact. It does not refuse, and it no longer
+replaces the link with a regular file. Resolution is a bounded `read_link`
+loop (max 32 hops) rather than `fs::canonicalize`, because the destination of
+a write may legitimately not exist yet — `canonicalize` fails on a
+not-yet-created file, and it would also normalize away a dangling final
+component. The temporary file is created in the *resolved* target's parent
+directory so the `persist` rename stays on the same filesystem.
+
+A companion `fs_util::atomic_write_within(vault_root, …)` re-applies the vault
+boundary check to the resolved destination and is used by every CLI mutation
+site that has the vault dir in scope (`lint --fix`, `okf`, `changelog`,
+`links auto`/`mv` link rewrites, managed regions). A symlink whose target
+escapes the vault is refused, so "follow" never becomes an escape hatch. The
+boundary check runs only when resolution actually changed the path, so the
+common non-symlink write pays no extra syscalls. The `Option`-free
+`atomic_write` remains for core-internal callers (`tasks`, frontmatter write)
+whose paths have already passed `discovery::resolve_file`'s canonicalizing
+boundary check.
+
+**Why:** *Follow*, not *refuse*. Vaults legitimately alias notes through
+symlinks and Obsidian follows them; refusing would break those vaults for
+every mutating command at once. Before this change every mutation path —
+`set`, `remove`, `append`, `task`, `lint --fix`, `mv`, `okf`, `changelog` —
+silently replaced the symlink with a regular file holding the new content,
+which is *silent data loss*: the aliasing relationship disappeared and the
+real target kept the stale content. See
+[[iterations/iteration-191-write-path-integrity]].
+
+## DEC-063: `atomic_write` fsyncs the temp file and the parent directory (2026-08-06)
+
+**Decision:** `atomic_write` calls `sync_all()` on the temp file before
+`persist`, and on Unix opens the destination's parent directory and `sync_all`s
+it after the rename. The parent-directory fsync is **best-effort**: an error is
+ignored rather than propagated, because some filesystems reject `fsync` on a
+directory handle and failing the whole write there would be a regression.
+
+**Why:** Without the pre-`persist` fsync the "atomic" guarantee in the doc
+comment was false. A crash between rename and writeback could leave the new
+directory entry pointing at a file whose data blocks were never flushed —
+i.e. a zero-length or partially-written note *replacing* good content. Unlike
+the snapshot index (`index.rs`), which detects a torn read via
+`rmp_serde::from_slice` and falls back to a disk scan, user markdown has no
+recovery path. The snapshot index therefore deliberately keeps its unsynced
+write. See [[iterations/iteration-191-write-path-integrity]].

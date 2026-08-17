@@ -303,6 +303,8 @@ pub fn run_release(
     let new_content = cl.render();
     let changed = new_content != old_content;
     if apply && changed {
+        // No vault root here: `changelog` targets an arbitrary CHANGELOG.md
+        // path (often the repo root), so there is no boundary to check against.
         hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }
@@ -459,6 +461,8 @@ pub fn run_add(
     let new_content = cl.render();
     let changed = new_content != old_content;
     if apply && changed {
+        // No vault root here: `changelog` targets an arbitrary CHANGELOG.md
+        // path (often the repo root), so there is no boundary to check against.
         hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }

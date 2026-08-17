@@ -171,7 +171,7 @@ pub(crate) fn read_old_content(dir: &Path, rel_path: &str) -> Result<String> {
 /// Write a changed plan to disk atomically.
 pub(crate) fn apply_plan(dir: &Path, plan: &GeneratePlan) -> Result<()> {
     let full = dir.join(&plan.rel_path);
-    hyalo_core::fs_util::atomic_write(&full, plan.new_content.as_bytes())
+    hyalo_core::fs_util::atomic_write_within(dir, &full, plan.new_content.as_bytes())
         .with_context(|| format!("failed to write {}", plan.rel_path))
 }
 

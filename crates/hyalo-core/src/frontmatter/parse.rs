@@ -320,7 +320,35 @@ pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {
 ///
 /// If `props` is empty (all properties removed), no frontmatter block is written —
 /// the file starts directly with the body.
+///
+/// Writes via the boundary-unchecked [`crate::fs_util::atomic_write`] — a
+/// symlinked destination is still followed and replaced, but its target is
+/// *not* re-verified against a vault root. Only safe for callers whose path
+/// has already passed `discovery::resolve_file`'s canonicalizing boundary
+/// check (true of every CLI call site) or that have no vault to check against
+/// (e.g. tests). CLI call sites should prefer
+/// [`write_frontmatter_within`] (iter-191 follow-up).
 pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result<()> {
+    write_frontmatter_impl(None, path, props)
+}
+
+/// Like [`write_frontmatter`], but re-checks the vault boundary against the
+/// *resolved* destination — the same defense-in-depth
+/// [`crate::fs_util::atomic_write_within`] gives every other mutation path.
+/// Use this from any CLI call site that has the vault directory in scope.
+pub fn write_frontmatter_within(
+    vault_root: &Path,
+    path: &Path,
+    props: &IndexMap<String, Value>,
+) -> Result<()> {
+    write_frontmatter_impl(Some(vault_root), path, props)
+}
+
+fn write_frontmatter_impl(
+    vault_root: Option<&Path>,
+    path: &Path,
+    props: &IndexMap<String, Value>,
+) -> Result<()> {
     // --- Step 0: open the file and guard against unbounded memory use ---
     // Step 2 below reads the whole body into memory; refuse up front rather
     // than let `read_to_end` allocate without bound for a huge file.
@@ -417,8 +445,11 @@ pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result
     out.extend_from_slice(&body_bytes);
 
     // --- Step 4: write atomically ---
-    crate::fs_util::atomic_write(path, &out)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    match vault_root {
+        Some(root) => crate::fs_util::atomic_write_within(root, path, &out),
+        None => crate::fs_util::atomic_write(path, &out),
+    }
+    .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(())
 }
