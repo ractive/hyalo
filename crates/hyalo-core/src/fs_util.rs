@@ -24,8 +24,8 @@ const MAX_SYMLINK_HOPS: usize = 32;
 fn resolve_write_target(path: &Path) -> Result<PathBuf> {
     let mut current = path.to_path_buf();
     for _ in 0..MAX_SYMLINK_HOPS {
-        let is_symlink = std::fs::symlink_metadata(&current)
-            .is_ok_and(|m| m.file_type().is_symlink());
+        let is_symlink =
+            std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink());
         if !is_symlink {
             return Ok(current);
         }
@@ -120,10 +120,12 @@ pub fn atomic_write_within(vault_root: &Path, path: &Path, data: &[u8]) -> Resul
 
 fn write_impl(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Result<()> {
     let dest = resolve_write_target(path)?;
-    if dest != path {
-        if let Some(root) = vault_root {
-            ensure_resolved_within(root, path, &dest)?;
-        }
+    // The boundary re-check only matters when resolution actually moved the
+    // destination — an ordinary write pays no extra syscalls for it.
+    if dest != path
+        && let Some(root) = vault_root
+    {
+        ensure_resolved_within(root, path, &dest)?;
     }
     let dest = dest.as_path();
 

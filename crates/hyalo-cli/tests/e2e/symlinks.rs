@@ -78,7 +78,8 @@ fn task_toggle_follows_intra_vault_symlink() {
 #[test]
 fn lint_fix_through_symlink_is_idempotent() {
     // Trailing whitespace on the body line is a fixable MD009 violation.
-    let (tmp, target) = vault_with_symlink("---\ntitle: Test\ntype: note\n---\n\n# Heading\n\nBody   \n");
+    let (tmp, target) =
+        vault_with_symlink("---\ntitle: Test\ntype: note\n---\n\n# Heading\n\nBody   \n");
     write_md(
         tmp.path(),
         ".hyalo.toml",
@@ -106,7 +107,8 @@ fn lint_fix_through_symlink_is_idempotent() {
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
     assert_eq!(
-        val["results"]["total"], 0,
+        val["results"]["total"],
+        0,
         "second lint must be clean, got: {}",
         String::from_utf8_lossy(&second.stdout)
     );
@@ -142,7 +144,9 @@ fn symlink_escaping_vault_is_refused() {
         "expected the vault-boundary error, got: {combined}"
     );
     assert!(
-        fs::read_to_string(&secret).unwrap().contains("- [ ] Untouched"),
+        fs::read_to_string(&secret)
+            .unwrap()
+            .contains("- [ ] Untouched"),
         "the out-of-vault file must be byte-for-byte untouched"
     );
 }
@@ -167,7 +171,9 @@ fn set_through_symlink_updates_target() {
     );
 
     assert!(
-        fs::read_to_string(&target).unwrap().contains("status: done"),
+        fs::read_to_string(&target)
+            .unwrap()
+            .contains("status: done"),
         "set must write the symlink target"
     );
     assert_still_symlink(&tmp.path().join("alias.md"));
@@ -201,8 +207,7 @@ fn append_through_symlink_updates_target() {
 fn mv_link_rewrite_through_symlink_updates_target() {
     // `mv` writes through `atomic_write` when it rewrites *inbound* links, so
     // the symlinked file here is the one holding the link, not the one moved.
-    let (tmp, target) =
-        vault_with_symlink("---\ntitle: Hub\n---\nSee [B](b.md) for details.\n");
+    let (tmp, target) = vault_with_symlink("---\ntitle: Hub\n---\nSee [B](b.md) for details.\n");
     write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n# B\n");
 
     let output = hyalo_no_hints()

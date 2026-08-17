@@ -9,6 +9,34 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mutating a symlinked note no longer destroys the symlink** (iter-191,
+  DEC-062) — **user-visible behaviour change**. Every command that writes a
+  file (`set`, `remove`, `append`, `task`, `lint --fix`, `mv`, `okf`,
+  `changelog`, managed regions, link rewrites) funnels through one atomic-write
+  helper, and that helper replaced the *symlink* with a regular file holding
+  the new content. The aliasing relationship silently disappeared and the real
+  target kept the stale content — silent data loss for any vault that aliases
+  notes. The write now **follows** the link (bounded at 32 hops; a loop is
+  refused) and replaces the target, leaving the symlink a symlink, which is
+  what Obsidian does. A symlink whose target escapes the vault is still refused
+  with `file resolves outside vault boundary` — following is never an escape
+  hatch — and the boundary is re-checked against the *resolved* destination at
+  every call site that knows the vault dir.
+- **Atomic writes are now actually durable** (iter-191, DEC-063). The temp file
+  is `sync_all`ed before the rename and, on Unix, the parent directory is
+  `sync_all`ed after it. Previously a crash right after the rename could leave
+  the new directory entry pointing at unwritten blocks — i.e. an empty or
+  truncated note replacing good content. Unlike the snapshot index, which
+  detects a torn read and falls back to a disk scan, user markdown has no
+  recovery path.
+- **`lint --fix` can no longer panic on a malformed fix range** (iter-191). A
+  fix whose span was inverted (`start > end`) or landed mid-UTF-8-character was
+  only checked against the body length, so either case sliced a `str` at an
+  invalid offset and aborted the run. Such fixes are now reported as conflicts
+  and skipped, leaving the file untouched.
+
 ## [0.20.0] - 2026-07-19
 
 ### Added
