@@ -84,8 +84,8 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
 
   Links (link operations):
     hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
-    hyalo links auto [--apply] [--first-only] [--min-length N] [--exclude-title T ...] [--exclude-target-glob G ...] [--file F | -g/--glob G ...]   Auto-link unlinked title mentions (default: dry-run)
-    Persist the exclusions in .hyalo.toml:  [links.auto] exclude_titles / exclude_target_globs / first_only (flags extend the lists)
+    hyalo links auto [--apply] [--first-only | --no-first-only] [--min-length N] [--exclude-title T ...] [--exclude-target-glob G ...] [--file F | -g/--glob G ...]   Auto-link unlinked title mentions (default: dry-run)
+    Persist the exclusions in .hyalo.toml:  [links.auto] exclude_titles / exclude_target_globs / first_only (flags extend the lists; --no-first-only overrides first_only for one run)
 
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
@@ -318,6 +318,9 @@ COOKBOOK:
 
   # Auto-link: exclude short words and template pages
   hyalo links auto --min-length 5 --exclude-target-glob 'templates/*' --apply
+
+  # Auto-link: link every mention for one run, ignoring [links.auto] first_only = true
+  hyalo links auto --no-first-only
 
   # Auto-link: restrict to a single file
   hyalo links auto --file notes/todo.md --apply

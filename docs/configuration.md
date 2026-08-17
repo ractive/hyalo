@@ -84,8 +84,16 @@ Merge rules with the CLI flags:
 | --- | --- |
 | `exclude_titles` | **Unioned** with `--exclude-title` — the flag extends the config list, never replaces it |
 | `exclude_target_globs` | **Unioned** with `--exclude-target-glob` |
-| `first_only` | `--first-only` turns it on for a single run; the config turns it on for every run |
+| `first_only` | `--first-only` turns it on for a single run; the config turns it on for every run; `--no-first-only` turns it off for a single run |
 | `warn_common_titles` | On by default; `--no-warn-common-titles` turns it off for a single run, the config for every run |
+
+`first_only` is the one key with a counter-flag: `--no-first-only` forces
+first-mention-only **off** for a single run, so a vault that persists
+`first_only = true` can still get a one-off all-mentions pass without editing
+`.hyalo.toml`. It conflicts with `--first-only` — passing both is an error
+rather than a silent precedence puzzle — and is a no-op when the config does
+not enable `first_only`. The list keys have no counter-flag: they are unioned,
+and narrowing a run's scope with `--file`/`--glob` covers the same need.
 
 Because config exclusions apply silently, a run whose candidates they removed
 reports how many: `config_excluded` in the JSON envelope (omitted when zero,
