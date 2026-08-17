@@ -2,7 +2,7 @@
 title: Iteration 195 — review drain cleanups
 type: iteration
 date: 2026-08-17
-status: in-progress
+status: completed
 branch: iter-195/review-drain-cleanups
 tags:
   - iteration
@@ -55,7 +55,7 @@ Verified at `93d6491` (2026-08-17):
 
 ## Tasks
 
-### Dead code [0/2]
+### Dead code [2/2]
 
 - [x] Remove `pub fn lint_files` from `commands/lint.rs` and port its single
       unit-test caller (`lint.rs:3662`) to call `lint_files_with_options`
@@ -67,7 +67,7 @@ Verified at `93d6491` (2026-08-17):
       items check callers manually). Remove what is genuinely dead, list
       anything intentionally kept in the PR body.
 
-### Windows correctness [0/2]
+### Windows correctness [2/2]
 
 - [x] ~~Extend the guard at `discovery.rs:1390` to
       `!target.contains('/') && !target.contains('\\')`~~ — **not done, and
@@ -86,7 +86,7 @@ Verified at `93d6491` (2026-08-17):
       is ever truncated to a mangled stem such as `note.` (which the test
       proves is otherwise resolvable). Platform-independent.
 
-### CLI flag consistency (non-breaking, aliases only) [0/3]
+### CLI flag consistency (non-breaking, aliases only) [3/3]
 
 - [x] `create-index`: add `--path` as a hidden-or-visible alias for
       `--output`; `drop-index`: add `--output` as an alias for `--path`.
@@ -103,7 +103,7 @@ Verified at `93d6491` (2026-08-17):
       document only — a `visible_alias` here adds surface without removing
       the inconsistency.
 
-### KB hygiene [0/1]
+### KB hygiene [1/1]
 
 - [x] Fix the MD012 double blank line at
       `iterations/iteration-188-link-semantics-completion.md:134`
