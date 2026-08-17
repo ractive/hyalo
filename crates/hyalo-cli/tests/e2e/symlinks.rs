@@ -151,6 +151,68 @@ fn symlink_escaping_vault_is_refused() {
     );
 }
 
+#[test]
+fn set_symlink_escaping_vault_is_refused() {
+    let outside = TempDir::new().unwrap();
+    let secret = outside.path().join("secret.md");
+    fs::write(&secret, "---\ntitle: Secret\n---\nBody\n").unwrap();
+
+    let tmp = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(&secret, tmp.path().join("escape.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "--file", "escape.md", "--property", "status=done"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "escaping symlink must be refused");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("file resolves outside vault boundary"),
+        "expected the vault-boundary error, got: {combined}"
+    );
+    assert!(
+        !fs::read_to_string(&secret).unwrap().contains("status:"),
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+}
+
+#[test]
+fn append_symlink_escaping_vault_is_refused() {
+    let outside = TempDir::new().unwrap();
+    let secret = outside.path().join("secret.md");
+    fs::write(&secret, "---\ntitle: Secret\ntags:\n  - one\n---\nBody\n").unwrap();
+
+    let tmp = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(&secret, tmp.path().join("escape.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["append", "--file", "escape.md", "--property", "tags=two"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "escaping symlink must be refused");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("file resolves outside vault boundary"),
+        "expected the vault-boundary error, got: {combined}"
+    );
+    assert!(
+        !fs::read_to_string(&secret).unwrap().contains("two"),
+        "the out-of-vault file must be byte-for-byte untouched"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // One test per mutating command — no shared fixture shortcuts
 // ---------------------------------------------------------------------------

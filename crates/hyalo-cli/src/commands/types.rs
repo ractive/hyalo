@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use hyalo_core::discovery;
-use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter};
+use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter_within};
 use hyalo_core::schema::{SchemaConfig, expand_default};
 
 use crate::output::{CommandOutcome, Format, format_error, format_success};
@@ -496,7 +496,7 @@ pub(crate) fn set_type(
                     );
                     new_props.insert(key.clone(), typed);
                 }
-                write_frontmatter(full_path, &new_props)
+                write_frontmatter_within(dir, full_path, &new_props)
                     .with_context(|| format!("writing defaults to {rel}"))?;
             }
         }

@@ -114,6 +114,16 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 /// Use this from every call site that knows the vault directory. The extra
 /// canonicalization runs only when the destination really was a symlink, so
 /// the ordinary write path is unaffected.
+///
+/// **Residual TOCTOU:** the boundary check (in [`ensure_resolved_within`])
+/// canonicalizes and validates the resolved destination, but the temp-file
+/// creation and rename that follow use the *non-canonical* path again. If a
+/// directory component on that path is swapped for a symlink pointing outside
+/// the vault in the narrow window between the check and the write — e.g. by a
+/// concurrent process — the write can still land outside the vault. This is
+/// accepted as a low residual risk for a single-user local CLI tool; it is
+/// not a defense against a concurrent adversary with write access to the
+/// vault directory.
 pub fn atomic_write_within(vault_root: &Path, path: &Path, data: &[u8]) -> Result<()> {
     write_impl(Some(vault_root), path, data)
 }

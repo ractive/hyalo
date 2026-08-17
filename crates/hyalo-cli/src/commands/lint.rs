@@ -22,7 +22,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use hyalo_core::filename_template::FilenameTemplate;
-use hyalo_core::frontmatter::{check_mtime, read_frontmatter, read_mtime, write_frontmatter};
+use hyalo_core::frontmatter::{
+    check_mtime, read_frontmatter, read_mtime, write_frontmatter, write_frontmatter_within,
+};
 use hyalo_core::scanner;
 use hyalo_core::schema::{
     self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
@@ -192,6 +194,7 @@ pub fn lint_files(
         &mut None,
         None,
         case_insensitive,
+        None,
     )
 }
 
@@ -369,6 +372,13 @@ pub enum FixMode {
 /// before the final counts are computed, so the returned counts reflect only
 /// the violations that *remain* after fixing. With `DryRun`, counts reflect
 /// the post-fix state but files are untouched.
+///
+/// `vault_root` is forwarded to [`hyalo_core::frontmatter::write_frontmatter_within`]
+/// when `fix` is `Apply` so a symlinked destination that resolves outside the
+/// vault is refused at write time (iter-191 follow-up). Pass `None` only when
+/// `fix` is `Off` (no write is possible) or the caller has no vault to check
+/// against.
+#[allow(clippy::too_many_arguments)]
 pub fn lint_files_with_options(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
@@ -377,6 +387,7 @@ pub fn lint_files_with_options(
     snapshot_index: &mut Option<hyalo_core::index::SnapshotIndex>,
     index_path: Option<&Path>,
     case_insensitive: bool,
+    vault_root: Option<&Path>,
 ) -> Result<(CommandOutcome, LintCounts)> {
     let mut results: Vec<FileLintResult> = Vec::new();
     let mut counts = LintCounts::default();
@@ -384,8 +395,14 @@ pub fn lint_files_with_options(
     let mut index_dirty = false;
 
     for (full_path, rel_path) in files {
-        let (file_result, file_fixes) =
-            lint_file_with_fix(full_path, rel_path, schema, fix, case_insensitive)?;
+        let (file_result, file_fixes) = lint_file_with_fix(
+            full_path,
+            rel_path,
+            schema,
+            fix,
+            case_insensitive,
+            vault_root,
+        )?;
         for v in &file_result.violations {
             match v.severity {
                 Severity::Error => counts.errors += 1,
@@ -543,18 +560,32 @@ fn lint_file(
     schema: &SchemaConfig,
     case_insensitive: bool,
 ) -> Result<FileLintResult> {
-    let (result, _) =
-        lint_file_with_fix(full_path, rel_path, schema, FixMode::Off, case_insensitive)?;
+    let (result, _) = lint_file_with_fix(
+        full_path,
+        rel_path,
+        schema,
+        FixMode::Off,
+        case_insensitive,
+        None,
+    )?;
     Ok(result)
 }
 
 /// Lint a single file, optionally applying auto-fixes.
+///
+/// `vault_root`, when `Some`, is used to re-check the vault boundary against
+/// the *resolved* write destination via
+/// [`hyalo_core::frontmatter::write_frontmatter_within`] — see that
+/// function's doc comment. Only meaningful when `fix` is `FixMode::Apply`;
+/// `FixMode::Off` and `FixMode::DryRun` never write, so `None` is always safe
+/// there.
 fn lint_file_with_fix(
     full_path: &Path,
     rel_path: &str,
     schema: &SchemaConfig,
     fix: FixMode,
     case_insensitive: bool,
+    vault_root: Option<&Path>,
 ) -> Result<(FileLintResult, FileFixResult)> {
     let properties = match read_frontmatter(full_path) {
         Ok(props) => props,
@@ -591,8 +622,11 @@ fn lint_file_with_fix(
         let mut mutable = properties.clone();
         let actions = apply_fixes(rel_path, &mut mutable, schema);
         if matches!(fix, FixMode::Apply) && !actions.is_empty() {
-            write_frontmatter(full_path, &mutable)
-                .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
+            match vault_root {
+                Some(root) => write_frontmatter_within(root, full_path, &mutable),
+                None => write_frontmatter(full_path, &mutable),
+            }
+            .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
         }
         (mutable, actions)
     } else {
@@ -2489,7 +2523,7 @@ fn lint_one_file_extended(
             if !actions.is_empty() {
                 if matches!(fix, FixMode::Apply) {
                     check_mtime(full_path, mtime0)?;
-                    write_frontmatter(full_path, &mutable)
+                    write_frontmatter_within(vault_dir, full_path, &mutable)
                         .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
                     // Re-baseline: the write above legitimately changed the
                     // file's mtime, and a later body-fix write in this same
@@ -3909,6 +3943,7 @@ type = \"skill\"
             &mut None,
             None,
             false,
+            Some(dir.path()),
         )
         .unwrap();
 

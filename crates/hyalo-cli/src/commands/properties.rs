@@ -166,7 +166,7 @@ pub fn properties_rename(
 
         props.insert(to.to_owned(), value);
         if !dry_run {
-            frontmatter::write_frontmatter(full_path, &props)?;
+            frontmatter::write_frontmatter_within(dir, full_path, &props)?;
             if let Some(idx) = snapshot_index.as_mut()
                 && let Some(entry) = idx.get_mut(rel_path)
             {

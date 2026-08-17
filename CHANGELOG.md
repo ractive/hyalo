@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- **`hyalo_core::tasks::toggle_task` and `set_task_status`** (iter-191). These
+  singular single-line mutators had zero callers in the CLI and lacked the
+  `check_mtime` concurrent-modification guard their plural counterparts
+  (`toggle_tasks`, `set_tasks_status`) already had. Their behavior is fully
+  covered by calling the plural entry points with a one-element line slice.
+  Breaking change for any external consumer of the `hyalo-core` library API.
+
 ### Fixed
 
 - **Mutating a symlinked note no longer destroys the symlink** (iter-191,

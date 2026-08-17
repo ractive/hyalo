@@ -487,7 +487,11 @@ pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
 /// Toggle multiple tasks in one atomic read-modify-write pass. Lines are 1-based.
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Errors if any line is not a task checkbox.
-pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
+///
+/// `vault_root` is passed through to [`crate::fs_util::atomic_write_within`] so
+/// a symlinked destination that resolves outside the vault is refused at write
+/// time, not just at `discovery::resolve_file` resolution time (iter-191).
+pub fn toggle_tasks(vault_root: &Path, path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
     let mtime = frontmatter::read_mtime(path)?;
     bail_if_too_large(path, mtime.1)?;
 
@@ -525,7 +529,7 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
 
     let new_content = build_new_content(&content, &file_lines, &replacements);
     frontmatter::check_mtime(path, mtime)?;
-    crate::fs_util::atomic_write(path, new_content.as_bytes())
+    crate::fs_util::atomic_write_within(vault_root, path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(results)
@@ -534,7 +538,16 @@ pub fn toggle_tasks(path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
 /// Set a custom status character on multiple tasks in one atomic read-modify-write pass.
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Lines are 1-based. Errors if any line is not a task checkbox.
-pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Vec<TaskInfo>> {
+///
+/// `vault_root` is passed through to [`crate::fs_util::atomic_write_within`] so
+/// a symlinked destination that resolves outside the vault is refused at write
+/// time, not just at `discovery::resolve_file` resolution time (iter-191).
+pub fn set_tasks_status(
+    vault_root: &Path,
+    path: &Path,
+    lines: &[usize],
+    status: char,
+) -> Result<Vec<TaskInfo>> {
     let mtime = frontmatter::read_mtime(path)?;
     bail_if_too_large(path, mtime.1)?;
 
@@ -565,7 +578,7 @@ pub fn set_tasks_status(path: &Path, lines: &[usize], status: char) -> Result<Ve
 
     let new_content = build_new_content(&content, &file_lines, &replacements);
     frontmatter::check_mtime(path, mtime)?;
-    crate::fs_util::atomic_write(path, new_content.as_bytes())
+    crate::fs_util::atomic_write_within(vault_root, path, new_content.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
     Ok(results)
@@ -899,7 +912,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = toggle_tasks(&path, &[1]).unwrap();
+        let info = toggle_tasks(tmp.path(), &path, &[1]).unwrap();
         assert_eq!(info[0].status, 'x');
         assert!(info[0].done);
 
@@ -913,7 +926,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [x] Done task\n").unwrap();
 
-        let info = toggle_tasks(&path, &[1]).unwrap();
+        let info = toggle_tasks(tmp.path(), &path, &[1]).unwrap();
         assert_eq!(info[0].status, ' ');
         assert!(!info[0].done);
 
@@ -927,7 +940,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [X] Done task\n").unwrap();
 
-        let info = toggle_tasks(&path, &[1]).unwrap();
+        let info = toggle_tasks(tmp.path(), &path, &[1]).unwrap();
         assert_eq!(info[0].status, ' ');
         assert!(!info[0].done);
 
@@ -941,7 +954,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [-] Cancelled task\n").unwrap();
 
-        let info = toggle_tasks(&path, &[1]).unwrap();
+        let info = toggle_tasks(tmp.path(), &path, &[1]).unwrap();
         assert_eq!(info[0].status, 'x');
         assert!(info[0].done);
     }
@@ -952,7 +965,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "Regular line\n").unwrap();
 
-        let result = toggle_tasks(&path, &[1]);
+        let result = toggle_tasks(tmp.path(), &path, &[1]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
     }
@@ -963,7 +976,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "Line 1\n- [ ] Task\nLine 3\n").unwrap();
 
-        toggle_tasks(&path, &[2]).unwrap();
+        toggle_tasks(tmp.path(), &path, &[2]).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("Line 1"));
@@ -979,7 +992,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = set_tasks_status(&path, &[1], '?').unwrap();
+        let info = set_tasks_status(tmp.path(), &path, &[1], '?').unwrap();
         assert_eq!(info[0].status, '?');
         assert!(!info[0].done);
 
@@ -993,7 +1006,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = set_tasks_status(&path, &[1], 'x').unwrap();
+        let info = set_tasks_status(tmp.path(), &path, &[1], 'x').unwrap();
         assert_eq!(info[0].status, 'x');
         assert!(info[0].done);
     }
@@ -1004,7 +1017,7 @@ Regular text.
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "# Heading\n").unwrap();
 
-        let result = set_tasks_status(&path, &[1], 'x');
+        let result = set_tasks_status(tmp.path(), &path, &[1], 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
     }
@@ -1094,7 +1107,7 @@ Regular text.
         let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
         fs::write(&path, original).unwrap();
 
-        let result = toggle_tasks(&path, &[3]);
+        let result = toggle_tasks(tmp.path(), &path, &[3]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
 
@@ -1109,7 +1122,7 @@ Regular text.
         let original = "- [ ] Real task\n%%\n- [ ] Inside comment\n%%\n";
         fs::write(&path, original).unwrap();
 
-        let result = toggle_tasks(&path, &[3]);
+        let result = toggle_tasks(tmp.path(), &path, &[3]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
 
@@ -1126,7 +1139,7 @@ Regular text.
         let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
         fs::write(&path, original).unwrap();
 
-        let result = toggle_tasks(&path, &[1, 3]);
+        let result = toggle_tasks(tmp.path(), &path, &[1, 3]);
         assert!(result.is_err());
 
         let content = fs::read_to_string(&path).unwrap();
@@ -1143,7 +1156,7 @@ Regular text.
         let original = "- [ ] Real task\n```\n- [ ] Inside code\n```\n";
         fs::write(&path, original).unwrap();
 
-        let result = set_tasks_status(&path, &[3], 'x');
+        let result = set_tasks_status(tmp.path(), &path, &[3], 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
 
@@ -1158,7 +1171,7 @@ Regular text.
         let original = "- [ ] Real task\n%%\n- [ ] Inside comment\n%%\n";
         fs::write(&path, original).unwrap();
 
-        let result = set_tasks_status(&path, &[3], 'x');
+        let result = set_tasks_status(tmp.path(), &path, &[3], 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
 
@@ -1188,7 +1201,7 @@ title: Test
 
         // Physical lines: 1 `---`, 2 `title:`, 3 `---`, 4 ` ``` `, 5 fenced task,
         // 6 ` ``` `, 7 real task.
-        let infos = toggle_tasks(&path, &[7]).unwrap();
+        let infos = toggle_tasks(tmp.path(), &path, &[7]).unwrap();
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].line, 7);
         assert_eq!(infos[0].text, "Real task");
@@ -1212,7 +1225,7 @@ title: Test
         let f = fs::File::create(&path).unwrap();
         f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
 
-        let result = toggle_tasks(&path, &[1]);
+        let result = toggle_tasks(tmp.path(), &path, &[1]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too large"));
     }
@@ -1224,7 +1237,7 @@ title: Test
         let f = fs::File::create(&path).unwrap();
         f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
 
-        let result = set_tasks_status(&path, &[1], 'x');
+        let result = set_tasks_status(tmp.path(), &path, &[1], 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too large"));
     }
