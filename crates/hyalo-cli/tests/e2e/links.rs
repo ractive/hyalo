@@ -3999,3 +3999,179 @@ fn links_auto_config_exclusions_survive_apply() {
         "non-excluded titles should still be linked: {guide}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-197: advisory note for common-English-word candidate titles
+// ---------------------------------------------------------------------------
+
+/// Run `links auto` in `dir` and return `(stdout, stderr)` verbatim.
+///
+/// The common-title note is a stderr-only signal, so these tests need both
+/// streams — `run_links_auto_in_vault` above discards stderr.
+fn run_links_auto_capturing(dir: &std::path::Path, extra_args: &[&str]) -> (String, String) {
+    let output = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["links", "auto", "--format", "json"])
+        .args(extra_args)
+        .output()
+        .expect("hyalo links auto should run");
+    assert!(
+        output.status.success(),
+        "links auto exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn links_auto_notes_common_word_titles_on_stderr() {
+    // `permissions.md` is the canonical noise case: an ordinary English word as
+    // a page title, mentioned twice in prose in guide.md.
+    let tmp = setup_auto_config_vault("");
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.contains("note:"),
+        "the advisory should be a note, not a warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("common English word"),
+        "note should explain why the titles are flagged: {stderr}"
+    );
+    assert!(
+        stderr.contains("\"permissions\" (2×)"),
+        "note should name the offending title with its match count: {stderr}"
+    );
+    assert!(
+        stderr.contains("--exclude-title permissions"),
+        "note should hand the user a ready-to-paste flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("[links.auto] exclude_titles"),
+        "note should point at the persistent fix too: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_common_title_note_never_touches_the_stdout_report() {
+    // The report shape is the contract; the note lives on stderr only. A run
+    // with the note enabled must produce byte-identical stdout to one with it
+    // suppressed.
+    let tmp = setup_auto_config_vault("");
+
+    let (with_note, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+    let (without_note, silent_stderr) =
+        run_links_auto_capturing(tmp.path(), &["--no-warn-common-titles"]);
+
+    assert!(
+        !stderr.is_empty(),
+        "the control run should actually have emitted the note"
+    );
+    assert!(
+        silent_stderr.is_empty(),
+        "--no-warn-common-titles should leave stderr empty: {silent_stderr}"
+    );
+    assert_eq!(
+        with_note, without_note,
+        "the note must not change the stdout envelope"
+    );
+    assert!(
+        !with_note.contains("common English word"),
+        "the advisory text must never leak into stdout: {with_note}"
+    );
+}
+
+#[test]
+fn links_auto_config_warn_common_titles_false_silences_the_note() {
+    let tmp = setup_auto_config_vault("[links.auto]\nwarn_common_titles = false\n");
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.is_empty(),
+        "warn_common_titles = false should silence the note for every run: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_quiet_suppresses_the_common_title_note() {
+    let tmp = setup_auto_config_vault("");
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &["-q"]);
+
+    assert!(
+        stderr.is_empty(),
+        "-q suppresses every note, including this one: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_common_title_note_disappears_once_the_title_is_excluded() {
+    // Acting on the note removes it: the heuristic reports emitted matches, so
+    // an excluded title has nothing left to report.
+    let tmp = setup_auto_config_vault("");
+
+    let (_stdout, stderr) =
+        run_links_auto_capturing(tmp.path(), &["--exclude-title", "permissions"]);
+
+    assert!(
+        !stderr.contains("common English word"),
+        "excluding the title should extinguish the note: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_config_excluded_title_also_extinguishes_the_note() {
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        !stderr.contains("common English word"),
+        "a config exclusion should extinguish the note as well: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_stays_silent_for_domain_specific_titles() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "kubernetes.md",
+        md!(
+            r"
+---
+title: Kubernetes
+---
+Container orchestration.
+"
+        ),
+    );
+    write_md(
+        tmp.path(),
+        "guide.md",
+        md!(
+            r"
+---
+title: Guide
+---
+We deploy on Kubernetes twice a week.
+"
+        ),
+    );
+
+    let (stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stdout.contains("kubernetes"),
+        "the domain title should still be proposed: {stdout}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "no common-word title means no note at all: {stderr}"
+    );
+}

@@ -1023,6 +1023,46 @@ site_prefix = "docs"
             vec!["templates/*".to_owned()]
         );
         assert!(resolved.auto_link_first_only);
+        assert!(
+            resolved.auto_link_warn_common_titles,
+            "an unset warn_common_titles must stay on"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // [links.auto] warn_common_titles (iter-197)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn links_auto_warn_common_titles_defaults_to_true() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+
+        assert!(load_config_from(dir.path()).auto_link_warn_common_titles);
+    }
+
+    #[test]
+    fn links_auto_warn_common_titles_false_is_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nwarn_common_titles = false\n",
+        )
+        .unwrap();
+
+        assert!(!load_config_from(dir.path()).auto_link_warn_common_titles);
+    }
+
+    #[test]
+    fn links_auto_warn_common_titles_true_is_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nwarn_common_titles = true\n",
+        )
+        .unwrap();
+
+        assert!(load_config_from(dir.path()).auto_link_warn_common_titles);
     }
 
     #[test]

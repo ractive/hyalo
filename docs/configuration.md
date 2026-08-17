@@ -18,6 +18,7 @@ case_insensitive = "auto"                             # "auto", "true", or "fals
 exclude_titles = ["permissions", "README"]            # titles hyalo links auto never links
 exclude_target_globs = ["templates/*"]                # pages hyalo links auto never links to
 first_only = true                                     # link only the first mention per file
+warn_common_titles = true                             # note when a candidate title is a common word
 
 [schema.default]
 required = ["title"]
@@ -74,6 +75,7 @@ every invocation. `[links.auto]` persists them per vault:
 exclude_titles = ["permissions", "README", "index"]   # like --exclude-title (case-insensitive)
 exclude_target_globs = ["templates/*"]                # like --exclude-target-glob
 first_only = true                                     # like --first-only
+warn_common_titles = false                            # opt out of the common-word note
 ```
 
 Merge rules with the CLI flags:
@@ -83,13 +85,46 @@ Merge rules with the CLI flags:
 | `exclude_titles` | **Unioned** with `--exclude-title` — the flag extends the config list, never replaces it |
 | `exclude_target_globs` | **Unioned** with `--exclude-target-glob` |
 | `first_only` | `--first-only` turns it on for a single run; the config turns it on for every run |
+| `warn_common_titles` | On by default; `--no-warn-common-titles` turns it off for a single run, the config for every run |
 
 Because config exclusions apply silently, a run whose candidates they removed
 reports how many: `config_excluded` in the JSON envelope (omitted when zero,
 like `links.out_of_vault`) and an `Excluded by [links.auto] config: N titles`
 line in text output. `hyalo config` prints the effective settings as
 `links.auto.exclude_titles` / `links.auto.exclude_target_globs` /
-`links.auto.first_only` (and `results.links_auto` in JSON).
+`links.auto.first_only` / `links.auto.warn_common_titles` (and
+`results.links_auto` in JSON).
+
+### The common-word title note
+
+Exclusions only help once you have noticed the noise. On a first run, `hyalo
+links auto` also checks whether any proposed link came from a page whose title
+is an ordinary English word or a generic doc filename (`permissions`, `index`,
+`notes`, `README`) and, if so, prints one advisory line on stderr:
+
+```text
+note: 2 auto-link candidate titles are common English words and account for 31 of 33
+proposed links: "permissions" (24×), "index" (7×). If those are prose mentions rather
+than deliberate references, skip them with --exclude-title permissions
+--exclude-title index — or persist them once under [links.auto] exclude_titles in
+.hyalo.toml. Silence this note with --no-warn-common-titles.
+```
+
+Properties of the check, all deliberate:
+
+- **stderr only.** The report on stdout is byte-identical with the note enabled
+  or disabled, so no JSON consumer or diff-based workflow changes.
+- **Self-extinguishing.** Only titles that actually produced matches in *this*
+  run are named. Excluding them — by flag or config — removes the note.
+- **Match-count honest.** The counts quoted are the links being offered, not an
+  estimate over the title inventory.
+- **Silenced by `-q`** like every other note, or permanently by
+  `warn_common_titles = false`.
+- **Bundled word list, no dependency.** The list lives in
+  `hyalo-core::common_words` and covers high-frequency English words (plus
+  regular plurals, so `permissions` matches the stored `permission`) and generic
+  doc filenames. Titles shorter than 3 characters are never classified —
+  `--min-length` already excludes them.
 
 `hyalo links fix` has a similar per-invocation filter spelled
 `--ignore-target <substring>`. It matches link *targets* by substring rather

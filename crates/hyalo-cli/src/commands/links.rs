@@ -635,10 +635,27 @@ pub fn links_auto(
 
 #[cfg(test)]
 mod tests {
-    use super::AutoFilters;
+    use super::{AutoFilters, COMMON_TITLE_NOTE_MAX_LISTED, common_title_note};
+    use hyalo_core::auto_link::AutoLinkMatch;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// One proposed match with `matched_text` as the surface form; the other
+    /// fields are irrelevant to the common-title heuristic.
+    fn match_for(matched_text: &str) -> AutoLinkMatch {
+        AutoLinkMatch {
+            file: "guide.md".to_owned(),
+            line: 1,
+            col: 0,
+            matched_text: matched_text.to_owned(),
+            link_target: matched_text.to_ascii_lowercase(),
+        }
+    }
+
+    fn matches_for(surface_forms: &[&str]) -> Vec<AutoLinkMatch> {
+        surface_forms.iter().map(|t| match_for(t)).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -790,6 +807,154 @@ mod tests {
                 ..AutoFilters::default()
             }
             .has_config_exclusions()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-197: warn_common_titles resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn common_title_note_is_on_by_default() {
+        assert!(AutoFilters::default().effective_warn_common_titles());
+    }
+
+    #[test]
+    fn config_false_turns_the_common_title_note_off() {
+        let filters = AutoFilters {
+            config_warn_common_titles: false,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    #[test]
+    fn flag_turns_the_common_title_note_off_for_one_run() {
+        let filters = AutoFilters {
+            cli_no_warn_common_titles: true,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    #[test]
+    fn flag_and_config_both_off_stays_off() {
+        let filters = AutoFilters {
+            cli_no_warn_common_titles: true,
+            config_warn_common_titles: false,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-197: note text
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_matches_produces_no_note() {
+        assert!(common_title_note(&[]).is_none());
+    }
+
+    #[test]
+    fn domain_specific_titles_produce_no_note() {
+        let matches = matches_for(&["Kubernetes", "hyalo", "frontmatter"]);
+        assert!(common_title_note(&matches).is_none());
+    }
+
+    #[test]
+    fn single_offender_uses_singular_phrasing_and_exact_counts() {
+        let matches = matches_for(&["permissions", "permissions", "Kubernetes"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.starts_with("1 auto-link candidate title is a common English word"),
+            "singular phrasing expected: {note}"
+        );
+        assert!(
+            note.contains("accounts for 2 of 3 proposed links"),
+            "counts should be offender-vs-total: {note}"
+        );
+        assert!(
+            note.contains("\"permissions\" (2×)"),
+            "the offender should be named with its count: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title permissions"),
+            "the note should suggest the flag: {note}"
+        );
+    }
+
+    #[test]
+    fn offenders_are_ordered_by_count_then_alphabetically() {
+        // "index" 1×, "note" 3×, "report" 1×  →  note, index, report
+        let matches = matches_for(&["note", "Note", "NOTE", "report", "index"]);
+        let note = common_title_note(&matches).expect("common words should be flagged");
+        let pos = |needle: &str| note.find(needle).expect("offender should be listed");
+        assert!(
+            pos("\"note\" (3×)") < pos("\"index\" (1×)"),
+            "highest count first: {note}"
+        );
+        assert!(
+            pos("\"index\" (1×)") < pos("\"report\" (1×)"),
+            "ties broken alphabetically: {note}"
+        );
+        assert!(
+            note.starts_with("3 auto-link candidate titles are common English words"),
+            "plural phrasing expected: {note}"
+        );
+    }
+
+    #[test]
+    fn case_variants_of_one_title_are_counted_once() {
+        // `--exclude-title` is case-insensitive, so the note must not split
+        // "Note" and "note" into two separate offenders.
+        let matches = matches_for(&["Note", "note"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.contains("1 auto-link candidate title is"),
+            "case variants are one title: {note}"
+        );
+        assert!(
+            note.contains("\"note\" (2×)"),
+            "counts should be merged under the lowercased title: {note}"
+        );
+    }
+
+    #[test]
+    fn long_offender_lists_are_capped_with_a_remainder_count() {
+        let matches = matches_for(&[
+            "access", "account", "action", "active", "address", "agree", "answer",
+        ]);
+        let note = common_title_note(&matches).expect("common words should be flagged");
+        assert!(
+            note.contains(&format!("+{} more", 7 - COMMON_TITLE_NOTE_MAX_LISTED)),
+            "the tail should be summarised, not listed: {note}"
+        );
+        assert_eq!(
+            note.matches("--exclude-title ").count(),
+            COMMON_TITLE_NOTE_MAX_LISTED,
+            "only the named offenders get a suggested flag: {note}"
+        );
+    }
+
+    #[test]
+    fn multiword_titles_are_shell_quoted_in_the_suggestion() {
+        // "state of the art" is not a title we would flag, but a common word
+        // *is* reachable as a multi-word title via frontmatter aliases, and the
+        // suggested flag has to survive a copy-paste into a shell.
+        let quoted = super::quote_if_needed("data model");
+        assert_eq!(quoted, "\"data model\"");
+        assert_eq!(super::quote_if_needed("permissions"), "permissions");
+    }
+
+    #[test]
+    fn whitespace_only_matched_text_is_ignored() {
+        // Defensive: an empty surface form must not become an offender key.
+        let matches = matches_for(&["   ", "permissions"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.contains("\"permissions\" (1×)"),
+            "blank surface forms should be skipped, not counted: {note}"
         );
     }
 }

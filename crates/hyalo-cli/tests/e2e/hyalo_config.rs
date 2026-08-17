@@ -385,6 +385,46 @@ fn config_text_reports_links_auto_defaults() {
         stdout.contains("links.auto.first_only: false"),
         "expected first_only default false; got: {stdout}"
     );
+    assert!(
+        stdout.contains("links.auto.warn_common_titles: true"),
+        "expected warn_common_titles to default to on; got: {stdout}"
+    );
+}
+
+#[test]
+fn config_reports_warn_common_titles_opt_out() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links.auto]\nwarn_common_titles = false\n",
+    )
+    .unwrap();
+    setup_minimal(tmp.path());
+
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(text.status.success(), "stderr: {}", String::from_utf8_lossy(&text.stderr));
+    assert!(
+        stdout.contains("links.auto.warn_common_titles: false"),
+        "text report should surface the opt-out; got: {stdout}"
+    );
+
+    let json_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(json_out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(
+        json["results"]["links_auto"]["warn_common_titles"],
+        serde_json::json!(false),
+        "envelope should carry warn_common_titles: {json}"
+    );
 }
 
 #[test]
