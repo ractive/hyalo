@@ -4,7 +4,13 @@ use std::sync::OnceLock;
 use clap::{Args, Parser, Subcommand};
 
 use crate::cli::inputs::InputSelection;
+use crate::list_commands::list_commands_phrase;
 use crate::output::Format;
+
+/// Token substituted with [`list_commands_phrase`] in help templates.
+///
+/// Shared with [`crate::cli::help`] so both templates use the same marker.
+pub(crate) const LIST_COMMANDS_PLACEHOLDER: &str = "{LIST_COMMANDS}";
 
 /// Shared `--file` doc string used on every command that accepts `--file`,
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
@@ -128,12 +134,39 @@ pub(crate) fn build_version_string() -> &'static str {
     })
 }
 
-#[derive(Parser)]
-#[command(
-    name = "hyalo",
-    version = build_version_string(),
-    about = "Query, filter, and mutate YAML frontmatter across markdown file collections",
-    long_about = "Hyalo — query, filter, and mutate YAML frontmatter across markdown file collections.\n\n\
+/// Build the top-level `--help` prose.
+///
+/// A function rather than a string literal because the OUTPUT paragraph names
+/// the list commands, which are owned by [`crate::list_commands::LIST_COMMANDS`]
+/// (iter-192: generate, don't restate).
+pub(crate) fn build_long_about() -> &'static str {
+    static LONG_ABOUT: OnceLock<String> = OnceLock::new();
+    LONG_ABOUT.get_or_init(|| {
+        LONG_ABOUT_TEMPLATE.replace(LIST_COMMANDS_PLACEHOLDER, list_commands_phrase())
+    })
+}
+
+/// Build the `--count` flag's long help.
+///
+/// Same rationale as [`build_long_about`]: the list of commands accepting
+/// `--count` is derived, never restated.
+pub(crate) fn build_count_long_help() -> &'static str {
+    static COUNT_HELP: OnceLock<String> = OnceLock::new();
+    COUNT_HELP.get_or_init(|| {
+        format!(
+            "Print only the total count as a bare integer for list commands.\n\
+             List commands (those whose envelope carries a `total`): {}.\n\
+             Shortcut for --jq '.total'. Incompatible with --jq.\n\
+             Any other command exits 1 with an explanatory error rather than \
+             silently printing its full output.",
+            list_commands_phrase()
+        )
+    })
+}
+
+/// Template for [`build_long_about`]; [`LIST_COMMANDS_PLACEHOLDER`] is
+/// substituted at runtime.
+const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML frontmatter across markdown file collections.\n\n\
         Compatible with Obsidian vaults, Zettelkasten systems, and any directory of .md files \
         with YAML frontmatter. Also resolves [[wikilinks]] and manages task checkboxes.\n\n\
         SCOPE: Hyalo operates on a directory of .md files. It can query and mutate frontmatter \
@@ -145,7 +178,7 @@ pub(crate) fn build_version_string() -> &'static str {
         OUTPUT: Default format is \"text\" when stdout is a terminal, \"json\" when piped. \
         All JSON is wrapped in a consistent envelope:\n\
         \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
-        total is present for list commands (find, tags, properties, backlinks). \
+        total is present for list commands ({LIST_COMMANDS}). \
         hints is always present (empty [] when --no-hints). \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
         --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
@@ -161,7 +194,14 @@ pub(crate) fn build_version_string() -> &'static str {
         \u{00a0} hints = false          # disable hints (CLI default is on)\n\
         \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
-        See COMMAND REFERENCE below for full syntax of each command."
+        See COMMAND REFERENCE below for full syntax of each command.";
+
+#[derive(Parser)]
+#[command(
+    name = "hyalo",
+    version = build_version_string(),
+    about = "Query, filter, and mutate YAML frontmatter across markdown file collections",
+    long_about = build_long_about()
 )]
 pub(crate) struct Cli {
     /// Root directory for resolving all file and --glob paths.
@@ -184,10 +224,11 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
-    /// Print only the total count as a bare integer for list commands
-    /// (find, tags summary, properties summary, backlinks).
+    /// Print only the total count as a bare integer for list commands.
     /// Shortcut for --jq '.total'. Incompatible with --jq.
-    #[arg(long, global = true)]
+    // The full command list lives in `build_count_long_help()` so it is derived
+    // from LIST_COMMANDS rather than restated here (iter-192).
+    #[arg(long, global = true, long_help = build_count_long_help())]
     pub count: bool,
 
     /// Force hints on (already the default).

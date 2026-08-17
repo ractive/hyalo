@@ -15,7 +15,7 @@ use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
 use crate::hints::{CommonHintFlags, HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
-use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
+use crate::output_pipeline::{OutputPipeline, count_unsupported_error};
 use hyalo_core::index::SnapshotIndex;
 
 /// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
@@ -629,7 +629,7 @@ fn run_inner() -> Result<(), AppError> {
         let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
         eprintln!(
             "{}",
-            crate::output::format_error(fmt, COUNT_UNSUPPORTED_ERROR, None, None, None)
+            crate::output::format_error(fmt, count_unsupported_error(), None, None, None)
         );
         // User error (unsupported flag for this command) → exit 1, not 2
         // (2 is reserved for internal errors — iter-181 task 2).

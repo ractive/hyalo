@@ -6,10 +6,10 @@ use crate::output::{CommandOutcome, Format, apply_jq_filter_result, build_envelo
 
 /// Error message for `--count` on non-list commands (shared across match arms).
 ///
-/// Deliberately has no "Error: " prefix baked in — callers route it through
-/// [`crate::output::format_error`] so it renders correctly under both
-/// `--format text` (which adds the prefix) and `--format json`.
-pub(crate) const COUNT_UNSUPPORTED_ERROR: &str = "--count is only supported for list commands (find, tags summary, properties summary, backlinks, lint)";
+/// Re-exported from [`crate::list_commands`], the single source of truth for
+/// which commands emit a `total`. Do not hand-write the command list here —
+/// see that module's docs (iter-192).
+pub(crate) use crate::list_commands::count_unsupported_error;
 
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.
@@ -132,7 +132,7 @@ impl OutputPipeline<'_> {
                         "{}",
                         crate::output::format_error(
                             self.user_format,
-                            COUNT_UNSUPPORTED_ERROR,
+                            count_unsupported_error(),
                             None,
                             None,
                             None,
@@ -250,7 +250,7 @@ impl OutputPipeline<'_> {
                         "{}",
                         crate::output::format_error(
                             self.user_format,
-                            COUNT_UNSUPPORTED_ERROR,
+                            count_unsupported_error(),
                             None,
                             None,
                             None,
