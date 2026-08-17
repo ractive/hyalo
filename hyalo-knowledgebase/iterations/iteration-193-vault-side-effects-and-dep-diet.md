@@ -2,7 +2,7 @@
 title: Iteration 193 — vault side effects and dependency diet
 type: iteration
 date: 2026-08-06
-status: in-progress
+status: completed
 branch: iter-193/vault-side-effects-dep-diet
 tags:
   - iteration
@@ -54,7 +54,7 @@ Verified at `c42fa6f`:
 
 ## Tasks
 
-### Part A — stop writing to the vault on read-only commands
+### Part A — stop writing to the vault on read-only commands [4/4]
 
 - [x] Cache the resolved case-sensitivity per run — `OnceLock` keyed by
       canonical vault dir, or thread it through the existing command context
@@ -71,7 +71,7 @@ Verified at `c42fa6f`:
       case-insensitive link resolution silently turns **off**. That is a
       semantic change, not a perf detail, and it is currently undocumented.
 
-### Part B — dependency diet (upstream already landed; this is a bump)
+### Part B — dependency diet (upstream already landed; this is a bump) [4/5]
 
 - [x] Bump `mdbook-lint-core` and `mdbook-lint-rulesets` from `"0.14"` to
       `"0.15"` in `crates/hyalo-mdlint/Cargo.toml`. Release notes for
@@ -115,8 +115,11 @@ Verified at `c42fa6f`:
       byte columns while other rules use char columns, MD047's no-op range.
       hyalo is the best-documented embedder evidence available and those
       workarounds (`engine.rs:706-889`) are pure upstream-bug tax.
+      **[deferred — text drafted in full, not posted: unattended run cannot
+      write to a third-party GitHub repo (permission classifier). Carried to
+      [[iteration-194-post-upstream-mdbook-lint-reports]].]**
 
-### Part C — small consistency debts
+### Part C — small consistency debts [2/3]
 
 - [x] Replace the ~40 `writeln!(summary, ...).unwrap()` calls in
       `commands/init.rs` with `let _ = writeln!(...)`. `fmt::Write` into a
@@ -136,13 +139,16 @@ Verified at `c42fa6f`:
       continuation line falsely fires; inline `PR #472` mid-line correctly
       does not. Upstream-only: hyalo can just disable MD018, which would lose
       the genuine `#Heading` typo detection.
+      **[deferred — text drafted in full, not posted: unattended run cannot
+      write to a third-party GitHub repo (permission classifier). Carried to
+      [[iteration-194-post-upstream-mdbook-lint-reports]].]**
 - [x] Consider a distinct `out_of_vault` bucket for link targets that resolve
       outside the scanned directory (dogfood UX-1: GitHub Docs reports 6,568
       broken of 14,167, mostly `/src/...` and `../contributing/...` paths that
       are legitimately out of scope). Same treatment iter-184 gave broken
       anchors — keep them out of the headline `broken` count.
 
-## Acceptance criteria
+## Acceptance criteria [6/7]
 
 - [x] e2e: vault directory mtime is unchanged after `hyalo find`,
       `hyalo summary`, and `hyalo tags summary` — test name
@@ -156,6 +162,7 @@ Verified at `c42fa6f`:
       recorded before and after (expect 168 -> 135); MPL-2.0 exception
       removed from `deny.toml` and `cargo deny check` clean
 - [ ] upstream #456 comment link recorded in this file
+      **[deferred — see [[iteration-194-post-upstream-mdbook-lint-reports]]]**
 - [x] `grep -c "unwrap()" crates/hyalo-cli/src/commands/init.rs` returns 0
       outside `#[cfg(test)]`
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
