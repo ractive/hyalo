@@ -177,27 +177,6 @@ pub struct LintCounts {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Run `hyalo lint` against a list of `(full_path, rel_path)` file pairs.
-///
-/// Returns the formatted output and the set of counts; the caller is
-/// responsible for translating counts into an exit code.
-pub fn lint_files(
-    files: &[(std::path::PathBuf, String)],
-    schema: &SchemaConfig,
-    case_insensitive: bool,
-) -> Result<(CommandOutcome, LintCounts)> {
-    lint_files_with_options(
-        files,
-        schema,
-        FixMode::Off,
-        None,
-        &mut None,
-        None,
-        case_insensitive,
-        None,
-    )
-}
-
 /// Prepend an additional `FileLintResult` (e.g. `.hyalo.toml` view violations)
 /// to the outcome produced by [`lint_files_with_options`]. Adjusts the totals
 /// and the `files_with_issues` counter in the serialized payload to stay
@@ -3659,7 +3638,17 @@ type = \"skill\"
 
         let schema = SchemaConfig::default();
         let files = vec![(path, "note.md".to_owned())];
-        let (_, counts) = lint_files(&files, &schema, false).unwrap();
+        let (_, counts) = lint_files_with_options(
+            &files,
+            &schema,
+            FixMode::Off,
+            None,
+            &mut None,
+            None,
+            false,
+            None,
+        )
+        .unwrap();
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
     }

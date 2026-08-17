@@ -1387,6 +1387,16 @@ pub fn resolve_target(
     // Obsidian-style bare stem resolution: if the target has no path separator,
     // look it up by filename stem. Resolves `[[note]]` to `sub/note.md` when
     // exactly one file in the vault has that stem.
+    //
+    // Only `'/'` is tested here, unlike the sibling separator guards in this file
+    // (`stem_classification`, `classify_link`, the markdown-destination branch),
+    // which see raw link targets and therefore must test `'\\'` too. This guard
+    // runs *after* the unconditional `replace('\\', "/")` at the top of this
+    // function, so `target` cannot contain a backslash at this point: a Windows
+    // -flavoured target like `note.md\` has already become `note.md`, and cannot
+    // be truncated into a mangled stem such as `note.`. Adding `'\\'` here would
+    // be an unreachable condition. See `resolve_target_backslash_targets_are_
+    // normalized_before_stem_resolution` for the pinned invariant.
     if !target.contains('/')
         && let Some(idx) = case_index
     {
@@ -2139,6 +2149,55 @@ mod tests {
             resolve_target(&canonical, "b", None, Some(&idx)),
             Some("archive/b.md".to_owned()),
             "bare-stem fallback must work without case-insensitive paths"
+        );
+    }
+
+    #[test]
+    fn resolve_target_backslash_targets_are_normalized_before_stem_resolution() {
+        // iter-195: pins why the bare-stem guard in `resolve_target` tests only
+        // `'/'` while its three siblings in this file test `'/'` and `'\\'`.
+        // Backslashes are normalized to `/` at the top of `resolve_target`, so a
+        // Windows-flavoured target can never reach the stem branch carrying a
+        // separator that the guard fails to see, and can never be truncated into
+        // a mangled stem like `note.` (which would wrongly match `note..md`).
+        // Platform-independent: the normalization is a string replace, not a
+        // `Path` operation.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["note..md", "sub/note.md", "sub/other.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("note..md");
+        idx.insert("sub/note.md");
+        idx.insert("sub/other.md");
+
+        // Sanity: the mangled stem `note.` IS resolvable when asked for
+        // directly, so the assertions below are about normalization and not
+        // about an index that would miss anyway.
+        assert_eq!(
+            resolve_target(&canonical, "note.", None, Some(&idx)),
+            Some("note..md".to_owned()),
+            "index sanity: the stem `note.` resolves when asked for directly"
+        );
+
+        // `note.md\` normalizes to `note.md`, so it takes the ordinary bare-name
+        // path and resolves by stem `note` — never by the mangled stem `note.`.
+        assert_eq!(
+            resolve_target(&canonical, "note.md\\", None, Some(&idx)),
+            Some("sub/note.md".to_owned()),
+            "a trailing backslash must normalize away, not mangle the stem"
+        );
+
+        // A backslash-separated target is treated as the equivalent
+        // forward-slash path and never falls through to stem lookup.
+        assert_eq!(
+            resolve_target(&canonical, "sub\\other.md", None, Some(&idx)),
+            Some("sub/other.md".to_owned()),
+            "backslash-separated targets resolve as paths"
+        );
+        assert_eq!(
+            resolve_target(&canonical, "missing\\other", None, Some(&idx)),
+            None,
+            "a path-like backslash target must not be rescued by stem lookup"
         );
     }
 
