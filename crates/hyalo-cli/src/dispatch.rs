@@ -1501,6 +1501,21 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     allow_ambiguous,
                 )
             } else {
+                // `mv` has an asymmetric default: single-file mode writes
+                // immediately, batch mode defaults to dry-run and needs
+                // `--apply` to commit. Accepting `--apply` here as a silent
+                // no-op hid that asymmetry from anyone who learned the batch
+                // form first — they had no way to tell whether the flag was
+                // doing the work or the default was (iter-192, DEC-192-mv-apply).
+                if apply {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        "single-file mv applies by default; use --dry-run to preview",
+                        None,
+                        Some("--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run"),
+                        None,
+                    )));
+                }
                 let file = match resolve_single_file(file_positional, file) {
                     Ok(f) => f,
                     Err(e) => {

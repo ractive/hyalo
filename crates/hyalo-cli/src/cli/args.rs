@@ -664,7 +664,8 @@ pub(crate) enum Commands {
             Provide a positional FILE or --file. The destination is a .md path or an existing\n\
             directory (basename of source is appended), given either as --to <dest> or as a second\n\
             positional DEST (`hyalo mv old.md new.md`, requires the positional source). Applied\n\
-            immediately unless --dry-run is passed.\n\n\
+            immediately unless --dry-run is passed; --apply is rejected here (it would be a no-op\n\
+            and hide the mode asymmetry).\n\n\
             BATCH MODE (when --glob, --property, --tag, or --type is given):\n\
             Resolves a set of source files via the given selectors (intersection). --to must be a\n\
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
@@ -724,7 +725,8 @@ pub(crate) enum Commands {
         /// Preview changes without modifying any files (default behavior in batch mode without --apply)
         #[arg(long)]
         dry_run: bool,
-        /// Commit changes in batch mode (required when using --glob/--property/--tag/--type)
+        /// Commit changes in batch mode (required when using --glob/--property/--tag/--type).
+        /// Rejected in single-file mode, which applies by default — use --dry-run to preview.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// How to handle destination basename collisions: 'error' (default) or 'skip'

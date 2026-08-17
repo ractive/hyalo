@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod bundled_skills;
+mod command_reference;
 mod feature_fanout;
 mod help_drift;
 mod stubs;
@@ -23,6 +24,8 @@ enum Commands {
     CheckFeatureFanout,
     /// Gate 3: verify help text has EXAMPLES blocks and no stale wording.
     CheckHelpDrift,
+    /// Gate: verify every clap subcommand appears in the COMMAND REFERENCE block.
+    CheckCommandReference,
     /// Gate: verify every bundled skill template passes the skills profile.
     CheckBundledSkills,
     /// Stub — not yet implemented (iter-142b).
@@ -36,6 +39,7 @@ fn main() {
     let result = match cli.command {
         Commands::CheckFeatureFanout => feature_fanout::run(),
         Commands::CheckHelpDrift => help_drift::run(),
+        Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
