@@ -308,7 +308,7 @@ pub fn links_fix(
 ///   replace it, so a vault-wide exclusion cannot be lost by adding one flag
 /// - `first_only` is on when either source asks for it: config turns it on for
 ///   every run, `--first-only` turns it on for a single run
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct AutoFilters<'a> {
     /// `--min-length`: shortest title considered a candidate. Source-agnostic —
     /// it has no `[links.auto]` key (see the iteration's non-goals).
@@ -325,6 +325,29 @@ pub struct AutoFilters<'a> {
     pub config_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only`.
     pub config_first_only: bool,
+    /// `--no-warn-common-titles` was passed: silence the common-title note for
+    /// this run whatever the config says.
+    pub cli_no_warn_common_titles: bool,
+    /// `[links.auto] warn_common_titles` (default `true`).
+    pub config_warn_common_titles: bool,
+}
+
+impl Default for AutoFilters<'_> {
+    /// Mirrors the CLI defaults, not `bool::default()`: the common-title note is
+    /// on unless a vault opts out, so `config_warn_common_titles` starts `true`.
+    fn default() -> Self {
+        Self {
+            min_length: 0,
+            cli_exclude_titles: &[],
+            cli_exclude_target_globs: &[],
+            cli_first_only: false,
+            config_exclude_titles: &[],
+            config_exclude_target_globs: &[],
+            config_first_only: false,
+            cli_no_warn_common_titles: false,
+            config_warn_common_titles: true,
+        }
+    }
 }
 
 impl AutoFilters<'_> {
@@ -369,6 +392,15 @@ impl AutoFilters<'_> {
         self.cli_first_only || self.config_first_only
     }
 
+    /// `true` when the advisory common-title note should be considered for this
+    /// run: on by default, off when the vault sets
+    /// `[links.auto] warn_common_titles = false` or the run passes
+    /// `--no-warn-common-titles` (the flag can only turn it off — there is
+    /// nothing to turn on that the default does not already do).
+    pub fn effective_warn_common_titles(&self) -> bool {
+        self.config_warn_common_titles && !self.cli_no_warn_common_titles
+    }
+
     /// `true` when `[links.auto]` contributes at least one exclusion, i.e. when
     /// the `config_excluded` attribution pass is worth running.
     pub fn has_config_exclusions(&self) -> bool {
@@ -381,6 +413,99 @@ impl AutoFilters<'_> {
             exclude_titles: self.cli_exclude_titles,
             exclude_target_globs: self.cli_exclude_target_globs,
         }
+    }
+}
+
+/// How many offending titles the common-title note names before it summarises
+/// the rest as `+N more`. Five keeps the note (and the ready-to-paste flag list
+/// it suggests) inside a terminal line or two.
+const COMMON_TITLE_NOTE_MAX_LISTED: usize = 5;
+
+/// Build the advisory common-title note for a `links auto` run, or `None` when
+/// no proposed link came from a common English word (iter-197).
+///
+/// The heuristic runs on the *emitted* matches, not on the title inventory, so
+/// it is self-extinguishing and never speculative:
+///
+/// - a common-word title that produced no match is not mentioned — nothing to
+///   act on
+/// - a title already excluded (by `--exclude-title` or `[links.auto]
+///   exclude_titles`) cannot produce a match, so acting on the note makes it
+///   disappear
+/// - the counts quoted are exactly the links the user is being offered
+///
+/// The result is written to stderr as a `note:` by the caller. It deliberately
+/// never reaches the stdout envelope: a vault that has not opted into anything
+/// must see a byte-identical report (see the iteration's non-goals).
+fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option<String> {
+    use std::collections::HashMap;
+
+    let total = matches.len();
+    if total == 0 {
+        return None;
+    }
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for m in matches {
+        // Key on the lowercased matched text: `--exclude-title` compares
+        // case-insensitively, so "Permissions" and "permissions" are one title
+        // and the note must not split them into two entries.
+        let key = m.matched_text.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        *counts.entry(key).or_insert(0) += 1;
+    }
+
+    let mut offenders: Vec<(String, usize)> = counts
+        .into_iter()
+        .filter(|(title, _)| hyalo_core::common_words::is_common_word(title))
+        .collect();
+    if offenders.is_empty() {
+        return None;
+    }
+    // Most-noisy first; ties broken alphabetically so the note is deterministic.
+    offenders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let affected: usize = offenders.iter().map(|(_, count)| *count).sum();
+    let listed = offenders.len().min(COMMON_TITLE_NOTE_MAX_LISTED);
+    let mut names: Vec<String> = offenders[..listed]
+        .iter()
+        .map(|(title, count)| format!("\"{title}\" ({count}×)"))
+        .collect();
+    if offenders.len() > listed {
+        names.push(format!("+{} more", offenders.len() - listed));
+    }
+
+    let subject = if offenders.len() == 1 {
+        "1 auto-link candidate title is a common English word and accounts for".to_owned()
+    } else {
+        format!(
+            "{} auto-link candidate titles are common English words and account for",
+            offenders.len()
+        )
+    };
+    let flags: String = offenders[..listed]
+        .iter()
+        .map(|(title, _)| format!(" --exclude-title {}", quote_if_needed(title)))
+        .collect();
+
+    Some(format!(
+        "{subject} {affected} of {total} proposed links: {names}. \
+         If those are prose mentions rather than deliberate references, skip them with{flags} \
+         — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
+         Silence this note with --no-warn-common-titles.",
+        names = names.join(", "),
+    ))
+}
+
+/// Wrap a title in double quotes when it contains whitespace, so the suggested
+/// `--exclude-title` flags can be pasted into a shell verbatim.
+fn quote_if_needed(title: &str) -> String {
+    if title.chars().any(char::is_whitespace) {
+        format!("\"{title}\"")
+    } else {
+        title.to_owned()
     }
 }
 
@@ -430,6 +555,16 @@ pub fn links_auto(
     };
 
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
+
+    // iter-197: advisory note when common English words drive the candidates.
+    // stderr only (deduped and suppressed by `-q` like every other note), so the
+    // stdout envelope stays byte-identical for vaults that never opt into
+    // anything.
+    if filters.effective_warn_common_titles()
+        && let Some(note) = common_title_note(&report.matches)
+    {
+        crate::warn::note(note);
+    }
 
     // Collect unique modified files for the caller to patch the index. Only
     // files that were actually applied (not skipped/failed) count as modified,

@@ -1970,11 +1970,18 @@ pub(crate) enum LinksAction {
             \u{00a0}                      plain-text mention appears earlier in the file than the link.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
+            COMMON-WORD TITLES: when a proposed link comes from a page whose title is an ordinary \
+            English word or a generic doc filename (\"permissions\", \"index\", \"README\"), the run \
+            prints one advisory note on stderr naming those titles with their match counts and the \
+            --exclude-title flags that would skip them. It only names titles that actually produced \
+            matches, so excluding them makes the note disappear. The note never appears on stdout — \
+            the report is unchanged — and -q or --no-warn-common-titles silences it.\n\n\
             PERSISTING THESE: put them in the [links.auto] section of .hyalo.toml so they apply to every run:\n\
             \u{00a0} [links.auto]\n\
             \u{00a0} exclude_titles = [\"permissions\", \"README\"]\n\
             \u{00a0} exclude_target_globs = [\"templates/*\"]\n\
             \u{00a0} first_only = true\n\
+            \u{00a0} warn_common_titles = false   # opt out of the common-word note\n\
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
             config says. When config exclusions actually remove candidates, the report adds a \
@@ -2009,6 +2016,14 @@ pub(crate) enum LinksAction {
         /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
+        /// Do not print the advisory note naming candidate titles that are common
+        /// English words (e.g. "permissions", "index").
+        ///
+        /// The note goes to stderr only and never changes the report on stdout.
+        /// Persist the opt-out with `warn_common_titles = false` under
+        /// [links.auto] in .hyalo.toml.
+        #[arg(long)]
+        no_warn_common_titles: bool,
         /// Restrict to a single file (vault-relative path)
         #[arg(long, conflicts_with = "glob")]
         file: Option<String>,

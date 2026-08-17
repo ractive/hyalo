@@ -1502,6 +1502,7 @@ fn run_inner() -> Result<(), AppError> {
     let auto_link_exclude_titles = config.auto_link_exclude_titles;
     let auto_link_exclude_target_globs = config.auto_link_exclude_target_globs;
     let auto_link_first_only = config.auto_link_first_only;
+    let auto_link_warn_common_titles = config.auto_link_warn_common_titles;
     let mut md_lint = config.md_lint;
     let mut lint_strict_from_config = config.lint_strict;
     // Active conformance profiles: from `[lint] profiles` in `.hyalo.toml`, or
@@ -1664,6 +1665,7 @@ fn run_inner() -> Result<(), AppError> {
         auto_link_exclude_titles: &auto_link_exclude_titles,
         auto_link_exclude_target_globs: &auto_link_exclude_target_globs,
         auto_link_first_only,
+        auto_link_warn_common_titles,
         exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,

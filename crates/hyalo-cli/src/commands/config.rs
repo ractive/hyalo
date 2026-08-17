@@ -46,7 +46,7 @@ pub(crate) struct ConfigReport {
 /// two lists per-run and `--first-only` can turn `first_only` on for a run, so
 /// what is reported here is the *baseline* every `links auto` invocation starts
 /// from.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LinksAutoReport {
     /// `[links.auto] exclude_titles`.
     pub exclude_titles: Vec<String>,
@@ -54,6 +54,21 @@ pub(crate) struct LinksAutoReport {
     pub exclude_target_globs: Vec<String>,
     /// `[links.auto] first_only`.
     pub first_only: bool,
+    /// `[links.auto] warn_common_titles` — `true` (the default) means `links
+    /// auto` may print the advisory common-English-word note on stderr.
+    pub warn_common_titles: bool,
+}
+
+impl Default for LinksAutoReport {
+    /// Mirrors the resolved config defaults, where `warn_common_titles` is on.
+    fn default() -> Self {
+        Self {
+            exclude_titles: Vec::new(),
+            exclude_target_globs: Vec::new(),
+            first_only: false,
+            warn_common_titles: true,
+        }
+    }
 }
 
 /// Build and return the config report for `cwd`.
@@ -102,6 +117,7 @@ pub(crate) fn collect_config_report(
             exclude_titles: resolved.auto_link_exclude_titles,
             exclude_target_globs: resolved.auto_link_exclude_target_globs,
             first_only: resolved.auto_link_first_only,
+            warn_common_titles: resolved.auto_link_warn_common_titles,
         },
     })
 }
@@ -169,6 +185,7 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
                 "exclude_titles": report.links_auto.exclude_titles,
                 "exclude_target_globs": report.links_auto.exclude_target_globs,
                 "first_only": report.links_auto.first_only,
+                "warn_common_titles": report.links_auto.warn_common_titles,
             },
         },
         "hints": hints,
@@ -231,13 +248,14 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
 
     let mut out = format!(
         "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
-         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\n",
+         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
         auto_titles = list_or_none(&report.links_auto.exclude_titles),
         auto_globs = list_or_none(&report.links_auto.exclude_target_globs),
         auto_first_only = report.links_auto.first_only,
+        auto_warn_common = report.links_auto.warn_common_titles,
     );
 
     if let Some(ref contents) = report.raw_contents {
