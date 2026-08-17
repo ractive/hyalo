@@ -485,10 +485,13 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
             offenders.len()
         )
     };
-    let flags: String = offenders[..listed]
-        .iter()
-        .map(|(title, _)| format!(" --exclude-title {}", quote_if_needed(title)))
-        .collect();
+    let mut flags = String::new();
+    for (title, _) in &offenders[..listed] {
+        use std::fmt::Write as _;
+        // Writing into a String is infallible; the Result only exists to satisfy
+        // the `fmt::Write` signature.
+        let _ = write!(flags, " --exclude-title {}", quote_if_needed(title));
+    }
 
     Some(format!(
         "{subject} {affected} of {total} proposed links: {names}. \

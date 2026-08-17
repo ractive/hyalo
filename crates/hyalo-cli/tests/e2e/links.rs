@@ -4142,26 +4142,22 @@ fn links_auto_stays_silent_for_domain_specific_titles() {
     write_md(
         tmp.path(),
         "kubernetes.md",
-        md!(
-            r"
+        md!(r"
 ---
 title: Kubernetes
 ---
 Container orchestration.
-"
-        ),
+"),
     );
     write_md(
         tmp.path(),
         "guide.md",
-        md!(
-            r"
+        md!(r"
 ---
 title: Guide
 ---
 We deploy on Kubernetes twice a week.
-"
-        ),
+"),
     );
 
     let (stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);

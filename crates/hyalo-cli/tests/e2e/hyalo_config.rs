@@ -407,7 +407,11 @@ fn config_reports_warn_common_titles_opt_out() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&text.stdout);
-    assert!(text.status.success(), "stderr: {}", String::from_utf8_lossy(&text.stderr));
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
     assert!(
         stdout.contains("links.auto.warn_common_titles: false"),
         "text report should surface the opt-out; got: {stdout}"

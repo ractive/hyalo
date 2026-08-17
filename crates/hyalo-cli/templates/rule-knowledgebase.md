@@ -16,7 +16,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   Persist the noisy-title exclusions instead of retyping them: `[links.auto] exclude_titles = [...]`,
   `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
   rather than replacing them, and a run whose config exclusions removed candidates reports
-  `config_excluded`
+  `config_excluded`. When a proposed link comes from a page titled with a common English word,
+  a stderr `note:` names it with its match count — act on it or silence it with
+  `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
 - **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton with `TBD` placeholders; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild)
