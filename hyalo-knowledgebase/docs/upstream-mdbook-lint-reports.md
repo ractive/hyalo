@@ -13,13 +13,22 @@ tags:
 
 Two upstream submissions prepared during [[iterations/iteration-193-vault-side-effects-and-dep-diet]].
 
-**Status: NOT POSTED.** The autonomous agent that drafted these was blocked
-from writing to a third-party GitHub repository (`gh issue comment` /
-`gh issue create` against `joshrotenberg/mdbook-lint` is denied by the
-permission classifier, correctly — an unattended agent should not speak on
-the project's behalf in someone else's tracker). Post them manually, or grant
-the permission and re-run. Once posted, record the comment/issue URLs in the
-iteration file's acceptance criteria.
+**Status: §1 POSTED, §2 pending.** The autonomous agent that drafted these
+was blocked from writing to a third-party GitHub repository (`gh issue
+comment` / `gh issue create` against `joshrotenberg/mdbook-lint` is denied by
+the permission classifier, correctly — an unattended agent should not speak
+on the project's behalf in someone else's tracker).
+
+- §1 (comment on #456) was **posted 2026-08-17** on the user's explicit
+  instruction, with clear Claude Code attribution:
+  <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>
+  The posted text amends this draft: upstream PR
+  [#486](https://github.com/joshrotenberg/mdbook-lint/pull/486) (merged
+  2026-08-05, unreleased) already fixed items 2, 3 and 5 on `main`, so the
+  posted version marks those as independent confirmation rather than live
+  bugs; items 1 and 4 remain the open contract half.
+- §2 (MD018 false-positive issue) is still **NOT POSTED** — post manually and
+  record the URL here and in the iteration file's acceptance criteria.
 
 Target repository: <https://github.com/joshrotenberg/mdbook-lint>
 
@@ -27,6 +36,9 @@ Target repository: <https://github.com/joshrotenberg/mdbook-lint>
 
 Target: <https://github.com/joshrotenberg/mdbook-lint/issues/456>
 ("Make autofix coordinates unambiguous and safe for library embedders")
+
+**Posted 2026-08-17** (amended for upstream #486, Claude Code attribution):
+<https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>
 
 ---
 

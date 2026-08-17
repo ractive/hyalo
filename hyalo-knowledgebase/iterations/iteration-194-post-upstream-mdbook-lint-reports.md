@@ -43,7 +43,7 @@ landed in the interim.
 
 ## Tasks
 
-- [ ] Post the comment in [[docs/upstream-mdbook-lint-reports]] §1 to
+- [x] Post the comment in [[docs/upstream-mdbook-lint-reports]] §1 to
       <https://github.com/joshrotenberg/mdbook-lint/issues/456>. Re-verify the
       cited line numbers / behavior against whatever `mdbook-lint-core`
       version is current before posting — if it has moved, update the text's
@@ -64,7 +64,7 @@ landed in the interim.
 
 ## Acceptance criteria
 
-- [ ] A comment exists on `joshrotenberg/mdbook-lint#456` matching (or
+- [x] A comment exists on `joshrotenberg/mdbook-lint#456` matching (or
       knowingly updating) the drafted text; its URL is recorded in both
       [[docs/upstream-mdbook-lint-reports]] and
       [[iteration-193-vault-side-effects-and-dep-diet]]

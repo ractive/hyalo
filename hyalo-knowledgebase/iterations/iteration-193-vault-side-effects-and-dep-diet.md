@@ -71,7 +71,7 @@ Verified at `c42fa6f`:
       case-insensitive link resolution silently turns **off**. That is a
       semantic change, not a perf detail, and it is currently undocumented.
 
-### Part B — dependency diet (upstream already landed; this is a bump) [4/5]
+### Part B — dependency diet (upstream already landed; this is a bump) [5/5]
 
 - [x] Bump `mdbook-lint-core` and `mdbook-lint-rulesets` from `"0.14"` to
       `"0.15"` in `crates/hyalo-mdlint/Cargo.toml`. Release notes for
@@ -108,16 +108,17 @@ Verified at `c42fa6f`:
       rather than assume, and leave them in place if still reachable.
 - [x] Record the before/after crate count and clean-build time in this file
       so the win is measured, not asserted.
-- [ ] Comment on upstream issue **#456** ("Make autofix coordinates
+- [x] Comment on upstream issue **#456** ("Make autofix coordinates
       unambiguous and safe for library embedders", open, priority: high)
       with hyalo's concrete `convert_fix` workarounds — MD011's inclusive
       end column, MD034 swallowing Liquid `{%`/`{{`, MD009/HYALO001 needing
       byte columns while other rules use char columns, MD047's no-op range.
       hyalo is the best-documented embedder evidence available and those
       workarounds (`engine.rs:706-889`) are pure upstream-bug tax.
-      **[deferred — text drafted in full, not posted: unattended run cannot
-      write to a third-party GitHub repo (permission classifier). Carried to
-      [[iteration-194-post-upstream-mdbook-lint-reports]].]**
+      **[posted 2026-08-17 by the launching session on the user's explicit
+      instruction (the unattended run was classifier-blocked), amended for
+      upstream PR #486 which had already fixed items 2/3/5 on `main`:
+      <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>]**
 
 ### Part C — small consistency debts [2/3]
 
@@ -148,7 +149,7 @@ Verified at `c42fa6f`:
       are legitimately out of scope). Same treatment iter-184 gave broken
       anchors — keep them out of the headline `broken` count.
 
-## Acceptance criteria [6/7]
+## Acceptance criteria [7/7]
 
 - [x] e2e: vault directory mtime is unchanged after `hyalo find`,
       `hyalo summary`, and `hyalo tags summary` — test name
@@ -161,8 +162,9 @@ Verified at `c42fa6f`:
 - [x] `cargo tree -p hyalo-cli --edges normal --prefix none | sort -u | wc -l`
       recorded before and after (expect 168 -> 135); MPL-2.0 exception
       removed from `deny.toml` and `cargo deny check` clean
-- [ ] upstream #456 comment link recorded in this file
-      **[deferred — see [[iteration-194-post-upstream-mdbook-lint-reports]]]**
+- [x] upstream #456 comment link recorded in this file
+      **[posted 2026-08-17:
+      <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>]**
 - [x] `grep -c "unwrap()" crates/hyalo-cli/src/commands/init.rs` returns 0
       outside `#[cfg(test)]`
 - [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
@@ -228,11 +230,16 @@ does not touch (`cargo tree -i` confirms; `yaml-rust` needs `--target all`).
   in `broken` — a vault that *is* the site root makes those genuine misses, and
   hiding them would be worse than the noise saved.
 
-### Upstream items — drafted, NOT posted
+### Upstream items — #456 comment posted, MD018 issue pending
 
-Both upstream tasks were written up in full but could not be submitted: this
-iteration ran unattended, and writing to a third-party GitHub repository
+Both upstream tasks were written up in full but could not be submitted by the
+unattended run: writing to a third-party GitHub repository
 (`joshrotenberg/mdbook-lint`) is blocked by the permission classifier. The
-complete texts are in
-[[docs/upstream-mdbook-lint-reports]] — post them manually and record the URLs
-there and in the acceptance criteria above.
+complete texts are in [[docs/upstream-mdbook-lint-reports]].
+
+- The **#456 comment was posted 2026-08-17** by the launching session on the
+  user's explicit instruction (with Claude Code attribution), amended to
+  account for upstream PR #486 having fixed items 2/3/5 on `main`:
+  <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>
+- The **MD018 false-positive issue is still unposted** — tracked in
+  [[iteration-194-post-upstream-mdbook-lint-reports]].
