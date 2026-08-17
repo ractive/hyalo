@@ -50,7 +50,7 @@ iter-180 established hint trust but gated it with substring assertions
 (`hints.rs:4029`: `.contains("--limit 0")`), which the broken hint satisfies.
 That is the specific gap to close.
 
-## Tasks
+## Tasks [11/11]
 
 - [x] Introduce one shared constant (e.g. `LIST_COMMANDS` in `output.rs` or
       `cli/args.rs`) naming the commands that emit `total`, and derive from
@@ -91,7 +91,7 @@ That is the specific gap to close.
       mv applies by default; use --dry-run to preview" instead of silently
       accepting it as a no-op. Record as a DEC entry.
 
-## Acceptance criteria
+## Acceptance criteria [8/8]
 
 - [x] `LIST_COMMANDS` (or equivalent) is the single source for all five
       enumerations — `grep` finds no second hand-written list
