@@ -2066,9 +2066,15 @@ mod tests {
     /// Vault with three candidate pages, one of them under `templates/`.
     fn attribution_index() -> MockIndex {
         MockIndex::new(vec![
-            make_entry("permissions.md", vec![("title", Value::from("Permissions"))]),
+            make_entry(
+                "permissions.md",
+                vec![("title", Value::from("Permissions"))],
+            ),
             make_entry("daily.md", vec![("title", Value::from("Daily"))]),
-            make_entry("templates/widget.md", vec![("title", Value::from("Widget"))]),
+            make_entry(
+                "templates/widget.md",
+                vec![("title", Value::from("Widget"))],
+            ),
         ])
     }
 

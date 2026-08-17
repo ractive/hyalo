@@ -1677,8 +1677,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         resolved.as_index(),
                         dir,
                         apply,
-                        min_length,
                         &links_commands::AutoFilters {
+                            min_length,
                             cli_exclude_titles: &exclude_title,
                             cli_exclude_target_globs: &exclude_target_glob,
                             cli_first_only: first_only,

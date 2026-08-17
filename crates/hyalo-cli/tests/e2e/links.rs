@@ -3873,8 +3873,7 @@ fn links_auto_cli_exclude_title_extends_config_list() {
 
 #[test]
 fn links_auto_cli_exclude_target_glob_extends_config_list() {
-    let tmp =
-        setup_auto_config_vault("[links.auto]\nexclude_target_globs = [\"templates/*\"]\n");
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_target_globs = [\"templates/*\"]\n");
 
     let results = run_links_auto_in_vault(tmp.path(), &["--exclude-target-glob", "daily.md"]);
 
@@ -3985,7 +3984,10 @@ fn links_auto_config_exclusions_survive_apply() {
     let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
 
     let results = run_links_auto_in_vault(tmp.path(), &["--apply"]);
-    assert_eq!(results["applied"], true, "apply should report success: {results}");
+    assert_eq!(
+        results["applied"], true,
+        "apply should report success: {results}"
+    );
 
     let guide = fs::read_to_string(tmp.path().join("guide.md")).expect("guide.md should exist");
     assert!(

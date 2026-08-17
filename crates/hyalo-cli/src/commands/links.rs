@@ -310,6 +310,9 @@ pub fn links_fix(
 ///   every run, `--first-only` turns it on for a single run
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AutoFilters<'a> {
+    /// `--min-length`: shortest title considered a candidate. Source-agnostic —
+    /// it has no `[links.auto]` key (see the iteration's non-goals).
+    pub min_length: usize,
     /// `--exclude-title` values (repeatable).
     pub cli_exclude_titles: &'a [String],
     /// `--exclude-target-glob` values (repeatable).
@@ -328,9 +331,8 @@ impl AutoFilters<'_> {
     /// Union of config and CLI titles, config first, duplicates dropped
     /// case-insensitively (matching `--exclude-title`'s own comparison).
     pub fn effective_exclude_titles(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::with_capacity(
-            self.config_exclude_titles.len() + self.cli_exclude_titles.len(),
-        );
+        let mut out: Vec<String> =
+            Vec::with_capacity(self.config_exclude_titles.len() + self.cli_exclude_titles.len());
         for title in self
             .config_exclude_titles
             .iter()
@@ -394,7 +396,6 @@ pub fn links_auto(
     index: &dyn VaultIndex,
     dir: &Path,
     apply: bool,
-    min_length: usize,
     filters: &AutoFilters<'_>,
     file_filter: Option<&str>,
     glob_filter: &[String],
@@ -404,7 +405,7 @@ pub fn links_auto(
     let exclude_target_globs = filters.effective_exclude_target_globs();
     let opts = hyalo_core::auto_link::AutoLinkOptions {
         apply,
-        min_length,
+        min_length: filters.min_length,
         exclude_titles: &exclude_titles,
         first_only: filters.effective_first_only(),
         exclude_target_globs: &exclude_target_globs,
@@ -417,7 +418,7 @@ pub fn links_auto(
     let config_excluded = if filters.has_config_exclusions() {
         hyalo_core::auto_link::count_config_excluded_titles(
             index,
-            min_length,
+            filters.min_length,
             filters.cli_exclusions(),
             hyalo_core::auto_link::ExclusionSets {
                 exclude_titles: &exclude_titles,

@@ -1043,10 +1043,7 @@ site_prefix = "docs"
             resolved.frontmatter_link_props,
             Some(vec!["related".to_owned()])
         );
-        assert_eq!(
-            resolved.auto_link_exclude_titles,
-            vec!["index".to_owned()]
-        );
+        assert_eq!(resolved.auto_link_exclude_titles, vec!["index".to_owned()]);
     }
 
     #[test]
@@ -1077,7 +1074,9 @@ site_prefix = "docs"
         let resolved = load_config_from(dir.path());
         assert!(resolved.auto_link_exclude_titles.is_empty());
         assert_eq!(resolved.dir, PathBuf::from("."));
-        assert!(crate::warn::any_tracked_starts_with("malformed .hyalo.toml"));
+        assert!(crate::warn::any_tracked_starts_with(
+            "malformed .hyalo.toml"
+        ));
     }
 
     // ---------------------------------------------------------------------------
