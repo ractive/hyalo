@@ -51,6 +51,11 @@ pub(crate) struct IndexFlags {
     /// Read-only commands (find, summary, tags summary, properties summary,
     /// backlinks) skip the disk scan entirely when the index is present.
     ///
+    /// This set is *index support*, not the *list commands* of
+    /// [`crate::list_commands::LIST_COMMANDS`] — it includes `summary` (which
+    /// emits no `total`) and excludes the config-only listings. The two lists
+    /// answer different questions and are deliberately maintained apart.
+    ///
     /// Mutation commands (set, remove, append, task, mv, tags rename,
     /// properties rename, links fix) still read/write individual files on disk
     /// but also patch the index entry in-place after each mutation — keeping
