@@ -2,7 +2,7 @@
 title: Iteration 195a — persistent auto-link exclusions in .hyalo.toml
 type: iteration
 date: 2026-08-17
-status: in-progress
+status: completed
 branch: iter-195a/auto-link-config-exclusions
 tags:
   - iteration
@@ -44,7 +44,7 @@ Verified at `56480cb`:
   installs. Do NOT add `[links.auto]` to this repo's own `.hyalo.toml`
   until after the next release.
 
-## Tasks
+## Tasks [8/8]
 
 - [x] Extend `LinksConfig` with an optional `auto` table:
       `exclude_titles: Vec<String>`, `exclude_target_globs: Vec<String>`,
@@ -75,7 +75,7 @@ Verified at `56480cb`:
 - [x] Move [[backlog/done/auto-link-config-exclusions]] to `backlog/done/` with
       its ACs ticked (verify each against the landed behaviour first).
 
-## Acceptance criteria
+## Acceptance criteria [7/7]
 
 - [x] `[links.auto] exclude_titles` suppresses matches with no CLI flags
 - [x] CLI `--exclude-title` extends (not replaces) the config list; same
