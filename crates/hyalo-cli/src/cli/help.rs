@@ -135,10 +135,10 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo deinit
 
   Create-index (build snapshot for faster queries):
-    hyalo create-index [-o/--output PATH]
+    hyalo create-index [-o/--output PATH]   # --path is an alias for --output
 
   Drop-index (delete snapshot index):
-    hyalo drop-index [-p/--path PATH]
+    hyalo drop-index [-p/--path PATH]       # --output is an alias for --path
 
   Completions (generate shell completions):
     hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell

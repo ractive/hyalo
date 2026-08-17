@@ -607,8 +607,12 @@ pub(crate) enum Commands {
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.\n\n\
+            FLAG NOTE: `-n / --recent` sizes the 'recently modified' list only. This differs\n\
+            from `-n` on find and backlinks, where `-n` is `--limit` and caps the returned\n\
+            result set. `summary` has no --limit; its stats always cover every scanned file.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo summary\n\
+            \u{00a0} hyalo summary -n 25   # 25 recent files (not a result limit)\n\
             \u{00a0} hyalo summary --format text\n\
             \u{00a0} hyalo summary --jq '.results.tasks.total'\n\
             \u{00a0} hyalo summary --jq '.results.links.broken'"
@@ -617,7 +621,9 @@ pub(crate) enum Commands {
         /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
         #[arg(short, long)]
         glob: Vec<String>,
-        /// Number of recent files to show (default: 10)
+        /// Number of recent files to show (default: 10).
+        /// NOTE: on this command -n means --recent, not --limit as on find and backlinks —
+        /// it caps only the "recently modified" list, never the summary's stats
         #[arg(short = 'n', long, default_value = "10")]
         recent: usize,
         /// Limit directory listing depth (0 = root only; stats are always full)
@@ -958,7 +964,8 @@ Repeatable (AND).\n\
     CreateIndex {
         /// Output path for the index file (default: .hyalo-index in --dir).
         /// Equivalent to the global --index-file flag on this subcommand.
-        #[arg(short, long)]
+        /// Also accepted as --path, matching `drop-index --path`.
+        #[arg(short, long, visible_alias = "path")]
         output: Option<PathBuf>,
         /// Allow writing the index file outside the vault directory
         #[arg(long)]
@@ -975,8 +982,9 @@ Repeatable (AND).\n\
             SIDE EFFECTS: Deletes the index file from disk."
     )]
     DropIndex {
-        /// Path to the index file to delete (default: .hyalo-index in --dir)
-        #[arg(short, long)]
+        /// Path to the index file to delete (default: .hyalo-index in --dir).
+        /// Also accepted as --output, matching `create-index --output`.
+        #[arg(short, long, visible_alias = "output")]
         path: Option<PathBuf>,
         /// Allow deleting an index file outside the vault directory
         #[arg(long)]
