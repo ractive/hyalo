@@ -83,32 +83,90 @@ pub(crate) fn collect_config_report(
     })
 }
 
+/// Drill-down hints emitted by `hyalo config`.
+///
+/// `config` answers "what settings are in effect?"; the natural next questions
+/// are "what is in the vault those settings point at?" and "what schema rules
+/// will lint apply?". Both hints are plain, always-valid commands so the
+/// execution-based hint gate (`tests/e2e/hint_execution.rs`) can run them.
+pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
+    let dir = report.dir.display().to_string();
+    // Only pass --dir when it is not the implicit default; a bare `hyalo summary`
+    // reads the same .hyalo.toml this report came from.
+    let suffix = if dir == "." {
+        String::new()
+    } else {
+        format!(" --dir {}", crate::hints::shell_quote(&dir))
+    };
+    vec![
+        crate::hints::Hint::new(
+            "Overview of the vault this config points at".to_owned(),
+            format!("hyalo summary{suffix}"),
+        ),
+        crate::hints::Hint::new(
+            "Schema types lint will enforce".to_owned(),
+            format!("hyalo types list{suffix}"),
+        ),
+    ]
+}
+
+/// Build the JSON envelope for `hyalo config`.
+///
+/// Wrapped in the standard `{"results": ..., "hints": [...]}` envelope
+/// (iter-192) so `--jq` addresses it exactly like every other command.
+///
+/// Two deliberate shape decisions:
+/// - The config's own on/off switch is reported as `results.hints_enabled`,
+///   not `results.hints`. The envelope's `hints` is an array of drill-down
+///   commands; a boolean under the same name in the same document made
+///   `.hints` mean two different things depending on nesting depth.
+/// - `dir` appears both at `results.dir` and hoisted to the envelope root, the
+///   latter for compatibility with pre-192 consumers of `hyalo config
+///   --format json | jq .dir`.
+pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
+    let hints: Vec<serde_json::Value> = config_hints(report)
+        .iter()
+        .map(|h| json!({"description": &h.description, "cmd": &h.cmd}))
+        .collect();
+    json!({
+        "results": {
+            "config_path": report.config_path.as_ref().map(|p| p.display().to_string()),
+            "raw_contents": report.raw_contents,
+            "cwd": report.cwd.display().to_string(),
+            "dir": report.dir.display().to_string(),
+            "dir_overridden": report.dir_overridden,
+            "format": report.format,
+            "hints_enabled": report.hints,
+            "site_prefix": report.site_prefix,
+            "exempt": report.exempt,
+        },
+        "hints": hints,
+        "dir": report.dir.display().to_string(),
+    })
+}
+
 /// Run `hyalo config` and return a `CommandOutcome` ready for the output pipeline.
-pub(crate) fn run_config(report: &ConfigReport, format: Format) -> CommandOutcome {
+///
+/// `show_hints` controls whether the text rendering appends the `-> hyalo …`
+/// drill-down lines; the JSON envelope always carries a `hints` array (empty
+/// when suppressed), matching every other command.
+pub(crate) fn run_config(report: &ConfigReport, format: Format, show_hints: bool) -> CommandOutcome {
     match format {
         // `github` is rejected for non-lint commands upstream; treat as JSON here.
-        Format::Json | Format::Github => run_config_json(report),
-        Format::Text => run_config_text(report),
+        Format::Json | Format::Github => run_config_json(report, show_hints),
+        Format::Text => run_config_text(report, show_hints),
     }
 }
 
-fn run_config_json(report: &ConfigReport) -> CommandOutcome {
-    let obj = json!({
-        "config_path": report.config_path.as_ref().map(|p| p.display().to_string()),
-        "raw_contents": report.raw_contents,
-        "cwd": report.cwd.display().to_string(),
-        "dir": report.dir.display().to_string(),
-        "dir_overridden": report.dir_overridden,
-        "format": report.format,
-        "hints": report.hints,
-        "site_prefix": report.site_prefix,
-        "exempt": report.exempt,
-    });
-
-    CommandOutcome::success(format_success(Format::Json, &obj))
+fn run_config_json(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
+    let mut envelope = config_envelope(report);
+    if !show_hints {
+        envelope["hints"] = json!([]);
+    }
+    CommandOutcome::success(format_success(Format::Json, &envelope))
 }
 
-fn run_config_text(report: &ConfigReport) -> CommandOutcome {
+fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let config_path_str = report
         .config_path
         .as_ref()
@@ -144,6 +202,19 @@ fn run_config_text(report: &ConfigReport) -> CommandOutcome {
         if !contents.ends_with('\n') {
             out.push('\n');
         }
+    }
+
+    // Drill-down hints, rendered with the same `  -> cmd  # description` layout
+    // the JSON pipeline's text mode uses (crate::output::format_envelope), so
+    // `config` reads like every other command (iter-192).
+    if show_hints {
+        for hint in config_hints(report) {
+            out.push_str("\n  -> ");
+            out.push_str(&hint.cmd);
+            out.push_str("  # ");
+            out.push_str(&hint.description);
+        }
+        out.push('\n');
     }
 
     CommandOutcome::RawOutput(out)

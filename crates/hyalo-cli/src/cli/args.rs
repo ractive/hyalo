@@ -1689,7 +1689,10 @@ pub(crate) enum ChangelogAction {
 #[allow(clippy::large_enum_variant)] // Set variant holds FindFilters by design; boxing would complicate dispatch
 pub(crate) enum ViewsAction {
     /// List all saved views
+    // `summary` alias — mirrors `tags summary` / `properties summary` so the
+    // aggregate verb works across every subcommand group (iter-192).
     #[command(
+        visible_alias = "summary",
         long_about = "Show all saved views and their filter configurations.\n\n\
         OUTPUT: JSON envelope with results (array of view objects) and total count.\n\
         SIDE EFFECTS: None (read-only)."
@@ -1748,8 +1751,10 @@ pub(crate) enum ViewsAction {
 #[derive(Subcommand)]
 pub(crate) enum TypesAction {
     /// List all defined types and their required fields (default)
+    // `summary` alias — see `ViewsAction::List` (iter-192).
     #[command(
-        long_about = "List all type schemas defined in `.hyalo.toml`.\n\n            OUTPUT: JSON envelope with results array and total count.\n            SIDE EFFECTS: None (read-only)."
+        visible_alias = "summary",
+        long_about = "List all type schemas defined in `.hyalo.toml`.\n\n          OUTPUT: JSON envelope with results array and total count.\n            SIDE EFFECTS: None (read-only)."
     )]
     List,
     /// Show the full schema for a single type
@@ -1805,6 +1810,8 @@ pub(crate) enum TypesAction {
 #[derive(Subcommand)]
 pub(crate) enum LintRulesAction {
     /// List all available lint rules with their current settings (default)
+    // `summary` alias — see `ViewsAction::List` (iter-192).
+    #[command(visible_alias = "summary")]
     List {
         /// Only show enabled rules
         #[arg(long)]
@@ -2082,7 +2089,10 @@ pub(crate) enum TaskAction {
 #[derive(Subcommand)]
 pub(crate) enum PropertiesAction {
     /// Show unique property names with types and file counts (read-only)
+    // `list` alias: the same read verb `types list` / `views list` use, so a
+    // user who learned one group's verb can use it in the other (iter-192).
     #[command(
+        visible_alias = "list",
         long_about = "Aggregate summary of frontmatter properties across matched files.\n\n\
         OUTPUT: List of unique property names, their inferred type, and how many files contain them.\n\
         SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
@@ -2127,7 +2137,8 @@ pub(crate) enum PropertiesAction {
 #[derive(Subcommand)]
 pub(crate) enum TagsAction {
     /// Show unique tags with file counts (read-only)
-    #[command(long_about = "Aggregate summary of tags across matched files.\n\n\
+    // `list` alias — see `PropertiesAction::Summary` (iter-192).
+    #[command(visible_alias = "list", long_about = "Aggregate summary of tags across matched files.\n\n\
         OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
         SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
         SIDE EFFECTS: None (read-only).\n\

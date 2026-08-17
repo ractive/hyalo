@@ -41,7 +41,7 @@ pub struct Hint {
 }
 
 impl Hint {
-    fn new(description: impl Into<String>, cmd: String) -> Self {
+    pub(crate) fn new(description: impl Into<String>, cmd: String) -> Self {
         Self {
             description: description.into(),
             cmd,
@@ -977,7 +977,7 @@ fn hints_for_properties_summary(
         {
             hints.push(Hint::new(
                 format!("Show all {t} properties (no limit)"),
-                build_command_with_glob(ctx, &["properties", "--limit", "0"]),
+                build_command_with_glob(ctx, &["properties", "summary", "--limit", "0"]),
             ));
         }
     }
@@ -1436,7 +1436,7 @@ fn hints_for_tags_summary(
         {
             hints.push(Hint::new(
                 format!("Show all {t} tags (no limit)"),
-                build_command_with_glob(ctx, &["tags", "--limit", "0"]),
+                build_command_with_glob(ctx, &["tags", "summary", "--limit", "0"]),
             ));
         }
     }
