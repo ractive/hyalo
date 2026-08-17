@@ -131,7 +131,6 @@ the shape change proved backward-compatible (not the hard schema break assumed
 here) under `to_vec_named` framing — see DEC-060. The deferral notes below are
 retained for history.
 
-
 Deferred, honestly, as one unit. Anchor carry-through requires adding
 `fragment: Option<String>` to the serialized `Link`, which changes the
 `.hyalo-index` wire shape (`IndexEntry.links`) and must land together with the

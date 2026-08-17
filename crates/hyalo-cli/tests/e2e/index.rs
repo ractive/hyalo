@@ -225,9 +225,65 @@ fn create_index_bare_relative_filename() {
     );
 }
 
+#[test]
+fn create_index_accepts_path_alias_for_output() {
+    // iter-195: `create-index` spelled the index file `--output` while
+    // `drop-index` spelled the same file `--path`. Long aliases (both
+    // directions) remove the guesswork without breaking either spelling.
+    let tmp = setup_vault();
+    let custom_path = tmp.path().join("aliased.idx");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--path", custom_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "create-index --path should be accepted; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        custom_path.exists(),
+        "index should exist after create-index --path"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["path"].as_str().unwrap(),
+        custom_path.to_str().unwrap()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // drop-index
 // ---------------------------------------------------------------------------
+
+#[test]
+fn drop_index_accepts_output_alias_for_path() {
+    // iter-195: mirror of `create_index_accepts_path_alias_for_output`.
+    let tmp = setup_vault();
+    let index_path = create_default_index(&tmp);
+    assert!(index_path.exists());
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["drop-index", "--output", index_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "drop-index --output should be accepted; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !index_path.exists(),
+        "index should be gone after drop-index --output"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(json["results"]["deleted"].is_string());
+}
 
 #[test]
 fn drop_index_deletes_file() {
