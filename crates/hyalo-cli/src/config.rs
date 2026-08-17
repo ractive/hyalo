@@ -987,6 +987,100 @@ site_prefix = "docs"
     }
 
     // ---------------------------------------------------------------------------
+    // [links.auto] config (iter-195a)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn links_auto_all_keys_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nexclude_titles = [\"permissions\", \"README\"]\n\
+             exclude_target_globs = [\"templates/*\"]\nfirst_only = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(
+            resolved.auto_link_exclude_titles,
+            vec!["permissions".to_owned(), "README".to_owned()]
+        );
+        assert_eq!(
+            resolved.auto_link_exclude_target_globs,
+            vec!["templates/*".to_owned()]
+        );
+        assert!(resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_partial_table_keeps_other_defaults() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nfirst_only = true\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_coexists_with_other_links_keys() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links]\ncase_insensitive = \"true\"\nfrontmatter_properties = [\"related\"]\n\n\
+             [links.auto]\nexclude_titles = [\"index\"]\n",
+        )
+        .unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert_eq!(resolved.case_insensitive_mode, CaseInsensitiveMode::On);
+        assert_eq!(
+            resolved.frontmatter_link_props,
+            Some(vec!["related".to_owned()])
+        );
+        assert_eq!(
+            resolved.auto_link_exclude_titles,
+            vec!["index".to_owned()]
+        );
+    }
+
+    #[test]
+    fn links_auto_defaults_when_absent() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "[links]\n").unwrap();
+
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(!resolved.auto_link_first_only);
+    }
+
+    #[test]
+    fn links_auto_unknown_key_is_warned_and_config_ignored() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \"vault\"\n[links.auto]\nexclude_title = [\"typo\"]\n",
+        )
+        .unwrap();
+
+        // Same behaviour as every other unknown key: warn, then fall back to
+        // hardcoded defaults for the whole file (deny_unknown_fields).
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let resolved = load_config_from(dir.path());
+        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert_eq!(resolved.dir, PathBuf::from("."));
+        assert!(crate::warn::any_tracked_starts_with("malformed .hyalo.toml"));
+    }
+
+    // ---------------------------------------------------------------------------
     // validate_on_write config
     // ---------------------------------------------------------------------------
 

@@ -3732,3 +3732,268 @@ Nothing links here anymore.
         "envelope must carry 'failed'"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `[links.auto]` config exclusions (iter-195a)
+// ---------------------------------------------------------------------------
+
+/// Vault used by the `[links.auto]` tests.
+///
+/// `guide.md` mentions "Permissions" twice, "Daily" twice, and "Widget" once,
+/// so one fixture covers exclusion, first-only, and target-glob behaviour.
+fn setup_auto_config_vault(config: &str) -> TempDir {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    fs::write(tmp.path().join(".hyalo.toml"), config).expect("config should be writable");
+
+    write_md(
+        tmp.path(),
+        "permissions.md",
+        md!(r"
+---
+title: Permissions
+---
+How the permission model works.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "daily.md",
+        md!(r"
+---
+title: Daily
+---
+Daily standup notes.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "templates/widget.md",
+        md!(r"
+---
+title: Widget
+---
+Template for widgets.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "guide.md",
+        md!(r"
+---
+title: Guide
+---
+Permissions are checked first.
+Daily runs happen nightly, and Permissions apply there too.
+A Widget is rendered, and Daily wraps up.
+"),
+    );
+    tmp
+}
+
+/// Run `hyalo links auto` from *inside* the vault so the vault's own
+/// `.hyalo.toml` is the config that gets loaded — config resolution is
+/// CWD-based, `--dir` only moves the vault.
+fn run_links_auto_in_vault(dir: &std::path::Path, extra_args: &[&str]) -> serde_json::Value {
+    let output = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["links", "auto", "--format", "json"])
+        .args(extra_args)
+        .output()
+        .expect("hyalo links auto should run");
+    assert!(
+        output.status.success(),
+        "links auto exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    json["results"].clone()
+}
+
+/// The distinct `link_target`s proposed in a `links auto` result.
+fn proposed_targets(results: &serde_json::Value) -> Vec<String> {
+    let mut targets: Vec<String> = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array")
+        .iter()
+        .filter_map(|m| m["link_target"].as_str().map(str::to_owned))
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+#[test]
+fn links_auto_config_exclude_titles_applies_without_flags() {
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &[]);
+
+    assert_eq!(
+        proposed_targets(&results),
+        vec!["daily".to_owned(), "widget".to_owned()],
+        "config exclude_titles should suppress permissions with no CLI flags: {results}"
+    );
+    assert_eq!(
+        results["config_excluded"], 1,
+        "one candidate title was removed by config: {results}"
+    );
+}
+
+#[test]
+fn links_auto_config_exclude_titles_is_case_insensitive() {
+    // The config spelling need not match the page's casing, matching
+    // `--exclude-title`'s own case-insensitive comparison.
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"PERMISSIONS\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &[]);
+
+    assert!(
+        !proposed_targets(&results).contains(&"permissions".to_owned()),
+        "differently-cased config entry should still exclude: {results}"
+    );
+}
+
+#[test]
+fn links_auto_cli_exclude_title_extends_config_list() {
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--exclude-title", "Daily"]);
+
+    assert_eq!(
+        proposed_targets(&results),
+        vec!["widget".to_owned()],
+        "the flag must extend (not replace) the config list: {results}"
+    );
+    assert_eq!(
+        results["config_excluded"], 1,
+        "config_excluded counts only what the config took away: {results}"
+    );
+}
+
+#[test]
+fn links_auto_cli_exclude_target_glob_extends_config_list() {
+    let tmp =
+        setup_auto_config_vault("[links.auto]\nexclude_target_globs = [\"templates/*\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--exclude-target-glob", "daily.md"]);
+
+    assert_eq!(
+        proposed_targets(&results),
+        vec!["permissions".to_owned()],
+        "config glob and flag glob should both apply: {results}"
+    );
+    assert_eq!(
+        results["config_excluded"], 1,
+        "the glob-excluded template page contributed one candidate title: {results}"
+    );
+}
+
+#[test]
+fn links_auto_config_first_only_behaves_like_the_flag() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = true\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &[]);
+
+    // guide.md mentions Permissions twice and Daily twice; first-only keeps one each.
+    assert_eq!(
+        results["total"], 3,
+        "first_only from config should keep one mention per target: {results}"
+    );
+    assert!(
+        results.get("config_excluded").is_none(),
+        "first_only alone removes no candidate titles: {results}"
+    );
+}
+
+#[test]
+fn links_auto_flag_first_only_wins_over_config_false() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = false\n");
+
+    let without_flag = run_links_auto_in_vault(tmp.path(), &[]);
+    assert_eq!(
+        without_flag["total"], 5,
+        "first_only = false should link every mention: {without_flag}"
+    );
+
+    let with_flag = run_links_auto_in_vault(tmp.path(), &["--first-only"]);
+    assert_eq!(
+        with_flag["total"], 3,
+        "an explicit --first-only wins for this run: {with_flag}"
+    );
+}
+
+#[test]
+fn links_auto_config_and_flag_first_only_compose() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = true\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--first-only"]);
+
+    assert_eq!(
+        results["total"], 3,
+        "flag plus config is still first-only: {results}"
+    );
+}
+
+#[test]
+fn links_auto_omits_config_excluded_when_config_removed_nothing() {
+    // A config exclusion naming a title no page has removes no candidates, so
+    // the key stays out of the envelope (the `links.out_of_vault` precedent).
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"nonexistent\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &[]);
+
+    assert!(
+        results.get("config_excluded").is_none(),
+        "config_excluded should be omitted when zero: {results}"
+    );
+}
+
+#[test]
+fn links_auto_without_config_omits_config_excluded() {
+    let tmp = setup_auto_config_vault("");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--exclude-title", "Permissions"]);
+
+    assert!(
+        results.get("config_excluded").is_none(),
+        "CLI-only exclusions are not config exclusions: {results}"
+    );
+}
+
+#[test]
+fn links_auto_text_output_reports_config_excluded() {
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--format", "text"])
+        .output()
+        .expect("hyalo links auto should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stdout.contains("Excluded by [links.auto] config: 1 title"),
+        "text output should explain the config exclusions; got: {stdout}"
+    );
+}
+
+#[test]
+fn links_auto_config_exclusions_survive_apply() {
+    let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--apply"]);
+    assert_eq!(results["applied"], true, "apply should report success: {results}");
+
+    let guide = fs::read_to_string(tmp.path().join("guide.md")).expect("guide.md should exist");
+    assert!(
+        !guide.contains("[[permissions]]"),
+        "config-excluded title must not be written on --apply: {guide}"
+    );
+    assert!(
+        guide.contains("[[daily]]"),
+        "non-excluded titles should still be linked: {guide}"
+    );
+}
