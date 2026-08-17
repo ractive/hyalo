@@ -133,10 +133,29 @@ const SEED_COMMANDS: &[&[&str]] = &[
     &["config"],
     &["create-index"],
     &["task", "read", "--file", "notes/note-1.md", "--line", "12"],
-    &["task", "toggle", "--file", "notes/note-1.md", "--line", "12"],
-    &["set", "--property", "reviewed=true", "--file", "notes/note-1.md"],
+    &[
+        "task",
+        "toggle",
+        "--file",
+        "notes/note-1.md",
+        "--line",
+        "12",
+    ],
+    &[
+        "set",
+        "--property",
+        "reviewed=true",
+        "--file",
+        "notes/note-1.md",
+    ],
     &["remove", "--property", "owner", "--file", "notes/note-2.md"],
-    &["append", "--property", "aliases=Alt", "--file", "notes/note-3.md"],
+    &[
+        "append",
+        "--property",
+        "aliases=Alt",
+        "--file",
+        "notes/note-3.md",
+    ],
     &["mv", "notes/note-4.md", "notes/moved-4.md"],
 ];
 
@@ -348,6 +367,13 @@ fn to_argv_injects_dir_when_the_hint_omits_it() {
     let vault = Path::new("/tmp/fresh-vault");
     assert_eq!(
         to_argv("hyalo tags summary --limit 0", vault),
-        vec!["--dir", "/tmp/fresh-vault", "tags", "summary", "--limit", "0"]
+        vec![
+            "--dir",
+            "/tmp/fresh-vault",
+            "tags",
+            "summary",
+            "--limit",
+            "0"
+        ]
     );
 }

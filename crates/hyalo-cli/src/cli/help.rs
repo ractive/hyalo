@@ -10,8 +10,8 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Files with broken links:      hyalo find --broken-links
   Sort and limit:               hyalo find --sort modified --reverse --limit 10
   Count matching files:         hyalo find --tag project --count
-  Read file content:            hyalo read --file notes/todo.md
-  Read a section:               hyalo read --file notes/todo.md --section Proposal
+  Read file content:            hyalo read notes/todo.md
+  Read a section:               hyalo read notes/todo.md --section Proposal
   Set a property:               hyalo set --property status=completed --file notes/todo.md
   Bulk-set with filter:         hyalo set --property status=completed --where-property status=draft --glob '**/*.md'
   Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'
@@ -24,7 +24,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag
   Vault overview:               hyalo summary --format text
   Toggle a task:                hyalo task toggle --file todo.md --line 5
-  Find backlinks:               hyalo backlinks --file decision-log.md
+  Find backlinks:               hyalo backlinks decision-log.md
   Move a file (update links):   hyalo mv --file old.md --to new.md
   Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run
   Fix broken links (preview):   hyalo links fix
@@ -264,7 +264,10 @@ COOKBOOK:
   # Pipe file paths for scripting (Unix)
   hyalo find --tag research --jq '.results[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
 
-  # Find all files that link to a given note
+  # Find all files that link to a given note (positional FILE)
+  hyalo backlinks decision-log.md
+
+  # Find all files that link to a given note (equivalent flag form)
   hyalo backlinks --file decision-log.md
 
   # Move a file and update all links
@@ -279,11 +282,14 @@ COOKBOOK:
   # Disable absolute-link resolution entirely
   hyalo --site-prefix '' find --fields links
 
-  # Read file body content
+  # Read file body content (positional FILE — the form every hint emits)
+  hyalo read notes/todo.md
+
+  # Read file body content (equivalent flag form)
   hyalo read --file notes/todo.md
 
   # Read a specific section
-  hyalo read --file notes/todo.md --section Tasks
+  hyalo read notes/todo.md --section Tasks
 
   # Read a line range
   hyalo read --file notes/todo.md --lines 1:10

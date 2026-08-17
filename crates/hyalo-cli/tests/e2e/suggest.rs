@@ -240,7 +240,11 @@ fn append_tag_hint_only_fires_for_real_append_subcommand() {
 #[test]
 fn read_verb_aliases_work_in_every_subcommand_group() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "a.md", "---\ntitle: A\ntags:\n  - x\n---\n# A\n");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntags:\n  - x\n---\n# A\n",
+    );
     let dir = tmp.path().to_str().unwrap().to_owned();
 
     for argv in [
@@ -278,7 +282,11 @@ fn read_verb_aliases_work_in_every_subcommand_group() {
 #[test]
 fn alias_output_matches_canonical_verb() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "a.md", "---\ntitle: A\ntags:\n  - x\n---\n# A\n");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntags:\n  - x\n---\n# A\n",
+    );
     let dir = tmp.path().to_str().unwrap().to_owned();
 
     for (canonical, alias) in [

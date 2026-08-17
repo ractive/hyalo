@@ -1512,7 +1512,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         effective_format,
                         "single-file mv applies by default; use --dry-run to preview",
                         None,
-                        Some("--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run"),
+                        Some(
+                            "--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run",
+                        ),
                         None,
                     )));
                 }

@@ -2,9 +2,14 @@
 title: Iteration 192 — CLI surface truth (help, hints, envelope, verbs)
 type: iteration
 date: 2026-08-06
-status: planned
+status: in-progress
 branch: iter-192/cli-surface-truth
-tags: [iteration, cli, docs, hints, dx]
+tags:
+  - iteration
+  - cli
+  - docs
+  - hints
+  - dx
 related:
   - "[[reviews/codebase-review-2026-08-06]]"
   - "[[dogfood-results/dogfood-v0200-opus5-review-round]]"

@@ -308,7 +308,10 @@ fn config_json_hints_are_an_array_of_runnable_commands() {
     assert!(!hints.is_empty(), "config should emit hints: {json}");
     for hint in hints {
         let cmd = hint["cmd"].as_str().expect("hint cmd");
-        assert!(cmd.starts_with("hyalo "), "hint cmd must be runnable: {cmd}");
+        assert!(
+            cmd.starts_with("hyalo "),
+            "hint cmd must be runnable: {cmd}"
+        );
         assert!(
             hint["description"].is_string(),
             "hint needs a description: {hint}"

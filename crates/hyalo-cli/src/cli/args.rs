@@ -1440,7 +1440,15 @@ Repeatable (AND).\n\
         long_about = "Print the effective configuration for the current working directory.\n\n\
             Shows which .hyalo.toml is active (or none), its raw contents, and the effective\n\
             values: config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
-            OUTPUT: Line-by-line in text format; JSON object with --format json.\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo config\n\
+            \u{00a0} hyalo config --dir ../other-vault\n\
+            \u{00a0} hyalo config --jq '.results.dir'\n\
+            \u{00a0} hyalo config --format json\n\n\
+            OUTPUT: Line-by-line in text format; the standard JSON envelope with --format json —\n\
+            the settings live under `results`, and the config's own hints switch is reported as\n\
+            `results.hints_enabled` so it does not collide with the envelope's `hints` array.\n\
+            --jq filters that envelope like it does for every other command.\n\
             SIDE EFFECTS: None (read-only)."
     )]
     Config,
@@ -2140,11 +2148,14 @@ pub(crate) enum PropertiesAction {
 pub(crate) enum TagsAction {
     /// Show unique tags with file counts (read-only)
     // `list` alias — see `PropertiesAction::Summary` (iter-192).
-    #[command(visible_alias = "list", long_about = "Aggregate summary of tags across matched files.\n\n\
+    #[command(
+        visible_alias = "list",
+        long_about = "Aggregate summary of tags across matched files.\n\n\
         OUTPUT: Each unique tag and how many files contain it. Tags are compared case-insensitively.\n\
         SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
         SIDE EFFECTS: None (read-only).\n\
-        USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy.")]
+        USE WHEN: You need to see which tags exist, find popular/orphan tags, or audit tag taxonomy."
+    )]
     Summary {
         /// Glob pattern(s) to filter which files to scan, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long)]

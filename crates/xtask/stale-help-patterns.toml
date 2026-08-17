@@ -9,3 +9,18 @@ reason = "iter-140 fixed via create_dir_all"
 [[patterns]]
 pattern = "parent does not exist"
 reason = "iter-140 fixed via create_dir_all"
+
+# iter-192 — the CLI's four inconsistent enumerations of "commands that emit
+# total". All five call sites now render list_commands::LIST_COMMANDS, so any
+# of these hand-written variants reappearing means someone re-forked the list.
+[[patterns]]
+pattern = "find, tags, properties, backlinks"
+reason = "iter-192: list-command set is derived from LIST_COMMANDS, not restated"
+
+[[patterns]]
+pattern = "backlinks, lint)"
+reason = "iter-192: stale --count list; derive from LIST_COMMANDS"
+
+[[patterns]]
+pattern = "default: json"
+reason = "iter-192: --format defaults to text on a TTY and json when piped, never unconditionally json"

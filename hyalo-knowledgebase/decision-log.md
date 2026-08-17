@@ -1108,3 +1108,25 @@ the snapshot index (`index.rs`), which detects a torn read via
 `rmp_serde::from_slice` and falls back to a disk scan, user markdown has no
 recovery path. The snapshot index therefore deliberately keeps its unsynced
 write. See [[iterations/iteration-191-write-path-integrity]].
+
+## DEC-064: `mv`'s dual default is kept, and made loud (2026-08-17)
+
+**Decision:** `hyalo mv` keeps its asymmetric default — single-file mode writes
+immediately, batch mode (`--glob`/`--property`/`--tag`/`--type`) defaults to
+dry-run and requires `--apply` — but single-file mode now **rejects** `--apply`
+with `single-file mv applies by default; use --dry-run to preview` instead of
+accepting it as a silent no-op.
+
+**Why:** The two defaults are each right for their mode. A single-file `mv` is
+the same gesture as `mv(1)` and blocking it behind a flag would be gratuitous
+ceremony; a batch `mv` can rewrite hundreds of files from one glob, where the
+cost of an unintended run is high enough that preview-by-default earns its
+keystroke. Collapsing them either way makes one of the two modes worse.
+
+What could not stay was the *silence*. `--apply` in single-file mode did
+nothing and reported nothing, so a user who learned the batch form first had no
+way to tell whether the flag was doing the work or the default was — and would
+carry that wrong model into the batch case, where it matters. An explicit
+rejection converts an invisible asymmetry into a one-line lesson at the moment
+the wrong mental model shows up. See
+[[iterations/iteration-192-cli-surface-truth]].

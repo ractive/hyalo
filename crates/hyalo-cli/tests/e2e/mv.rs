@@ -2034,7 +2034,9 @@ fn mv_single_file_rejects_apply() {
 
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["mv", "old.md", "--to", "new.md", "--apply", "--format", "text"])
+        .args([
+            "mv", "old.md", "--to", "new.md", "--apply", "--format", "text",
+        ])
         .output()
         .unwrap();
 
@@ -2058,7 +2060,11 @@ fn mv_single_file_rejects_apply() {
 #[test]
 fn mv_batch_still_accepts_apply() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "old.md", "---\ntitle: Old\ntype: note\n---\n# Old\n");
+    write_md(
+        tmp.path(),
+        "old.md",
+        "---\ntitle: Old\ntype: note\n---\n# Old\n",
+    );
     std::fs::create_dir_all(tmp.path().join("done")).unwrap();
 
     let output = hyalo_no_hints()

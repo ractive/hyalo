@@ -150,7 +150,11 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
 /// `show_hints` controls whether the text rendering appends the `-> hyalo …`
 /// drill-down lines; the JSON envelope always carries a `hints` array (empty
 /// when suppressed), matching every other command.
-pub(crate) fn run_config(report: &ConfigReport, format: Format, show_hints: bool) -> CommandOutcome {
+pub(crate) fn run_config(
+    report: &ConfigReport,
+    format: Format,
+    show_hints: bool,
+) -> CommandOutcome {
     match format {
         // `github` is rejected for non-lint commands upstream; treat as JSON here.
         Format::Json | Format::Github => run_config_json(report, show_hints),

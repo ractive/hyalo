@@ -105,7 +105,8 @@ hyalo find --fields properties,backlinks              # combine with other field
 ```
 
 **All JSON output uses a consistent envelope:** `{"results": <payload>, "total": N, "hints": [...]}`.
-`total` is present for list commands (find, tags summary, properties summary, backlinks).
+`total` is present for list commands (find, lint, tags summary, properties summary, backlinks,
+types list, views list, lint-rules list) — the same set `--count` accepts.
 `hints` is always present (empty `[]` when `--no-hints`). `--jq` operates on the full envelope:
 
 ```bash
@@ -250,24 +251,29 @@ default in interactive terminals).
 - **read** — extract body content, a section, or line range
 - **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
 - **lint** — validate frontmatter against the `[schema]` and lint markdown body with mdbook-lint MD001..MD059 + HYALO001/002 native rules; supports `--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--strict` (promotes missing-type and undeclared-property warnings to errors), `--fix`, `--fix-rule`; exit 1 when errors found
-- **lint-rules** — manage which lint rules are enabled and their severity in `.hyalo.toml` (list, show, set, remove)
-- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove)
-- **properties summary** — list property names and types
+- **lint-rules** — manage which lint rules are enabled and their severity in `.hyalo.toml` (list, show, set, remove; `lint-rules summary` aliases `list`)
+- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove; `types summary` aliases `list`)
+- **properties summary** — list property names and types (`properties list` is an alias)
 - **properties rename** — bulk rename a property key across files (`--from old --to new`)
-- **tags summary** — list tags with counts
+- **tags summary** — list tags with counts (`tags list` is an alias)
 - **tags rename** — bulk rename a tag across files (`--from old --to new`)
 - **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates, which default to all `**/*.md` when no `--file`/`--glob` is given; `--property 'K=[a,b,c]'` creates YAML sequences; `--property 'K=[[foo/bar]]'` stores a literal wikilink string; `--validate` rejects values that would fail schema lint; file arg is positional or `--file`, repeatable)
 - **remove** — delete properties or tags
 - **append** — add to list properties (supports `--validate`; note: tags are not appendable; use `set --tag` instead)
 - **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
-- **mv** — move/rename a file and rewrite all inbound links across the vault (`--dry-run` to preview)
+- **mv** — move/rename a file and rewrite all inbound links across the vault. Single-file mode
+  writes immediately (`--dry-run` to preview; `--apply` is rejected there). Batch mode
+  (`--glob`/`--property`/`--tag`/`--type`) defaults to dry-run and needs `--apply` to commit
 - **links fix** — detect broken wikilinks/markdown links and auto-repair (dry-run by default; `--apply` to write). Also detects case mismatches when `[links] case_insensitive` is enabled (default `"auto"` on macOS/Windows). Low-confidence fuzzy matches are reported separately and excluded from `--apply` unless you pass `--apply-fuzzy` (optionally `--min-confidence <0.0-1.0>`)
 - **backlinks** — reverse link lookup: lists all files that link to a given file
 - **create-index** — build a snapshot index for faster repeated read-only queries
 - **drop-index** — delete a snapshot index file created with create-index
-- **views list** — show all saved views and their filters
+- **views list** — show all saved views and their filters (`views summary` is an alias)
 - **views set** — save a find query as a named view (`hyalo views set todo --task todo`)
 - **views remove** — delete a saved view
+- **config** — print the effective configuration (which `.hyalo.toml` is active, resolved dir,
+  format, hints, site prefix). Wrapped in the standard envelope, so `hyalo config --jq
+  '.results.dir'` works like any other command
 
 ## Schema & Lint
 
@@ -452,7 +458,7 @@ structure.
 
 ## Default output limits
 
-List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at
+List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`, `types list`, `views list`, `lint-rules list`) return at
 most **50 results** by default to avoid flooding the context window. When results are truncated,
 output shows "showing N of M matches" and a hint to get all results.
 
