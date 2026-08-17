@@ -17,6 +17,7 @@ mod feature_matrix;
 mod files_from;
 mod find;
 mod help;
+mod hint_execution;
 mod hints;
 mod hyalo_config;
 mod index;

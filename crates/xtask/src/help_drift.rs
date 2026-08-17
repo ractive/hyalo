@@ -39,7 +39,22 @@ const SUBCOMMANDS: &[&[&str]] = &[
     &["task", "read"],
     &["task", "toggle"],
     &["task", "set"],
+    // iter-192: commands that reached the COMMAND REFERENCE but had never been
+    // held to the EXAMPLES / stale-wording bar.
+    &["changelog"],
+    &["config"],
+    &["madr"],
+    &["okf"],
 ];
+
+/// Commands scanned for stale wording (3b) on top of [`SUBCOMMANDS`].
+///
+/// The empty argv is `hyalo --help` itself. It carries the OUTPUT paragraph,
+/// the global-flags block, and the OUTPUT SHAPES note — the three places
+/// iter-192 found contradicting the binary — but has no `EXAMPLES:` header of
+/// its own (its examples live in the `-h` short help), so it is excluded from
+/// the 3a check rather than allowlisted out of it.
+const STALE_ONLY_COMMANDS: &[&[&str]] = &[&[]];
 
 /// Commands allowed to skip the EXAMPLES requirement (no-op / meta commands).
 const EXAMPLES_ALLOWLIST: &[&str] = &["help", "completions"];
@@ -158,13 +173,19 @@ fn check_stale_patterns(root: &std::path::Path, patterns: &[StalePattern]) -> Ve
     }
 
     let mut failures = Vec::new();
-    for argv in SUBCOMMANDS {
+    for argv in SUBCOMMANDS.iter().chain(STALE_ONLY_COMMANDS.iter()) {
         let cmd_label = argv.join(" ");
         let Some(help) = help_text(root, argv) else {
             continue;
         };
 
-        let help_lower = help.to_lowercase();
+        // Collapse whitespace so a pattern still matches when clap wraps the
+        // help at a column that happens to fall inside the phrase.
+        let help_lower = help
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         for sp in patterns {
             if help_lower.contains(sp.pattern.to_lowercase().as_str()) {
                 failures.push(format!(

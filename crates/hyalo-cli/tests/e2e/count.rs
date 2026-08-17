@@ -265,3 +265,139 @@ fn count_on_read_command_errors() {
         "expected unsupported error, got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// LIST_COMMANDS is one source of truth (iter-192)
+// ---------------------------------------------------------------------------
+
+/// Collapse every run of whitespace to a single space so assertions are immune
+/// to clap's line wrapping (the same phrase wraps at different columns in
+/// different help sections).
+fn squash(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The list-command phrase the binary itself reports, read out of the `--count`
+/// runtime error. Everything else in this module is checked against it, so the
+/// test never restates the list — restating it is the bug being prevented.
+fn declared_list_commands() -> Vec<String> {
+    let tmp = TempDir::new().unwrap();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["summary", "--count", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let start = stderr
+        .find("list commands (")
+        .unwrap_or_else(|| panic!("no --count error to parse: {stderr}"))
+        + "list commands (".len();
+    let rest = &stderr[start..];
+    let end = rest.find(')').expect("unterminated command list");
+    rest[..end]
+        .split(", ")
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn list_commands_phrase_is_identical_in_every_help_section() {
+    let commands = declared_list_commands();
+    assert!(
+        commands.len() >= 5,
+        "parsed a suspiciously short list: {commands:?}"
+    );
+    let phrase = commands.join(", ");
+
+    let output = hyalo_no_hints().arg("--help").output().unwrap();
+    let help = squash(&String::from_utf8_lossy(&output.stdout));
+    let occurrences = help.matches(&phrase).count();
+
+    // Four call sites render the list: the top-level OUTPUT paragraph, the
+    // --count flag's long help, the "Default output limits" block, and the
+    // OUTPUT SHAPES note. All four read from LIST_COMMANDS, so all four must
+    // agree with the runtime error verbatim.
+    assert_eq!(
+        occurrences, 4,
+        "expected the list-command phrase \"{phrase}\" in all 4 help sections, found {occurrences}"
+    );
+}
+
+#[test]
+fn every_declared_list_command_emits_total_and_accepts_count() {
+    let tmp = setup_vault();
+    let dir = tmp.path().to_str().unwrap().to_owned();
+
+    for cmd in declared_list_commands() {
+        let mut argv: Vec<&str> = cmd.split(' ').collect();
+        // `backlinks` is the one list command with a required operand.
+        if argv.first() == Some(&"backlinks") {
+            argv.push("a.md");
+        }
+
+        // --count must print a bare integer.
+        let counted = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args(&argv)
+            .arg("--count")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&counted.stdout).into_owned();
+        assert!(
+            stdout.trim().parse::<u64>().is_ok(),
+            "`hyalo {cmd} --count` did not print a bare integer (stdout: {stdout:?}, stderr: {})",
+            String::from_utf8_lossy(&counted.stderr)
+        );
+
+        // The JSON envelope must carry the `total` that makes --count possible.
+        let json_out = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args(&argv)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(&json_out.stdout)
+            .unwrap_or_else(|e| panic!("`hyalo {cmd} --format json` is not JSON: {e}"));
+        assert!(
+            envelope.get("total").is_some(),
+            "`hyalo {cmd}` is declared a list command but its envelope has no `total`: {envelope}"
+        );
+    }
+}
+
+#[test]
+fn known_non_list_commands_reject_count() {
+    let tmp = setup_vault();
+    let dir = tmp.path().to_str().unwrap().to_owned();
+    let declared = declared_list_commands();
+
+    // Commands whose payload is a single object, not a countable collection.
+    for cmd in [
+        vec!["summary"],
+        vec!["read", "a.md"],
+        vec!["links", "fix"],
+        vec!["config"],
+    ] {
+        let label = cmd.join(" ");
+        assert!(
+            !declared.contains(&label),
+            "{label} is declared a list command; this test's premise is stale"
+        );
+        let output = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args(&cmd)
+            .args(["--count", "--format", "text"])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "`hyalo {label} --count` should be rejected, not silently succeed"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(
+            stderr.contains("--count is only supported for list commands"),
+            "`hyalo {label} --count` gave an unexpected error: {stderr}"
+        );
+    }
+}

@@ -9,6 +9,36 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`list` / `summary` verb aliases across every subcommand group** (iter-192).
+  `properties` and `tags` used `summary`; `types`, `views`, and `lint-rules`
+  used `list`. Each group now accepts both spellings, so the verb learned in one
+  group works in the rest: `hyalo tags list`, `hyalo properties list`,
+  `hyalo types summary`, `hyalo views summary`, `hyalo lint-rules summary`.
+- **Two new drift gates** (iter-192). `cargo run -p xtask --
+  check-command-reference` fails when a clap subcommand has no COMMAND REFERENCE
+  entry (it is wired into the Quality Gates workflow). An execution-based hint
+  gate harvests every hint the CLI emits across a fixture vault and *runs* each
+  one, failing on any the CLI rejects — the substring assertions it replaces
+  could not distinguish a runnable command from a plausible-looking one.
+
+### Changed
+
+- **`hyalo config --format json` now uses the standard envelope** (iter-192) —
+  **breaking for JSON consumers**. The settings moved from the document root
+  into `results`, and the config's own on/off switch is reported as
+  `results.hints_enabled` rather than `hints`, which previously meant a boolean
+  at the root and an array of drill-down commands everywhere else. `dir` stays
+  hoisted to the root as well, so `hyalo config --format json | jq .dir` keeps
+  working; every other field moves under `.results`. `config` also emits
+  drill-down hints now, in both text and JSON.
+- **`hyalo mv --apply` is rejected in single-file mode** (iter-192). Single-file
+  `mv` writes immediately and batch `mv` defaults to dry-run; accepting
+  `--apply` as a silent no-op in the first mode hid that asymmetry from anyone
+  who learned the batch form first. It now errors with `single-file mv applies
+  by default; use --dry-run to preview`. Batch `--apply` is unchanged.
+
 ### Removed
 
 - **`hyalo_core::tasks::toggle_task` and `set_task_status`** (iter-191). These
@@ -20,6 +50,25 @@ and this project adheres to
 
 ### Fixed
 
+- **`hyalo --help` no longer contradicts itself about which commands emit
+  `total`** (iter-192). Four help sections and the `--count` runtime error each
+  carried a separately hand-written list, and none of the five matched the
+  binary — `lint`, `types list`, `views list`, and `lint-rules list` all emit a
+  `total` and accept `--count` while being listed as if they did not. All five
+  call sites now render one `LIST_COMMANDS` constant, and an e2e test parses the
+  list back out of the binary and verifies each named command really does emit a
+  `total`.
+- **Eight commands were missing from COMMAND REFERENCE** (iter-192):
+  `changelog`, `config`, `lint`, `lint-rules`, `madr`, `new`, `okf`, and
+  `types`. The reference also claimed `--format json|text` with a fixed
+  `default: json` (it is `json|text|github`, defaulting to text on a terminal
+  and json when piped) and omitted `--index-file`.
+- **`hyalo tags summary` suggested a command that does not run** (iter-192). Its
+  show-all hint emitted `hyalo tags --limit 0`; `--limit` belongs to `tags
+  summary`, not `tags`. The equivalent `properties summary` hint had the same
+  defect and is fixed too.
+- **`hyalo config --jq` silently ignored the filter** (iter-192), printing the
+  whole object as though no filter had been passed.
 - **Mutating a symlinked note no longer destroys the symlink** (iter-191,
   DEC-062) — **user-visible behaviour change**. Every command that writes a
   file (`set`, `remove`, `append`, `task`, `lint --fix`, `mv`, `okf`,

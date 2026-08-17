@@ -10,8 +10,8 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Files with broken links:      hyalo find --broken-links
   Sort and limit:               hyalo find --sort modified --reverse --limit 10
   Count matching files:         hyalo find --tag project --count
-  Read file content:            hyalo read --file notes/todo.md
-  Read a section:               hyalo read --file notes/todo.md --section Proposal
+  Read file content:            hyalo read notes/todo.md
+  Read a section:               hyalo read notes/todo.md --section Proposal
   Set a property:               hyalo set --property status=completed --file notes/todo.md
   Bulk-set with filter:         hyalo set --property status=completed --where-property status=draft --glob '**/*.md'
   Add a tag across files:       hyalo set --tag reviewed --glob 'research/**/*.md'
@@ -24,7 +24,7 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Rename a tag across files:    hyalo tags rename --from old-tag --to new-tag
   Vault overview:               hyalo summary --format text
   Toggle a task:                hyalo task toggle --file todo.md --line 5
-  Find backlinks:               hyalo backlinks --file decision-log.md
+  Find backlinks:               hyalo backlinks decision-log.md
   Move a file (update links):   hyalo mv --file old.md --to new.md
   Move (dry-run preview):       hyalo mv --file old.md --to sub/new.md --dry-run
   Fix broken links (preview):   hyalo links fix
@@ -39,14 +39,19 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Generate shell completions:   hyalo completions bash";
 
 /// Long help (shown by `--help`): command reference, cookbook, and output shapes.
-pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
+///
+/// Template — [`crate::cli::args::LIST_COMMANDS_PLACEHOLDER`] is substituted with
+/// the rendered [`crate::list_commands::LIST_COMMANDS`] at runtime by
+/// [`help_long`]. Never hand-write the list-command enumeration here (iter-192).
+const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
                [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
                [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [--reverse] [-n/--limit N]
 
   Read (display file body content, read-only):
-    hyalo read -f/--file F [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
+    hyalo read FILE [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
+    hyalo read -f/--file F [...]                                  Flag form; FILE positional is equivalent
 
   Set (create or overwrite, mutates files):
     hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
@@ -57,12 +62,12 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Append (add to list properties, mutates files):
     hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
 
-  Properties (subcommand group):
-    hyalo properties summary [-g/--glob G] [-n/--limit N]         Unique property names, types, and file counts (read-only)
+  Properties (subcommand group; bare `hyalo properties` = summary):
+    hyalo properties summary [-g/--glob G] [-n/--limit N]         Unique property names, types, and file counts (read-only) [alias: list]
     hyalo properties rename --from OLD --to NEW [-g/--glob G]     Rename a property key across files (mutates files)
 
-  Tags (subcommand group):
-    hyalo tags summary [-g/--glob G] [-n/--limit N]               Unique tags with file counts (read-only)
+  Tags (subcommand group; bare `hyalo tags` = summary):
+    hyalo tags summary [-g/--glob G] [-n/--limit N]               Unique tags with file counts (read-only) [alias: list]
     hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)
 
   Summary (vault overview, read-only):
@@ -74,7 +79,8 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo task set        -f/--file F -l/--line N -s/--status C
 
   Backlinks (reverse link lookup, read-only):
-    hyalo backlinks -f/--file F [-n/--limit N]
+    hyalo backlinks FILE [-n/--limit N]
+    hyalo backlinks -f/--file F [...]                             Flag form; FILE positional is equivalent
 
   Links (link operations):
     hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
@@ -83,11 +89,44 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
   Mv (move/rename file, updates links, mutates files):
     hyalo mv -f/--file F --to NEW [--dry-run]
 
-  Views (manage saved find queries):
-    hyalo views list                                       List all saved views
+  Views (manage saved find queries; bare `hyalo views` = list):
+    hyalo views list                                       List all saved views [alias: summary]
     hyalo views set <NAME> [find filters...]               Save a view (overwrites existing)
     hyalo views remove <NAME>                              Delete a view
     hyalo find --view <NAME> [additional filters...]       Use a saved view
+
+  Lint (validate frontmatter against schemas + lint the markdown body, read-only):
+    hyalo lint [-f/--file F | -g/--glob G] [--files-from PATH] [--rule ID] [--rule-prefix PREFIX]
+               [--detailed] [--strict] [--fix | --fix-rule ID] [--dry-run] [-n/--limit N]
+
+  Lint-rules (manage the markdown lint rule catalog; bare `hyalo lint-rules` = list):
+    hyalo lint-rules list [--enabled-only | --disabled-only] [--rule-prefix PREFIX]   List rules and settings [alias: summary]
+    hyalo lint-rules show <RULE_ID>                        Full details for one rule
+    hyalo lint-rules set <RULE_ID> [--enabled BOOL] [--severity S]   Configure a rule (mutates .hyalo.toml)
+    hyalo lint-rules remove <RULE_ID>                      Drop a rule override (mutates .hyalo.toml)
+
+  Types (manage document-type schemas in .hyalo.toml; bare `hyalo types` = list):
+    hyalo types list                                       All defined types and required fields [alias: summary]
+    hyalo types show <TYPE>                                Full merged schema for one type
+    hyalo types set <TYPE> [--required K,K] [...]          Create or update a type (mutates .hyalo.toml)
+    hyalo types remove <TYPE>                              Delete a type entry (mutates .hyalo.toml)
+
+  New (scaffold a file from a schema type, mutates files):
+    hyalo new --type <TYPE> -f/--file PATH
+
+  Madr (Markdown Architecture Decision Record generators):
+    hyalo madr toc [--apply]                               Regenerate the ADR table of contents / status dashboard
+
+  Changelog (Keep a Changelog 1.1.0 maintenance):
+    hyalo changelog add <CATEGORY> <TEXT>                  Append an entry under `## [Unreleased]`
+    hyalo changelog release <VERSION>                      Rotate `## [Unreleased]` into a dated release section
+
+  Okf (Open Knowledge Format artifact generators):
+    hyalo okf index [--apply]                              Regenerate each directory's index.md from concept frontmatter
+    hyalo okf log <TEXT> [--apply]                         Prepend a dated entry to a scope-selectable log.md
+
+  Config (print the effective configuration, read-only):
+    hyalo config [-d/--dir DIR]
 
   Init (configuration, one-time setup):
     hyalo init [--claude] [--profile <PROFILE>] [-d/--dir DIR]
@@ -105,20 +144,22 @@ pub(crate) const HELP_LONG: &str = "COMMAND REFERENCE:
     hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell
 
   Global flags (apply to all commands):
-    -d/--dir <DIR>          Root directory (default: ., override via .hyalo.toml)
-    --format json|text      Output format (default: json, override via .hyalo.toml)
-    --jq <FILTER>           Apply a jq expression to JSON output (incompatible with --format text)
-    --count                 Print total as bare integer (shortcut for --jq '.total'; list commands only)
-    --hints                 Force hints on (already the default; suppressed by --jq)
-    --no-hints              Disable drill-down hints (enabled by default, override via .hyalo.toml)
-    --site-prefix <PREFIX>  Override site prefix for absolute link resolution (auto-derived from --dir)
-    -q/--quiet              Suppress all warnings to stderr
+    -d/--dir <DIR>            Root directory (default: ., override via .hyalo.toml)
+    --format json|text|github Output format (default: text on a terminal, json when piped;
+                              override via .hyalo.toml. github is lint-only)
+    --jq <FILTER>             Apply a jq expression to JSON output (incompatible with --format text)
+    --count                   Print total as bare integer (shortcut for --jq '.total'; list commands only)
+    --hints                   Force hints on (already the default; suppressed by --jq)
+    --no-hints                Disable drill-down hints (enabled by default, override via .hyalo.toml)
+    --site-prefix <PREFIX>    Override site prefix for absolute link resolution (auto-derived from --dir)
+    -q/--quiet                Suppress all warnings to stderr
 
   Per-subcommand index flags (see each subcommand's --help):
-    --index / --index-file  Use pre-built snapshot index for faster queries
+    --index                   Use the default snapshot index (.hyalo-index in the vault dir)
+    --index-file <PATH>       Use a snapshot index at an explicit path
 
   Default output limits:
-    List commands (find, lint, tags summary, properties summary, backlinks) return
+    List commands ({LIST_COMMANDS}) return
     at most 50 results by default. Use --limit 0 for unlimited output.
     The default cap is bypassed when --jq or --count is used (pipelines
     need complete data). An explicit --limit is always honoured.
@@ -223,7 +264,10 @@ COOKBOOK:
   # Pipe file paths for scripting (Unix)
   hyalo find --tag research --jq '.results[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
 
-  # Find all files that link to a given note
+  # Find all files that link to a given note (positional FILE)
+  hyalo backlinks decision-log.md
+
+  # Find all files that link to a given note (equivalent flag form)
   hyalo backlinks --file decision-log.md
 
   # Move a file and update all links
@@ -238,11 +282,14 @@ COOKBOOK:
   # Disable absolute-link resolution entirely
   hyalo --site-prefix '' find --fields links
 
-  # Read file body content
+  # Read file body content (positional FILE — the form every hint emits)
+  hyalo read notes/todo.md
+
+  # Read file body content (equivalent flag form)
   hyalo read --file notes/todo.md
 
   # Read a specific section
-  hyalo read --file notes/todo.md --section Tasks
+  hyalo read notes/todo.md --section Tasks
 
   # Read a line range
   hyalo read --file notes/todo.md --lines 1:10
@@ -286,7 +333,7 @@ COOKBOOK:
 OUTPUT SHAPES (JSON, default):
   # All commands wrap output in a consistent envelope:
   {\"results\": <payload>, \"total\": N, \"hints\": [...]}
-  # total: present for find, tags summary, properties summary, backlinks; omitted elsewhere
+  # total: present for list commands ({LIST_COMMANDS}); omitted elsewhere
   # hints: always present (empty [] when --no-hints or --jq)
   # --jq operates on the full envelope: --jq '.results[].file', --jq '.total'
 
@@ -344,6 +391,18 @@ OUTPUT SHAPES (JSON, default):
 
   # --format text produces human-readable output on all commands";
 
+/// The rendered long help: [`HELP_LONG_TEMPLATE`] with the list-command
+/// placeholder resolved against [`crate::list_commands::LIST_COMMANDS`].
+pub(crate) fn help_long() -> &'static str {
+    static RENDERED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RENDERED.get_or_init(|| {
+        HELP_LONG_TEMPLATE.replace(
+            crate::cli::args::LIST_COMMANDS_PLACEHOLDER,
+            crate::list_commands::list_commands_phrase(),
+        )
+    })
+}
+
 /// Build a filtered version of `HELP_EXAMPLES` (the `-h` EXAMPLES block).
 ///
 /// Each example is a single line.  Drop any line that references a flag whose
@@ -385,12 +444,13 @@ pub(crate) fn filter_examples(hide_dir: bool, hide_format: bool) -> String {
 /// This keeps the help focused on flags the user actually needs to type.
 pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
     if !hide_dir && !hide_format {
-        return HELP_LONG.to_owned();
+        return help_long().to_owned();
     }
 
     // Split into paragraphs separated by blank lines.  Process each paragraph
     // individually, then rejoin.
-    let paragraphs: Vec<&str> = HELP_LONG.split("\n\n").collect();
+    let long = help_long();
+    let paragraphs: Vec<&str> = long.split("\n\n").collect();
     let mut out: Vec<String> = Vec::with_capacity(paragraphs.len());
 
     for para in &paragraphs {

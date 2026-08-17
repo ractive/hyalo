@@ -15,7 +15,7 @@ use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
 use crate::hints::{CommonHintFlags, HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
-use crate::output_pipeline::{COUNT_UNSUPPORTED_ERROR, OutputPipeline};
+use crate::output_pipeline::{OutputPipeline, count_unsupported_error};
 use hyalo_core::index::SnapshotIndex;
 
 /// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
@@ -629,7 +629,7 @@ fn run_inner() -> Result<(), AppError> {
         let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
         eprintln!(
             "{}",
-            crate::output::format_error(fmt, COUNT_UNSUPPORTED_ERROR, None, None, None)
+            crate::output::format_error(fmt, count_unsupported_error(), None, None, None)
         );
         // User error (unsupported flag for this command) → exit 1, not 2
         // (2 is reserved for internal errors — iter-181 task 2).
@@ -691,7 +691,32 @@ fn run_inner() -> Result<(), AppError> {
         let dir_override = cli.dir.as_deref();
         let report = crate::commands::config::collect_config_report(&cwd, dir_override)
             .map_err(AppError::Internal)?;
-        match crate::commands::config::run_config(&report, format) {
+
+        // `--jq` operates on the full envelope, exactly as it does for pipeline
+        // commands. Before iter-192 the filter was accepted and silently
+        // ignored, printing the unfiltered object.
+        if let Some(filter) = cli.jq.as_deref() {
+            let envelope = crate::commands::config::config_envelope(&report);
+            return match crate::output::apply_jq_filter_result(filter, &envelope) {
+                Ok(filtered) => {
+                    println!("{}", crate::output::sanitize_control_chars(&filtered));
+                    Ok(())
+                }
+                Err(e) => Err(AppError::User(crate::output::format_error(
+                    format,
+                    "jq filter failed",
+                    None,
+                    None,
+                    Some(&e),
+                ))),
+            };
+        }
+
+        // Hints follow the same precedence as every other command: on by
+        // default, `--no-hints` (or `hints = false` in .hyalo.toml) turns them
+        // off, an explicit `--hints` turns them back on.
+        let show_hints = cli.hints || (!cli.no_hints && config.hints);
+        match crate::commands::config::run_config(&report, format, show_hints) {
             CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
                 // Sanitized because the text-mode RawOutput branch echoes the raw
                 // .hyalo.toml contents (`report.raw_contents`), which never passes

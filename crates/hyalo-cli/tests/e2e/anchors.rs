@@ -516,6 +516,8 @@ fn mv_preserves_fragments_dry_run() {
     );
 }
 
+/// Single-file `mv` applies by default — `--apply` is rejected in that mode
+/// since iter-192, so this exercises the plain (no-flag) write path.
 #[test]
 fn mv_preserves_fragments_apply() {
     let tmp = setup_mv_vault();
@@ -527,7 +529,6 @@ fn mv_preserves_fragments_apply() {
             "Foo.md",
             "--to",
             "Bar.md",
-            "--apply",
         ])
         .output()
         .expect("mv apply should run");

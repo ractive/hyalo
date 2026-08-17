@@ -128,27 +128,41 @@ fn config_json_output_no_config() {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
 
-    // hyalo config returns a flat JSON object (not the standard envelope)
+    // iter-192: `hyalo config` uses the standard envelope. The config payload
+    // lives under `results`; `hints` is the envelope's hint array (empty here
+    // because of --no-hints), and the config's own on/off switch is reported as
+    // `results.hints_enabled` so the two never collide.
+    let results = &json["results"];
     assert!(
-        json.get("cwd").is_some(),
-        "expected 'cwd' field; got: {json}"
+        results.get("cwd").is_some(),
+        "expected 'results.cwd' field; got: {json}"
     );
     assert!(
-        json.get("dir").is_some(),
-        "expected 'dir' field; got: {json}"
+        results.get("dir").is_some(),
+        "expected 'results.dir' field; got: {json}"
+    );
+    assert!(
+        json["hints"].is_array(),
+        "envelope 'hints' must be an array; got: {json}"
     );
     assert_eq!(
-        json["hints"], true,
-        "expected hints = true by default; got: {json}"
+        results["hints_enabled"], true,
+        "expected hints_enabled = true by default; got: {json}"
     );
     assert!(
-        json["config_path"].is_null(),
+        results["config_path"].is_null(),
         "expected config_path = null when no config; got: {json}"
     );
     assert_eq!(
-        json["dir"].as_str().unwrap(),
+        results["dir"].as_str().unwrap(),
         ".",
         "expected default dir '.'; got: {json}"
+    );
+    // `dir` stays hoisted to the envelope root for pre-192 consumers.
+    assert_eq!(
+        json["dir"].as_str().unwrap(),
+        ".",
+        "expected hoisted top-level dir '.'; got: {json}"
     );
 }
 
@@ -176,24 +190,25 @@ fn config_json_output_with_config() {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("invalid JSON: {e}\n{stdout}"));
 
-    // hyalo config returns a flat JSON object (not the standard envelope)
+    // iter-192: config payload lives under the envelope's `results`.
+    let results = &json["results"];
     assert_eq!(
-        json["dir"].as_str().unwrap(),
+        results["dir"].as_str().unwrap(),
         "vault",
         "expected dir 'vault'; got: {json}"
     );
     assert_eq!(
-        json["format"].as_str().unwrap(),
+        results["format"].as_str().unwrap(),
         "text",
         "expected format 'text' from config; got: {json}"
     );
     // config_path should be a non-null string
     assert!(
-        json["config_path"].is_string(),
+        results["config_path"].is_string(),
         "expected config_path string; got: {json}"
     );
     assert!(
-        json["config_path"]
+        results["config_path"]
             .as_str()
             .unwrap()
             .contains(".hyalo.toml"),
@@ -201,7 +216,7 @@ fn config_json_output_with_config() {
     );
     // raw_contents should be present and contain the TOML content
     assert!(
-        json["raw_contents"].as_str().unwrap().contains("vault"),
+        results["raw_contents"].as_str().unwrap().contains("vault"),
         "expected raw_contents to include dir value; got: {json}"
     );
 }
@@ -230,5 +245,112 @@ fn config_does_not_require_valid_vault_dir() {
     assert!(
         output.status.success(),
         "hyalo config should succeed even with non-existent vault dir; stderr: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Envelope + --jq (iter-192)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_jq_filters_the_envelope() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join("vault")).unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--jq", ".results.dir"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Before iter-192 the filter was silently ignored and the whole object printed.
+    assert_eq!(stdout.trim().trim_matches('"'), "vault", "got: {stdout}");
+}
+
+#[test]
+fn config_jq_reports_a_bad_filter_instead_of_ignoring_it() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--jq", ".["])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "a malformed jq filter must be an error, not a silent no-op"
+    );
+}
+
+#[test]
+fn config_json_hints_are_an_array_of_runnable_commands() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(tmp.path());
+
+    let output = super::common::hyalo()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hints = json["hints"].as_array().expect("hints array");
+    assert!(!hints.is_empty(), "config should emit hints: {json}");
+    for hint in hints {
+        let cmd = hint["cmd"].as_str().expect("hint cmd");
+        assert!(
+            cmd.starts_with("hyalo "),
+            "hint cmd must be runnable: {cmd}"
+        );
+        assert!(
+            hint["description"].is_string(),
+            "hint needs a description: {hint}"
+        );
+    }
+}
+
+#[test]
+fn config_text_shows_hint_arrows_by_default() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(tmp.path());
+
+    let output = super::common::hyalo()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\n  -> hyalo "),
+        "config text output should carry drill-down hints; got: {stdout}"
+    );
+}
+
+#[test]
+fn config_text_no_hints_suppresses_arrows() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("  -> hyalo "),
+        "--no-hints must suppress the arrows; got: {stdout}"
     );
 }
