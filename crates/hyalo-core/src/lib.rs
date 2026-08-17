@@ -2,6 +2,7 @@ pub mod anchor;
 pub mod auto_link;
 pub mod bm25;
 pub mod case_index;
+pub mod common_words;
 pub mod content_search;
 pub mod discovery;
 pub mod filename_template;
