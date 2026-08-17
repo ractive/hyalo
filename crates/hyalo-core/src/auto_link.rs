@@ -286,6 +286,66 @@ fn build_title_inventory(
     Ok((title_map, ambiguous))
 }
 
+/// Auto-link exclusion inputs from one source (CLI flags, or the
+/// `[links.auto]` section of `.hyalo.toml`).
+///
+/// Used by [`count_config_excluded_titles`] to attribute suppressed candidate
+/// titles to the config rather than to the flags.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExclusionSets<'a> {
+    /// Titles never linked (case-insensitive), like `--exclude-title`.
+    pub exclude_titles: &'a [String],
+    /// Vault-relative globs whose pages are never link targets, like
+    /// `--exclude-target-glob`.
+    pub exclude_target_globs: &'a [String],
+}
+
+impl ExclusionSets<'_> {
+    /// `true` when neither list carries an entry (nothing to attribute).
+    pub fn is_empty(&self) -> bool {
+        self.exclude_titles.is_empty() && self.exclude_target_globs.is_empty()
+    }
+}
+
+/// Count the auto-link candidate titles that persisted config exclusions
+/// remove, i.e. the `config_excluded` figure in the `links auto` envelope.
+///
+/// `cli` carries only the exclusions the user typed on this invocation;
+/// `effective` carries the union actually handed to [`auto_link`]. The result
+/// is the number of title keys that are candidates under `cli` alone but not
+/// under `effective` — exactly the candidates the config took away.
+///
+/// Builds the title inventory twice, but only over index metadata (no file
+/// I/O), so callers should still skip the call when the config contributes no
+/// exclusions.
+pub fn count_config_excluded_titles(
+    index: &dyn VaultIndex,
+    min_length: usize,
+    cli: ExclusionSets<'_>,
+    effective: ExclusionSets<'_>,
+) -> Result<usize> {
+    let entries = index.entries();
+    let (cli_titles, _) = build_title_inventory(
+        entries,
+        min_length,
+        cli.exclude_titles,
+        cli.exclude_target_globs,
+    )?;
+    if cli_titles.is_empty() {
+        return Ok(0);
+    }
+    let (effective_titles, _) = build_title_inventory(
+        entries,
+        min_length,
+        effective.exclude_titles,
+        effective.exclude_target_globs,
+    )?;
+    Ok(cli_titles
+        .keys()
+        .filter(|k| !effective_titles.contains_key(*k))
+        .count())
+}
+
 /// Extract the filename stem from a vault-relative path.
 ///
 /// `"notes/sprint-planning.md"` → `"sprint-planning"`.

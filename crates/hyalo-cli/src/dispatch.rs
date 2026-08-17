@@ -164,6 +164,14 @@ pub(crate) struct CommandContext<'a> {
     pub md_lint: &'a hyalo_mdlint::LintConfig,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub case_insensitive_mode: CaseInsensitiveMode,
+    /// Persisted `hyalo links auto` exclusions and preference from
+    /// `[links.auto]` in `.hyalo.toml` (iter-195a). Unioned with the CLI flags
+    /// in the `links auto` dispatch arm.
+    pub auto_link_exclude_titles: &'a [String],
+    /// See [`CommandContext::auto_link_exclude_titles`].
+    pub auto_link_exclude_target_globs: &'a [String],
+    /// `[links.auto] first_only` — `--first-only` for every run.
+    pub auto_link_first_only: bool,
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
@@ -1670,9 +1678,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         dir,
                         apply,
                         min_length,
-                        &exclude_title,
-                        first_only,
-                        &exclude_target_glob,
+                        &links_commands::AutoFilters {
+                            cli_exclude_titles: &exclude_title,
+                            cli_exclude_target_globs: &exclude_target_glob,
+                            cli_first_only: first_only,
+                            config_exclude_titles: ctx.auto_link_exclude_titles,
+                            config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
+                            config_first_only: ctx.auto_link_first_only,
+                        },
                         file.as_deref(),
                         &glob,
                         effective_format,
