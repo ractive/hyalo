@@ -2,7 +2,7 @@
 title: Iteration 195a — persistent auto-link exclusions in .hyalo.toml
 type: iteration
 date: 2026-08-17
-status: planned
+status: in-progress
 branch: iter-195a/auto-link-config-exclusions
 tags:
   - iteration
@@ -10,7 +10,7 @@ tags:
   - auto-link
   - config
 related:
-  - "[[backlog/auto-link-config-exclusions]]"
+  - "[[backlog/done/auto-link-config-exclusions]]"
 ---
 
 # Iteration 195a — persistent auto-link exclusions in .hyalo.toml
@@ -21,7 +21,7 @@ Promote the last open backlog item to done: a `[links.auto]` section in
 `.hyalo.toml` that persists the exclusions and `first_only` preference that
 today must be retyped on every `hyalo links auto` invocation. Full problem
 statement, external-user evidence (~94% noise on a title-heavy vault), and
-prior-art table live in [[backlog/auto-link-config-exclusions]] — read it
+prior-art table live in [[backlog/done/auto-link-config-exclusions]] — read it
 first; this plan only adds the implementation shape.
 
 **Do NOT release; release is a separate user-gated step.**
@@ -72,7 +72,7 @@ Verified at `56480cb`:
       configuration docs page, and the knowledgebase rule template if it
       mentions `links auto`. README only if its existing prose becomes
       wrong (README is not a feature list).
-- [ ] Move [[backlog/auto-link-config-exclusions]] to `backlog/done/` with
+- [ ] Move [[backlog/done/auto-link-config-exclusions]] to `backlog/done/` with
       its ACs ticked (verify each against the landed behaviour first).
 
 ## Acceptance criteria
