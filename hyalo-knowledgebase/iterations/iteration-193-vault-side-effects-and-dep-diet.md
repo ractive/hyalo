@@ -120,14 +120,14 @@ Verified at `c42fa6f`:
       upstream PR #486 which had already fixed items 2/3/5 on `main`:
       <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>]**
 
-### Part C — small consistency debts [2/3]
+### Part C — small consistency debts [3/3]
 
 - [x] Replace the ~40 `writeln!(summary, ...).unwrap()` calls in
       `commands/init.rs` with `let _ = writeln!(...)`. `fmt::Write` into a
       `String` is infallible, but these are the bulk of the project's
       no-unwrap-outside-tests violations and they make the rule
       un-greppable.
-- [ ] File an upstream issue: **MD018 fires on paragraph continuation
+- [x] File an upstream issue: **MD018 fires on paragraph continuation
       lines.** A wrapped paragraph whose continuation line begins with `#`
       (e.g. a bare `#472` issue reference) is flagged "No space after hash on
       atx style heading" — it is paragraph text, not a heading, and `#472` is
@@ -140,9 +140,10 @@ Verified at `c42fa6f`:
       continuation line falsely fires; inline `PR #472` mid-line correctly
       does not. Upstream-only: hyalo can just disable MD018, which would lose
       the genuine `#Heading` typo detection.
-      **[deferred — text drafted in full, not posted: unattended run cannot
-      write to a third-party GitHub repo (permission classifier). Carried to
-      [[iteration-194-post-upstream-mdbook-lint-reports]].]**
+      **[filed 2026-08-17 by the launching session on the user's explicit
+      instruction, repro re-verified against 0.15.2 immediately before
+      posting:
+      <https://github.com/joshrotenberg/mdbook-lint/issues/491>]**
 - [x] Consider a distinct `out_of_vault` bucket for link targets that resolve
       outside the scanned directory (dogfood UX-1: GitHub Docs reports 6,568
       broken of 14,167, mostly `/src/...` and `../contributing/...` paths that
@@ -230,7 +231,7 @@ does not touch (`cargo tree -i` confirms; `yaml-rust` needs `--target all`).
   in `broken` — a vault that *is* the site root makes those genuine misses, and
   hiding them would be worse than the noise saved.
 
-### Upstream items — #456 comment posted, MD018 issue pending
+### Upstream items — both posted
 
 Both upstream tasks were written up in full but could not be submitted by the
 unattended run: writing to a third-party GitHub repository
@@ -241,5 +242,6 @@ complete texts are in [[docs/upstream-mdbook-lint-reports]].
   user's explicit instruction (with Claude Code attribution), amended to
   account for upstream PR #486 having fixed items 2/3/5 on `main`:
   <https://github.com/joshrotenberg/mdbook-lint/issues/456#issuecomment-5319878913>
-- The **MD018 false-positive issue is still unposted** — tracked in
-  [[iteration-194-post-upstream-mdbook-lint-reports]].
+- The **MD018 false-positive issue was filed 2026-08-17** the same way, with
+  the reproduction re-verified against 0.15.2 immediately before posting:
+  <https://github.com/joshrotenberg/mdbook-lint/issues/491>

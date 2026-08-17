@@ -1,19 +1,19 @@
 ---
-title: Upstream mdbook-lint reports (drafts, unposted)
+title: Upstream mdbook-lint reports (both posted 2026-08-17)
 type: docs
 date: 2026-08-17
-status: draft
+status: archived
 tags:
   - upstream
   - mdbook-lint
   - iteration-193
 ---
 
-# Upstream mdbook-lint reports (drafts, unposted)
+# Upstream mdbook-lint reports
 
 Two upstream submissions prepared during [[iterations/iteration-193-vault-side-effects-and-dep-diet]].
 
-**Status: §1 POSTED, §2 pending.** The autonomous agent that drafted these
+**Status: BOTH POSTED (2026-08-17).** The autonomous agent that drafted these
 was blocked from writing to a third-party GitHub repository (`gh issue
 comment` / `gh issue create` against `joshrotenberg/mdbook-lint` is denied by
 the permission classifier, correctly — an unattended agent should not speak
@@ -27,8 +27,9 @@ on the project's behalf in someone else's tracker).
   2026-08-05, unreleased) already fixed items 2, 3 and 5 on `main`, so the
   posted version marks those as independent confirmation rather than live
   bugs; items 1 and 4 remain the open contract half.
-- §2 (MD018 false-positive issue) is still **NOT POSTED** — post manually and
-  record the URL here and in the iteration file's acceptance criteria.
+- §2 (MD018 false-positive issue) was **filed 2026-08-17** the same way, with
+  the three reproduction cases re-verified against 0.15.2 immediately before
+  posting: <https://github.com/joshrotenberg/mdbook-lint/issues/491>
 
 Target repository: <https://github.com/joshrotenberg/mdbook-lint>
 
@@ -145,6 +146,9 @@ and VS Code docs) and can report diffs.
 Suggested title: **MD018: false positive on paragraph continuation lines
 starting with `#`**
 
+**Filed 2026-08-17** (repro re-verified against 0.15.2, Claude Code
+attribution): <https://github.com/joshrotenberg/mdbook-lint/issues/491>
+
 ---
 
 **Version:** 0.15.2 (also present in 0.14).
@@ -192,6 +196,6 @@ loses the genuine `#Heading` typo detection the rule exists for.
 
 ## Follow-up
 
-- [ ] Post the #456 comment and record its URL in
+- [x] Post the #456 comment and record its URL in
       [[iterations/iteration-193-vault-side-effects-and-dep-diet]]
-- [ ] File the MD018 issue and record its number here
+- [x] File the MD018 issue and record its number here

@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 194 — post drafted upstream mdbook-lint reports
 date: 2026-08-17
-status: planned
+status: completed
 tags:
   - iteration
   - upstream
@@ -48,15 +48,15 @@ landed in the interim.
       cited line numbers / behavior against whatever `mdbook-lint-core`
       version is current before posting — if it has moved, update the text's
       version references rather than posting stale specifics.
-- [ ] File the issue in [[docs/upstream-mdbook-lint-reports]] §2 (MD018
+- [x] File the issue in [[docs/upstream-mdbook-lint-reports]] §2 (MD018
       false-positive on paragraph continuation lines beginning with `#`)
       against <https://github.com/joshrotenberg/mdbook-lint>. Re-run the three
       reproduction cases from the draft before posting to confirm they still
       hold.
-- [ ] Record both resulting URLs in [[docs/upstream-mdbook-lint-reports]]
+- [x] Record both resulting URLs in [[docs/upstream-mdbook-lint-reports]]
       (flip `status: draft` → `status: posted` in its frontmatter and add the
       URLs inline under each section).
-- [ ] Record the same two URLs in
+- [x] Record the same two URLs in
       [[iteration-193-vault-side-effects-and-dep-diet]]: tick its "Comment on
       upstream issue #456" and "File an upstream issue: MD018 …" boxes, tick
       the "upstream #456 comment link recorded in this file" acceptance
@@ -68,10 +68,10 @@ landed in the interim.
       knowingly updating) the drafted text; its URL is recorded in both
       [[docs/upstream-mdbook-lint-reports]] and
       [[iteration-193-vault-side-effects-and-dep-diet]]
-- [ ] A new issue exists on `joshrotenberg/mdbook-lint` for the MD018
+- [x] A new issue exists on `joshrotenberg/mdbook-lint` for the MD018
       paragraph-continuation false positive; its URL is recorded in both of
       the same two files
-- [ ] `hyalo lint` on the knowledgebase reports no new findings after the edits
+- [x] `hyalo lint` on the knowledgebase reports no new findings after the edits
 
 ## Non-goals
 
