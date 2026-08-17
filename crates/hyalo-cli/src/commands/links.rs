@@ -489,8 +489,16 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
     for (title, _) in &offenders[..listed] {
         use std::fmt::Write as _;
         // Writing into a String is infallible; the Result only exists to satisfy
-        // the `fmt::Write` signature.
-        let _ = write!(flags, " --exclude-title {}", quote_if_needed(title));
+        // the `fmt::Write` signature. Reuse the same shell-quoting the other
+        // suggested-flag hints use (`hints::shell_quote`) rather than a
+        // bespoke whitespace-only check — titles can contain apostrophes,
+        // `$`, backticks, or double quotes, none of which a naive
+        // whitespace check would escape.
+        let _ = write!(
+            flags,
+            " --exclude-title {}",
+            crate::hints::shell_quote(title)
+        );
     }
 
     Some(format!(
@@ -500,16 +508,6 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
          Silence this note with --no-warn-common-titles.",
         names = names.join(", "),
     ))
-}
-
-/// Wrap a title in double quotes when it contains whitespace, so the suggested
-/// `--exclude-title` flags can be pasted into a shell verbatim.
-fn quote_if_needed(title: &str) -> String {
-    if title.chars().any(char::is_whitespace) {
-        format!("\"{title}\"")
-    } else {
-        title.to_owned()
-    }
 }
 
 /// Run `hyalo links auto` using a pre-built index.
@@ -944,10 +942,17 @@ mod tests {
     fn multiword_titles_are_shell_quoted_in_the_suggestion() {
         // "state of the art" is not a title we would flag, but a common word
         // *is* reachable as a multi-word title via frontmatter aliases, and the
-        // suggested flag has to survive a copy-paste into a shell.
-        let quoted = super::quote_if_needed("data model");
-        assert_eq!(quoted, "\"data model\"");
-        assert_eq!(super::quote_if_needed("permissions"), "permissions");
+        // suggested flag has to survive a copy-paste into a shell. Uses the
+        // same `hints::shell_quote` every other suggested-flag hint uses, so
+        // it also escapes apostrophes/`$`/backticks/double quotes, not just
+        // whitespace.
+        let quoted = crate::hints::shell_quote("data model");
+        assert_eq!(quoted, "'data model'");
+        assert_eq!(crate::hints::shell_quote("permissions"), "permissions");
+        assert_eq!(
+            crate::hints::shell_quote("it's a trap"),
+            "'it'\\''s a trap'"
+        );
     }
 
     #[test]
