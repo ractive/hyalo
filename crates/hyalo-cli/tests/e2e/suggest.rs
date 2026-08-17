@@ -1,4 +1,5 @@
 use super::common::{hyalo_no_hints, write_md};
+use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
 // e2e tests for subcommand-flag suggestion
@@ -227,4 +228,80 @@ fn append_tag_hint_only_fires_for_real_append_subcommand() {
         !stderr.contains("`hyalo append` does not accept --tag"),
         "append-specific hint must not fire when subcommand is `find`; got: {stderr}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Cross-group verb aliases (iter-192)
+// ---------------------------------------------------------------------------
+
+/// `summary` and `list` are the same read verb wearing two names across the
+/// five subcommand groups. Before iter-192 each group accepted only one of
+/// them, so a verb learned in one group failed in the next.
+#[test]
+fn read_verb_aliases_work_in_every_subcommand_group() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntags:\n  - x\n---\n# A\n");
+    let dir = tmp.path().to_str().unwrap().to_owned();
+
+    for argv in [
+        // `list` is the native verb here; `summary` is the alias.
+        vec!["types", "summary"],
+        vec!["views", "summary"],
+        vec!["lint-rules", "summary"],
+        // `summary` is the native verb here; `list` is the alias.
+        vec!["tags", "list"],
+        vec!["properties", "list"],
+    ] {
+        let label = argv.join(" ");
+        let output = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args(&argv)
+            .args(["--format", "json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "`hyalo {label}` should be accepted; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let envelope: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|e| panic!("`hyalo {label}` did not emit JSON: {e}"));
+        assert!(
+            envelope.get("total").is_some(),
+            "`hyalo {label}` should behave exactly like its canonical spelling: {envelope}"
+        );
+    }
+}
+
+/// Aliases must produce byte-identical output to the verb they alias — they are
+/// alternative spellings, not variant behaviour.
+#[test]
+fn alias_output_matches_canonical_verb() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntags:\n  - x\n---\n# A\n");
+    let dir = tmp.path().to_str().unwrap().to_owned();
+
+    for (canonical, alias) in [
+        (vec!["tags", "summary"], vec!["tags", "list"]),
+        (vec!["properties", "summary"], vec!["properties", "list"]),
+        (vec!["types", "list"], vec!["types", "summary"]),
+        (vec!["views", "list"], vec!["views", "summary"]),
+    ] {
+        let run = |argv: &Vec<&str>| {
+            let out = hyalo_no_hints()
+                .args(["--dir", &dir])
+                .args(argv)
+                .args(["--format", "json"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert_eq!(
+            run(&canonical),
+            run(&alias),
+            "`{}` and `{}` must produce identical output",
+            canonical.join(" "),
+            alias.join(" ")
+        );
+    }
 }

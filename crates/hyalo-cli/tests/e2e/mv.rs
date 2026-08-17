@@ -2022,3 +2022,55 @@ fn batch_mv_apply_reports_failed_inbound_rewrite_and_rolls_back_renames() {
     );
     assert!(tmp.path().join("movers/p2.md").exists());
 }
+
+// ---------------------------------------------------------------------------
+// Mode-default asymmetry (iter-192)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mv_single_file_rejects_apply() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "old.md", "---\ntitle: Old\n---\n# Old\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "old.md", "--to", "new.md", "--apply", "--format", "text"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "single-file `mv --apply` must be rejected, not silently accepted as a no-op"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("single-file mv applies by default; use --dry-run to preview"),
+        "expected the guidance message; got: {stderr}"
+    );
+    // The rejection must not have moved anything.
+    assert!(
+        tmp.path().join("old.md").exists(),
+        "a rejected mv must leave the source in place"
+    );
+    assert!(!tmp.path().join("new.md").exists());
+}
+
+#[test]
+fn mv_batch_still_accepts_apply() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "old.md", "---\ntitle: Old\ntype: note\n---\n# Old\n");
+    std::fs::create_dir_all(tmp.path().join("done")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["mv", "--glob", "*.md", "--to", "done/", "--apply"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "batch mv --apply must still work; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(tmp.path().join("done/old.md").exists());
+}
