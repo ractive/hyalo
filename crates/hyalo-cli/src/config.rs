@@ -56,6 +56,11 @@ struct AutoLinksConfig {
     /// When `true`, behaves as if `--first-only` had been passed.
     #[serde(default)]
     first_only: Option<bool>,
+    /// When `false`, suppresses the advisory stderr note that names candidate
+    /// titles which are common English words (iter-197). Defaults to `true`;
+    /// `--no-warn-common-titles` turns it off for a single run.
+    #[serde(default)]
+    warn_common_titles: Option<bool>,
 }
 
 /// Changelog configuration from `[changelog]` in `.hyalo.toml`.
@@ -253,6 +258,12 @@ pub(crate) struct ResolvedDefaults {
     /// `--first-only` had been passed; the flag can still turn it on for a run
     /// when the config says `false`.
     pub(crate) auto_link_first_only: bool,
+    /// `[links.auto] warn_common_titles`, default `true`. When `false`, `hyalo
+    /// links auto` never emits the advisory note naming candidate titles that are
+    /// common English words (iter-197). `--no-warn-common-titles` turns it off for
+    /// a single run; there is no flag to turn it back on, because the default
+    /// already does.
+    pub(crate) auto_link_warn_common_titles: bool,
     /// When `true`, "no 'type' property" and "undeclared property in frontmatter"
     /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.
     /// Can be overridden per-invocation with `hyalo lint --strict`.
@@ -309,6 +320,7 @@ impl ResolvedDefaults {
             auto_link_exclude_titles: Vec::new(),
             auto_link_exclude_target_globs: Vec::new(),
             auto_link_first_only: false,
+            auto_link_warn_common_titles: true,
             lint_strict: false,
             loaded_from_file: false,
             lint_profiles: Vec::new(),
@@ -508,6 +520,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         auto_link_exclude_titles: links_auto.exclude_titles,
         auto_link_exclude_target_globs: links_auto.exclude_target_globs,
         auto_link_first_only: links_auto.first_only.unwrap_or(false),
+        auto_link_warn_common_titles: links_auto.warn_common_titles.unwrap_or(true),
         lint_strict,
         loaded_from_file: true,
         lint_profiles,
@@ -1010,6 +1023,46 @@ site_prefix = "docs"
             vec!["templates/*".to_owned()]
         );
         assert!(resolved.auto_link_first_only);
+        assert!(
+            resolved.auto_link_warn_common_titles,
+            "an unset warn_common_titles must stay on"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // [links.auto] warn_common_titles (iter-197)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn links_auto_warn_common_titles_defaults_to_true() {
+        let dir = make_temp();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+
+        assert!(load_config_from(dir.path()).auto_link_warn_common_titles);
+    }
+
+    #[test]
+    fn links_auto_warn_common_titles_false_is_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nwarn_common_titles = false\n",
+        )
+        .unwrap();
+
+        assert!(!load_config_from(dir.path()).auto_link_warn_common_titles);
+    }
+
+    #[test]
+    fn links_auto_warn_common_titles_true_is_loaded() {
+        let dir = make_temp();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "[links.auto]\nwarn_common_titles = true\n",
+        )
+        .unwrap();
+
+        assert!(load_config_from(dir.path()).auto_link_warn_common_titles);
     }
 
     #[test]

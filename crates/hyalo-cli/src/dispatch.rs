@@ -172,6 +172,9 @@ pub(crate) struct CommandContext<'a> {
     pub auto_link_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only` — `--first-only` for every run.
     pub auto_link_first_only: bool,
+    /// `[links.auto] warn_common_titles` (default `true`) — whether `links auto`
+    /// may emit the advisory note naming common-English-word candidate titles.
+    pub auto_link_warn_common_titles: bool,
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
@@ -1654,6 +1657,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 exclude_title,
                 first_only,
                 exclude_target_glob,
+                no_warn_common_titles,
                 file,
                 glob,
                 index_flags: _, // consumed in run.rs before dispatch
@@ -1685,6 +1689,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             config_exclude_titles: ctx.auto_link_exclude_titles,
                             config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
                             config_first_only: ctx.auto_link_first_only,
+                            cli_no_warn_common_titles: no_warn_common_titles,
+                            config_warn_common_titles: ctx.auto_link_warn_common_titles,
                         },
                         file.as_deref(),
                         &glob,

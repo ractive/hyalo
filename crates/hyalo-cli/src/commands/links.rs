@@ -308,7 +308,7 @@ pub fn links_fix(
 ///   replace it, so a vault-wide exclusion cannot be lost by adding one flag
 /// - `first_only` is on when either source asks for it: config turns it on for
 ///   every run, `--first-only` turns it on for a single run
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct AutoFilters<'a> {
     /// `--min-length`: shortest title considered a candidate. Source-agnostic —
     /// it has no `[links.auto]` key (see the iteration's non-goals).
@@ -325,6 +325,29 @@ pub struct AutoFilters<'a> {
     pub config_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only`.
     pub config_first_only: bool,
+    /// `--no-warn-common-titles` was passed: silence the common-title note for
+    /// this run whatever the config says.
+    pub cli_no_warn_common_titles: bool,
+    /// `[links.auto] warn_common_titles` (default `true`).
+    pub config_warn_common_titles: bool,
+}
+
+impl Default for AutoFilters<'_> {
+    /// Mirrors the CLI defaults, not `bool::default()`: the common-title note is
+    /// on unless a vault opts out, so `config_warn_common_titles` starts `true`.
+    fn default() -> Self {
+        Self {
+            min_length: 0,
+            cli_exclude_titles: &[],
+            cli_exclude_target_globs: &[],
+            cli_first_only: false,
+            config_exclude_titles: &[],
+            config_exclude_target_globs: &[],
+            config_first_only: false,
+            cli_no_warn_common_titles: false,
+            config_warn_common_titles: true,
+        }
+    }
 }
 
 impl AutoFilters<'_> {
@@ -369,6 +392,15 @@ impl AutoFilters<'_> {
         self.cli_first_only || self.config_first_only
     }
 
+    /// `true` when the advisory common-title note should be considered for this
+    /// run: on by default, off when the vault sets
+    /// `[links.auto] warn_common_titles = false` or the run passes
+    /// `--no-warn-common-titles` (the flag can only turn it off — there is
+    /// nothing to turn on that the default does not already do).
+    pub fn effective_warn_common_titles(&self) -> bool {
+        self.config_warn_common_titles && !self.cli_no_warn_common_titles
+    }
+
     /// `true` when `[links.auto]` contributes at least one exclusion, i.e. when
     /// the `config_excluded` attribution pass is worth running.
     pub fn has_config_exclusions(&self) -> bool {
@@ -382,6 +414,100 @@ impl AutoFilters<'_> {
             exclude_target_globs: self.cli_exclude_target_globs,
         }
     }
+}
+
+/// How many offending titles the common-title note names before it summarises
+/// the rest as `+N more`. Five keeps the note (and the ready-to-paste flag list
+/// it suggests) inside a terminal line or two.
+const COMMON_TITLE_NOTE_MAX_LISTED: usize = 5;
+
+/// Build the advisory common-title note for a `links auto` run, or `None` when
+/// no proposed link came from a common English word (iter-197).
+///
+/// The heuristic runs on the *emitted* matches, not on the title inventory, so
+/// it is self-extinguishing and never speculative:
+///
+/// - a common-word title that produced no match is not mentioned — nothing to
+///   act on
+/// - a title already excluded (by `--exclude-title` or `[links.auto]
+///   exclude_titles`) cannot produce a match, so acting on the note makes it
+///   disappear
+/// - the counts quoted are exactly the links the user is being offered
+///
+/// The result is written to stderr as a `note:` by the caller. It deliberately
+/// never reaches the stdout envelope: a vault that has not opted into anything
+/// must see a byte-identical report (see the iteration's non-goals).
+fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option<String> {
+    use std::collections::HashMap;
+
+    let total = matches.len();
+    if total == 0 {
+        return None;
+    }
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for m in matches {
+        // Key on the lowercased matched text: `--exclude-title` compares
+        // case-insensitively, so "Permissions" and "permissions" are one title
+        // and the note must not split them into two entries.
+        let key = m.matched_text.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        *counts.entry(key).or_insert(0) += 1;
+    }
+
+    let mut offenders: Vec<(String, usize)> = counts
+        .into_iter()
+        .filter(|(title, _)| hyalo_core::common_words::is_common_word(title))
+        .collect();
+    if offenders.is_empty() {
+        return None;
+    }
+    // Most-noisy first; ties broken alphabetically so the note is deterministic.
+    offenders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let affected: usize = offenders.iter().map(|(_, count)| *count).sum();
+    let listed = offenders.len().min(COMMON_TITLE_NOTE_MAX_LISTED);
+    let mut names: Vec<String> = offenders[..listed]
+        .iter()
+        .map(|(title, count)| format!("\"{title}\" ({count}×)"))
+        .collect();
+    if offenders.len() > listed {
+        names.push(format!("+{} more", offenders.len() - listed));
+    }
+
+    let subject = if offenders.len() == 1 {
+        "1 auto-link candidate title is a common English word and accounts for".to_owned()
+    } else {
+        format!(
+            "{} auto-link candidate titles are common English words and account for",
+            offenders.len()
+        )
+    };
+    let mut flags = String::new();
+    for (title, _) in &offenders[..listed] {
+        use std::fmt::Write as _;
+        // Writing into a String is infallible; the Result only exists to satisfy
+        // the `fmt::Write` signature. Reuse the same shell-quoting the other
+        // suggested-flag hints use (`hints::shell_quote`) rather than a
+        // bespoke whitespace-only check — titles can contain apostrophes,
+        // `$`, backticks, or double quotes, none of which a naive
+        // whitespace check would escape.
+        let _ = write!(
+            flags,
+            " --exclude-title {}",
+            crate::hints::shell_quote(title)
+        );
+    }
+
+    Some(format!(
+        "{subject} {affected} of {total} proposed links: {names}. \
+         If those are prose mentions rather than deliberate references, skip them with{flags} \
+         — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
+         Silence this note with --no-warn-common-titles.",
+        names = names.join(", "),
+    ))
 }
 
 /// Run `hyalo links auto` using a pre-built index.
@@ -430,6 +556,16 @@ pub fn links_auto(
     };
 
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
+
+    // iter-197: advisory note when common English words drive the candidates.
+    // stderr only (deduped and suppressed by `-q` like every other note), so the
+    // stdout envelope stays byte-identical for vaults that never opt into
+    // anything.
+    if filters.effective_warn_common_titles()
+        && let Some(note) = common_title_note(&report.matches)
+    {
+        crate::warn::note(note);
+    }
 
     // Collect unique modified files for the caller to patch the index. Only
     // files that were actually applied (not skipped/failed) count as modified,
@@ -500,10 +636,27 @@ pub fn links_auto(
 
 #[cfg(test)]
 mod tests {
-    use super::AutoFilters;
+    use super::{AutoFilters, COMMON_TITLE_NOTE_MAX_LISTED, common_title_note};
+    use hyalo_core::auto_link::AutoLinkMatch;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// One proposed match with `matched_text` as the surface form; the other
+    /// fields are irrelevant to the common-title heuristic.
+    fn match_for(matched_text: &str) -> AutoLinkMatch {
+        AutoLinkMatch {
+            file: "guide.md".to_owned(),
+            line: 1,
+            col: 0,
+            matched_text: matched_text.to_owned(),
+            link_target: matched_text.to_ascii_lowercase(),
+        }
+    }
+
+    fn matches_for(surface_forms: &[&str]) -> Vec<AutoLinkMatch> {
+        surface_forms.iter().map(|t| match_for(t)).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -655,6 +808,161 @@ mod tests {
                 ..AutoFilters::default()
             }
             .has_config_exclusions()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-197: warn_common_titles resolution
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn common_title_note_is_on_by_default() {
+        assert!(AutoFilters::default().effective_warn_common_titles());
+    }
+
+    #[test]
+    fn config_false_turns_the_common_title_note_off() {
+        let filters = AutoFilters {
+            config_warn_common_titles: false,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    #[test]
+    fn flag_turns_the_common_title_note_off_for_one_run() {
+        let filters = AutoFilters {
+            cli_no_warn_common_titles: true,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    #[test]
+    fn flag_and_config_both_off_stays_off() {
+        let filters = AutoFilters {
+            cli_no_warn_common_titles: true,
+            config_warn_common_titles: false,
+            ..AutoFilters::default()
+        };
+        assert!(!filters.effective_warn_common_titles());
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-197: note text
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_matches_produces_no_note() {
+        assert!(common_title_note(&[]).is_none());
+    }
+
+    #[test]
+    fn domain_specific_titles_produce_no_note() {
+        let matches = matches_for(&["Kubernetes", "hyalo", "frontmatter"]);
+        assert!(common_title_note(&matches).is_none());
+    }
+
+    #[test]
+    fn single_offender_uses_singular_phrasing_and_exact_counts() {
+        let matches = matches_for(&["permissions", "permissions", "Kubernetes"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.starts_with("1 auto-link candidate title is a common English word"),
+            "singular phrasing expected: {note}"
+        );
+        assert!(
+            note.contains("accounts for 2 of 3 proposed links"),
+            "counts should be offender-vs-total: {note}"
+        );
+        assert!(
+            note.contains("\"permissions\" (2×)"),
+            "the offender should be named with its count: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title permissions"),
+            "the note should suggest the flag: {note}"
+        );
+    }
+
+    #[test]
+    fn offenders_are_ordered_by_count_then_alphabetically() {
+        // "index" 1×, "note" 3×, "report" 1×  →  note, index, report
+        let matches = matches_for(&["note", "Note", "NOTE", "report", "index"]);
+        let note = common_title_note(&matches).expect("common words should be flagged");
+        let pos = |needle: &str| note.find(needle).expect("offender should be listed");
+        assert!(
+            pos("\"note\" (3×)") < pos("\"index\" (1×)"),
+            "highest count first: {note}"
+        );
+        assert!(
+            pos("\"index\" (1×)") < pos("\"report\" (1×)"),
+            "ties broken alphabetically: {note}"
+        );
+        assert!(
+            note.starts_with("3 auto-link candidate titles are common English words"),
+            "plural phrasing expected: {note}"
+        );
+    }
+
+    #[test]
+    fn case_variants_of_one_title_are_counted_once() {
+        // `--exclude-title` is case-insensitive, so the note must not split
+        // "Note" and "note" into two separate offenders.
+        let matches = matches_for(&["Note", "note"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.contains("1 auto-link candidate title is"),
+            "case variants are one title: {note}"
+        );
+        assert!(
+            note.contains("\"note\" (2×)"),
+            "counts should be merged under the lowercased title: {note}"
+        );
+    }
+
+    #[test]
+    fn long_offender_lists_are_capped_with_a_remainder_count() {
+        let matches = matches_for(&[
+            "access", "account", "action", "active", "address", "agree", "answer",
+        ]);
+        let note = common_title_note(&matches).expect("common words should be flagged");
+        assert!(
+            note.contains(&format!("+{} more", 7 - COMMON_TITLE_NOTE_MAX_LISTED)),
+            "the tail should be summarised, not listed: {note}"
+        );
+        assert_eq!(
+            note.matches("--exclude-title ").count(),
+            COMMON_TITLE_NOTE_MAX_LISTED,
+            "only the named offenders get a suggested flag: {note}"
+        );
+    }
+
+    #[test]
+    fn multiword_titles_are_shell_quoted_in_the_suggestion() {
+        // "state of the art" is not a title we would flag, but a common word
+        // *is* reachable as a multi-word title via frontmatter aliases, and the
+        // suggested flag has to survive a copy-paste into a shell. Uses the
+        // same `hints::shell_quote` every other suggested-flag hint uses, so
+        // it also escapes apostrophes/`$`/backticks/double quotes, not just
+        // whitespace.
+        let quoted = crate::hints::shell_quote("data model");
+        assert_eq!(quoted, "'data model'");
+        assert_eq!(crate::hints::shell_quote("permissions"), "permissions");
+        assert_eq!(
+            crate::hints::shell_quote("it's a trap"),
+            "'it'\\''s a trap'"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_matched_text_is_ignored() {
+        // Defensive: an empty surface form must not become an offender key.
+        let matches = matches_for(&["   ", "permissions"]);
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.contains("\"permissions\" (1×)"),
+            "blank surface forms should be skipped, not counted: {note}"
         );
     }
 }

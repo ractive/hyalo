@@ -48,6 +48,17 @@ and this project adheres to
   in the JSON envelope (omitted when zero) and an
   `Excluded by [links.auto] config: N titles` line in text output.
   `hyalo config` reports the effective settings in both formats.
+- **`links auto` names candidate titles that are common English words**
+  (iter-197). Exclusions only help once the noise has been noticed, so a run
+  whose proposed links come from pages titled with ordinary English words or
+  generic doc filenames (`permissions`, `index`, `notes`, `README`) now prints
+  one advisory `note:` on stderr naming those titles with their match counts and
+  the `--exclude-title` flags that would skip them. Only titles that actually
+  produced matches are named, so excluding them extinguishes the note. The
+  stdout report is byte-identical whether or not the note fires; `-q`,
+  `--no-warn-common-titles`, or `[links.auto] warn_common_titles = false`
+  silence it. The word list is bundled in `hyalo-core::common_words` — no new
+  dependency.
 
 ### Changed
 
