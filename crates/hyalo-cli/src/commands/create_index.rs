@@ -113,6 +113,14 @@ pub fn create_index(
     // warning about an unrelated default-location index would be misleading.
     // Compare against the resolved default path (handles `-o <default>` correctly).
     let wrote_to_default = index_path == dir.join(".hyalo-index");
+    if wrote_to_default {
+        // Same sweep, other orphan: a fallback case-sensitivity probe that was
+        // killed between creating and deleting its file leaves a dot-prefixed
+        // `.hyalo-case-probe-*` behind, invisible to `hyalo find`. `create-index`
+        // is the one command that already writes to the vault, so it is the
+        // natural place to clean up.
+        hyalo_core::case_index::sweep_stale_case_probes(dir);
+    }
     if wrote_to_default && let Ok(stale) = find_stale_indexes(dir) {
         for (stale_path, stale_vault, stale_ts) in stale {
             // Don't warn about the file we just wrote
