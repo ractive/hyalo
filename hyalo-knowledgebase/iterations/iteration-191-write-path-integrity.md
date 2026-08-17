@@ -2,9 +2,13 @@
 title: Iteration 191 — write-path integrity (symlinks, durability, dead mutators)
 type: iteration
 date: 2026-08-06
-status: planned
+status: in-progress
 branch: iter-191/write-path-integrity
-tags: [iteration, write-path, correctness, data-integrity]
+tags:
+  - iteration
+  - write-path
+  - correctness
+  - data-integrity
 related:
   - "[[reviews/codebase-review-2026-08-06]]"
   - "[[dogfood-results/dogfood-v0200-opus5-review-round]]"
@@ -45,55 +49,55 @@ Verified before planning (do not re-litigate):
 
 ## Tasks
 
-- [ ] Decide and record the symlink policy in `decision-log.md` — follow the
+- [x] Decide and record the symlink policy in `decision-log.md` — follow the
       link and write the target, **or** refuse with a clear error. Recommend
       *follow*: refusing breaks vaults that legitimately alias notes, and
       Obsidian follows links. Record as a DEC entry before writing code.
-- [ ] Implement the chosen policy in `atomic_write` (`fs_util.rs:17-51`) —
+- [x] Implement the chosen policy in `atomic_write` (`fs_util.rs:17-51`) —
       resolve `path` via `fs::canonicalize` (or `read_link` loop with a depth
       cap) before choosing the rename destination, so `persist` lands on the
       real file rather than replacing the link.
-- [ ] Guard the resolved destination with the existing vault-boundary check
+- [x] Guard the resolved destination with the existing vault-boundary check
       so following a link cannot escape the vault — a symlink to
       `../../etc/passwd.md` must still be refused, not followed.
-- [ ] Add `tmp.as_file().sync_all()` before `persist` in `atomic_write`, and
+- [x] Add `tmp.as_file().sync_all()` before `persist` in `atomic_write`, and
       fsync the parent directory afterwards on Unix so the rename itself is
       durable.
-- [ ] Correct the `atomic_write` doc comment so its durability claim matches
+- [x] Correct the `atomic_write` doc comment so its durability claim matches
       what the code now actually guarantees.
-- [ ] Delete `tasks::toggle_task` and `tasks::set_task_status` (`tasks.rs:481`,
+- [x] Delete `tasks::toggle_task` and `tasks::set_task_status` (`tasks.rs:481`,
       `:521`) — zero callers, and they lack the `check_mtime` guard their
       plural counterparts have. If they must stay for semver, add the guard
       instead and say why in the doc comment.
-- [ ] Harden `apply_body_fixes` (`lint.rs:3087,3092`) — replace
+- [x] Harden `apply_body_fixes` (`lint.rs:3087,3092`) — replace
       `result[start..end]` with `result.get(start..end)` and treat `None` as
       `FixOutcome::Conflict`, covering `start > end` and non-char-boundary
       offsets that the current `end > body.len()` check misses.
-- [ ] Delete the dead no-op loop at `lint.rs:1689-1694` and its
+- [x] Delete the dead no-op loop at `lint.rs:1689-1694` and its
       self-contradicting comment.
-- [ ] Update CHANGELOG under `Fixed` — the symlink item is user-visible
+- [x] Update CHANGELOG under `Fixed` — the symlink item is user-visible
       behaviour change and needs to be called out explicitly.
 
 ## Acceptance criteria
 
-- [ ] e2e: `hyalo task toggle` on an intra-vault symlink updates the link
+- [x] e2e: `hyalo task toggle` on an intra-vault symlink updates the link
       **target** and leaves the symlink a symlink — test name
       `task_toggle_follows_intra_vault_symlink`
-- [ ] e2e: `hyalo lint --fix` on a symlinked file is idempotent — second run
+- [x] e2e: `hyalo lint --fix` on a symlinked file is idempotent — second run
       reports zero violations — test name `lint_fix_through_symlink_is_idempotent`
-- [ ] e2e: a symlink whose target escapes the vault is still refused with
+- [x] e2e: a symlink whose target escapes the vault is still refused with
       `file resolves outside vault boundary` — test name
       `symlink_escaping_vault_is_refused`
-- [ ] e2e: `hyalo set` / `hyalo append` / `hyalo mv` each verified against a
+- [x] e2e: `hyalo set` / `hyalo append` / `hyalo mv` each verified against a
       symlinked file — one test per command, no shared fixture shortcuts
-- [ ] unit: `atomic_write` calls `sync_all` before `persist` — asserted
+- [x] unit: `atomic_write` calls `sync_all` before `persist` — asserted
       structurally or via a doc test, since durability itself is not
       unit-testable
-- [ ] unit: `apply_body_fixes` returns `Conflict` (does not panic) for a
+- [x] unit: `apply_body_fixes` returns `Conflict` (does not panic) for a
       `DiagFix` with `start > end` and for one with a mid-UTF-8-char `end` —
       test names `apply_body_fixes_rejects_inverted_range` and
       `apply_body_fixes_rejects_non_char_boundary`
-- [ ] `grep -rn "toggle_task\b\|set_task_status\b" crates/` returns only the
+- [x] `grep -rn "toggle_task\b\|set_task_status\b" crates/` returns only the
       plural forms (or the singular forms show a `check_mtime` call)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
