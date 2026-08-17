@@ -2,7 +2,7 @@
 title: Iteration 191 — write-path integrity (symlinks, durability, dead mutators)
 type: iteration
 date: 2026-08-06
-status: done
+status: completed
 branch: iter-191/write-path-integrity
 tags:
   - iteration
