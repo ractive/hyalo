@@ -307,7 +307,9 @@ pub fn links_fix(
 /// - the two list keys are **unioned** — flags extend the config, never
 ///   replace it, so a vault-wide exclusion cannot be lost by adding one flag
 /// - `first_only` is on when either source asks for it: config turns it on for
-///   every run, `--first-only` turns it on for a single run
+///   every run, `--first-only` turns it on for a single run — unless
+///   `--no-first-only` (iter-198) forces it off for this run, which wins over
+///   both
 #[derive(Debug, Clone, Copy)]
 pub struct AutoFilters<'a> {
     /// `--min-length`: shortest title considered a candidate. Source-agnostic —
@@ -319,6 +321,11 @@ pub struct AutoFilters<'a> {
     pub cli_exclude_target_globs: &'a [String],
     /// `--first-only` was passed.
     pub cli_first_only: bool,
+    /// `--no-first-only` was passed: force first-mention-only OFF for this run
+    /// whatever `[links.auto] first_only` says. Clap rejects it alongside
+    /// `--first-only`; if both ever arrive anyway, off wins (see
+    /// [`AutoFilters::effective_first_only`]).
+    pub cli_no_first_only: bool,
     /// `[links.auto] exclude_titles`.
     pub config_exclude_titles: &'a [String],
     /// `[links.auto] exclude_target_globs`.
@@ -341,6 +348,7 @@ impl Default for AutoFilters<'_> {
             cli_exclude_titles: &[],
             cli_exclude_target_globs: &[],
             cli_first_only: false,
+            cli_no_first_only: false,
             config_exclude_titles: &[],
             config_exclude_target_globs: &[],
             config_first_only: false,
@@ -387,8 +395,16 @@ impl AutoFilters<'_> {
         out
     }
 
-    /// `true` when either source asks for first-mention-only linking.
+    /// `true` when first-mention-only linking applies to this run.
+    ///
+    /// `--no-first-only` is the one input that can force it off: it wins over
+    /// both `[links.auto] first_only = true` and (defensively — clap declares
+    /// the two flags as conflicting) an accompanying `--first-only`. Otherwise
+    /// either source asking for it is enough.
     pub fn effective_first_only(&self) -> bool {
+        if self.cli_no_first_only {
+            return false;
+        }
         self.cli_first_only || self.config_first_only
     }
 

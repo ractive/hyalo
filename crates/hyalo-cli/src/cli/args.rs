@@ -1968,6 +1968,9 @@ pub(crate) enum LinksAction {
             \u{00a0}                      anywhere in the file counts as its first mention, case-insensitively\n\
             \u{00a0}                      — no new match is emitted for that target in that file even if a\n\
             \u{00a0}                      plain-text mention appears earlier in the file than the link.\n\
+            --no-first-only       Force first-only OFF for this run, even when [links.auto]\n\
+            \u{00a0}                      first_only = true is set in .hyalo.toml. Conflicts with\n\
+            \u{00a0}                      --first-only.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
             COMMON-WORD TITLES: when a proposed link comes from a page whose title is an ordinary \
@@ -1984,7 +1987,8 @@ pub(crate) enum LinksAction {
             \u{00a0} warn_common_titles = false   # opt out of the common-word note\n\
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
-            config says. When config exclusions actually remove candidates, the report adds a \
+            config says, and --no-first-only turns it off for a single run whatever the config says. \
+            When config exclusions actually remove candidates, the report adds a \
             config_excluded count so a bare run stays explainable.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
             COMMON MISTAKES:\n\
@@ -1993,7 +1997,9 @@ pub(crate) enum LinksAction {
             - Ambiguous titles (same title from 2+ files) are automatically skipped. Use --exclude-title \
             to suppress specific titles, or rename one of the source files.\n\
             - Short titles match too aggressively. Use --min-length (default 3) to skip common short words.\n\
-            - Without --first-only, every mention is linked. This can over-link — use --first-only for prose."
+            - Without --first-only, every mention is linked. This can over-link — use --first-only for prose. \
+            If the vault persists first_only = true, --no-first-only gets the all-mentions behaviour back \
+            for one run."
     )]
     Auto {
         /// Preview changes without modifying files (default when --apply is omitted)
@@ -2013,6 +2019,13 @@ pub(crate) enum LinksAction {
         /// as its first mention (case-insensitive; aliased links count too).
         #[arg(long)]
         first_only: bool,
+        /// Link every mention for this run even when `[links.auto] first_only = true`
+        /// is set in .hyalo.toml.
+        ///
+        /// The counter-flag to --first-only: it forces first-only OFF for a single
+        /// run without editing the config. Cannot be combined with --first-only.
+        #[arg(long, conflicts_with = "first_only")]
+        no_first_only: bool,
         /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
