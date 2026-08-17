@@ -47,6 +47,7 @@ mod short_flags;
 mod site_prefix;
 mod skills_profile;
 mod suggest;
+mod symlinks;
 mod summary;
 mod tags;
 mod task;
