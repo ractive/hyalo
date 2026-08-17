@@ -136,7 +136,10 @@ fn index_command_help_lists_cross_aliases() {
         "create-index -h must advertise the --path alias, got:\n{create_help}"
     );
 
-    let drop = hyalo_no_hints().args(["drop-index", "-h"]).output().unwrap();
+    let drop = hyalo_no_hints()
+        .args(["drop-index", "-h"])
+        .output()
+        .unwrap();
     assert!(drop.status.success());
     let drop_help = String::from_utf8(drop.stdout).unwrap();
     assert!(
