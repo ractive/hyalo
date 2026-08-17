@@ -476,76 +476,6 @@ fn validate_task_line<'a>(
     Ok(file_lines[line - 1])
 }
 
-/// Toggle task completion: `[ ]` → `[x]`, `[x]`/`[X]` → `[ ]`, custom → `[x]`.
-/// Returns the updated `TaskInfo`. Writes the file in-place.
-pub fn toggle_task(path: &Path, line: usize) -> Result<TaskInfo> {
-    let file_size = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .len();
-    bail_if_too_large(path, file_size)?;
-
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let lines: Vec<&str> = content.split('\n').collect();
-    // split('\n') produces a trailing empty element for files ending in '\n';
-    // exclude it from the line count so it matches 1-based scanner line numbers.
-    let line_count = if lines.last() == Some(&"") {
-        lines.len() - 1
-    } else {
-        lines.len()
-    };
-
-    let valid_lines = valid_task_line_set(content.as_bytes())?;
-    let target = validate_task_line(&lines, line_count, &valid_lines, line)?;
-    let (current_status, _done) =
-        detect_task_checkbox(target).ok_or_else(|| anyhow::anyhow!("line {line} is not a task"))?;
-
-    let new_status = if current_status == 'x' || current_status == 'X' {
-        ' '
-    } else {
-        'x'
-    };
-
-    let (modified_line, info) = mutate_task_line(target, line, new_status)
-        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
-
-    let new_content = build_new_content(&content, &lines, &[(line, modified_line)]);
-    crate::fs_util::atomic_write(path, new_content.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
-    Ok(info)
-}
-
-/// Set a custom status character on a task.
-/// Returns the updated `TaskInfo`. Writes the file in-place.
-pub fn set_task_status(path: &Path, line: usize, status: char) -> Result<TaskInfo> {
-    let file_size = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .len();
-    bail_if_too_large(path, file_size)?;
-
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let lines: Vec<&str> = content.split('\n').collect();
-    let line_count = if lines.last() == Some(&"") {
-        lines.len() - 1
-    } else {
-        lines.len()
-    };
-
-    let valid_lines = valid_task_line_set(content.as_bytes())?;
-    let target = validate_task_line(&lines, line_count, &valid_lines, line)?;
-
-    let (modified_line, info) = mutate_task_line(target, line, status)
-        .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
-
-    let new_content = build_new_content(&content, &lines, &[(line, modified_line)]);
-    crate::fs_util::atomic_write(path, new_content.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
-    Ok(info)
-}
-
 /// Scan a file and return all task lines with section context.
 /// Skips frontmatter, fenced code blocks, and comment blocks.
 pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
@@ -956,79 +886,84 @@ Regular text.
         assert!(task.is_some());
     }
 
-    // --- toggle_task ---
+    // --- toggle_tasks (single-line behaviour) ---
+    //
+    // iter-191 deleted the two singular single-line task mutators (zero
+    // callers, and they lacked the `check_mtime` guard their plural
+    // counterparts have). Their behavioural coverage lives on here,
+    // exercised through the plural entry points with a one-element slice.
 
     #[test]
-    fn toggle_task_open_to_done() {
+    fn toggle_tasks_open_to_done() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, 'x');
-        assert!(info.done);
+        let info = toggle_tasks(&path, &[1]).unwrap();
+        assert_eq!(info[0].status, 'x');
+        assert!(info[0].done);
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("- [x] Open task"));
     }
 
     #[test]
-    fn toggle_task_done_to_open_lowercase() {
+    fn toggle_tasks_done_to_open_lowercase() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [x] Done task\n").unwrap();
 
-        let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, ' ');
-        assert!(!info.done);
+        let info = toggle_tasks(&path, &[1]).unwrap();
+        assert_eq!(info[0].status, ' ');
+        assert!(!info[0].done);
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("- [ ] Done task"));
     }
 
     #[test]
-    fn toggle_task_done_to_open_uppercase() {
+    fn toggle_tasks_done_to_open_uppercase() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [X] Done task\n").unwrap();
 
-        let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, ' ');
-        assert!(!info.done);
+        let info = toggle_tasks(&path, &[1]).unwrap();
+        assert_eq!(info[0].status, ' ');
+        assert!(!info[0].done);
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("- [ ] Done task"));
     }
 
     #[test]
-    fn toggle_task_custom_to_done() {
+    fn toggle_tasks_custom_to_done() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [-] Cancelled task\n").unwrap();
 
-        let info = toggle_task(&path, 1).unwrap();
-        assert_eq!(info.status, 'x');
-        assert!(info.done);
+        let info = toggle_tasks(&path, &[1]).unwrap();
+        assert_eq!(info[0].status, 'x');
+        assert!(info[0].done);
     }
 
     #[test]
-    fn toggle_task_error_on_non_task_line() {
+    fn toggle_tasks_error_on_non_task_line() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "Regular line\n").unwrap();
 
-        let result = toggle_task(&path, 1);
+        let result = toggle_tasks(&path, &[1]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
     }
 
     #[test]
-    fn toggle_task_preserves_other_lines() {
+    fn toggle_tasks_preserves_other_lines() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "Line 1\n- [ ] Task\nLine 3\n").unwrap();
 
-        toggle_task(&path, 2).unwrap();
+        toggle_tasks(&path, &[2]).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("Line 1"));
@@ -1036,40 +971,40 @@ Regular text.
         assert!(content.contains("Line 3"));
     }
 
-    // --- set_task_status ---
+    // --- set_tasks_status (single-line behaviour) ---
 
     #[test]
-    fn set_task_status_custom_char() {
+    fn set_tasks_status_custom_char() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = set_task_status(&path, 1, '?').unwrap();
-        assert_eq!(info.status, '?');
-        assert!(!info.done);
+        let info = set_tasks_status(&path, &[1], '?').unwrap();
+        assert_eq!(info[0].status, '?');
+        assert!(!info[0].done);
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("- [?] Open task"));
     }
 
     #[test]
-    fn set_task_status_to_done() {
+    fn set_tasks_status_to_done() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "- [ ] Open task\n").unwrap();
 
-        let info = set_task_status(&path, 1, 'x').unwrap();
-        assert_eq!(info.status, 'x');
-        assert!(info.done);
+        let info = set_tasks_status(&path, &[1], 'x').unwrap();
+        assert_eq!(info[0].status, 'x');
+        assert!(info[0].done);
     }
 
     #[test]
-    fn set_task_status_error_on_non_task() {
+    fn set_tasks_status_error_on_non_task() {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("tasks.md");
         fs::write(&path, "# Heading\n").unwrap();
 
-        let result = set_task_status(&path, 1, 'x');
+        let result = set_tasks_status(&path, &[1], 'x');
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a task"));
     }
@@ -1151,51 +1086,6 @@ Regular text.
     // -----------------------------------------------------------------
     // H-9: mutation entry points must reject fenced/comment-block lines
     // -----------------------------------------------------------------
-
-    #[test]
-    fn toggle_task_rejects_line_inside_code_block() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("tasks.md");
-        let original = "```\n- [ ] Inside code\n```\n- [ ] Real task\n";
-        fs::write(&path, original).unwrap();
-
-        let result = toggle_task(&path, 2);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a task"));
-
-        let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content, original, "fenced line must not be mutated");
-    }
-
-    #[test]
-    fn toggle_task_rejects_line_inside_comment_block() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("tasks.md");
-        let original = "%%\n- [ ] Inside comment\n%%\n- [ ] Real task\n";
-        fs::write(&path, original).unwrap();
-
-        let result = toggle_task(&path, 2);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a task"));
-
-        let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content, original, "commented line must not be mutated");
-    }
-
-    #[test]
-    fn set_task_status_rejects_line_inside_code_block() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("tasks.md");
-        let original = "```\n- [ ] Inside code\n```\n- [ ] Real task\n";
-        fs::write(&path, original).unwrap();
-
-        let result = set_task_status(&path, 2, 'x');
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not a task"));
-
-        let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content, original, "fenced line must not be mutated");
-    }
 
     #[test]
     fn toggle_tasks_rejects_line_inside_code_block() {
@@ -1314,30 +1204,6 @@ title: Test
     // M: mutation entry points must refuse oversized files without
     // reading them into memory.
     // -----------------------------------------------------------------
-
-    #[test]
-    fn toggle_task_rejects_oversized_file() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("big.md");
-        let f = fs::File::create(&path).unwrap();
-        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
-
-        let result = toggle_task(&path, 1);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("too large"));
-    }
-
-    #[test]
-    fn set_task_status_rejects_oversized_file() {
-        let tmp = tempdir().unwrap();
-        let path = tmp.path().join("big.md");
-        let f = fs::File::create(&path).unwrap();
-        f.set_len(scanner::MAX_FILE_SIZE + 1).unwrap();
-
-        let result = set_task_status(&path, 1, 'x');
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("too large"));
-    }
 
     #[test]
     fn toggle_tasks_rejects_oversized_file() {

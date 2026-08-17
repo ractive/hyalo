@@ -635,7 +635,11 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
                 // file ends up byte-for-byte as it was before the batch.
                 match &plan.original_content {
                     Some(original) => {
-                        match hyalo_core::fs_util::atomic_write(old_path, original.as_bytes()) {
+                        match hyalo_core::fs_util::atomic_write_within(
+                            dir,
+                            old_path,
+                            original.as_bytes(),
+                        ) {
                             Ok(()) => self_rewrites_restored.push(outcome.rel_path.clone()),
                             Err(restore_err) => {
                                 eprintln!(

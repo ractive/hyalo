@@ -565,8 +565,15 @@ fn write_single_plan(canonical_vault: &Path, plan: &RewritePlan) -> Result<()> {
         crate::frontmatter::check_mtime(&plan.path, expected_mtime)?;
     }
 
-    crate::fs_util::atomic_write(&plan.path, plan.rewritten_content.as_bytes())
-        .with_context(|| format!("writing {}", plan.path.display()))?;
+    // `atomic_write_within` re-applies the boundary check to the *resolved*
+    // destination, so a symlinked plan target that points out of the vault is
+    // refused rather than followed (DEC-062).
+    crate::fs_util::atomic_write_within(
+        canonical_vault,
+        &plan.path,
+        plan.rewritten_content.as_bytes(),
+    )
+    .with_context(|| format!("writing {}", plan.path.display()))?;
     Ok(())
 }
 

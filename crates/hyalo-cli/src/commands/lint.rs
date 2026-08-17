@@ -1685,14 +1685,6 @@ pub fn lint_files_extended(
         all_results.push(r);
     }
 
-    // Handle frontmatter --fix index patching.
-    for (full_path, rel_path) in files {
-        // Check if frontmatter was modified (tracked by the frontmatter pass).
-        // We check by re-reading if the file was written.
-        // Actually the frontmatter pass writes inline — we need to patch for all modified.
-        let _ = (full_path, rel_path); // covered by per_file above
-    }
-
     // Patch index for body-modified files.
     if !modified_files.is_empty() {
         crate::dispatch::patch_index_for_modified_files_pub(
@@ -2694,7 +2686,7 @@ fn lint_one_file_extended(
         };
         check_mtime(full_path, mtime0)?;
         let new_content = format!("{frontmatter_part}{working_body}");
-        hyalo_core::fs_util::atomic_write(full_path, new_content.as_bytes())
+        hyalo_core::fs_util::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
             .with_context(|| format!("writing fixed body to {rel_path}"))?;
         body_modified = true;
     }
@@ -3064,7 +3056,10 @@ fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String,
             outcome_map.insert(orig_idx, FixOutcome::Conflict { blocking_rule });
             continue;
         }
-        if end > body.len() {
+        // `start > end`, a non-char-boundary offset, or `end` past the body all
+        // make the range unusable — `str` indexing would panic on any of them.
+        // `get` is the single check that covers all three (iter-191).
+        if body.get(start..end).is_none() {
             outcome_map.insert(
                 orig_idx,
                 FixOutcome::Conflict {
@@ -3084,7 +3079,22 @@ fn apply_body_fixes(body: &str, fixes: &[&hyalo_mdlint::Diagnostic]) -> (String,
             .fix
             .as_ref()
             .map_or("", |f| f.replacement.as_str());
-        if result[start..end] == *replacement {
+        // Re-validate against the *partially mutated* buffer: the winner
+        // selection above checked the range against the pristine body, and
+        // although descending-offset mutation keeps earlier ranges valid, a
+        // `get` here is what makes that reasoning enforced rather than
+        // assumed. `None` means the range is unusable — report it as a
+        // conflict instead of panicking on a slice (iter-191).
+        let Some(current) = result.get(start..end) else {
+            outcome_map.insert(
+                orig_idx,
+                FixOutcome::Conflict {
+                    blocking_rule: "out-of-bounds".to_owned(),
+                },
+            );
+            continue;
+        };
+        if current == replacement {
             // Byte-for-byte no-op: nothing changed, don't count it as fixed.
             outcome_map.insert(orig_idx, FixOutcome::NoFix);
             continue;
@@ -4213,6 +4223,36 @@ type = \"skill\"
         assert!(
             matches!(outcomes[0], FixOutcome::NoFix),
             "byte-for-byte no-op must not be reported as Applied: {:?}",
+            outcomes[0]
+        );
+    }
+
+    #[test]
+    fn apply_body_fixes_rejects_inverted_range() {
+        // start > end: `body[start..end]` would panic. The fix must be
+        // reported as a conflict and the body left untouched (iter-191).
+        let inverted = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 4, 1, "boom");
+        let (result, outcomes) = apply_body_fixes("0123456789", &[&inverted]);
+        assert_eq!(result, "0123456789", "content must not change");
+        assert!(
+            matches!(outcomes[0], FixOutcome::Conflict { .. }),
+            "inverted range must be a Conflict, got: {:?}",
+            outcomes[0]
+        );
+    }
+
+    #[test]
+    fn apply_body_fixes_rejects_non_char_boundary() {
+        // "é" is two bytes; end == 1 lands mid-character, which `str`
+        // indexing rejects with a panic. In-bounds, so the old
+        // `end > body.len()` check missed it entirely (iter-191).
+        let body = "é abc";
+        let mid_char = mk_diag("MD009", hyalo_mdlint::DiagSeverity::Warn, 0, 1, "x");
+        let (result, outcomes) = apply_body_fixes(body, &[&mid_char]);
+        assert_eq!(result, body, "content must not change");
+        assert!(
+            matches!(outcomes[0], FixOutcome::Conflict { .. }),
+            "mid-char-boundary range must be a Conflict, got: {:?}",
             outcomes[0]
         );
     }
