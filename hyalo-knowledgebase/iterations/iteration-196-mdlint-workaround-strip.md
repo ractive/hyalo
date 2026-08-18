@@ -34,7 +34,7 @@ continuation-line fix — closes our #491, merged 2026-08-18), and
 [#493](https://github.com/joshrotenberg/mdbook-lint/pull/493) (the #456
 coordinate contract: 1-based Unicode-scalar `Position`, half-open `Fix`,
 checked byte-conversion APIs, explicit LF/CRLF/EOF semantics — closes
-#456, merged 2026-08-18). **As of 2026-08-18 all three are on upstream
+issue 456, merged 2026-08-18). **As of 2026-08-18 all three are on upstream
 `main` but NO release contains them — latest is still 0.15.2.** Check
 with `cargo info mdbook-lint-core` / their releases page. Expect the next
 release to be an API-visible bump (0.16.x): #493 redefines `Position`/
@@ -49,7 +49,7 @@ release to be an API-visible bump (0.16.x): #493 redefines `Position`/
   MD011 inclusive end column, MD034 Liquid-swallowing + char/byte length
   mix, MD047 no-op range.
 - Upstream #493 (merged 2026-08-18) implements the "contract half" of
-  #456: unit-defined coordinates, half-open ranges, checked
+  issue 456: unit-defined coordinates, half-open ranges, checked
   position-to-byte conversion APIs, and explicit newline/EOF constructors
   replacing the replacement-driven heuristic. If the triggering release
   contains it, the per-rule `rule_uses_byte_columns` allowlist
