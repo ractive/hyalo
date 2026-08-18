@@ -11,6 +11,13 @@ and this project adheres to
 
 ### Added
 
+- **`links auto --no-first-only`** (iter-198). The counter-flag to
+  `--first-only`: it forces first-mention-only *off* for a single run, so a
+  vault that persists `[links.auto] first_only = true` can still get a one-off
+  all-mentions pass without editing `.hyalo.toml`. Previously the two sources
+  were OR-ed, leaving the config key impossible to override per run. The flag
+  conflicts with `--first-only` (passing both is a clap error, not a silent
+  precedence puzzle) and is a no-op when `first_only` is not enabled.
 - **`create-index --path` and `drop-index --output` flag aliases** (iter-195).
   The two commands name the *same* index file with different flags — `-o/--output`
   on `create-index`, `-p/--path` on `drop-index` — so each accepts the other's

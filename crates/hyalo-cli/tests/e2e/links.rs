@@ -3934,6 +3934,94 @@ fn links_auto_config_and_flag_first_only_compose() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// `--no-first-only` counter-flag (iter-198)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_auto_no_first_only_overrides_config_first_only() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = true\n");
+
+    // Baseline: the persisted key collapses the duplicate mentions.
+    let persisted = run_links_auto_in_vault(tmp.path(), &[]);
+    assert_eq!(
+        persisted["total"], 3,
+        "config first_only should keep one mention per target: {persisted}"
+    );
+
+    // The counter-flag gets every mention back for this one run, without
+    // touching .hyalo.toml.
+    let overridden = run_links_auto_in_vault(tmp.path(), &["--no-first-only"]);
+    assert_eq!(
+        overridden["total"], 5,
+        "--no-first-only should link every mention despite the config: {overridden}"
+    );
+}
+
+#[test]
+fn links_auto_no_first_only_applies_every_mention() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = true\n");
+
+    let results = run_links_auto_in_vault(tmp.path(), &["--no-first-only", "--apply"]);
+    assert_eq!(
+        results["applied"].as_bool(),
+        Some(true),
+        "write path honours it too: {results}"
+    );
+    assert_eq!(
+        results["total"], 5,
+        "every mention is written, not just the first: {results}"
+    );
+
+    let content = fs::read_to_string(tmp.path().join("guide.md")).expect("guide.md should be read");
+    assert_eq!(
+        content.matches("[[permissions").count(),
+        2,
+        "both Permissions mentions should be linked: {content}"
+    );
+    assert_eq!(
+        content.matches("[[daily").count(),
+        2,
+        "both Daily mentions should be linked: {content}"
+    );
+}
+
+#[test]
+fn links_auto_no_first_only_without_config_is_a_no_op() {
+    // Nothing to turn off: the run already links every mention.
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = false\n");
+
+    let plain = run_links_auto_in_vault(tmp.path(), &[]);
+    let flagged = run_links_auto_in_vault(tmp.path(), &["--no-first-only"]);
+
+    assert_eq!(plain["total"], 5, "baseline links every mention: {plain}");
+    assert_eq!(
+        flagged["total"], plain["total"],
+        "--no-first-only changes nothing when first_only is already off: {flagged}"
+    );
+}
+
+#[test]
+fn links_auto_first_only_and_no_first_only_conflict() {
+    let tmp = setup_auto_config_vault("[links.auto]\nfirst_only = true\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--first-only", "--no-first-only"])
+        .output()
+        .expect("hyalo links auto should run");
+
+    assert!(
+        !output.status.success(),
+        "the two flags contradict each other and must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "expected a clap conflict error, got: {stderr}"
+    );
+}
+
 #[test]
 fn links_auto_omits_config_excluded_when_config_removed_nothing() {
     // A config exclusion naming a title no page has removes no candidates, so

@@ -16,7 +16,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   Persist the noisy-title exclusions instead of retyping them: `[links.auto] exclude_titles = [...]`,
   `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
   rather than replacing them, and a run whose config exclusions removed candidates reports
-  `config_excluded`. When a proposed link comes from a page titled with a common English word,
+  `config_excluded`. `--no-first-only` forces first-only OFF for one run when the config
+  persists `first_only = true`. When a proposed link comes from a page titled with a common English word,
   a stderr `note:` names it with its match count — act on it or silence it with
   `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
