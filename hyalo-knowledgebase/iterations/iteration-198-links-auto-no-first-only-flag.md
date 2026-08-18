@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 198 — --no-first-only counter-flag for links auto
 date: 2026-08-17
-status: in-progress
+status: completed
 tags:
   - iteration
   - links
