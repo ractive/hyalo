@@ -26,18 +26,19 @@ attempt to fix upstream #456 here").
 ## Trigger — do NOT start until this holds
 
 A published `mdbook-lint-core` / `mdbook-lint-rulesets` release **newer
-than 0.15.2** whose history contains upstream PR
-[#486](https://github.com/joshrotenberg/mdbook-lint/pull/486)
-("fix(rules): correct MD011, MD034, and MD047 autofix corruption",
-merged to their `main` 2026-08-05). Check with
-`cargo info mdbook-lint-core` / the upstream CHANGELOG. Given the
-maintainer's own agent-driven release cadence (five issues to release in
-about two weeks last cycle), poll when convenient rather than watching.
-
-Secondary, independent trigger: upstream fixes
-[#491](https://github.com/joshrotenberg/mdbook-lint/issues/491) (MD018
-continuation-line false positive, filed by us 2026-08-17) — see the MD018
-task below; it can ride along or wait for the next gated pass.
+than 0.15.2** whose history contains upstream PRs
+[#486](https://github.com/joshrotenberg/mdbook-lint/pull/486) (MD011/
+MD034/MD047 corruption fixes, merged 2026-08-05),
+[#492](https://github.com/joshrotenberg/mdbook-lint/pull/492) (MD018
+continuation-line fix — closes our #491, merged 2026-08-18), and
+[#493](https://github.com/joshrotenberg/mdbook-lint/pull/493) (the #456
+coordinate contract: 1-based Unicode-scalar `Position`, half-open `Fix`,
+checked byte-conversion APIs, explicit LF/CRLF/EOF semantics — closes
+#456, merged 2026-08-18). **As of 2026-08-18 all three are on upstream
+`main` but NO release contains them — latest is still 0.15.2.** Check
+with `cargo info mdbook-lint-core` / their releases page. Expect the next
+release to be an API-visible bump (0.16.x): #493 redefines `Position`/
+`Fix` semantics, so read its migration notes before bumping.
 
 ## Context
 
@@ -47,11 +48,16 @@ task below; it can ride along or wait for the next gated pass.
   (issuecomment-5319878913). Summary of what #486 fixed on their `main`:
   MD011 inclusive end column, MD034 Liquid-swallowing + char/byte length
   mix, MD047 no-op range.
-- Two workarounds are **NOT** covered by #486 and must survive this
-  iteration unless upstream's release notes say otherwise: the per-rule
-  `rule_uses_byte_columns` allowlist (`engine.rs:702`), and the
-  `line_len + 1` replace-vs-insert disambiguation heuristic. Those are the
-  "contract half" of #456, still open upstream.
+- Upstream #493 (merged 2026-08-18) implements the "contract half" of
+  #456: unit-defined coordinates, half-open ranges, checked
+  position-to-byte conversion APIs, and explicit newline/EOF constructors
+  replacing the replacement-driven heuristic. If the triggering release
+  contains it, the per-rule `rule_uses_byte_columns` allowlist
+  (`engine.rs:702`) and the `line_len + 1` replace-vs-insert heuristic
+  become candidates for FULL removal in favor of the new APIs — a bigger
+  win than the original scope. Note #493 is an API redesign: expect
+  compile-visible changes in `convert_fix`, and treat the bump as a
+  migration, not a drop-in.
 - The MD011 guard was deliberately written to self-neutralize
   (`content[end..].starts_with(']')`), so it is *safe* under a fixed
   upstream — this iteration removes it for clarity, not correctness.
@@ -72,17 +78,18 @@ task below; it can ride along or wait for the next gated pass.
       (or re-enable) a fixture test that fails under 0.15.2 semantics and
       passes under the new release — proving the upstream fix is actually
       in the shipped crate, not just on their `main`.
-- [ ] Re-verify the `rule_uses_byte_columns` allowlist against the new
-      release's source (it "silently rots on every upstream release" — our
-      own words on #456). Keep it unless the release implements #456's
-      coordinate contract; if it does, plan its removal as a follow-up
-      iteration instead of scope-creeping here.
-- [ ] Keep the `line_len + 1` disambiguation heuristic and its CRLF
-      branch unless the release notes say the encoding changed.
-- [ ] MD018 (#491): if the triggering release also fixes it, add a
-      regression fixture (continuation line `#472` not flagged; standalone
-      `#foo` still flagged) and delete the latent-bug note in iter-193's
-      Part B audit trail. If not fixed, leave everything alone.
+- [ ] MD018 (#491, fixed upstream by #492): add a regression fixture
+      (continuation line `#472` not flagged; standalone `#foo` still
+      flagged; mid-line `PR #472` not flagged) and delete the latent-bug
+      note in iter-193's Part B audit trail.
+- [ ] #493 adoption: migrate `convert_fix` to the new `Position`/`Fix`
+      contract and checked conversion APIs. If the contract holds as
+      documented, DELETE `rule_uses_byte_columns` and the `line_len + 1`
+      heuristic entirely (each behind its own fixture proving the shipped
+      crate honors the contract for a rule that previously needed the
+      workaround, incl. a multibyte + CRLF case). If any rule still
+      violates the contract in the shipped release, keep the minimal
+      guard, file it upstream, and record the exception here.
 - [ ] Re-check `deny.toml`: do the two RUSTSEC ignores still resolve
       through `comrak -> syntect`? Does `toml` 0.5 dedupe (upstream #459)?
       Record before/after unique-crate count if the tree changed.
@@ -101,8 +108,9 @@ task below; it can ride along or wait for the next gated pass.
 - [ ] Each removed workaround has a fixture test proving the upstream fix
       is present in the *published* crate hyalo now pins
 - [ ] `convert_fix` contains no compensation for MD011/MD034/MD047 range
-      bugs; the byte-column allowlist and `line_len + 1` heuristic remain
-      (or their removal is planned in a follow-up, not improvised here)
+      bugs; the byte-column allowlist and `line_len + 1` heuristic are
+      removed under the #493 contract (or every survivor is justified by
+      a named, upstream-filed contract violation in the shipped release)
 - [ ] `cargo deny check` clean; RUSTSEC ignore list re-verified and
       annotated with the re-check date
 - [ ] KB lint counts unchanged except deltas explained by the release notes
@@ -111,8 +119,6 @@ task below; it can ride along or wait for the next gated pass.
 
 ## Non-goals
 
-- Implementing #456's coordinate contract downstream, or removing the
-  byte-column allowlist while upstream columns remain per-rule.
-- Working around MD018 downstream — upstream has the report (#491) and a
-  strong record of accepting exactly this class of fix.
 - Any release; release stays user-gated.
+- Reworking hyalo-side lint features beyond the translation layer —
+  this iteration is dependency migration + workaround deletion only.
