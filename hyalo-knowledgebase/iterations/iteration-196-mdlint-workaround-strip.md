@@ -36,9 +36,14 @@ coordinate contract: 1-based Unicode-scalar `Position`, half-open `Fix`,
 checked byte-conversion APIs, explicit LF/CRLF/EOF semantics — closes
 issue 456, merged 2026-08-18). **As of 2026-08-18 all three are on upstream
 `main` but NO release contains them — latest is still 0.15.2.** Check
-with `cargo info mdbook-lint-core` / their releases page. Expect the next
-release to be an API-visible bump (0.16.x): #493 redefines `Position`/
-`Fix` semantics, so read its migration notes before bumping.
+with `cargo info mdbook-lint-core` / their releases page. The pending
+release is visible as their open release-plz PR
+[#484](https://github.com/joshrotenberg/mdbook-lint/pull/484)
+("chore: release v0.16.0") — its cargo-semver-checks output already
+flags `mdbook-lint-core` as API BREAKING (plus a new
+`Config.experimental_rules` field from their #480). When #484 merges and
+v0.16.0 hits crates.io, this iteration is runnable. Read #493's
+migration notes before bumping.
 
 ## Context
 
