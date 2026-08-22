@@ -2,7 +2,7 @@
 title: Iteration 204 — dogfood v0.21.0-pre medium/low batch
 type: iteration
 date: 2026-08-18
-status: in-progress
+status: completed
 branch: iter-204/dogfood-low-batch
 tags:
   - iteration
