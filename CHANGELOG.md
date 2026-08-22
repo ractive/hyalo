@@ -69,6 +69,18 @@ and this project adheres to
 
 ### Changed
 
+- **mdbook-lint bumped to 0.16.0** (iter-196). `mdbook-lint-core` and
+  `mdbook-lint-rulesets` move from 0.15.2 to 0.16.0, which ships the exact
+  autofix-coordinate contract hyalo asked for upstream: `Fix` ranges are
+  half-open, `Position` columns are 1-based Unicode scalars, CRLF is atomic,
+  and `Position::to_byte_offset` is a checked conversion. Autofix output is
+  strictly more accurate — fixes on lines containing multibyte characters
+  (MD010 on a line with `✘` or a typographic apostrophe, for example) used to
+  be dropped and are now applied. Violation counts are unchanged on every
+  corpus tested. The upgrade also brings upstream's MD018 fix: a paragraph
+  continuation line starting with an issue reference (`#472`) is no longer
+  reported as a malformed ATX heading.
+
 - **BREAKING: `--dir` no longer discards `.hyalo.toml`** (iter-201). `--dir`
   names a *vault*, not a config. When the path it resolves to is the one the
   working directory's `.hyalo.toml` already points at (`dir = "kb"` +
@@ -151,6 +163,18 @@ and this project adheres to
   omitted.
 
 ### Removed
+
+- **All downstream mdbook-lint autofix workarounds** (iter-196). With the
+  0.16.0 coordinate contract in place, `hyalo-mdlint`'s translation layer no
+  longer compensates for upstream range bugs: the `rule_uses_byte_columns`
+  per-rule allowlist, the hand-rolled `line_col_to_byte` walk, the MD011
+  inclusive-end `end += 1` guard, the MD034 Liquid-tag pull-back
+  (`trim_md034_liquid`), and the `line_len + 1` replace-vs-insert heuristic
+  are all deleted — `convert_fix` is now a straight checked translation.
+  Each deletion is covered by a fixture that fails under 0.15.2 semantics.
+  One documented exception survives: `md047_fix` still computes MD047's fix
+  locally for **CRLF** bodies, because shipped 0.16.0 hard-codes `"\n"` for
+  the missing-EOF-newline insertion. LF bodies use upstream's fix.
 
 - **`hyalo_core::tasks::toggle_task` and `set_task_status`** (iter-191). These
   singular single-line mutators had zero callers in the CLI and lacked the

@@ -95,11 +95,12 @@ Verified at `c42fa6f`:
     (upstream #453) — MD018/MD019 fixes now keep a closing `##`.
   - **Not in the release notes, found by diffing `md018.rs`:** the violation
     column changed from `line.len()` (bytes) to `line.chars().count()`
-    (chars). This silently fixes a latent hyalo bug — `rule_uses_byte_columns`
-    (`engine.rs:702`) already classifies MD018 as char-columns, so on a
-    multibyte line hyalo's char walk was being handed a byte column by 0.14.
-    Worth citing verbatim on upstream #456; it is exactly the coordinate
-    ambiguity that issue is about.
+    (chars) — cited verbatim on upstream #456 as a concrete instance of the
+    coordinate ambiguity that issue is about. *(Resolved: the per-rule
+    `rule_uses_byte_columns` allowlist this note was about no longer exists —
+    mdbook-lint 0.16.0 defines columns as Unicode scalars for every rule and
+    [[iterations/iteration-196-mdlint-workaround-strip]] deleted the
+    allowlist.)*
 - [x] Remove the scoped MPL-2.0 exception at `deny.toml:33-38` — it exists
       only for `mdbook` — and re-run `cargo deny check`.
 - [x] Re-check the two RUSTSEC ignores (`bincode` 1.x RUSTSEC-2025-0141,
