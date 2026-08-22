@@ -4,14 +4,19 @@
 # Runs automatically in the release workflow as a quality gate.
 
 [advisories]
+# Ignore list last re-verified 2026-08-22 (iter-196, on the mdbook-lint
+# 0.15.2 -> 0.16.0 bump): both advisories still resolve through the same
+# `comrak -> syntect` chain and nothing else in the tree pulls them.
 ignore = [
     # bincode 1.x is unmaintained; pulled in via comrak -> syntect (syntax
     # highlighting caches). No safe upgrade on the syntect 5.x line; not
     # exposed to untrusted input in our usage. Mirrors cargo-audit, which
     # reports unmaintained as a warning, not an error.
+    # Re-checked 2026-08-22: chain unchanged (comrak 0.21 -> syntect 5.3).
     "RUSTSEC-2025-0141",
     # yaml-rust is unmaintained; same comrak -> syntect dependency chain,
     # used only to parse syntect's bundled theme/syntax definitions.
+    # Re-checked 2026-08-22: chain unchanged (comrak 0.21 -> syntect 5.3).
     "RUSTSEC-2024-0320",
 ]
 
@@ -36,6 +41,11 @@ ignore = true
 # pulled in as an unused dependency of mdbook-lint-core 0.14. Upstream removed
 # it in 0.15.2, so the whole subtree — and the exception — is gone (iter-193).
 
+# `toml` 0.5 is still duplicated against `toml` 1.x: mdbook-lint-core /
+# mdbook-lint-rulesets 0.16.0 have not moved off 0.5 (upstream
+# joshrotenberg/mdbook-lint#459). Re-checked 2026-08-22 (iter-196); the
+# 0.15.2 -> 0.16.0 bump left the unique-crate count at 136 (upstream #489
+# only moved `glob` from rulesets to core).
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
