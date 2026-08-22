@@ -126,7 +126,7 @@ pub fn links_fix(
         (filtered, ignored)
     };
 
-    let matcher = LinkMatcher::from_index(index, threshold);
+    let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
     let fix_report = plan_fixes(&broken, &matcher);
 
     // Split low-confidence guesses into their own bucket. Fuzzy matches are

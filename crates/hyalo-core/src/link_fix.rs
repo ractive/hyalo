@@ -309,6 +309,10 @@ pub struct LinkMatcher {
     stem_to_indices: HashMap<String, Vec<usize>>,
     /// Minimum Jaro-Winkler score for fuzzy matching.
     threshold: f64,
+    /// Site prefix stripped from site-absolute targets before matching, so a
+    /// link written `/docs/a/b.md` is compared against the vault path
+    /// `a/b.md` (iter-200).
+    site_prefix: Option<String>,
 }
 
 /// Result of a single match attempt.
@@ -328,7 +332,20 @@ pub const BASENAME_FALLBACK_CONFIDENCE: f64 = 0.6;
 
 impl LinkMatcher {
     /// Build a matcher from a list of vault-relative file paths.
+    ///
+    /// Equivalent to [`LinkMatcher::with_site_prefix`] with no site prefix.
     pub fn new(files: Vec<String>, threshold: f64) -> Self {
+        Self::with_site_prefix(files, threshold, None)
+    }
+
+    /// Build a matcher that understands site-absolute targets.
+    ///
+    /// Broken-link targets reach [`find_match`](Self::find_match) exactly as
+    /// the author wrote them, but the index is keyed by vault-relative paths.
+    /// Without the prefix strip, a site-absolute target could never satisfy
+    /// the exact/case-insensitive/extension strategies — every site-absolute
+    /// link fell through to the basename guess (dogfood H-1/M-1).
+    pub fn with_site_prefix(files: Vec<String>, threshold: f64, site_prefix: Option<&str>) -> Self {
         let mut lower_to_idx = HashMap::with_capacity(files.len());
         let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
@@ -369,13 +386,14 @@ impl LinkMatcher {
             exact_to_idx,
             stem_to_indices,
             threshold,
+            site_prefix: site_prefix.map(std::string::ToString::to_string),
         }
     }
 
     /// Build a matcher from an index (avoids rescanning the directory).
-    pub fn from_index(index: &dyn VaultIndex, threshold: f64) -> Self {
+    pub fn from_index(index: &dyn VaultIndex, threshold: f64, site_prefix: Option<&str>) -> Self {
         let files: Vec<String> = index.entries().iter().map(|e| e.rel_path.clone()).collect();
-        Self::new(files, threshold)
+        Self::with_site_prefix(files, threshold, site_prefix)
     }
 
     /// Returns `true` if `candidate` (vault-relative) refers to the same file
@@ -396,9 +414,21 @@ impl LinkMatcher {
     /// the matcher never proposes a self-referential fix.
     ///
     /// Returns `None` if no match is found above the configured threshold.
-    pub(crate) fn find_match(&self, raw_target: &str, source: &str) -> Option<MatchResult> {
+    pub(crate) fn find_match(&self, written_target: &str, source: &str) -> Option<MatchResult> {
         // Minimum score difference to avoid ambiguous fuzzy matches.
         const TIE_DELTA: f64 = 0.01;
+
+        // A site-absolute target (`/docs/a/b.md`) names a path from the site
+        // root; the index is keyed by vault-relative paths, so strip the
+        // leading `/` and any configured site prefix before matching.
+        // Everything below then works on vault-relative text.
+        let stripped;
+        let raw_target = if written_target.starts_with('/') {
+            stripped = strip_site_prefix(written_target, self.site_prefix.as_deref());
+            stripped.as_str()
+        } else {
+            written_target
+        };
 
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
@@ -464,7 +494,7 @@ impl LinkMatcher {
             && indices.len() == 1
             && !Self::is_self_link(source, &self.files[indices[0]])
         {
-            let site_absolute = raw_target.starts_with('/');
+            let site_absolute = written_target.starts_with('/');
             let (strategy, confidence) = if site_absolute {
                 (FixStrategy::BasenameFallback, BASENAME_FALLBACK_CONFIDENCE)
             } else {
@@ -845,7 +875,18 @@ fn emit_markdown_fix_target(
         } else {
             strip_md_suffix(new_vault_rel)
         };
-        return match site_prefix {
+        // Re-attach the site prefix only when the *original* link carried it.
+        // `site_prefix` is auto-derived from the vault directory name when
+        // nothing is configured, so injecting it unconditionally would invent
+        // a path segment the author never wrote (dogfood L-11).
+        let author_used_prefix = site_prefix.is_some_and(|prefix| {
+            let prefix = prefix.trim_matches('/');
+            !prefix.is_empty()
+                && raw_target[1..]
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        });
+        return match site_prefix.filter(|_| author_used_prefix) {
             Some(prefix) => format!("/{}/{}", prefix.trim_matches('/'), body),
             None => format!("/{body}"),
         };
