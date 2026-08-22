@@ -2,7 +2,7 @@
 title: Iteration 205 — frequency trigger for the common-title note
 type: iteration
 date: 2026-08-18
-status: in-progress
+status: completed
 branch: iter-205/common-title-frequency-trigger
 tags:
   - iteration
