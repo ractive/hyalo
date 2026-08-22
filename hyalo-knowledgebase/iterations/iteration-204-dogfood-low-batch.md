@@ -95,7 +95,7 @@ item that turns out deep gets split out rather than ballooning here.
 - [ ] L-13(b): document `exclude_target_globs` case-insensitivity in
       links auto help + configuration.md.
 
-### Small correctness debts [0/3]
+### Small correctness debts [0/4]
 
 - [ ] L-1: `backlinks` stops double-counting case-mismatched wikilinks
       (register under the canonical target only; `find --fields links`
@@ -105,6 +105,18 @@ item that turns out deep gets split out rather than ballooning here.
 - [ ] L-16: covered in iter-202 (exit-code unification) — verify here
       only that `okf log` now exits 1; if 202 has not merged first,
       do it here and tell 202's agent via the plan.
+- [ ] iter-203 follow-up: site-prefix stripping (`strip_site_prefix`) is
+      case-sensitive and tries only the single auto-derived guess (last
+      path component of `--dir`). MDN's derived prefix (`en-us`) never
+      matches its real two-segment, mixed-case URL prefix
+      (`en-US/docs`), so every site-absolute link (`/en-US/docs/...`)
+      stays unresolved until `--site-prefix "en-US/docs"` is passed by
+      hand — `hyalo config` now at least surfaces the derived guess
+      (iter-203 UX-4) so this is discoverable, but nothing resolves
+      automatically. Make the match case-insensitive; decide whether
+      auto-derivation should also try, or `hyalo config` should warn
+      about, a multi-segment prefix. Add a regression fixture shaped
+      like MDN (vault dir `en-us`, links written `/en-US/docs/...`).
 
 ## Acceptance criteria
 

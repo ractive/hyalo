@@ -35,6 +35,11 @@ No repro numbers or profiling data were captured beyond the headline
 figure at dogfood time. First task here is therefore to reproduce and
 measure before proposing a fix — do not assume the cause.
 
+Corroborating data point from iter-203's MDN measurement run (14,375
+files, read-only): `links` still took ~80s there too, unchanged by
+iter-203's directory-index resolution — so the cost is orthogonal to
+that change and reproduces on a second, larger corpus.
+
 ## Tasks
 
 - [ ] Reproduce: run `hyalo links fix` (dry-run) and `hyalo links auto`
