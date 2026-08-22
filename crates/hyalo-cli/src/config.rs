@@ -910,6 +910,125 @@ mod tests {
         tempfile::tempdir().expect("failed to create temp dir")
     }
 
+    // ---------------------------------------------------------------------------
+    // resolve_effective / dir_override_note (iter-201, H-4)
+    // ---------------------------------------------------------------------------
+
+    /// A repo-root config pointing at a `kb/` subdirectory — the layout the
+    /// `--dir` bug was worst on.
+    fn make_project() -> TempDir {
+        let dir = make_temp();
+        fs::create_dir_all(dir.path().join("kb")).unwrap();
+        fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \"kb\"\nhints = false\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolve_without_dir_keeps_the_cwd_config() {
+        let project = make_project();
+        let effective = resolve_effective(load_config_from(project.path()), None);
+        assert_eq!(effective.dir, PathBuf::from("kb"));
+        assert!(!effective.config.hints, "the config must apply");
+        assert!(effective.config_path.is_some());
+        assert!(!effective.dir_redundant);
+        assert!(!effective.cwd_config_shadowed);
+    }
+
+    #[test]
+    fn resolve_with_dir_naming_the_configured_vault_keeps_the_config() {
+        let project = make_project();
+        let cli_dir = project.path().join("kb");
+        let effective = resolve_effective(load_config_from(project.path()), Some(&cli_dir));
+        assert!(
+            !effective.config.hints,
+            "the CWD config must survive a redundant --dir"
+        );
+        assert_eq!(
+            effective.config_path,
+            Some(project.path().join(".hyalo.toml"))
+        );
+        assert!(effective.dir_redundant);
+        assert!(!effective.cwd_config_shadowed);
+        assert_eq!(dir_override_note(&effective), None);
+    }
+
+    #[test]
+    fn resolve_with_dir_naming_another_tree_drops_the_cwd_config() {
+        let project = make_project();
+        let other = project.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        let effective = resolve_effective(load_config_from(project.path()), Some(&other));
+        assert!(
+            effective.config.hints,
+            "a different vault must not inherit hints = false"
+        );
+        assert_eq!(effective.config_path, None);
+        assert!(!effective.dir_redundant);
+        assert!(effective.cwd_config_shadowed);
+        let note = dir_override_note(&effective).expect("the switch must be announced");
+        assert!(note.contains("built-in defaults"), "note was: {note}");
+    }
+
+    #[test]
+    fn resolve_with_dir_naming_a_tree_with_its_own_config_uses_that_file() {
+        let project = make_project();
+        let other = project.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join(".hyalo.toml"), "site_prefix = \"other\"\n").unwrap();
+        let effective = resolve_effective(load_config_from(project.path()), Some(&other));
+        assert_eq!(
+            effective.config.site_prefix.as_deref(),
+            Some("other"),
+            "the target's own config must apply"
+        );
+        assert_eq!(effective.config_path, Some(other.join(".hyalo.toml")));
+        let note = dir_override_note(&effective).expect("the switch must be announced");
+        assert!(
+            note.contains(".hyalo.toml is in effect"),
+            "note was: {note}"
+        );
+    }
+
+    #[test]
+    fn resolve_without_a_cwd_config_announces_nothing() {
+        // Nothing is being shadowed, so a `--dir` elsewhere is not news.
+        let dir = make_temp();
+        let other = dir.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        let effective = resolve_effective(load_config_from(dir.path()), Some(&other));
+        assert!(!effective.cwd_config_shadowed);
+        assert_eq!(dir_override_note(&effective), None);
+    }
+
+    #[test]
+    fn resolve_with_a_malformed_cwd_config_does_not_claim_redundancy() {
+        // A config that did not parse resolves no vault, so `--dir` cannot be
+        // "the same as" anything and must not be called redundant.
+        let dir = make_temp();
+        fs::create_dir_all(dir.path().join("kb")).unwrap();
+        fs::write(dir.path().join(".hyalo.toml"), "dir = \"kb\"\nnope = 1\n").unwrap();
+        let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        let cli_dir = dir.path().join("kb");
+        let effective = resolve_effective(load_config_from(dir.path()), Some(&cli_dir));
+        assert!(!effective.dir_redundant);
+    }
+
+    #[test]
+    fn salvage_dir_recovers_dir_from_an_otherwise_unusable_file() {
+        assert_eq!(
+            salvage_dir("dir = \"kb\"\nnope = 1\n"),
+            Some(PathBuf::from("kb"))
+        );
+        assert_eq!(salvage_dir("this is not { toml"), None);
+        assert_eq!(salvage_dir("nope = 1\n"), None);
+    }
+
     #[test]
     fn missing_config_returns_defaults() {
         let dir = make_temp();
