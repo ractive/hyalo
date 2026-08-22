@@ -47,7 +47,7 @@ Repros in [[dogfood-results/dogfood-v0210-pre-release-iters-191-198]]
   `.hyalo.toml`, emitted in the same `-> hyalo …` list as read-only
   drill-downs when 2+ filters combine.
 
-## Tasks
+## Tasks [7/7]
 
 - [x] H-4 decision first, recorded as a DEC entry: when `--dir` equals the
       configured dir, the config MUST apply (the note stays, minus the
@@ -76,7 +76,7 @@ Repros in [[dogfood-results/dogfood-v0210-pre-release-iters-191-198]]
       `--dir` semantics; CHANGELOG (breaking if H-4 changes `--dir`
       behavior — call it out).
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] `hyalo lint --dir hyalo-knowledgebase --strict` reports the same
       findings as without the flag (repo KB: 4 warnings, not vacuous
