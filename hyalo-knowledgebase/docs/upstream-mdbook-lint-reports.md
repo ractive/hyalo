@@ -199,3 +199,38 @@ loses the genuine `#Heading` typo detection the rule exists for.
 - [x] Post the #456 comment and record its URL in
       [[iterations/iteration-193-vault-side-effects-and-dep-diet]]
 - [x] File the MD018 issue and record its number here
+
+## Outcome — mdbook-lint 0.16.0 (2026-08-22)
+
+Upstream shipped every report in this document. Release
+[v0.16.0](https://github.com/joshrotenberg/mdbook-lint/releases/tag/v0.16.0)
+(published 2026-08-20 from release PR #484) contains:
+
+| Report | Upstream PR | Effect on hyalo |
+| --- | --- | --- |
+| §1 items 2/3/5 (MD011 inclusive end, MD034 Liquid swallowing, MD047 no-op range) | [#486](https://github.com/joshrotenberg/mdbook-lint/pull/486) | `convert_fix` MD011 `end += 1` guard, `trim_md034_liquid`, and the LF half of `md047_fix` deleted |
+| §1 items 1/4 (the coordinate contract) | [#493](https://github.com/joshrotenberg/mdbook-lint/pull/493) | `rule_uses_byte_columns`, `line_col_to_byte` and the `line_len + 1` replace-vs-insert heuristic deleted; `Position::to_byte_offset` used instead |
+| §2 ([issue #491](https://github.com/joshrotenberg/mdbook-lint/issues/491), MD018 continuation lines) | [#492](https://github.com/joshrotenberg/mdbook-lint/pull/492) | false positive gone; regression fixture added |
+
+Removal work is [[iterations/iteration-196-mdlint-workaround-strip]].
+
+### One exception still open (not yet filed upstream)
+
+Shipped 0.16.0 `mdbook-lint-rulesets/src/standard/md047.rs` is still
+LF-centric, despite the release note claim that "standard-rule fixes now
+preserve CRLF":
+
+1. The missing-trailing-newline branch builds
+   `Fix::insertion("Add newline at end of file", "\n", …)` with a hard-coded
+   LF, so applying it to a CRLF file appends a bare LF.
+2. `check_file_ending` counts trailing terminators with
+   `content.chars().rev().take_while(|&c| c == '\n')`, which stops at the
+   `\r` of the preceding CRLF — so a CRLF file with several trailing blank
+   lines counts one terminator and MD047 never fires at all.
+
+hyalo keeps `md047_fix` for CRLF bodies only (LF bodies go through
+`convert_fix` unchanged) as the documented compensation for (1); (2) is a
+detection gap upstream owns. **Not filed yet** — third-party repo writes stay
+user-gated, and iteration 196 ran unattended. Filing this, plus the follow-up
+comment on #456 reporting the embedder result, is the outstanding manual
+step.
