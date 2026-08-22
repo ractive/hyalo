@@ -1311,6 +1311,13 @@ pub fn resolve_target(
 
     // Normalize absolute paths using site_prefix (same logic as LinkGraph).
     // `/docs/page.md` with site_prefix "docs" becomes `page.md`.
+    //
+    // Remember whether the link was written site-absolute: such a target names
+    // a path from the site root, so the Obsidian bare-stem fallback at the end
+    // of this function must not apply to it (iter-200 / dogfood M-1 — `/actions`
+    // was "resolving" to `graphql/reference/actions.md` at confidence 1.0 and
+    // getting rewritten by a plain `links fix --apply`).
+    let site_absolute = target.starts_with('/');
     let target = if target.starts_with('/') {
         let stripped = strip_site_prefix(&target, site_prefix);
         // Reject traversal even after prefix stripping (e.g. `/docs/../../etc/passwd`)
@@ -1398,6 +1405,7 @@ pub fn resolve_target(
     // be an unreachable condition. See `resolve_target_backslash_targets_are_
     // normalized_before_stem_resolution` for the pinned invariant.
     if !target.contains('/')
+        && !site_absolute
         && let Some(idx) = case_index
     {
         // Try the target as-is (could already be a stem or have .md).

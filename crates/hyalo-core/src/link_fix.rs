@@ -26,7 +26,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
-use crate::link_graph::normalize_target;
+use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
@@ -105,8 +105,21 @@ pub enum FixStrategy {
     CaseInsensitive,
     /// The target was written with or without `.md` and the other form matched.
     ExtensionMismatch,
-    /// The bare stem matched exactly one file anywhere in the vault.
+    /// The target was a bare basename (no directory part) and its stem
+    /// matched exactly one file anywhere in the vault — the Obsidian
+    /// short-form resolution rule, applied to a link that was already written
+    /// short-form.
     ShortestPath,
+    /// A *site-absolute* target (`/actions`) matched a file only by its last
+    /// path segment (iter-200 / dogfood M-1).
+    ///
+    /// This is a guess, not a resolution: the site-root path the author wrote
+    /// is thrown away and a same-named file from somewhere else is
+    /// substituted (`/actions` → `graphql/reference/actions.md`). It therefore
+    /// carries a reduced confidence and is grouped with fuzzy matches, so
+    /// plain `--apply` never writes it — `--apply-fuzzy` / `--min-confidence`
+    /// opt in.
+    BasenameFallback,
     /// Jaro-Winkler similarity above the configured threshold.
     FuzzyMatch,
     /// The target resolves to an existing file but with different casing.
@@ -133,6 +146,17 @@ pub struct FixReport {
     /// Broken links for which no suitable candidate could be found.
     pub unfixable: Vec<BrokenLinkInfo>,
 }
+
+/// What one `--apply` pass did with the fixes it was handed.
+///
+/// Tuple order: `(applied_plans, unapplied, failed, rejected)` — see
+/// [`apply_fixes`] for what each bucket means. Named so the four-way split
+/// stays readable at the call site.
+pub type ApplyOutcome = (Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>, Vec<FixPlan>);
+
+/// What one dry-run pass would do: `(would_modify, unapplied, rejected)` —
+/// see [`plan_fixes_dry_run`].
+pub type DryRunOutcome = (Vec<String>, Vec<FixPlan>, Vec<FixPlan>);
 
 /// A fix whose source file's on-disk write failed during `--apply` (L-11).
 ///
@@ -296,6 +320,10 @@ pub struct LinkMatcher {
     stem_to_indices: HashMap<String, Vec<usize>>,
     /// Minimum Jaro-Winkler score for fuzzy matching.
     threshold: f64,
+    /// Site prefix stripped from site-absolute targets before matching, so a
+    /// link written `/docs/a/b.md` is compared against the vault path
+    /// `a/b.md` (iter-200).
+    site_prefix: Option<String>,
 }
 
 /// Result of a single match attempt.
@@ -306,9 +334,29 @@ pub(crate) struct MatchResult {
     pub confidence: f64,
 }
 
+/// Confidence reported for [`FixStrategy::BasenameFallback`] matches.
+///
+/// Deliberately well below the 0.95 of a genuine short-form stem match: the
+/// only evidence is the filename, and the directory the author actually wrote
+/// contradicts it.
+pub const BASENAME_FALLBACK_CONFIDENCE: f64 = 0.6;
+
 impl LinkMatcher {
     /// Build a matcher from a list of vault-relative file paths.
+    ///
+    /// Equivalent to [`LinkMatcher::with_site_prefix`] with no site prefix.
     pub fn new(files: Vec<String>, threshold: f64) -> Self {
+        Self::with_site_prefix(files, threshold, None)
+    }
+
+    /// Build a matcher that understands site-absolute targets.
+    ///
+    /// Broken-link targets reach [`find_match`](Self::find_match) exactly as
+    /// the author wrote them, but the index is keyed by vault-relative paths.
+    /// Without the prefix strip, a site-absolute target could never satisfy
+    /// the exact/case-insensitive/extension strategies — every site-absolute
+    /// link fell through to the basename guess (dogfood H-1/M-1).
+    pub fn with_site_prefix(files: Vec<String>, threshold: f64, site_prefix: Option<&str>) -> Self {
         let mut lower_to_idx = HashMap::with_capacity(files.len());
         let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
@@ -349,13 +397,14 @@ impl LinkMatcher {
             exact_to_idx,
             stem_to_indices,
             threshold,
+            site_prefix: site_prefix.map(std::string::ToString::to_string),
         }
     }
 
     /// Build a matcher from an index (avoids rescanning the directory).
-    pub fn from_index(index: &dyn VaultIndex, threshold: f64) -> Self {
+    pub fn from_index(index: &dyn VaultIndex, threshold: f64, site_prefix: Option<&str>) -> Self {
         let files: Vec<String> = index.entries().iter().map(|e| e.rel_path.clone()).collect();
-        Self::new(files, threshold)
+        Self::with_site_prefix(files, threshold, site_prefix)
     }
 
     /// Returns `true` if `candidate` (vault-relative) refers to the same file
@@ -376,9 +425,21 @@ impl LinkMatcher {
     /// the matcher never proposes a self-referential fix.
     ///
     /// Returns `None` if no match is found above the configured threshold.
-    pub(crate) fn find_match(&self, raw_target: &str, source: &str) -> Option<MatchResult> {
+    pub(crate) fn find_match(&self, written_target: &str, source: &str) -> Option<MatchResult> {
         // Minimum score difference to avoid ambiguous fuzzy matches.
         const TIE_DELTA: f64 = 0.01;
+
+        // A site-absolute target (`/docs/a/b.md`) names a path from the site
+        // root; the index is keyed by vault-relative paths, so strip the
+        // leading `/` and any configured site prefix before matching.
+        // Everything below then works on vault-relative text.
+        let stripped;
+        let raw_target = if written_target.starts_with('/') {
+            stripped = strip_site_prefix(written_target, self.site_prefix.as_deref());
+            stripped.as_str()
+        } else {
+            written_target
+        };
 
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
@@ -427,15 +488,33 @@ impl LinkMatcher {
         }
 
         // --- Strategy 3: Shortest-path (unique stem match) ---
+        //
+        // Split by how the broken target was written (M-1). A *site-absolute*
+        // target (`/actions`) asserts a path from the site root; matching it
+        // by basename alone means discarding that assertion and substituting a
+        // same-named file from somewhere else entirely — on GitHub Docs this
+        // turned `[GitHub Actions](/actions)` into
+        // `graphql/reference/actions.md`, 17 times, under a plain `--apply`.
+        // That is a guess and belongs behind the fuzzy gate. Bare and
+        // relative targets keep the long-standing shortest-path treatment:
+        // for them the basename is the reliable signal (short-form semantics,
+        // or a stale relative path after a move), and the H-1 round-trip
+        // guard now guarantees whatever gets written actually resolves.
         let target_stem_lower = target_stem.to_ascii_lowercase();
         if let Some(indices) = self.stem_to_indices.get(&target_stem_lower)
             && indices.len() == 1
             && !Self::is_self_link(source, &self.files[indices[0]])
         {
+            let site_absolute = written_target.starts_with('/');
+            let (strategy, confidence) = if site_absolute {
+                (FixStrategy::BasenameFallback, BASENAME_FALLBACK_CONFIDENCE)
+            } else {
+                (FixStrategy::ShortestPath, 0.95)
+            };
             return Some(MatchResult {
                 matched_file: self.files[indices[0]].clone(),
-                strategy: FixStrategy::ShortestPath,
-                confidence: 0.95,
+                strategy,
+                confidence,
             });
         }
 
@@ -529,21 +608,25 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
 /// wikilinks), applies them via [`apply_replacements`], and writes back via
 /// [`execute_plans`].
 ///
-/// Returns `(applied_plans, unapplied, failed)` where:
+/// Returns `(applied_plans, unapplied, failed, rejected)` where:
 /// - `applied_plans` are the [`RewritePlan`]s that were durably written to disk.
 /// - `unapplied` lists input [`FixPlan`]s that produced no [`Replacement`]
 ///   (e.g. because the on-disk text no longer matched what detection saw, or
 ///   the file exceeded the size limit).
 /// - `failed` lists fixes whose file produced a valid plan but the durable
 ///   write failed mid-batch (L-11); remaining files still get written.
+/// - `rejected` lists fixes refused by the H-1 round-trip guard: the emitted
+///   target would not have resolved, so nothing was written and the caller
+///   must report them as unfixable rather than fixed.
 ///
-/// Callers must treat both `unapplied` and `failed` fixes as NOT applied when
-/// reporting results, and set a non-zero exit code when `failed` is non-empty.
+/// Callers must treat `unapplied`, `failed`, and `rejected` fixes as NOT
+/// applied when reporting results, and set a non-zero exit code when `failed`
+/// is non-empty.
 pub fn apply_fixes(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>)> {
+) -> Result<ApplyOutcome> {
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -552,6 +635,9 @@ pub fn apply_fixes(
 
     let mut plans: Vec<RewritePlan> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    // Fixes refused by the H-1 round-trip guard (emitted target would not
+    // resolve) — reported to the caller as unfixable, never written.
+    let mut rejected: Vec<FixPlan> = Vec::new();
     // I/O failures (stat/read) encountered while building plans, keyed by the
     // fixes they belong to — reported as `failed`, not `unapplied`, since
     // these are genuine errors rather than stale-text mismatches. Fixes for a
@@ -590,12 +676,14 @@ pub fn apply_fixes(
             }
         };
 
-        let (replacements, satisfied) =
+        let (replacements, satisfied, guard_rejected) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
 
         let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
         for (idx, fix) in file_fixes.iter().enumerate() {
-            if satisfied.contains(&idx) {
+            if guard_rejected.contains(&idx) {
+                rejected.push((*fix).clone());
+            } else if satisfied.contains(&idx) {
                 satisfied_fixes.push((*fix).clone());
             } else {
                 unapplied.push((*fix).clone());
@@ -644,7 +732,8 @@ pub fn apply_fixes(
         }
     }
 
-    Ok((applied_plans, unapplied, failed))
+    rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    Ok((applied_plans, unapplied, failed, rejected))
 }
 
 /// Outcome of reading a source file's on-disk content for fix planning.
@@ -698,14 +787,16 @@ fn read_source_file(abs_path: &Path) -> SourceRead {
 /// unapplied in *both* modes. Without this, dry-run always reported an empty
 /// `unapplied` and could promise fixes that a subsequent `--apply` would drop.
 ///
-/// Returns `(would_modify, unapplied)` where `would_modify` is the set of
-/// vault-relative paths that would receive at least one rewrite, and
-/// `unapplied` lists the fixes whose on-disk text no longer matches.
+/// Returns `(would_modify, unapplied, rejected)` where `would_modify` is the
+/// set of vault-relative paths that would receive at least one rewrite,
+/// `unapplied` lists the fixes whose on-disk text no longer matches, and
+/// `rejected` lists the fixes the H-1 round-trip guard refuses (their emitted
+/// target would not resolve, so `--apply` would report them as unfixable).
 pub fn plan_fixes_dry_run(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<String>, Vec<FixPlan>)> {
+) -> Result<DryRunOutcome> {
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
         by_source.entry(fix.source.as_str()).or_default().push(fix);
@@ -713,6 +804,7 @@ pub fn plan_fixes_dry_run(
 
     let mut would_modify: Vec<String> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    let mut rejected: Vec<FixPlan> = Vec::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
@@ -730,11 +822,13 @@ pub fn plan_fixes_dry_run(
             }
         };
 
-        let (replacements, satisfied) =
+        let (replacements, satisfied, guard_rejected) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
 
         for (idx, fix) in file_fixes.iter().enumerate() {
-            if !satisfied.contains(&idx) {
+            if guard_rejected.contains(&idx) {
+                rejected.push((*fix).clone());
+            } else if !satisfied.contains(&idx) {
                 unapplied.push((*fix).clone());
             }
         }
@@ -746,7 +840,111 @@ pub fn plan_fixes_dry_run(
 
     would_modify.sort();
     unapplied.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    Ok((would_modify, unapplied))
+    rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    Ok((would_modify, unapplied, rejected))
+}
+
+// ---------------------------------------------------------------------------
+// Emission: turning a vault-relative fix target into on-page link text
+// ---------------------------------------------------------------------------
+
+/// Strip a trailing `.md` (case-insensitively) from a target string.
+fn strip_md_suffix(target: &str) -> &str {
+    if target.len() > 3 && target.as_bytes()[target.len() - 3..].eq_ignore_ascii_case(b".md") {
+        &target[..target.len() - 3]
+    } else {
+        target
+    }
+}
+
+/// Compute the destination text to write for a fixed **markdown** link.
+///
+/// [`FixPlan::new_target`] is always *vault-relative*, but the read-side
+/// resolver reads a bare markdown destination as *file-relative* and a
+/// leading-`/` destination as *site-absolute*. Writing the vault-relative path
+/// verbatim therefore only round-trips when the source file happens to sit at
+/// the vault root — everywhere else the rewritten link cannot resolve, and on
+/// a site-absolute corpus every single rewrite was corruption (dogfood H-1:
+/// 1,097 GitHub Docs files modified, broken count 6,565 → 6,582).
+///
+/// Emission rules, mirroring [`crate::link_write::LinkWriter`]:
+/// - site-absolute in ⇒ site-absolute out (re-attaching `site_prefix`);
+/// - otherwise a path relative to the *source file's directory*;
+/// - the original's `.md` presence/absence is preserved either way.
+fn emit_markdown_fix_target(
+    raw_target: &str,
+    new_vault_rel: &str,
+    source_rel: &str,
+    site_prefix: Option<&str>,
+) -> String {
+    let had_md = raw_target.len() > 3
+        && raw_target.as_bytes()[raw_target.len() - 3..].eq_ignore_ascii_case(b".md");
+
+    if raw_target.starts_with('/') {
+        let body = if had_md {
+            new_vault_rel
+        } else {
+            strip_md_suffix(new_vault_rel)
+        };
+        // Re-attach the site prefix only when the *original* link carried it.
+        // `site_prefix` is auto-derived from the vault directory name when
+        // nothing is configured, so injecting it unconditionally would invent
+        // a path segment the author never wrote (dogfood L-11).
+        let author_used_prefix = site_prefix.is_some_and(|prefix| {
+            let prefix = prefix.trim_matches('/');
+            !prefix.is_empty()
+                && raw_target[1..]
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        });
+        return match site_prefix.filter(|_| author_used_prefix) {
+            Some(prefix) => format!("/{}/{}", prefix.trim_matches('/'), body),
+            None => format!("/{body}"),
+        };
+    }
+
+    let rel = relative_path_between(source_rel, new_vault_rel);
+    if had_md {
+        rel
+    } else {
+        strip_md_suffix(&rel).to_string()
+    }
+}
+
+/// Whether the emitted markdown destination reads back — through the exact
+/// normalization the read-side resolver applies — as `new_vault_rel`.
+///
+/// This is the H-1 *guard*: any writer/resolver asymmetry (present or future)
+/// turns into a refused fix and a visible `unfixable` count instead of a
+/// silently corrupted link. `.md` presence is ignored on both sides because
+/// [`crate::discovery::resolve_target`] appends the extension itself.
+fn markdown_fix_round_trips(
+    emitted: &str,
+    new_vault_rel: &str,
+    source_rel: &str,
+    site_prefix: Option<&str>,
+) -> bool {
+    let normalized = if emitted.starts_with('/') {
+        strip_site_prefix(emitted, site_prefix)
+    } else {
+        normalize_target(Path::new(source_rel), emitted)
+    };
+    strip_md_suffix(&normalized) == strip_md_suffix(new_vault_rel)
+}
+
+/// Whether the emitted wikilink target reads back as `new_vault_rel`.
+///
+/// Wikilink targets are vault-relative as written, so a path-form emission has
+/// to match exactly; a bare stem is accepted when it is the basename of the
+/// target (Obsidian short-form, which detection only proposes for stems that
+/// are unique in the vault).
+fn wikilink_fix_round_trips(emitted: &str, new_vault_rel: &str) -> bool {
+    let emitted = strip_md_suffix(emitted);
+    let target = strip_md_suffix(new_vault_rel);
+    emitted == target
+        || (!emitted.contains('/')
+            && !emitted.contains('\\')
+            && target.rsplit('/').next() == Some(emitted))
 }
 
 /// Walk `content` line by line and build [`Replacement`]s for all link fixes
@@ -754,21 +952,27 @@ pub fn plan_fixes_dry_run(
 /// link properties and links in the document body (code fences and Obsidian
 /// comment fences are skipped for the latter).
 ///
-/// Returns `(replacements, satisfied)` where `satisfied` holds the indices
-/// (into `fixes`) of plans that were matched to an on-disk occurrence and
-/// rewritten. Tracking is per-occurrence: each on-disk match consumes the
-/// first not-yet-satisfied plan with that target, so duplicate plans for the
-/// same `(line, old_target)` — a legitimate case when the same broken target
-/// appears twice — are only satisfied by distinct occurrences. Callers use
-/// the unsatisfied remainder to detect fixes whose on-disk text no longer
-/// matches what detection saw (stale plan) so they are never misreported as
-/// applied.
+/// Returns `(replacements, satisfied, rejected)` where `satisfied` holds the
+/// indices (into `fixes`) of plans that were matched to an on-disk occurrence
+/// and `rejected` the subset of those whose emitted target failed the H-1
+/// round-trip guard (see [`markdown_fix_round_trips`]) and was therefore *not*
+/// turned into a `Replacement`. Tracking is per-occurrence: each on-disk match
+/// consumes the first not-yet-satisfied plan with that target, so duplicate
+/// plans for the same `(line, old_target)` — a legitimate case when the same
+/// broken target appears twice — are only satisfied by distinct occurrences.
+/// Callers use the unsatisfied remainder to detect fixes whose on-disk text no
+/// longer matches what detection saw (stale plan) so they are never
+/// misreported as applied, and `rejected` to report them as unfixable.
 fn build_replacements_for_file(
     content: &str,
     source_rel: &str,
     fixes: &[&FixPlan],
-    _site_prefix: Option<&str>,
-) -> (Vec<Replacement>, std::collections::HashSet<usize>) {
+    site_prefix: Option<&str>,
+) -> (
+    Vec<Replacement>,
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
     // Index fixes by line number for O(1) lookup during the scan, carrying
     // each plan's index into `fixes` for per-occurrence satisfaction
     // tracking.
@@ -779,6 +983,7 @@ fn build_replacements_for_file(
 
     let mut replacements = Vec::new();
     let mut satisfied: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut rejected: std::collections::HashSet<usize> = std::collections::HashSet::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B): one lexer
     // for frontmatter, fences, `%%` comments, and cross-line code/HTML spans.
     let mut scanner = LineScanner::new();
@@ -890,30 +1095,44 @@ fn build_replacements_for_file(
                 continue;
             };
 
-            // Compute new target text based on link kind.
-            let new_target_text = match span.kind {
+            // Compute new target text based on link kind, then verify it
+            // round-trips through the read-side resolver (H-1 guard).
+            let (new_target_text, round_trips) = match span.kind {
                 LinkKind::Wikilink => {
-                    // Use stem (without .md) for wikilinks.
-                    fix.new_target
-                        .strip_suffix(".md")
-                        .unwrap_or(&fix.new_target)
-                        .to_string()
+                    // Use stem (without .md) for wikilinks; wikilink targets
+                    // are vault-relative as written, so the plan's target is
+                    // already in the right coordinate system.
+                    let emitted = strip_md_suffix(&fix.new_target).to_string();
+                    let ok = wikilink_fix_round_trips(&emitted, &fix.new_target);
+                    (emitted, ok)
                 }
                 LinkKind::Markdown => {
-                    // Preserve the original `.md` presence/absence in the link.
-                    // If the original target had no `.md` suffix, strip it from
-                    // the new target too so the style is unchanged.
-                    let orig_had_md = fix.old_target.to_ascii_lowercase().ends_with(".md");
-                    if orig_had_md {
-                        fix.new_target.clone()
-                    } else {
-                        fix.new_target
-                            .strip_suffix(".md")
-                            .unwrap_or(&fix.new_target)
-                            .to_string()
-                    }
+                    // The plan's target is vault-relative; a markdown
+                    // destination is read as site-absolute or file-relative.
+                    let emitted = emit_markdown_fix_target(
+                        &span.link.target,
+                        &fix.new_target,
+                        source_rel,
+                        site_prefix,
+                    );
+                    let ok = markdown_fix_round_trips(
+                        &emitted,
+                        &fix.new_target,
+                        source_rel,
+                        site_prefix,
+                    );
+                    (emitted, ok)
                 }
             };
+
+            // A fix whose emitted target would not resolve is never written:
+            // it is consumed (so a duplicate plan is not re-matched) and
+            // reported as unfixable instead of corrupting the link.
+            if !round_trips {
+                satisfied.insert(fix_idx);
+                rejected.insert(fix_idx);
+                continue;
+            }
 
             // Build old_text / new_text from the ORIGINAL line bytes.
             let old_text = line[span.full_start..span.full_end].to_string();
@@ -936,7 +1155,7 @@ fn build_replacements_for_file(
         }
     }
 
-    (replacements, satisfied)
+    (replacements, satisfied, rejected)
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,7 +1378,7 @@ mod tests {
         // `[[decision-log#DEC-041]]` into `[[decision-log-archive]]`.
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1, "one frontmatter link repaired: {repls:?}");
         assert_eq!(repls[0].old_text, "[[decision-log#DEC-041]]");
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041]]");
@@ -1169,7 +1388,7 @@ mod tests {
     fn build_replacements_frontmatter_repair_preserves_anchor_and_alias() {
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041|Log]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1);
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041|Log]]");
     }
@@ -1202,7 +1421,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
         };
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(
             repls.len(),
             1,
@@ -1446,6 +1665,267 @@ See [broken](old-name.md) here.
         assert_eq!(report.broken[2].line, 3);
     }
 
+    // -----------------------------------------------------------------
+    // iter-200 H-1: emission must round-trip through the read-side resolver
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn emit_site_absolute_target_stays_site_absolute() {
+        // Dogfood H-1 minimal repro: `/how-tos/old-home/moved-page` in
+        // `docs/page.md`, real file at `how-tos/new-home/moved-page.md`.
+        // Dropping the leading `/` produced a target the resolver reads as
+        // relative to `docs/`, i.e. permanently broken.
+        let emitted = emit_markdown_fix_target(
+            "/how-tos/old-home/moved-page",
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None,
+        );
+        assert_eq!(emitted, "/how-tos/new-home/moved-page");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn emit_site_absolute_preserves_authors_site_prefix() {
+        let emitted = emit_markdown_fix_target(
+            "/docs/old/page.md",
+            "new/page.md",
+            "sub/linker.md",
+            Some("docs"),
+        );
+        assert_eq!(emitted, "/docs/new/page.md");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "new/page.md",
+            "sub/linker.md",
+            Some("docs")
+        ));
+    }
+
+    #[test]
+    fn emit_site_absolute_does_not_inject_a_derived_site_prefix() {
+        // `site_prefix` is auto-derived from the vault directory name when
+        // nothing is configured; a link the author wrote without it must not
+        // grow one (dogfood L-11).
+        let emitted = emit_markdown_fix_target(
+            "/how-tos/old/page",
+            "how-tos/new/page.md",
+            "index.md",
+            Some("my-vault"),
+        );
+        assert_eq!(emitted, "/how-tos/new/page");
+    }
+
+    #[test]
+    fn emit_relative_target_is_relative_to_the_source_directory() {
+        // A vault-relative target written verbatim into a nested file is the
+        // same H-1 asymmetry without the leading slash.
+        let emitted =
+            emit_markdown_fix_target("../c/target.md", "z/target.md", "a/b/page.md", None);
+        assert_eq!(emitted, "../../z/target.md");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "z/target.md",
+            "a/b/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn emit_preserves_md_suffix_style() {
+        assert_eq!(
+            emit_markdown_fix_target("wrong", "sub/right.md", "index.md", None),
+            "sub/right"
+        );
+        assert_eq!(
+            emit_markdown_fix_target("wrong.md", "sub/right.md", "index.md", None),
+            "sub/right.md"
+        );
+    }
+
+    #[test]
+    fn round_trip_guard_rejects_vault_relative_emission_from_a_nested_source() {
+        // The pre-iter-200 writer emitted exactly this: the vault-relative
+        // path, verbatim, from a nested source. The guard must reject it.
+        assert!(!markdown_fix_round_trips(
+            "how-tos/new-home/moved-page",
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn round_trip_guard_accepts_wikilink_path_and_short_forms() {
+        assert!(wikilink_fix_round_trips("sub/note", "sub/note.md"));
+        assert!(wikilink_fix_round_trips("note", "sub/note.md"));
+        assert!(!wikilink_fix_round_trips("other", "sub/note.md"));
+    }
+
+    #[test]
+    fn apply_fixes_site_absolute_link_resolves_after_rewrite() {
+        let tmp = vault_with_files(&[
+            (
+                "docs/page.md",
+                "See [AUTOTITLE](/how-tos/old-home/moved-page) here.\n",
+            ),
+            ("how-tos/new-home/moved-page.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "docs/page.md".to_string(),
+            line: 1,
+            old_target: "/how-tos/old-home/moved-page".to_string(),
+            new_target: "how-tos/new-home/moved-page.md".to_string(),
+            strategy: FixStrategy::BasenameFallback,
+            confidence: BASENAME_FALLBACK_CONFIDENCE,
+        }];
+
+        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
+        assert!(rejected.is_empty(), "unexpected rejected: {rejected:?}");
+
+        let written = fs::read_to_string(tmp.path().join("docs").join("page.md")).unwrap();
+        assert!(
+            written.contains("[AUTOTITLE](/how-tos/new-home/moved-page)"),
+            "site-absolute form must survive the rewrite, got: {written}"
+        );
+
+        // The rewritten link must actually resolve.
+        let canonical = crate::discovery::canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            crate::discovery::resolve_target(
+                &canonical,
+                "/how-tos/new-home/moved-page",
+                None,
+                None
+            )
+            .as_deref(),
+            Some("how-tos/new-home/moved-page.md"),
+            "rewritten target must resolve"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_refuses_a_fix_whose_emitted_target_would_not_resolve() {
+        // Stand-in for any future writer/resolver asymmetry: a `new_target`
+        // whose text the resolver normalizes to something else. The guard must
+        // turn that into a refusal (reported as unfixable) rather than a
+        // corrupted link.
+        let tmp = vault_with_files(&[
+            ("index.md", "See [text](wrong.md) for details.\n"),
+            ("b.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrong.md".to_string(),
+            new_target: "a/../b.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        assert!(plans.is_empty(), "nothing may be written: {plans:?}");
+        assert!(unapplied.is_empty(), "not a stale-text case: {unapplied:?}");
+        assert_eq!(rejected.len(), 1, "guard must reject the fix: {rejected:?}");
+
+        let written = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+        assert_eq!(
+            written, "See [text](wrong.md) for details.\n",
+            "file must be untouched"
+        );
+    }
+
+    #[test]
+    fn dry_run_reports_the_same_guard_rejection_as_apply() {
+        let tmp = vault_with_files(&[
+            ("index.md", "See [text](wrong.md) for details.\n"),
+            ("b.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrong.md".to_string(),
+            new_target: "a/../b.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (would_modify, unapplied, rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert!(would_modify.is_empty(), "nothing would change");
+        assert!(unapplied.is_empty());
+        assert_eq!(rejected.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-200 M-1: site-absolute basename guesses are gated
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn site_absolute_basename_match_is_a_gated_fallback() {
+        let matcher = LinkMatcher::new(
+            make_files(&["actions/index.md", "graphql/reference/actions.md"]),
+            0.85,
+        );
+        let result = matcher
+            .find_match("/actions", "index.md")
+            .expect("basename match still found");
+        assert!(
+            matches!(result.strategy, FixStrategy::BasenameFallback),
+            "site-absolute basename guess must not masquerade as a certain fix: {:?}",
+            result.strategy
+        );
+        assert!(
+            result.confidence < 1.0,
+            "a guess must not claim confidence 1.0"
+        );
+    }
+
+    #[test]
+    fn relative_basename_match_stays_shortest_path() {
+        let matcher = LinkMatcher::new(make_files(&["z/target.md"]), 0.85);
+        let result = matcher
+            .find_match("../c/target.md", "a/b/page.md")
+            .expect("basename match found");
+        assert!(matches!(result.strategy, FixStrategy::ShortestPath));
+    }
+
+    #[test]
+    fn site_absolute_case_mismatch_is_a_certain_fix() {
+        // Before iter-200 the leading `/` made every strategy but the basename
+        // guess unreachable for site-absolute targets.
+        let matcher = LinkMatcher::new(make_files(&["how-tos/moved-page.md"]), 0.85);
+        let result = matcher
+            .find_match("/how-tos/Moved-Page", "a/b/page.md")
+            .expect("case-insensitive match found");
+        assert!(
+            matches!(result.strategy, FixStrategy::CaseInsensitive),
+            "expected a certain case fix, got {:?}",
+            result.strategy
+        );
+        assert_eq!(result.matched_file, "how-tos/moved-page.md");
+    }
+
+    #[test]
+    fn site_prefix_is_stripped_before_matching() {
+        let matcher =
+            LinkMatcher::with_site_prefix(make_files(&["how-tos/page.md"]), 0.85, Some("docs"));
+        let result = matcher
+            .find_match("/docs/how-tos/Page", "index.md")
+            .expect("prefixed site-absolute target must match");
+        assert_eq!(result.matched_file, "how-tos/page.md");
+    }
+
     // --- apply_fixes: wikilink rewrite ---
 
     #[test]
@@ -1464,7 +1944,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1496,7 +1976,7 @@ See [broken](old-name.md) here.
             confidence: 1.0,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1532,7 +2012,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
         assert!(
@@ -1566,7 +2046,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1609,7 +2089,7 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1653,7 +2133,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1683,7 +2163,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1716,7 +2196,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert!(plans.is_empty(), "no replacement should have been produced");
         assert_eq!(unapplied.len(), 1);
@@ -1749,7 +2229,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
@@ -1784,7 +2264,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
@@ -1819,7 +2299,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
@@ -2312,7 +2792,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert_eq!(would_modify, vec!["index.md"]);
         assert!(unapplied.is_empty(), "fresh text: nothing stale");
 
@@ -2343,7 +2824,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify_dry, unapplied_dry) =
+        let (would_modify_dry, unapplied_dry, _rejected_dry) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(would_modify_dry.is_empty(), "stale fix modifies nothing");
         assert_eq!(
@@ -2353,7 +2834,8 @@ See [broken](old-name.md) here.
         );
 
         // apply must report the identical unapplied set.
-        let (plans, unapplied_apply, failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied_apply, failed, _rejected) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty());
         assert!(failed.is_empty());
         assert_eq!(unapplied_apply.len(), unapplied_dry.len());
@@ -2397,7 +2879,7 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied, failed) = apply_fixes(tmp.path(), &fixes, None)
+        let (plans, unapplied, failed, _rejected) = apply_fixes(tmp.path(), &fixes, None)
             .expect("apply_fixes must not abort on a per-file I/O error");
 
         assert_eq!(
@@ -2444,7 +2926,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "a vanished file must modify nothing"
@@ -2476,7 +2959,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "an oversized file must modify nothing"

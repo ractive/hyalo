@@ -125,6 +125,40 @@ and this project adheres to
 
 ### Fixed
 
+- **`links fix --apply` no longer breaks the links it rewrites** (iter-200).
+  The writer emitted the *vault-relative* path of the repaired target, but the
+  resolver reads a bare markdown destination as relative to the source file's
+  own directory and a `/…` destination as site-absolute — so on any corpus of
+  site-absolute or nested relative links, every single rewrite produced an
+  unresolvable target and the same "fix" was proposed forever. On a GitHub Docs
+  copy this modified 1,097 files while the broken count went *up*. Repairs are
+  now emitted in the form the link was written in (site-absolute stays
+  site-absolute, relative is computed from the source directory, `.md`
+  presence preserved), and an auto-derived `site_prefix` is never injected into
+  a link that did not already carry it. A new round-trip guard refuses any fix
+  whose emitted target would not resolve, reporting it under `unfixable`
+  instead of writing it — so a future writer/resolver asymmetry can only cost a
+  count, never a link.
+- **Site-absolute link targets now reach the exact and case-insensitive fix
+  strategies** (iter-200). The leading `/` (and any configured `site_prefix`)
+  is stripped before matching, so `[x](/how-tos/Moved-Page)` is repaired as the
+  case fix it is instead of falling through to a basename guess.
+- **A same-named file elsewhere in the vault is no longer treated as a certain
+  match for a site-absolute link** (iter-200). `[GitHub Actions](/actions)` was
+  "resolving" to `graphql/reference/actions.md` — labelled `LinkCaseMismatch`
+  at confidence 1.0 and written by a plain `--apply` — even when
+  `actions/index.md` existed. Such a match now reports as the new
+  `BasenameFallback` strategy at a reduced confidence and is grouped with fuzzy
+  matches, so it is only written under `--apply-fuzzy` / `--min-confidence`.
+  Bare and relative targets keep the existing shortest-path treatment.
+- **`links auto --apply` no longer writes wikilinks into URLs or link labels**
+  (iter-200). Candidate matching skipped inline code and whole-label matches
+  but not markdown link *destinations*, bare URLs in prose, autolinks, or a
+  substring of an existing link's label — so a page titled `net` rewrote
+  `[x](https://pkg.go.dev/x/actions.summerwind.net/v1)` into
+  `…summerwind.[[net]]/v1`, destroying working URLs. All four contexts are now
+  inert, whether the link's destination is internal or external.
+
 - **`hyalo --help` no longer contradicts itself about which commands emit
   `total`** (iter-192). Four help sections and the `--count` runtime error each
   carried a separately hand-written list, and none of the five matched the

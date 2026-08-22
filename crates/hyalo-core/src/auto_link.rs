@@ -671,6 +671,14 @@ fn scan_file_for_matches(
         // ---- Extract existing link spans to avoid overlapping them ----
         let link_spans = extract_link_spans_with_original(cleaned_str, line);
 
+        // ---- Zones that are syntactically part of a link (iter-200, H-2) ----
+        // `link_spans` only covers *vault* links: external destinations and
+        // bare URLs are invisible to it, so a title mention inside a URL or
+        // inside an external link's label used to be rewritten in place,
+        // destroying the URL. `inert_link_zones` covers both, plus the label
+        // text of every markdown link.
+        let inert = crate::links::inert_link_zones(cleaned_str);
+
         // ---- Run Aho-Corasick on the cleaned line ----
         for mat in ac.find_iter(cleaned_str) {
             let start = mat.start();
@@ -690,6 +698,12 @@ fn scan_file_for_matches(
 
             // Existing link overlap check.
             if overlaps_any_link(&link_spans, start, end) {
+                continue;
+            }
+
+            // Link-syntax zone check: markdown link destinations (including
+            // external ones), bare URLs, autolinks, and existing link labels.
+            if crate::links::overlaps_zone(&inert, start, end) {
                 continue;
             }
 
@@ -1122,6 +1136,78 @@ mod tests {
             "only the body mention should match"
         );
         assert_eq!(report.matches[0].line, 3);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-200 H-2: link-syntax zones are never auto-linked
+    // -----------------------------------------------------------------
+
+    /// Run auto-link (dry-run) over a single `notes.md` body against a vault
+    /// containing one linkable page named `net`, returning the matched lines.
+    fn net_matches(body: &str) -> Vec<usize> {
+        let page = make_entry("net.md", vec![]);
+        let other = make_entry("notes.md", vec![]);
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "net.md", "");
+        write_file(&tmp, "notes.md", body);
+
+        let index = MockIndex::new(vec![page, other]);
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+        report.matches.iter().map(|m| m.line).collect()
+    }
+
+    #[test]
+    fn no_match_inside_an_external_link_destination() {
+        // The dogfood H-2 repro: a page titled `net` rewrote
+        // `…summerwind.net/v1` inside a working URL.
+        assert!(
+            net_matches("Link: [x](https://pkg.go.dev/x/actions.summerwind.net/v1)\n").is_empty(),
+            "a URL destination must never be auto-linked"
+        );
+    }
+
+    #[test]
+    fn no_match_inside_a_bare_url() {
+        assert!(
+            net_matches("Bare: https://example.net/path is a URL.\n").is_empty(),
+            "a bare URL must never be auto-linked"
+        );
+        assert!(
+            net_matches("Auto: <https://example.net/path>\n").is_empty(),
+            "an autolink must never be auto-linked"
+        );
+    }
+
+    #[test]
+    fn no_match_inside_an_existing_link_label() {
+        assert!(
+            net_matches("Label: [the net thing](https://example.com/a)\n").is_empty(),
+            "an external link's label must never be auto-linked"
+        );
+        assert!(
+            net_matches("Label: [the net thing](other.md)\n").is_empty(),
+            "an internal link's label must never be auto-linked"
+        );
+    }
+
+    #[test]
+    fn plain_prose_mention_next_to_a_url_still_matches() {
+        // The exclusions must not swallow real candidates on the same line.
+        let matches = net_matches("See https://example.com/x and also net here.\n");
+        assert_eq!(matches, vec![1], "the bare prose mention must still match");
     }
 
     #[test]

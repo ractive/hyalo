@@ -4259,3 +4259,296 @@ We deploy on Kubernetes twice a week.
         "no common-word title means no note at all: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-200: links apply-path integrity (dogfood H-1, H-2, M-1)
+// ---------------------------------------------------------------------------
+
+/// Run `hyalo links fix` in `dir` with the given extra args and return the
+/// parsed `results` object.
+fn links_fix_results(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut cmd = hyalo_no_hints();
+    cmd.args([
+        "--dir",
+        dir.to_str().expect("temp path should be valid UTF-8"),
+        "links",
+        "fix",
+        "--format",
+        "json",
+    ]);
+    cmd.args(extra);
+    let output = cmd.output().expect("hyalo links fix should run");
+    assert!(
+        output.status.success(),
+        "links fix exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    json["results"].clone()
+}
+
+#[test]
+fn links_fix_apply_keeps_site_absolute_links_site_absolute() {
+    // Dogfood H-1: the writer emitted the vault-relative path, which the
+    // resolver then read as relative to the *source file's* directory — so
+    // every rewrite was permanently broken and stayed "fixable" forever.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "docs/page.md",
+        md!(r"
+See [AUTOTITLE](/how-tos/old-home/moved-page) for details.
+"),
+    );
+    write_md(tmp.path(), "how-tos/new-home/moved-page.md", "# Moved\n");
+
+    // The target moved directories, so the only evidence is the basename —
+    // a guess, hence behind the fuzzy gate (M-1).
+    let before = links_fix_results(tmp.path(), &[]);
+    assert_eq!(before["broken"].as_u64(), Some(1), "{before}");
+
+    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
+
+    let written = fs::read_to_string(tmp.path().join("docs").join("page.md"))
+        .expect("page.md should be readable");
+    assert!(
+        written.contains("[AUTOTITLE](/how-tos/new-home/moved-page)"),
+        "site-absolute form must survive the rewrite, got: {written}"
+    );
+
+    // The whole point: a re-run sees nothing left to do.
+    let after = links_fix_results(tmp.path(), &[]);
+    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
+    assert_eq!(after["fixable"].as_u64(), Some(0), "{after}");
+}
+
+#[test]
+fn links_fix_apply_writes_a_resolving_relative_target_from_a_nested_source() {
+    // Same asymmetry without a leading slash: a vault-relative target written
+    // verbatim into `a/b/page.md` resolves against `a/b/`, not the vault root.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "a/b/page.md",
+        md!(r"
+See [x](../c/target.md) here.
+"),
+    );
+    write_md(tmp.path(), "z/target.md", "# Target\n");
+
+    let applied = links_fix_results(tmp.path(), &["--apply"]);
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(1),
+        "a relative basename repair is still a plain --apply fix: {applied}"
+    );
+
+    let written =
+        fs::read_to_string(tmp.path().join("a").join("b").join("page.md")).expect("readable");
+    assert!(
+        written.contains("[x](../../z/target.md)"),
+        "expected a source-relative target, got: {written}"
+    );
+
+    let after = links_fix_results(tmp.path(), &[]);
+    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
+}
+
+#[test]
+fn links_fix_site_absolute_basename_guess_is_behind_the_fuzzy_gate() {
+    // Dogfood M-1: `/actions` "resolved" to `graphql/reference/actions.md`
+    // labelled LinkCaseMismatch at confidence 1.0, in the default apply
+    // bucket — even though `actions/index.md` exists.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "index.md",
+        md!(r"
+See [GitHub Actions](/actions) for details.
+"),
+    );
+    write_md(tmp.path(), "actions/index.md", "# Actions\n");
+    write_md(tmp.path(), "graphql/reference/actions.md", "# GraphQL\n");
+
+    let report = links_fix_results(tmp.path(), &[]);
+    assert_eq!(
+        report["case_mismatches"].as_u64(),
+        Some(0),
+        "a cross-directory basename guess is not a case mismatch: {report}"
+    );
+    assert_eq!(
+        report["fixable"].as_u64(),
+        Some(0),
+        "the guess must not sit in the default apply bucket: {report}"
+    );
+    let fuzzy = report["fuzzy_fixes"]
+        .as_array()
+        .expect("fuzzy_fixes array")
+        .clone();
+    assert_eq!(fuzzy.len(), 1, "{report}");
+    assert_eq!(fuzzy[0]["strategy"].as_str(), Some("BasenameFallback"));
+    assert!(
+        fuzzy[0]["confidence"].as_f64().unwrap_or(1.0) < 1.0,
+        "a guess must not claim confidence 1.0: {report}"
+    );
+
+    // A plain --apply leaves the file alone.
+    let before = fs::read_to_string(tmp.path().join("index.md")).expect("readable");
+    let _ = links_fix_results(tmp.path(), &["--apply"]);
+    let after = fs::read_to_string(tmp.path().join("index.md")).expect("readable");
+    assert_eq!(before, after, "plain --apply must not write a guess");
+}
+
+#[test]
+fn links_auto_apply_never_writes_inside_urls_or_link_labels() {
+    // Dogfood H-2: a page titled `net` turned
+    // `[x](https://pkg.go.dev/x/actions.summerwind.net/v1)` into
+    // `…summerwind.[[net]]/v1`, destroying two working URLs per line.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "net.md",
+        md!(r"
+---
+title: net
+---
+# net
+"),
+    );
+    write_md(tmp.path(), "other.md", "# Other\n");
+    let body = md!(r"
+Link: [x](https://pkg.go.dev/x/actions.summerwind.net/v1)
+
+Bare: https://example.net/path is a URL.
+
+Label: [the net thing](https://example.com/a)
+
+Internal: [read about net](other.md)
+
+Prose mention of net should be linked.
+");
+    write_md(tmp.path(), "page.md", body);
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().expect("valid UTF-8"),
+            "links",
+            "auto",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links auto --apply should run");
+    assert!(
+        output.status.success(),
+        "links auto --apply exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let written = fs::read_to_string(tmp.path().join("page.md")).expect("readable");
+    assert!(
+        written.contains("[x](https://pkg.go.dev/x/actions.summerwind.net/v1)"),
+        "the URL destination must be untouched: {written}"
+    );
+    assert!(
+        written.contains("Bare: https://example.net/path is a URL."),
+        "the bare URL must be untouched: {written}"
+    );
+    assert!(
+        written.contains("[the net thing](https://example.com/a)"),
+        "an external link's label must be untouched: {written}"
+    );
+    assert!(
+        written.contains("[read about net](other.md)"),
+        "an internal link's label must be untouched: {written}"
+    );
+    assert!(
+        written.contains("Prose mention of [[net]] should be linked."),
+        "the real prose mention must be linked: {written}"
+    );
+}
+
+#[test]
+fn links_fix_apply_conformance_broken_count_decreases_and_valid_links_untouched() {
+    // Regression gate for the whole apply-path class (iter-200): a corpus
+    // mixing site-absolute, relative, `../`, and URL-adjacent links. Applying
+    // every proposed fix must make the broken count strictly decrease and must
+    // not touch a single link that already resolved.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    // Targets.
+    write_md(tmp.path(), "how-tos/new-home/moved-page.md", "# Moved\n");
+    write_md(tmp.path(), "how-tos/Case-Page.md", "# Case\n");
+    write_md(tmp.path(), "z/target.md", "# Target\n");
+    write_md(tmp.path(), "index.md", "# Index\n");
+
+    // Sources.
+    write_md(
+        tmp.path(),
+        "docs/page.md",
+        md!(r"
+Site-absolute, moved: [a](/how-tos/old-home/moved-page)
+Site-absolute, case only: [b](/how-tos/case-page)
+"),
+    );
+    write_md(
+        tmp.path(),
+        "a/b/page.md",
+        md!(r"
+Relative, wrong dir: [c](../c/target.md)
+Parent-relative, valid: [d](../../index.md)
+"),
+    );
+    let untouched_body = md!(r"
+Valid wikilink: [[z/target]]
+Valid relative: [e](../index.md)
+External: [f](https://example.com/how-tos/case-page)
+Bare URL: https://example.com/z/target.md
+");
+    write_md(tmp.path(), "docs/valid.md", untouched_body);
+
+    let before = links_fix_results(tmp.path(), &[]);
+    let broken_before = before["broken"].as_u64().expect("broken count");
+    assert!(broken_before > 0, "fixture must start broken: {before}");
+
+    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(
+        applied["failed"].as_u64(),
+        Some(0),
+        "no write may fail: {applied}"
+    );
+
+    let after = links_fix_results(tmp.path(), &[]);
+    let broken_after = after["broken"].as_u64().expect("broken count");
+    assert!(
+        broken_after < broken_before,
+        "broken count must strictly decrease ({broken_before} → {broken_after}): {after}"
+    );
+    assert_eq!(
+        broken_after, 0,
+        "every fixture link has a real target: {after}"
+    );
+    assert_eq!(
+        after["case_mismatches"].as_u64(),
+        Some(0),
+        "case mismatches must be repaired too: {after}"
+    );
+
+    // The file whose links all resolved must be byte-identical.
+    let still = fs::read_to_string(tmp.path().join("docs").join("valid.md")).expect("readable");
+    assert_eq!(
+        still, untouched_body,
+        "a file with no broken links must not be rewritten"
+    );
+
+    // The valid `../../index.md` link in a rewritten file must survive verbatim.
+    let nested = fs::read_to_string(tmp.path().join("a").join("b").join("page.md")).expect("ok");
+    assert!(
+        nested.contains("[d](../../index.md)"),
+        "a resolving link in a rewritten file must not change: {nested}"
+    );
+}

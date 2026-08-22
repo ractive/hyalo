@@ -754,7 +754,6 @@ pub fn normalize_path_components(path: &Path) -> String {
 /// Example: `relative_path_between("sub/a.md", "other/b.md")` → `"../other/b.md"`
 /// Example: `relative_path_between("a.md", "sub/b.md")` → `"sub/b.md"`
 /// Example: `relative_path_between("sub/a.md", "sub/b.md")` → `"b.md"`
-#[allow(dead_code)] // used by the upcoming mv command (link_rewrite)
 pub(crate) fn relative_path_between(from_file: &str, to_file: &str) -> String {
     // from_dir components: everything except the last segment (the filename)
     let from_parts: Vec<&str> = from_file.split('/').collect();
