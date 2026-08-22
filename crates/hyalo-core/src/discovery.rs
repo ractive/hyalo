@@ -1338,8 +1338,80 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+/// Resolve one concrete candidate vault-relative path to an on-disk file.
+///
+/// Returns the canonical vault-relative path when `candidate` names a file
+/// inside the vault, `None` otherwise. When `case_index` is supplied the
+/// canonical on-disk casing is preferred over the caller's spelling, and an
+/// unambiguous case-insensitive match is accepted when the literal path is
+/// absent. Shared by the `<target>.md` and `<target>/index.md` attempts in
+/// [`resolve_target`] so the two can never drift apart (iter-203).
+fn resolve_candidate_path(
+    canonical_dir: &Path,
+    candidate: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
+    let full = canonical_dir.join(candidate);
+    if full.is_file() {
+        if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+            if let Some(idx) = case_index
+                && let Some(canonical_path) = idx.lookup_unique(candidate)
+            {
+                return Some(canonical_path.to_owned());
+            }
+            return Some(candidate.to_owned());
+        }
+        return None;
+    }
+    if let Some(idx) = case_index
+        && let Some(canonical_path) = idx.lookup_unique(candidate)
+    {
+        let full_resolved = canonical_dir.join(canonical_path);
+        if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+            return Some(canonical_path.to_owned());
+        }
+    }
+    None
+}
+
+/// The file name a directory link target resolves to (iter-203).
+///
+/// `foo`, `/foo` and `foo/` all resolve to `foo/index.md` — the directory-index
+/// convention used by MDN, GitHub Docs and most static-site generators.
+pub const DIRECTORY_INDEX_FILE: &str = "index.md";
+
+/// Given a vault-relative path, return the directory a link may spell instead
+/// of the file itself: `foo/index.md` → `Some("foo")` (iter-203).
+///
+/// Returns `None` when the path is not a directory index, or when it is the
+/// vault-root `index.md` — that file has no directory name to stand in for it.
+/// The `.md` suffix is matched case-insensitively, like everywhere else in
+/// resolution.
+#[must_use]
+pub fn directory_for_index_file(rel: &str) -> Option<&str> {
+    const SUFFIX_LEN: usize = "/index.md".len();
+    if rel.len() <= SUFFIX_LEN {
+        return None;
+    }
+    let (dir, suffix) = rel.split_at(rel.len() - SUFFIX_LEN);
+    suffix.eq_ignore_ascii_case("/index.md").then_some(dir)
+}
+
 /// Resolve a link target to a file path relative to the vault root.
-/// Tries the target as-is, then with `.md` appended.
+///
+/// # Resolution order
+///
+/// 1. The target as written (exact path, then case-insensitive index).
+/// 2. The target with `.md` appended (`foo` → `foo.md`).
+/// 3. `<target>/index.md` — a target that names a directory resolves to that
+///    directory's index file (iter-203).
+/// 4. Obsidian-style bare-stem lookup (bare, non-site-absolute targets only).
+///
+/// Steps 2 and 3 swap places when the target was written with a **trailing
+/// slash** (`foo/`), an explicit directory reference. So `foo` prefers
+/// `foo.md` over `foo/index.md`, while `foo/` prefers `foo/index.md` — and
+/// each still falls back to the other.
+///
 /// Returns the relative path if the file exists within the vault, or None.
 ///
 /// `canonical_dir` must be a pre-canonicalized vault path (see `canonicalize_vault_dir`).
@@ -1380,6 +1452,10 @@ pub fn resolve_target(
     if let Some(decoded) = percent_decode_path(&target) {
         target = decoded;
     }
+    // Remember whether the author wrote a trailing slash before it is stripped:
+    // `/foo/` is unambiguously a *directory* reference, so the `.md`-append
+    // attempt below must not apply to it (iter-203).
+    let trailing_slash = target.len() > 1 && target.ends_with('/');
     // Strip trailing slash (e.g. "docs/page/" → "docs/page")
     while target.ends_with('/') && target.len() > 1 {
         target.pop();
@@ -1440,32 +1516,41 @@ pub fn resolve_target(
         }
     }
 
-    if !std::path::Path::new(&target)
+    let target_has_md_ext = std::path::Path::new(&target)
         .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-    {
-        let with_ext = format!("{target}.md");
-        let full = canonical_dir.join(&with_ext);
-        if full.is_file() {
-            if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
-                // Same canonical-casing logic for the .md-appended variant.
-                if let Some(idx) = case_index
-                    && let Some(canonical_path) = idx.lookup_unique(&with_ext)
-                {
-                    return Some(canonical_path.to_owned());
-                }
-                return Some(with_ext);
-            }
-            return None;
-        }
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
 
-        // Try .md variant via case-insensitive index.
-        if let Some(idx) = case_index
-            && let Some(canonical_path) = idx.lookup_unique(&with_ext)
-        {
-            let full_resolved = canonical_dir.join(canonical_path);
-            if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
-                return Some(canonical_path.to_owned());
+    if !target_has_md_ext {
+        // Two suffix attempts remain, and their *relative order* is what
+        // encodes the precedence rule (iter-203):
+        //
+        // - `<target>.md`        — the classic stem form (`foo` → `foo.md`).
+        // - `<target>/index.md`  — the directory-index convention every
+        //   static-site corpus (MDN, GitHub Docs, Docusaurus, Hugo) links
+        //   against, where `/foo` names the page at `foo/index.md`.
+        //
+        // Normally the file form wins: `foo` resolves to `foo.md` even when
+        // `foo/index.md` also exists. A target written with a *trailing slash*
+        // (`foo/`) is an explicit directory reference, so the order flips and
+        // the index file wins. The `.md` attempt is still kept as a
+        // last-chance fallback for trailing-slash targets so a sloppily
+        // written `page/` keeps resolving to `page.md` when the directory
+        // does not exist at all.
+        //
+        // Both attempts run before the Obsidian bare-stem fallback below: a
+        // concrete path beats a fuzzy basename search. Unlike that fallback,
+        // the directory-index attempt also applies to site-absolute targets —
+        // resolving `/foo` to `foo/index.md` is a path lookup, not a guess.
+        let with_ext = format!("{target}.md");
+        let dir_index = format!("{target}/{DIRECTORY_INDEX_FILE}");
+        let ordered = if trailing_slash {
+            [dir_index.as_str(), with_ext.as_str()]
+        } else {
+            [with_ext.as_str(), dir_index.as_str()]
+        };
+        for candidate in ordered {
+            if let Some(hit) = resolve_candidate_path(canonical_dir, candidate, case_index) {
+                return Some(hit);
             }
         }
     }
@@ -2203,6 +2288,132 @@ mod tests {
             }
             fs::write(full, "").unwrap();
         }
+    }
+
+    // --- iter-203: directory targets resolve to <target>/index.md ---
+
+    #[test]
+    fn resolve_target_directory_resolves_to_index_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["foo/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        for target in ["foo", "/foo", "foo/", "/foo/"] {
+            assert_eq!(
+                resolve_target(&canonical, target, None, None),
+                Some("foo/index.md".to_owned()),
+                "target {target} must resolve to the directory index"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_target_nested_directory_resolves_to_index_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["web/api/document/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "/web/api/document", None, None),
+            Some("web/api/document/index.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "web/api/document/", None, None),
+            Some("web/api/document/index.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_directory_without_index_stays_broken() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["foo/page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        for target in ["foo", "/foo", "foo/", "/foo/"] {
+            assert_eq!(
+                resolve_target(&canonical, target, None, None),
+                None,
+                "target {target} has no index.md and must not resolve"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_target_file_beats_directory_index() {
+        // Precedence: `foo.md` wins over `foo/index.md` when both exist.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["foo.md", "foo/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "foo", None, None),
+            Some("foo.md".to_owned())
+        );
+        // …but a trailing slash is an explicit directory reference, so it must
+        // reach the index file even though `foo.md` exists.
+        assert_eq!(
+            resolve_target(&canonical, "foo/", None, None),
+            Some("foo/index.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_explicit_index_forms_keep_working() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["foo/index.md", "bar/page.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "foo/index", None, None),
+            Some("foo/index.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "foo/index.md", None, None),
+            Some("foo/index.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "/bar/page", None, None),
+            Some("bar/page.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_directory_index_case_variants_via_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["Foo/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.insert("Foo/index.md");
+        assert_eq!(
+            resolve_target(&canonical, "/foo", None, Some(&idx)),
+            Some("Foo/index.md".to_owned()),
+            "case-differing directory target must resolve through the index"
+        );
+    }
+
+    #[test]
+    fn resolve_target_directory_index_with_site_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["guide/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_target(&canonical, "/docs/guide", Some("docs"), None),
+            Some("guide/index.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_target_directory_index_rejects_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["foo/index.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(resolve_target(&canonical, "../foo", None, None), None);
+        assert_eq!(resolve_target(&canonical, "sub/../../foo", None, None), None);
+    }
+
+    #[test]
+    fn directory_for_index_file_cases() {
+        assert_eq!(directory_for_index_file("foo/index.md"), Some("foo"));
+        assert_eq!(directory_for_index_file("a/b/Index.MD"), Some("a/b"));
+        assert_eq!(directory_for_index_file("index.md"), None);
+        assert_eq!(directory_for_index_file("foo/notindex.md"), None);
+        assert_eq!(directory_for_index_file("/index.md"), None);
     }
 
     #[test]
