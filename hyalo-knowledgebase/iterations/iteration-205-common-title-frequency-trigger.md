@@ -103,7 +103,7 @@ cascade is bounded by `total / 25` rounds (two, here). Documented in
 thresholds; `[links.auto] warn_common_titles` keeps governing both triggers.
 Revisit only on demand.
 
-## Tasks
+## Tasks [9/9]
 
 - [x] Design the trigger and record it in the plan before coding (a DEC
       entry): a candidate title is flagged when wordlist-common OR
@@ -142,7 +142,7 @@ Revisit only on demand.
       thresholds are demanded; default: no new config).
 - [x] CHANGELOG entry.
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] The report's GitHub Docs scenario names `workflows` first with its
       count and share (502×, 43%); pasting the suggested flags back removes
