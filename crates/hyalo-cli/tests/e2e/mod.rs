@@ -9,6 +9,7 @@ mod changelog_profile;
 mod completion;
 mod config;
 mod config_dir;
+mod config_trust;
 mod count;
 mod cwd_features;
 mod errors;
