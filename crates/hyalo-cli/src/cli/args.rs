@@ -966,6 +966,14 @@ Repeatable (AND).\n\
             read/write files on disk but also patch the index in-place after each\n\
             mutation — keeping it current for subsequent queries. This is safe as\n\
             long as no external tool modifies vault files while the index is active.\n\n\
+            SNAPSHOT CONTRACT: the index is a point-in-time copy, not a live view.\n\
+            Edits made while it exists — by hand, by another tool, or by hyalo run\n\
+            without an index flag — are invisible to indexed queries, which still\n\
+            exit 0. Commands that load an index cheaply compare the vault's\n\
+            top-level directory mtimes against the snapshot's creation time and\n\
+            warn `index older than vault` when they postdate it; that probe misses\n\
+            in-place edits of existing notes and changes more than one level deep,\n\
+            so re-run create-index whenever the vault may have changed.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\

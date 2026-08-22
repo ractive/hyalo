@@ -208,6 +208,37 @@ pub enum FilesOrOutcome {
     Outcome(CommandOutcome),
 }
 
+/// L-2 (iter-204): turn "the one file you named is unparseable" into an error.
+///
+/// A write command pointed at exactly ONE explicitly named (non-glob) file
+/// that turns out to have unparseable frontmatter used to warn on stderr and
+/// exit 0 with `0/0 modified (1 scanned)` — indistinguishable, to a script,
+/// from "the file was already in the requested state". Batch runs
+/// (`--glob`, several `--file`s, whole-vault) keep warn-and-continue: there
+/// the other files genuinely were processed, and one bad note must not fail
+/// the run.
+///
+/// `skipped_unparseable` holds the relative paths skipped for parse errors;
+/// the detailed parse diagnostic has already been warned about by the caller.
+pub(crate) fn single_named_file_unparseable(
+    files: &[String],
+    globs: &[String],
+    skipped_unparseable: &[String],
+    format: Format,
+) -> Option<CommandOutcome> {
+    if !globs.is_empty() || files.len() != 1 || skipped_unparseable.len() != 1 {
+        return None;
+    }
+    let rel = &skipped_unparseable[0];
+    Some(CommandOutcome::UserError(crate::output::format_error(
+        format,
+        &format!("{rel}: unparseable frontmatter; nothing was modified"),
+        None,
+        Some("fix the YAML frontmatter (see the warning above), then re-run"),
+        None,
+    )))
+}
+
 /// Resolve the set of files to operate on based on `--file` / `--glob` / all files.
 /// Returns a user-error outcome for invalid inputs (e.g. file not found).
 /// A glob that matches no files returns an empty file list with exit 0, not an error.

@@ -1472,6 +1472,22 @@ fn run_inner() -> Result<(), AppError> {
                 let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
                 let vault_dir_str = canonical_dir.to_string_lossy();
                 if idx.validate(&vault_dir_str, site_prefix) {
+                    // M-6: a snapshot is a point-in-time copy — edits made
+                    // outside it (by hand, by another tool, or by hyalo itself
+                    // without `--index`) are simply invisible, and the run
+                    // still exits 0. Probe the vault's shallow directory mtimes
+                    // and warn when they postdate the snapshot, so a stale
+                    // index is at least noisy instead of silently wrong.
+                    let (_, _, created_at, _) = idx.header_info();
+                    if let Some(newest) = hyalo_core::index::newest_shallow_dir_mtime(&dir)
+                        && newest
+                            > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                    {
+                        crate::warn::warn(
+                            "index older than vault; results may be stale — re-run create-index"
+                                .to_owned(),
+                        );
+                    }
                     Some(idx)
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();

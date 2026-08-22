@@ -2453,3 +2453,73 @@ fn iter157_find_without_link_flags_works_with_empty_stem_map() {
     assert!(files.contains(&"c.md".to_string()));
     assert!(files.contains(&"sub/d.md".to_string()));
 }
+
+// ---------------------------------------------------------------------------
+// M-6 (iter-204): snapshot staleness signal
+// ---------------------------------------------------------------------------
+
+/// A freshly built index must NOT warn — the index's own creation touches the
+/// vault directory, so an mtime-only probe would false-positive here.
+#[test]
+fn fresh_index_does_not_warn_about_staleness() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("index older than vault"),
+        "fresh index must not warn: {stderr}"
+    );
+}
+
+/// A note added to a subdirectory after the index was built makes the vault
+/// newer than the snapshot: warn on stderr, still exit 0.
+#[test]
+fn stale_index_warns_when_vault_is_newer() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    // The probe compares whole seconds with one second of slack, so the vault
+    // edit has to land at least two seconds after the snapshot was written.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    write_md(tmp.path(), "sub/c.md", "---\ntitle: C\n---\nBody.\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "staleness is a warning, not an error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("index older than vault"),
+        "stale index must warn: {stderr}"
+    );
+    assert!(
+        stderr.contains("create-index"),
+        "warning must name the remedy: {stderr}"
+    );
+}
