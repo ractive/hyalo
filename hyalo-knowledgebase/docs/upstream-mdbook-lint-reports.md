@@ -230,7 +230,7 @@ preserve CRLF":
 
 hyalo keeps `md047_fix` for CRLF bodies only (LF bodies go through
 `convert_fix` unchanged) as the documented compensation for (1); (2) is a
-detection gap upstream owns. **Not filed yet** — third-party repo writes stay
-user-gated, and iteration 196 ran unattended. Filing this, plus the follow-up
-comment on #456 reporting the embedder result, is the outstanding manual
-step.
+detection gap upstream owns. **Filed 2026-08-23** (user-authorized) as
+[joshrotenberg/mdbook-lint#495](https://github.com/joshrotenberg/mdbook-lint/issues/495).
+The follow-up comment on #456 reporting the embedder result was dropped by
+user choice.

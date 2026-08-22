@@ -109,14 +109,13 @@ the following is carried forward rather than left as a permanently unticked
 task. See [[iterations/iteration-194-post-upstream-mdbook-lint-reports]] for
 the pattern.
 
-- Post a short follow-up comment on upstream
+- ~~Post a short follow-up comment on upstream
   [#456](https://github.com/joshrotenberg/mdbook-lint/issues/456) reporting
-  the embedder result: the 0.16.0 contract let hyalo delete the byte-column
-  allowlist, the hand-rolled coordinate walk, and the MD011/MD034 guards
-  outright.
-- File the MD047 CRLF gap described under "The one surviving exception"
-  below (hard-coded `"\n"` insertion, and `check_file_ending` under-counting
-  CRLF terminators).
+  the embedder result~~ — the user chose not to post this (2026-08-23);
+  dropped, not pending.
+- ~~File the MD047 CRLF gap described under "The one surviving exception"
+  below~~ — DONE 2026-08-23, user-authorized: filed as
+  [joshrotenberg/mdbook-lint#495](https://github.com/joshrotenberg/mdbook-lint/issues/495).
 
 ## Acceptance criteria [5/5]
 
@@ -178,8 +177,9 @@ upstream's fix unchanged. Shipped 0.16.0
 
 Recorded in [[docs/upstream-mdbook-lint-reports]]; **not filed upstream** —
 third-party repo writes stay user-gated and this iteration ran unattended.
-That, plus the follow-up comment on upstream #456, is the outstanding manual
-step.
+Filed 2026-08-23 as
+[joshrotenberg/mdbook-lint#495](https://github.com/joshrotenberg/mdbook-lint/issues/495);
+the #456 follow-up comment was dropped by user choice.
 
 ### Verification
 
