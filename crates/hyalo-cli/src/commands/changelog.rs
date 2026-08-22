@@ -432,6 +432,7 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
 ///
 /// Appends `- <message>` under the `### <category>` subsection of
 /// `## [Unreleased]`, creating the section / subsection when missing.
+#[allow(clippy::too_many_arguments)]
 pub fn run_add(
     changelog_file: &Path,
     boundary_root: &Path,

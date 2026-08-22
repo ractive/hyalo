@@ -810,17 +810,31 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
 /// Errors specific to file resolution.
 #[derive(Debug)]
 pub enum FileResolveError {
-    NotFound { path: String },
-    NotFoundSuggestion { path: String, suggestion: String },
-    MissingExtension { path: String, hint: String },
-    IsDirectory { path: String, hint: String },
+    NotFound {
+        path: String,
+    },
+    NotFoundSuggestion {
+        path: String,
+        suggestion: String,
+    },
+    MissingExtension {
+        path: String,
+        hint: String,
+    },
+    IsDirectory {
+        path: String,
+        hint: String,
+    },
     OutsideVault {
         path: String,
         /// Canonical destination the path escaped to, when resolution (symlink
         /// following) produced one. `None` for a purely lexical rejection.
         resolved: Option<String>,
     },
-    InvalidPath { path: String, reason: &'static str },
+    InvalidPath {
+        path: String,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for FileResolveError {
@@ -840,7 +854,10 @@ impl std::fmt::Display for FileResolveError {
                 path,
                 resolved: Some(target),
             } => {
-                write!(f, "file resolves outside vault boundary: {path} -> {target}")
+                write!(
+                    f,
+                    "file resolves outside vault boundary: {path} -> {target}"
+                )
             }
             Self::OutsideVault {
                 path,
@@ -1558,6 +1575,63 @@ mod tests {
         let files = discover_files(tmp.path()).unwrap();
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|f| f.extension().unwrap() == "md"));
+    }
+
+    /// M-5 (iter-202): a symlink and its target are two directory entries but
+    /// one file. Enumerating both made whole-vault writers rewrite the same
+    /// note twice — the second write tripping the concurrent-modification
+    /// guard — and inflated every count the CLI reports.
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedups_intra_vault_symlink_and_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("real.md"), "# Real").unwrap();
+        std::os::unix::fs::symlink("real.md", tmp.path().join("alias.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 1, "one file, two spellings: {files:?}");
+        assert!(
+            files[0].ends_with("alias.md"),
+            "the first spelling in sort order wins: {files:?}"
+        );
+    }
+
+    /// The surviving spelling must not depend on walk order, which is
+    /// non-deterministic (the walker is parallel).
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedup_is_stable_across_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("zzz")).unwrap();
+        fs::write(tmp.path().join("zzz/real.md"), "# Real").unwrap();
+        std::os::unix::fs::symlink("zzz/real.md", tmp.path().join("aaa.md")).unwrap();
+        fs::write(tmp.path().join("other.md"), "# Other").unwrap();
+
+        let first = discover_files(tmp.path()).unwrap();
+        for _ in 0..5 {
+            assert_eq!(
+                discover_files(tmp.path()).unwrap(),
+                first,
+                "dedup must pick the same spelling every run"
+            );
+        }
+        assert_eq!(first.len(), 2, "aaa.md + other.md: {first:?}");
+        assert!(first[0].ends_with("aaa.md"), "{first:?}");
+    }
+
+    /// Two distinct notes that merely *look* similar must both survive — the
+    /// dedup key is the canonical path, not the file name or content.
+    #[cfg(unix)]
+    #[test]
+    fn discover_keeps_distinct_files_with_symlinks_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "# A").unwrap();
+        fs::write(tmp.path().join("b.md"), "# B").unwrap();
+        std::os::unix::fs::symlink("a.md", tmp.path().join("c.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 2, "a.md (as a.md) and b.md: {files:?}");
+        assert!(files.iter().any(|f| f.ends_with("b.md")), "{files:?}");
     }
 
     #[test]

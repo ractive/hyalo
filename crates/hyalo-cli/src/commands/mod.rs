@@ -64,13 +64,15 @@ pub(crate) fn refuse_escaping_write(
     let Some(target) = hyalo_core::fs_util::escaping_write_target(dir, full)? else {
         return Ok(None);
     };
-    Ok(Some(CommandOutcome::UserError(crate::output::format_error(
-        format,
-        &hyalo_core::fs_util::outside_vault_message(subject, Some(&target)),
-        Some(display),
-        hint,
-        None,
-    ))))
+    Ok(Some(CommandOutcome::UserError(
+        crate::output::format_error(
+            format,
+            &hyalo_core::fs_util::outside_vault_message(subject, Some(&target)),
+            Some(display),
+            hint,
+            None,
+        ),
+    )))
 }
 
 /// Wrap `discovery::resolve_file` with the LLM-misuse warning.

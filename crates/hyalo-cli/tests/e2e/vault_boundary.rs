@@ -42,7 +42,10 @@ fn run(vault: &Path, args: &[&str]) -> (i32, String) {
 /// `anyhow` bail and surface as exit 2, the documented "internal error" class,
 /// which tells a caller to file a bug rather than to fix its path.
 fn assert_boundary_refusal(code: i32, combined: &str, context: &str) {
-    assert_eq!(code, 1, "{context}: expected exit 1, got {code}: {combined}");
+    assert_eq!(
+        code, 1,
+        "{context}: expected exit 1, got {code}: {combined}"
+    );
     assert!(
         combined.contains("resolves outside vault boundary"),
         "{context}: expected the shared boundary wording, got: {combined}"
@@ -344,7 +347,11 @@ fn boundary_refusals_share_exit_code_and_message_shape() {
     )
     .unwrap();
     fs::write(outside.join("secret.md"), "---\ntitle: S\n---\nBody\n").unwrap();
-    fs::write(outside.join("CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n").unwrap();
+    fs::write(
+        outside.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n",
+    )
+    .unwrap();
     fs::write(outside.join("log.md"), "# Log\n").unwrap();
     std::os::unix::fs::symlink(outside.join("secret.md"), vault.join("escape.md")).unwrap();
     std::os::unix::fs::symlink(outside.join("CHANGELOG.md"), vault.join("CHANGELOG.md")).unwrap();
@@ -368,13 +375,16 @@ fn boundary_refusals_share_exit_code_and_message_shape() {
         (
             "changelog add",
             vec![
-                "changelog", "add", "--category", "Added", "--message", "x", "--apply",
+                "changelog",
+                "add",
+                "--category",
+                "Added",
+                "--message",
+                "x",
+                "--apply",
             ],
         ),
-        (
-            "okf log",
-            vec!["okf", "log", "--message", "x", "--apply"],
-        ),
+        ("okf log", vec!["okf", "log", "--message", "x", "--apply"]),
         (
             "new",
             vec!["new", "--type", "note", "--file", "outdir/x.md"],
@@ -437,7 +447,8 @@ fn summary_counts_an_aliased_note_once() {
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
-        val["results"]["files"]["total"], 2,
+        val["results"]["files"]["total"],
+        2,
         "hub.md and target.md are two files; the alias must not make three: {}",
         String::from_utf8_lossy(&out.stdout)
     );
@@ -524,7 +535,9 @@ fn out_of_vault_symlink_warning_is_printed_once() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
-        stderr.matches("symlink target resolves outside vault").count(),
+        stderr
+            .matches("symlink target resolves outside vault")
+            .count(),
         1,
         "the skip warning must be emitted once per run, got: {stderr}"
     );

@@ -20,10 +20,12 @@ use tempfile::TempDir;
 ///
 /// The target lives under `.store/` on purpose. The discovery walker skips
 /// hidden directories, so the vault contains exactly *one* discoverable
-/// markdown file. Without that, both the symlink and its target would be
-/// walked as two separate files backed by one inode, and any whole-vault
-/// command would write the same inode twice — a fixture artefact, not the
-/// behaviour under test.
+/// markdown file and these tests exercise the write path through a symlink
+/// without also exercising enumeration. (Since iteration 202 the walker also
+/// deduplicates a symlink against its target by canonical path — see
+/// `vault_boundary::links_fix_apply_rewrites_an_aliased_note_once` — so an
+/// unhidden target would no longer produce a double write either. The hidden
+/// directory keeps the two concerns in separate tests.)
 fn vault_with_symlink(content: &str) -> (TempDir, std::path::PathBuf) {
     let tmp = TempDir::new().unwrap();
     fs::create_dir(tmp.path().join(".store")).unwrap();

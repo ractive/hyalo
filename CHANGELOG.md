@@ -140,6 +140,15 @@ and this project adheres to
   `--apply` as a silent no-op in the first mode hid that asymmetry from anyone
   who learned the batch form first. It now errors with `single-file mv applies
   by default; use --dry-run to preview`. Batch `--apply` is unchanged.
+- **One exit code and one wording for every vault-boundary refusal** (iter-202).
+  `okf log` refused an escaping target with exit 2, the documented
+  internal-error class, while the rest of the family used 1; `mv`,
+  `create-index` and `drop-index` each phrased the same refusal differently.
+  Every boundary refusal now exits 1 and reads `<subject> resolves outside vault
+  boundary: <resolved target>`, with the path the user typed carried in the
+  error's `path` field so both halves are visible. The
+  `set`/`append`/`remove`/`task` family gained the resolved target it previously
+  omitted.
 
 ### Removed
 
@@ -244,6 +253,26 @@ and this project adheres to
   only checked against the body length, so either case sliced a `str` at an
   invalid offset and aborted the run. Such fixes are now reported as conflicts
   and skipped, leaving the file untouched.
+- **Three unchecked writers now refuse to write outside the vault** (iter-202).
+  `madr toc` built `<adr-dir>/README.md` straight from its positional argument,
+  so `../outside` — or an in-vault ADR directory that is a symlink pointing
+  out — created or rewrote a README anywhere on disk at exit 0.
+  `changelog add`/`release` followed a `CHANGELOG.md` symlinked out of the
+  vault; an intentional out-of-vault changelog configured via
+  `[changelog] path` stays allowed, only the silent symlink hop is refused. `new --file` validated its
+  path lexically but never resolved it, so an in-vault `outdir -> ../outside`
+  symlink was a file-creation primitive. All three now resolve the destination
+  before touching the filesystem and refuse at exit 1 with nothing written
+  outside the vault, in dry-run as well as apply.
+- **An in-vault symlink and its target count as one file** (iter-202). The vault
+  walker enumerated both directory entries, so a whole-vault writer processed
+  the same file twice. `links fix --apply` rewrote the note once per spelling
+  and the second write saw the mtime the first had just changed — "modified by
+  another process", exit 1 in CI, even though the fix had landed. The same
+  double-count inflated `find --count`, `summary` totals and glob-write
+  counters, and printed the out-of-vault-symlink skip warning once per internal
+  walk. Enumeration is now deduplicated by canonical path — first spelling in
+  sort order wins, stably across runs — and each skip is warned once per run.
 
 ## [0.20.0] - 2026-07-19
 

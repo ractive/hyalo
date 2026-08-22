@@ -461,6 +461,109 @@ mod tests {
     }
 
     #[test]
+    fn outside_vault_message_two_path_form() {
+        let msg = outside_vault_message("file", Some(Path::new("/elsewhere/secret.md")));
+        assert_eq!(
+            msg,
+            "file resolves outside vault boundary: /elsewhere/secret.md"
+        );
+    }
+
+    #[test]
+    fn outside_vault_message_without_resolved_target() {
+        assert_eq!(
+            outside_vault_message("path", None),
+            "path resolves outside vault boundary"
+        );
+    }
+
+    #[test]
+    fn escaping_write_target_accepts_plain_in_vault_path() {
+        let vault = tempfile::tempdir().unwrap();
+        let dest = vault.path().join("note.md");
+        std::fs::write(&dest, "x").unwrap();
+        assert!(
+            escaping_write_target(vault.path(), &dest)
+                .unwrap()
+                .is_none(),
+            "an ordinary in-vault file must not be refused"
+        );
+    }
+
+    #[test]
+    fn escaping_write_target_accepts_not_yet_existing_nested_path() {
+        let vault = tempfile::tempdir().unwrap();
+        let dest = vault.path().join("a").join("b").join("new.md");
+        assert!(
+            escaping_write_target(vault.path(), &dest)
+                .unwrap()
+                .is_none(),
+            "a brand-new nested destination anchors on the vault root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_reports_symlink_escape() {
+        let outside = tempfile::tempdir().unwrap();
+        let escapee = outside.path().join("secret.md");
+        std::fs::write(&escapee, "untouched").unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let link = vault.path().join("alias.md");
+        std::os::unix::fs::symlink(&escapee, &link).unwrap();
+
+        let target = escaping_write_target(vault.path(), &link)
+            .unwrap()
+            .expect("the escape must be reported");
+        assert_eq!(
+            target,
+            dunce::canonicalize(&escapee).unwrap(),
+            "the reported target must be the canonical destination"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_reports_escape_through_symlinked_directory() {
+        let outside = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("outdir")).unwrap();
+
+        // Neither the file nor its intermediate directories exist yet: the
+        // check must anchor on the symlinked directory, which already does.
+        let dest = vault.path().join("outdir").join("a").join("planted.md");
+        let target = escaping_write_target(vault.path(), &dest)
+            .unwrap()
+            .expect("a write below a symlinked-out directory must be refused");
+        assert!(
+            target.ends_with("a/planted.md"),
+            "the reported target keeps the not-yet-created components: {}",
+            target.display()
+        );
+        assert!(
+            !outside.path().join("a").exists(),
+            "the check must not create anything"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_accepts_intra_vault_symlink() {
+        let vault = tempfile::tempdir().unwrap();
+        let real = vault.path().join("real.md");
+        std::fs::write(&real, "x").unwrap();
+        let link = vault.path().join("alias.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(
+            escaping_write_target(vault.path(), &link)
+                .unwrap()
+                .is_none(),
+            "a symlink that stays inside the vault is fine"
+        );
+    }
+
+    #[test]
     fn atomic_write_fails_if_parent_missing() {
         let tmp = tempfile::tempdir().unwrap();
         // The "missing" subdirectory does not exist, so the temp file cannot be created.
