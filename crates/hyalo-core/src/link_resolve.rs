@@ -172,6 +172,88 @@ impl<'a> LinkResolver<'a> {
         canonical == Some(old_rel) || canonical == Some(old_stem)
     }
 
+    /// Whether `span` is a **directory reference** to `old_rel` (iter-203).
+    ///
+    /// A link written as `/foo`, `foo`, `foo/` or `[[foo]]` names the
+    /// directory whose index file is `foo/index.md`. When `old_rel` is such an
+    /// index file and the span spells its directory, this returns
+    /// `Some(trailing_slash)` — the flag records whether the author wrote the
+    /// slash, so [`crate::link_write::LinkWriter`] can reproduce the exact
+    /// spelling after the move.
+    ///
+    /// Returns `None` for every other link, including a directory spelling
+    /// that a real file outranks (`foo` when `foo.md` exists) — mirroring the
+    /// precedence in `discovery::resolve_target`.
+    pub(crate) fn dir_index_match(
+        &self,
+        span: &LinkSpan,
+        source_rel: &str,
+        old_rel: &str,
+    ) -> Option<bool> {
+        use crate::link_graph::strip_site_prefix;
+
+        let old_dir = crate::discovery::directory_for_index_file(old_rel)?;
+
+        let raw = span.link.target.replace('\\', "/");
+        let trailing_slash = raw.ends_with('/');
+        let trimmed = raw.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Normalize exactly like the read-side resolvers do, per link kind.
+        let candidates: Vec<String> = match span.kind {
+            LinkKind::Wikilink => match trimmed.strip_prefix("./") {
+                Some(rest) => vec![normalize_target(Path::new(source_rel), rest)],
+                None => vec![trimmed.to_owned()],
+            },
+            LinkKind::Markdown => {
+                if trimmed.starts_with('/') {
+                    vec![strip_site_prefix(trimmed, self.site_prefix)]
+                } else if trimmed.contains('/') {
+                    vec![normalize_target(Path::new(source_rel), trimmed)]
+                } else {
+                    // Bare basename: source-relative first, then vault-root —
+                    // the same two candidates `normalize_link_target` tries.
+                    vec![
+                        normalize_target(Path::new(source_rel), trimmed),
+                        trimmed.to_owned(),
+                    ]
+                }
+            }
+        };
+
+        let matched = candidates.iter().any(|candidate| {
+            let candidate = candidate.trim_end_matches('/');
+            candidate == old_dir
+                || (self.case_index.case_insensitive_paths_enabled()
+                    && candidate.eq_ignore_ascii_case(old_dir))
+        });
+        if !matched {
+            return None;
+        }
+
+        // Precedence guard: a spelling that names a real file is not a
+        // directory reference — unless the trailing slash made it explicit.
+        if !trailing_slash {
+            for candidate in &candidates {
+                if self.case_index.contains_path(candidate)
+                    || self.case_index.lookup_unique(candidate).is_some()
+                {
+                    return None;
+                }
+                let with_md = format!("{candidate}.md");
+                if self.case_index.contains_path(&with_md)
+                    || self.case_index.lookup_unique(&with_md).is_some()
+                {
+                    return None;
+                }
+            }
+        }
+
+        Some(trailing_slash)
+    }
+
     /// Resolve a bare wikilink stem to a [`Resolution`].
     ///
     /// Used by the ambiguity-detection path in `mv` to distinguish `Hit` (safe

@@ -22,7 +22,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
 use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
 use crate::link_resolve::LinkResolver;
-use crate::link_write::{LinkWriter, SpanReplacement};
+use crate::link_write::{LinkWriter, SpanReplacement, TargetStyle};
 use crate::links::{LinkKind, PreserveForm, Resolution, extract_link_spans_with_original};
 use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 
@@ -654,8 +654,15 @@ fn plan_inbound_rewrites(
             // is among the ambiguous candidates (LinkResolver::matches_target
             // would reject the link because lookup_stem returns None for
             // ambiguous stems).
+            // iter-203: a link that spells the *directory* of a moving
+            // `index.md` (`/foo`, `foo`, `foo/`, `[[foo]]`) is checked first.
+            // It bypasses the bare-wikilink ambiguity probe below, which looks
+            // up basename stems and would reject `[[foo]]` outright — the stem
+            // of `foo/index.md` is `index`, not `foo`.
+            let dir_index = resolver.dir_index_match(&span, source_rel, old_rel);
+
             let mut bare_ambiguous_match = false;
-            if span.kind == LinkKind::Wikilink {
+            if dir_index.is_none() && span.kind == LinkKind::Wikilink {
                 let t = &span.link.target;
                 // Only bare wikilinks (no path separator) need the ambiguity check.
                 let normalized = if let Some(wo) = t.strip_prefix("./") {
@@ -713,24 +720,31 @@ fn plan_inbound_rewrites(
                 }
             }
 
-            if !bare_ambiguous_match
+            if dir_index.is_none()
+                && !bare_ambiguous_match
                 && !resolver.matches_target(&span, source_rel, old_rel, old_stem)
             {
                 continue;
             }
+
+            let style = match dir_index {
+                Some(trailing_slash) => TargetStyle::DirectoryIndex { trailing_slash },
+                None => TargetStyle::File,
+            };
 
             // Use LinkWriter to emit the new target in the user's written form.
             if let Some(SpanReplacement {
                 byte_offset,
                 old_text,
                 new_text,
-            }) = LinkWriter::rewrite(
+            }) = LinkWriter::rewrite_styled(
                 &span,
                 line,
                 new_rel,
                 source_rel,
                 PreserveForm::Preserve,
                 site_prefix,
+                style,
             ) {
                 replacements.push(Replacement {
                     line: line_num,
@@ -1501,6 +1515,138 @@ mod tests {
         );
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b]]");
         assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+    }
+
+    // --- iter-203: mv rewrites directory-spelled inbound links ---
+
+    /// Collect `(old_text, new_text)` pairs from every plan, sorted, so tests
+    /// can assert on the rewrite set without depending on plan ordering.
+    fn replacement_pairs(plans: &[RewritePlan]) -> Vec<(String, String)> {
+        let mut pairs: Vec<(String, String)> = plans
+            .iter()
+            .flat_map(|p| {
+                p.replacements
+                    .iter()
+                    .map(|r| (r.old_text.clone(), r.new_text.clone()))
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    #[test]
+    fn plan_mv_directory_index_rewrites_inbound_spellings() {
+        let vault = create_vault(&[
+            ("foo/index.md", "# Foo\n"),
+            ("a.md", "[x](/foo)\n"),
+            ("b.md", "[x](/foo/)\n"),
+            ("c.md", "See [[foo]]\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "foo/index.md", "bar/index.md", None, false)
+            .unwrap()
+            .plans;
+        assert_eq!(
+            replacement_pairs(&plans),
+            vec![
+                ("[[foo]]".to_string(), "[[bar]]".to_string()),
+                ("[x](/foo)".to_string(), "[x](/bar)".to_string()),
+                ("[x](/foo/)".to_string(), "[x](/bar/)".to_string()),
+            ],
+            "each directory spelling must survive the move unchanged in style"
+        );
+    }
+
+    #[test]
+    fn plan_mv_directory_index_preserves_site_prefix_spelling() {
+        // L-11 guard: the prefix must not be injected into a link that already
+        // carries it, and no `.md` may appear where the author wrote none.
+        let vault = create_vault(&[
+            ("foo/index.md", "# Foo\n"),
+            ("a.md", "[x](/docs/foo)\n"),
+        ]);
+        let plans = plan_mv(
+            vault.path(),
+            "foo/index.md",
+            "bar/index.md",
+            Some("docs"),
+            false,
+        )
+        .unwrap()
+        .plans;
+        assert_eq!(
+            replacement_pairs(&plans),
+            vec![("[x](/docs/foo)".to_string(), "[x](/docs/bar)".to_string())]
+        );
+    }
+
+    #[test]
+    fn plan_mv_directory_index_relative_markdown_link() {
+        let vault = create_vault(&[
+            ("foo/index.md", "# Foo\n"),
+            ("sub/a.md", "[x](../foo)\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "foo/index.md", "bar/index.md", None, false)
+            .unwrap()
+            .plans;
+        assert_eq!(
+            replacement_pairs(&plans),
+            vec![("[x](../foo)".to_string(), "[x](../bar)".to_string())]
+        );
+    }
+
+    #[test]
+    fn plan_mv_directory_index_to_plain_file_falls_back_to_file_form() {
+        // The new path is no longer a directory index, so the directory
+        // spelling cannot be preserved — emit the real file path instead.
+        let vault = create_vault(&[("foo/index.md", "# Foo\n"), ("a.md", "[x](/foo)\n")]);
+        let plans = plan_mv(vault.path(), "foo/index.md", "notes/readme.md", None, false)
+            .unwrap()
+            .plans;
+        assert_eq!(
+            replacement_pairs(&plans),
+            vec![("[x](/foo)".to_string(), "[x](/notes/readme)".to_string())]
+        );
+    }
+
+    #[test]
+    fn plan_mv_directory_index_leaves_real_file_links_alone() {
+        // `foo.md` outranks `foo/index.md`, so `[x](foo)` is not a directory
+        // reference and must not be touched when the index file moves.
+        let vault = create_vault(&[
+            ("foo.md", "# Foo file\n"),
+            ("foo/index.md", "# Foo index\n"),
+            ("a.md", "[x](foo)\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "foo/index.md", "bar/index.md", None, false)
+            .unwrap()
+            .plans;
+        assert!(
+            replacement_pairs(&plans).is_empty(),
+            "a link that resolves to foo.md must survive the index move untouched"
+        );
+    }
+
+    #[test]
+    fn plan_mv_explicit_index_links_keep_file_spelling() {
+        let vault = create_vault(&[
+            ("foo/index.md", "# Foo\n"),
+            ("a.md", "[x](/foo/index.md)\n"),
+            ("b.md", "See [[foo/index]]\n"),
+        ]);
+        let plans = plan_mv(vault.path(), "foo/index.md", "bar/index.md", None, false)
+            .unwrap()
+            .plans;
+        assert_eq!(
+            replacement_pairs(&plans),
+            vec![
+                ("[[foo/index]]".to_string(), "[[bar/index]]".to_string()),
+                (
+                    "[x](/foo/index.md)".to_string(),
+                    "[x](/bar/index.md)".to_string()
+                ),
+            ],
+            "explicit index spellings must stay explicit"
+        );
     }
 
     #[test]
