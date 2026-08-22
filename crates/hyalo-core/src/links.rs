@@ -664,6 +664,153 @@ fn is_external(target: &str) -> bool {
         || has_prefix_ci(target, "mailto:")
 }
 
+// ---------------------------------------------------------------------------
+// Inert link zones (iter-200)
+// ---------------------------------------------------------------------------
+
+/// Prefixes that start a bare URL run in prose.
+///
+/// Deliberately wider than [`is_external`]: that predicate decides whether a
+/// *parsed markdown destination* points off-vault, whereas this list has to
+/// recognise a URL sitting in plain prose, where `www.` forms are common.
+const BARE_URL_PREFIXES: [&str; 5] = ["https://", "http://", "ftp://", "mailto:", "www."];
+
+/// Whether `c` terminates a bare URL run.
+fn is_url_terminator(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\'' | '`' | '|' | '\\'
+        )
+}
+
+/// If a bare URL run starts at byte offset `start`, return its exclusive end.
+///
+/// `start` must be a char boundary. The run only starts on a word boundary so
+/// that `foohttps://x` is not treated as a URL, and trailing sentence
+/// punctuation is excluded so `see https://a.example.` keeps the final stop
+/// outside the zone.
+fn bare_url_end(line: &str, start: usize) -> Option<usize> {
+    if line[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    let rest = &line[start..];
+    let matched = BARE_URL_PREFIXES.iter().any(|p| {
+        rest.len() >= p.len() && rest.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
+    });
+    if !matched {
+        return None;
+    }
+    let mut end = line.len();
+    for (off, c) in rest.char_indices() {
+        if is_url_terminator(c) {
+            end = start + off;
+            break;
+        }
+    }
+    while end > start {
+        let Some(c) = line[..end].chars().next_back() else {
+            break;
+        };
+        if matches!(c, '.' | ',' | ';' | ':' | '!' | '?') {
+            end -= c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (end > start).then_some(end)
+}
+
+/// Byte ranges in `line` that are syntactically part of a link and must never
+/// be rewritten by a text-level mutator such as `links auto` (iter-200, H-2).
+///
+/// [`extract_link_spans`] answers a different question — "which *vault* links
+/// does this line contain?" — and therefore drops external destinations
+/// (`[x](https://…)`) entirely and never sees bare URLs at all. Auto-linking
+/// against those spans alone let a page titled `net` rewrite
+/// `[x](https://pkg.go.dev/x/actions.summerwind.net/v1)` into
+/// `…summerwind.[[net]]/v1`, destroying a working URL. The zones returned here
+/// cover, regardless of whether the destination is internal or external:
+///
+/// - whole `[label](destination)` constructs (label *and* destination, so a
+///   title mention inside a link's own label is left alone);
+/// - whole `[[wikilink]]` constructs;
+/// - autolinks (`<https://…>`) and bare URLs written in prose.
+///
+/// Ranges are returned in ascending, non-overlapping order. `line` should be
+/// the same text the caller matches against (e.g. the inline-code-blanked
+/// form), since offsets are relative to it.
+#[must_use]
+pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut zones: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if !line.is_char_boundary(i) {
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'[' => {
+                // `[[wikilink]]` — inert as a whole, alias and all.
+                if bytes.get(i + 1) == Some(&b'[')
+                    && let Some(rel) = line[i + 2..].find("]]")
+                {
+                    let end = i + 2 + rel + 2;
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                // `[label](destination)` — internal *or* external.
+                if let Some(close) = find_label_close_bracket(&line[i..])
+                    && bytes.get(i + close + 1) == Some(&b'(')
+                    && let Some(dest) = parse_destination(&line[i + close + 2..])
+                {
+                    let end = i + close + 2 + dest.end;
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            b'<' => {
+                // `<https://…>` autolink.
+                if let Some(rel) = line[i + 1..].find('>')
+                    && bare_url_end(line, i + 1).is_some()
+                {
+                    let end = i + 1 + rel + 1;
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            b'h' | b'H' | b'f' | b'F' | b'm' | b'M' | b'w' | b'W' => {
+                if let Some(end) = bare_url_end(line, i) {
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    zones
+}
+
+/// Whether `[start, end)` overlaps any range in `zones`.
+#[must_use]
+pub fn overlaps_zone(zones: &[(usize, usize)], start: usize, end: usize) -> bool {
+    zones.iter().any(|&(zs, ze)| start < ze && end > zs)
+}
+
 /// Split a target string into its base target and optional `#fragment`.
 ///
 /// The fragment is returned WITHOUT the leading `#`. Only the FIRST `#` is
