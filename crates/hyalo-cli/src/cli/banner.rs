@@ -10,10 +10,15 @@
 ///
 /// The public entry-point reads the process CWD; the inner `_for` variant accepts
 /// an explicit path so unit tests can exercise it without mutating the process state.
-pub(crate) fn cwd_help_banner() -> Option<String> {
+/// `resolved_dir` is the `dir` value from the already-loaded CWD config. It is
+/// threaded in rather than re-derived: loading `.hyalo.toml` a second time here
+/// is what made every invocation parse the config twice and print
+/// "1 additional identical warning(s) suppressed" on any malformed file
+/// (iter-201, M-2).
+pub(crate) fn cwd_help_banner(resolved_dir: &std::path::Path) -> Option<String> {
     let cwd = std::env::current_dir().ok()?;
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    cwd_help_banner_for_tty(&cwd, is_tty)
+    cwd_help_banner_for_tty(&cwd, resolved_dir, is_tty)
 }
 
 /// Inner implementation that accepts an explicit CWD path.
@@ -22,7 +27,8 @@ pub(crate) fn cwd_help_banner() -> Option<String> {
 /// working directory.
 #[cfg(test)]
 pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
-    cwd_help_banner_for_tty(cwd, true)
+    let resolved_dir = crate::config::load_config_from(cwd).dir;
+    cwd_help_banner_for_tty(cwd, &resolved_dir, true)
 }
 
 /// Variant that controls emoji rendering based on TTY.
@@ -30,19 +36,21 @@ pub(crate) fn cwd_help_banner_for(cwd: &std::path::Path) -> Option<String> {
 /// When `is_tty` is `false` (stdout is piped/redirected), emoji prefixes are
 /// suppressed so that `hyalo --help | cat` produces clean ASCII text. The
 /// banner content is otherwise unchanged.
-pub(crate) fn cwd_help_banner_for_tty(cwd: &std::path::Path, is_tty: bool) -> Option<String> {
+pub(crate) fn cwd_help_banner_for_tty(
+    cwd: &std::path::Path,
+    resolved_dir: &std::path::Path,
+    is_tty: bool,
+) -> Option<String> {
     let info_prefix = if is_tty { "\u{2139}\u{fe0f}  " } else { "" };
     let warn_prefix = if is_tty { "\u{26a0}\u{fe0f}  " } else { "" };
 
     // Case 1: CWD contains .hyalo.toml — banner tells the user which dir is active.
     let local_toml = cwd.join(".hyalo.toml");
     if local_toml.is_file() {
-        // Use the same loader as the rest of the CLI so the banner reflects
-        // the effective `dir` (and falls back gracefully on malformed configs).
-        let dir_value = crate::config::load_config_from(cwd)
-            .dir
-            .display()
-            .to_string();
+        // The caller already resolved this through the normal loader, so the
+        // banner reflects the effective `dir` (and its malformed-config
+        // fallback) without re-reading the file.
+        let dir_value = resolved_dir.display().to_string();
         return Some(format!(
             "{info_prefix}hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
              Don't `cd` into it; pass paths relative to `{dir_value}`.\n"
@@ -217,8 +225,9 @@ mod tests {
         fs::create_dir_all(tmp.path().join("kb")).unwrap();
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
 
-        let tty = cwd_help_banner_for_tty(tmp.path(), true).expect("tty banner");
-        let piped = cwd_help_banner_for_tty(tmp.path(), false).expect("piped banner");
+        let dir = crate::config::load_config_from(tmp.path()).dir;
+        let tty = cwd_help_banner_for_tty(tmp.path(), &dir, true).expect("tty banner");
+        let piped = cwd_help_banner_for_tty(tmp.path(), &dir, false).expect("piped banner");
 
         assert!(tty.contains('\u{2139}'), "TTY banner should keep emoji");
         assert!(
@@ -238,8 +247,9 @@ mod tests {
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
         let cwd = tmp.path().join("kb");
 
-        let tty = cwd_help_banner_for_tty(&cwd, true).expect("tty warn banner");
-        let piped = cwd_help_banner_for_tty(&cwd, false).expect("piped warn banner");
+        let dir = crate::config::load_config_from(&cwd).dir;
+        let tty = cwd_help_banner_for_tty(&cwd, &dir, true).expect("tty warn banner");
+        let piped = cwd_help_banner_for_tty(&cwd, &dir, false).expect("piped warn banner");
 
         assert!(tty.contains('\u{26a0}'), "TTY warn banner keeps emoji");
         assert!(

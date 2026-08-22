@@ -480,7 +480,7 @@ fn run_inner() -> Result<(), AppError> {
 
     // Prepend CWD-aware banner when relevant (info if .hyalo.toml in CWD,
     // warning if running from inside the vault). Shown by both -h and --help.
-    if let Some(banner) = cwd_help_banner() {
+    if let Some(banner) = cwd_help_banner(&config.dir) {
         cmd = cmd.before_help(banner.clone()).before_long_help(banner);
     }
 
@@ -684,13 +684,18 @@ fn run_inner() -> Result<(), AppError> {
                 crate::output::Format::Json
             }
         });
-        // A `--dir` override wins over the config's own `dir`: report the
-        // effective vault directory the rest of the CLI would use, not the
-        // config-file value it shadows (ff-rdp B6). When `--dir` names a
-        // directory that has its own `.hyalo.toml`, load from there.
+        // Report exactly what the rest of the CLI would use, by going through
+        // the shared `--dir` resolution rather than a second, divergent one
+        // (iter-201, H-4). `config` is the command users reach for to *check*
+        // which `.hyalo.toml` applies, so it must not have its own answer.
         let dir_override = cli.dir.as_deref();
-        let report = crate::commands::config::collect_config_report(&cwd, dir_override)
-            .map_err(AppError::Internal)?;
+        let effective = crate::config::resolve_effective(config.clone(), dir_override);
+        if let Some(note) = crate::config::dir_override_note(&effective) {
+            crate::warn::note(note);
+        }
+        let report =
+            crate::commands::config::collect_config_report(&cwd, effective, dir_override.is_some())
+                .map_err(AppError::Internal)?;
 
         // `--jq` operates on the full envelope, exactly as it does for pipeline
         // commands. Before iter-192 the filter was accepted and silently

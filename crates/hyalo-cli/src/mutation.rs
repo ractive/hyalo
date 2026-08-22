@@ -45,12 +45,10 @@ impl Commands {
             | Self::Init { .. }
             | Self::Deinit => false,
 
-            // Snapshot index files live outside the vault but are still bytes
-            // on disk chosen by config (`dir` decides what gets indexed).
-            Self::CreateIndex { .. } | Self::DropIndex { .. } => true,
-
-            // Scaffolds a new file from a schema type; there is no preview mode.
-            Self::New { .. } => true,
+            // `create-index`/`drop-index` write a snapshot index file, `new`
+            // scaffolds a markdown file from a schema type. None of the three
+            // has a preview mode.
+            Self::CreateIndex { .. } | Self::DropIndex { .. } | Self::New { .. } => true,
 
             Self::Set { dry_run, .. }
             | Self::Remove { dry_run, .. }
@@ -62,44 +60,50 @@ impl Commands {
                 fix_rule,
                 dry_run,
                 ..
-            } => (*fix || fix_rule.is_some()) && !dry_run,
+            } => (*fix || !fix_rule.is_empty()) && !dry_run,
 
             Self::Task { action } => match action {
                 TaskAction::Read { .. } => false,
                 TaskAction::Toggle { dry_run, .. } | TaskAction::Set { dry_run, .. } => !dry_run,
             },
 
+            // Groups whose `action` is optional default to their read-only
+            // aggregate (`summary` / `list`) when omitted.
             Self::Properties { action } => match action {
-                PropertiesAction::Summary { .. } => false,
-                PropertiesAction::Rename { dry_run, .. } => !dry_run,
+                None | Some(PropertiesAction::Summary { .. }) => false,
+                Some(PropertiesAction::Rename { dry_run, .. }) => !dry_run,
             },
 
             Self::Tags { action } => match action {
-                TagsAction::Summary { .. } => false,
-                TagsAction::Rename { dry_run, .. } => !dry_run,
+                None | Some(TagsAction::Summary { .. }) => false,
+                Some(TagsAction::Rename { dry_run, .. }) => !dry_run,
             },
 
             Self::Views { action } => match action {
-                ViewsAction::List | ViewsAction::Run { .. } => false,
-                ViewsAction::Set { .. } | ViewsAction::Remove { .. } => true,
+                None | Some(ViewsAction::List | ViewsAction::Run { .. }) => false,
+                Some(ViewsAction::Set { .. } | ViewsAction::Remove { .. }) => true,
             },
 
             Self::Types { action } => match action {
-                TypesAction::List | TypesAction::Show { .. } => false,
-                TypesAction::Set { dry_run, .. } => !dry_run,
-                TypesAction::Remove { .. } => true,
+                None | Some(TypesAction::List | TypesAction::Show { .. }) => false,
+                Some(TypesAction::Set { dry_run, .. }) => !dry_run,
+                Some(TypesAction::Remove { .. }) => true,
             },
 
             Self::LintRules { action } => match action {
-                LintRulesAction::List { .. } | LintRulesAction::Show { .. } => false,
-                LintRulesAction::Set { dry_run, .. } | LintRulesAction::Remove { dry_run, .. } => {
-                    !dry_run
-                }
+                None | Some(LintRulesAction::List { .. } | LintRulesAction::Show { .. }) => false,
+                Some(
+                    LintRulesAction::Set { dry_run, .. } | LintRulesAction::Remove { dry_run, .. },
+                ) => !dry_run,
             },
 
+            // `hyalo links` with no subcommand defaults to the `fix` preview.
             Self::Links { action } => match action {
-                LinksAction::Fix { apply, dry_run, .. }
-                | LinksAction::Auto { apply, dry_run, .. } => *apply && !dry_run,
+                None => false,
+                Some(
+                    LinksAction::Fix { apply, dry_run, .. }
+                    | LinksAction::Auto { apply, dry_run, .. },
+                ) => *apply && !dry_run,
             },
 
             Self::Okf { action } => match action {
@@ -235,7 +239,9 @@ pub(crate) fn tokens_write(tokens: &[String]) -> bool {
     let mut skip_value = false;
 
     for tok in tokens.iter().skip(usize::from(
-        tokens.first().is_some_and(|t| t == "hyalo" || t == "hyalo.exe"),
+        tokens
+            .first()
+            .is_some_and(|t| t == "hyalo" || t == "hyalo.exe"),
     )) {
         if skip_value {
             skip_value = false;
@@ -250,8 +256,7 @@ pub(crate) fn tokens_write(tokens: &[String]) -> bool {
             match name {
                 "--apply" => has_apply = true,
                 "--dry-run" => has_dry_run = true,
-                "--fix" => has_fix = true,
-                "--fix-rule" => has_fix = true,
+                "--fix" | "--fix-rule" => has_fix = true,
                 _ => {}
             }
             continue;
@@ -376,7 +381,10 @@ mod tests {
             false,
         ),
         ("hyalo remove --property owner --file notes/a.md", true),
-        ("hyalo append --property aliases=Alt --file notes/a.md", true),
+        (
+            "hyalo append --property aliases=Alt --file notes/a.md",
+            true,
+        ),
         ("hyalo mv notes/a.md notes/b.md", true),
         ("hyalo new --file notes/c.md", true),
         ("hyalo create-index", true),

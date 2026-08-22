@@ -157,6 +157,51 @@ pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
     format_success(format, &json)
 }
 
+/// Serialize one hint for the JSON envelope.
+///
+/// `writes` is always present (never omitted when `false`) so a consumer can
+/// filter on it without having to distinguish "absent" from "read-only"
+/// (iter-201, M-7).
+fn hint_to_json(hint: &crate::hints::Hint) -> serde_json::Value {
+    serde_json::json!({
+        "description": &hint.description,
+        "cmd": &hint.cmd,
+        "writes": hint.writes,
+    })
+}
+
+/// Append the `-> hyalo …` drill-down block to text output.
+///
+/// Mutating suggestions are rendered with a distinct `=>` arrow and a trailing
+/// `[writes]` tag. Before iter-201 a `views set …` command — which rewrites
+/// `.hyalo.toml` — appeared in the same `->` list as read-only drill-downs,
+/// so "run the hints" was not a safe instruction to give an agent.
+fn append_hint_lines(text: &mut String, hints: &[crate::hints::Hint]) {
+    if hints.is_empty() {
+        return;
+    }
+    text.push('\n');
+    for hint in hints {
+        if hint.cmd.is_empty() {
+            // Advice-only hint (no follow-up command). Render the
+            // description directly without the `cmd  # desc` layout.
+            text.push_str("\n  -> ");
+            text.push_str(&hint.description);
+        } else if hint.writes {
+            text.push_str("\n  => ");
+            text.push_str(&hint.cmd);
+            text.push_str("  # ");
+            text.push_str(&hint.description);
+            text.push_str(" [writes]");
+        } else {
+            text.push_str("\n  -> ");
+            text.push_str(&hint.cmd);
+            text.push_str("  # ");
+            text.push_str(&hint.description);
+        }
+    }
+}
+
 /// Build the JSON envelope value: `{"results": ..., "total": <optional>, "hints": [...]}`.
 ///
 /// The envelope is always present even when hints is empty (hints becomes `[]`).
@@ -167,10 +212,7 @@ pub fn build_envelope_value(
     total: Option<u64>,
     hints: &[crate::hints::Hint],
 ) -> serde_json::Value {
-    let hints_json: Vec<serde_json::Value> = hints
-        .iter()
-        .map(|h| serde_json::json!({"description": &h.description, "cmd": &h.cmd}))
-        .collect();
+    let hints_json: Vec<serde_json::Value> = hints.iter().map(hint_to_json).collect();
     let mut envelope = serde_json::json!({
         "results": value,
         "hints": hints_json,
@@ -218,22 +260,7 @@ pub fn format_envelope(
         Format::Text => {
             let mut cache = JaqFilterCache::new();
             let mut text = format_results_as_text(value, total, &mut cache);
-            if !hints.is_empty() {
-                text.push('\n');
-                for hint in hints {
-                    if hint.cmd.is_empty() {
-                        // Advice-only hint (no follow-up command). Render the
-                        // description directly without the `cmd  # desc` layout.
-                        text.push_str("\n  -> ");
-                        text.push_str(&hint.description);
-                    } else {
-                        text.push_str("\n  -> ");
-                        text.push_str(&hint.cmd);
-                        text.push_str("  # ");
-                        text.push_str(&hint.description);
-                    }
-                }
-            }
+            append_hint_lines(&mut text, hints);
             sanitize_control_chars(&text)
         }
     }
@@ -259,22 +286,7 @@ pub fn format_prebuilt_envelope(
         Format::Text => {
             let mut cache = JaqFilterCache::new();
             let mut text = format_results_as_text(results_value, total, &mut cache);
-            if !hints.is_empty() {
-                text.push('\n');
-                for hint in hints {
-                    if hint.cmd.is_empty() {
-                        // Advice-only hint (no follow-up command). Render the
-                        // description directly without the `cmd  # desc` layout.
-                        text.push_str("\n  -> ");
-                        text.push_str(&hint.description);
-                    } else {
-                        text.push_str("\n  -> ");
-                        text.push_str(&hint.cmd);
-                        text.push_str("  # ");
-                        text.push_str(&hint.description);
-                    }
-                }
-            }
+            append_hint_lines(&mut text, hints);
             sanitize_control_chars(&text)
         }
     }

@@ -847,7 +847,10 @@ pub(crate) fn resolve_effective(
     // `--dir kb/` and an absolute path all count as the configured vault.
     let cwd_vault = cwd_config.config_dir.join(&cwd_config.dir);
     let same_vault = cwd_config.loaded_from_file
-        && match (dunce::canonicalize(cli_dir), dunce::canonicalize(&cwd_vault)) {
+        && match (
+            dunce::canonicalize(cli_dir),
+            dunce::canonicalize(&cwd_vault),
+        ) {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         };
