@@ -622,13 +622,15 @@ impl HyaloLintEngine {
 
                 let sev = effective_severity(rule_id);
                 for v in violations {
-                    // MD047's own fix positions don't survive translation to
-                    // byte offsets for the common "N trailing newlines" case
-                    // (see `md047_fix`) — compute it directly instead.
-                    let fix = if *rule_id == "MD047" {
+                    // Upstream MD047 hard-codes "\n" for the missing-EOF-newline
+                    // insertion and never fires on CRLF files with extra
+                    // trailing blank lines (see `md047_fix`), so CRLF bodies
+                    // still need the local computation. LF bodies take the
+                    // upstream fix, which is exact since 0.16.0.
+                    let fix = if *rule_id == "MD047" && body_content.contains("\r\n") {
                         md047_fix(body_content)
                     } else {
-                        convert_fix(&v, body_content, rule_id)
+                        convert_fix(&v, body_content)
                     };
                     diagnostics.push(Diagnostic {
                         rule_id: rule_id.to_string(),
@@ -652,7 +654,7 @@ impl HyaloLintEngine {
                 .check(&doc)
                 .with_context(|| format!("running HYALO001 on {rel_path}"))?;
             for v in violations {
-                let fix = convert_fix(&v, body_content, "HYALO001");
+                let fix = convert_fix(&v, body_content);
                 diagnostics.push(Diagnostic {
                     rule_id: "HYALO001".to_owned(),
                     rule_name: v.rule_name.clone(),
@@ -691,154 +693,61 @@ impl HyaloLintEngine {
     }
 }
 
-/// Upstream rules disagree on what a `Fix` column means: some compute
-/// columns from byte lengths (`line.len() + 1` style — MD009, and our own
-/// HYALO001), others index into a `Vec<char>` and emit char positions (at
-/// least MD034 and MD011). Using the wrong unit on a line with multibyte
-/// UTF-8 lands the fix on the wrong byte offset and corrupts the file, so
-/// the walk must be chosen per rule. Only rules whose column math has been
-/// verified byte-based belong here; everything else gets the char-based
-/// walk, whose worst case is a dropped fix rather than corruption.
-fn rule_uses_byte_columns(rule_id: &str) -> bool {
-    matches!(rule_id, "MD009" | "HYALO001")
-}
-
-/// Convert an upstream `Fix` (line/column positions) to a byte-offset `DiagFix`.
+/// Convert an upstream `Fix` (line/column [`Position`]s) to a byte-offset
+/// [`DiagFix`].
 ///
-/// The column unit is selected per rule (see [`rule_uses_byte_columns`]).
-/// The conversion from line+column to byte offsets is best-effort; if
-/// conversion fails the fix is silently dropped (the violation is still
-/// reported without a fix).
-fn convert_fix(v: &mdbook_lint_core::Violation, content: &str, rule_id: &str) -> Option<DiagFix> {
-    let byte_columns = rule_uses_byte_columns(rule_id);
+/// Since mdbook-lint 0.16.0 (upstream PR #493, "Define exact autofix
+/// coordinates") `Fix` ranges are **exact and half-open** and `Position`
+/// columns are 1-based **Unicode-scalar** offsets within the line's content,
+/// with CRLF treated as atomic and line terminators never included
+/// implicitly. `Position::to_byte_offset` is the canonical checked
+/// conversion, so this function is a straight translation with no per-rule
+/// compensation: the pre-0.16 byte-column allowlist, the MD011 inclusive-end
+/// guard, the MD034 Liquid pull-back and the `line_len + 1`
+/// replace-vs-insert heuristic all became unnecessary and were deleted in
+/// iteration 196.
+///
+/// A position that cannot be resolved (out-of-range line/column, or an
+/// offset inside a CRLF pair) yields `None`; the violation is still reported,
+/// just without a fix.
+fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix> {
     let fix = v.fix.as_ref()?;
-    let start = line_col_to_byte(content, fix.start.line, fix.start.column, byte_columns)?;
-    let mut end = line_col_to_byte(content, fix.end.line, fix.end.column, byte_columns)?;
-    let mut replacement = fix.replacement.clone().unwrap_or_default();
-
-    // Upstream MD011 emits its end column as the 1-based position OF the
-    // closing ']' (its own source comments "+1 because end_pos is 0-based
-    // position of ']'"), i.e. inclusive — one short as an exclusive end, so
-    // applying the fix as-is leaves a stray ']' behind on every line, ASCII
-    // included. Extend the range by one, but only when the byte at `end`
-    // really is the ']' the range claims to cover, so a future upstream
-    // correction cannot make this overshoot.
-    if rule_id == "MD011" && content[end..].starts_with(']') {
-        end += 1;
+    let start = fix.start.to_byte_offset(content)?;
+    let end = fix.end.to_byte_offset(content)?;
+    // Half-open means `start <= end`; anything else is a malformed range and
+    // applying it would panic or corrupt the file, so drop the fix instead.
+    if end < start {
+        return None;
     }
-
-    // MD034 (no-bare-urls) wraps a detected bare URL in `<...>`. Upstream's URL
-    // boundary scan treats Liquid template syntax (`{% ... %}`, `{{ ... }}` —
-    // common in GitHub Docs) as part of the URL, so it swallows a trailing
-    // `{%`/`{{` into the autolink and produces `<https://…{%>` which then
-    // breaks the template. Pull the range (and its replacement) back to just
-    // before the Liquid opener so the autolink stops at the real URL and the
-    // template markup is left untouched.
-    if rule_id == "MD034"
-        && let Some(trimmed) = trim_md034_liquid(&replacement, content, start, end)
-    {
-        end = trimmed.end;
-        replacement = trimmed.replacement;
-    }
-
-    // Some upstream rules (MD009, MD023, ...) express "replace this whole
-    // line" with an end column of `line_len + 1` and a replacement that
-    // re-adds its own trailing '\n', expecting to consume the line's
-    // original terminator too. Translated through `line_col_to_byte`, that
-    // end column lands *on* the first byte of the terminator (CR on CRLF
-    // input, LF otherwise) rather than past it — so consuming only
-    // `[start, end)` leaves the original terminator in place and the
-    // replacement's own '\n' creates a duplicate blank line.
-    //
-    // Other rules (MD022, ...) use the *same* end-column shape to express a
-    // deliberate insertion: the replacement is the untouched original line
-    // plus an extra '\n', meant to add a new line while leaving the
-    // existing terminator alone. Tell the two apart by comparing the
-    // replacement (minus its trailing '\n') against the original
-    // `[start, end)` slice: identical means "insert before the terminator",
-    // different means "replace the line, including its terminator".
-    if let Some(without_nl) = replacement.strip_suffix('\n')
-        && content
-            .get(start..end)
-            .is_some_and(|orig| orig != without_nl)
-    {
-        let bytes = content.as_bytes();
-        if bytes.get(end) == Some(&b'\r') && bytes.get(end + 1) == Some(&b'\n') {
-            // CRLF terminator: consume both bytes and keep the replacement's
-            // ending CRLF-style so the fix doesn't flip the file to LF-only.
-            end += 2;
-            replacement.truncate(replacement.len() - 1);
-            replacement.push_str("\r\n");
-        } else if bytes.get(end) == Some(&b'\n') {
-            end += 1;
-        }
-    }
-
     Some(DiagFix {
         description: fix.description.clone(),
         start,
         end,
-        replacement,
+        replacement: fix.replacement.clone().unwrap_or_default(),
     })
 }
 
-/// Outcome of trimming a Liquid tag off the tail of an MD034 autolink fix.
-struct Md034Trim {
-    end: usize,
-    replacement: String,
-}
-
-/// If the MD034 `replacement` (`<URL>`) has swallowed a trailing Liquid tag
-/// (`{%` or `{{`), return a shortened `(end, replacement)` that stops the
-/// autolink just before the tag.
+/// Compute a corrected single-pass fix for MD047 (single-trailing-newline)
+/// on **CRLF** bodies, bypassing upstream's own `Fix` positions.
 ///
-/// `replacement` is expected to be `<...>`; `start..end` is its byte range in
-/// `content`. Returns `None` when there is no Liquid tag to trim (the common
-/// case — most URLs are clean), so the caller keeps upstream's fix untouched.
-fn trim_md034_liquid(
-    replacement: &str,
-    content: &str,
-    start: usize,
-    end: usize,
-) -> Option<Md034Trim> {
-    // Only handle the well-formed `<...>` shape upstream emits.
-    let inner = replacement.strip_prefix('<')?.strip_suffix('>')?;
-    // Earliest Liquid opener inside the wrapped URL.
-    let cut = ["{%", "{{"]
-        .iter()
-        .filter_map(|tag| inner.find(tag))
-        .min()?;
-    if cut == 0 {
-        // The whole "URL" is a Liquid tag — nothing real to autolink.
-        return None;
-    }
-    let trimmed_url = &inner[..cut];
-    // Recompute the byte range: the replacement covered `start..end`; the new
-    // range keeps the same start and drops the tail (`inner.len() - cut` bytes)
-    // that followed the URL, so the Liquid markup stays in the source verbatim.
-    let dropped = inner.len() - cut;
-    let new_end = end.checked_sub(dropped)?;
-    // Guard against a range that no longer lines up with the content.
-    if new_end < start || new_end > content.len() {
-        return None;
-    }
-    Some(Md034Trim {
-        end: new_end,
-        replacement: format!("<{trimmed_url}>"),
-    })
-}
-
-/// Compute a corrected single-pass fix for MD047 (single-trailing-newline),
-/// bypassing upstream's own `Fix` positions entirely.
+/// mdbook-lint 0.16.0 fixed the LF range arithmetic (upstream #486/#493), so
+/// LF bodies now go through [`convert_fix`] unchanged. Two CRLF gaps remain
+/// in the shipped 0.16.0 crate, both in `mdbook-lint-rulesets`
+/// `src/standard/md047.rs`:
 ///
-/// Upstream computes its "remove extra trailing newlines" fix range in
-/// line/column terms that, once translated to byte offsets via
-/// [`line_col_to_byte`], is a byte-for-byte no-op when the body has exactly
-/// two trailing newlines (so `--fix` would report "fixed" forever without
-/// the file ever changing) and only removes one newline per application
-/// otherwise. Compute the correct range directly against the body's byte
-/// length instead, so any number of trailing newlines converges to exactly
-/// one in a single application.
+/// 1. The missing-trailing-newline branch builds
+///    `Fix::insertion("Add newline at end of file", "\n", …)` with a
+///    hard-coded LF, which would flip the last line of a CRLF file to a bare
+///    LF.
+/// 2. `check_file_ending` counts trailing terminators with
+///    `content.chars().rev().take_while(|&c| c == '\n')`, which stops at the
+///    `\r` of the second-to-last CRLF — so a CRLF file with several trailing
+///    blank lines counts one terminator and the rule never fires.
+///
+/// (2) is a detection gap upstream owns; (1) is a fix-output gap this
+/// function compensates for. Kept as the documented exception required by
+/// iteration 196's acceptance criteria; re-check on the next mdbook-lint
+/// bump.
 fn md047_fix(body: &str) -> Option<DiagFix> {
     // Match the body's own line-ending style so the fix never flips a CRLF
     // file to LF (or vice versa).
@@ -888,42 +797,6 @@ fn md047_fix(body: &str) -> Option<DiagFix> {
     })
 }
 
-/// Convert a 1-based (line, column) pair to a 0-based byte offset.
-///
-/// `byte_columns` selects the column unit (see [`rule_uses_byte_columns`]):
-/// when `true`, columns are 1-based **byte** positions within the line
-/// (`line.len() - trailing + 1` style) and the walk advances by each
-/// character's UTF-8 byte length; when `false`, columns are 1-based **char**
-/// positions (`Vec<char>` indices) and the walk advances by one per
-/// character. Using the wrong unit on a multibyte line either drops the fix
-/// (byte target unreachable by char walk) or lands on the wrong byte
-/// (char target overshot by byte walk) — the latter corrupts content, which
-/// is why unverified rules default to the char walk.
-fn line_col_to_byte(
-    text: &str,
-    target_line: usize,
-    target_col: usize,
-    byte_columns: bool,
-) -> Option<usize> {
-    let mut cur_line = 1;
-    let mut cur_col = 1;
-    for (offset, ch) in text.char_indices() {
-        if cur_line == target_line && cur_col == target_col {
-            return Some(offset);
-        }
-        if ch == '\n' {
-            cur_line += 1;
-            cur_col = 1;
-        } else {
-            cur_col += if byte_columns { ch.len_utf8() } else { 1 };
-        }
-    }
-    if cur_line == target_line && cur_col == target_col {
-        Some(text.len())
-    } else {
-        None
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests

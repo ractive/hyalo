@@ -71,21 +71,31 @@ impl Rule for Hyalo001 {
                 continue;
             }
 
-            let col = line.len() - trimmed.len() + 1;
+            // `Position` columns are 1-based Unicode-scalar offsets into the
+            // line's content (mdbook-lint 0.16 coordinate contract), not byte
+            // offsets — a bare `[]` on a line containing multibyte text would
+            // otherwise resolve to the wrong byte range. The indent is ASCII
+            // whitespace, so its byte length doubles as a scalar count, but go
+            // through the checked upstream conversion anyway.
+            let indent = line.len() - trimmed.len();
+            let col = indent + 1;
             let replacement = build_replacement(trimmed);
-            let end_col = col + trimmed.len();
+
+            let start = Position::from_byte_offset_in_line(line_no, line, indent).unwrap_or(
+                Position {
+                    line: line_no,
+                    column: col,
+                },
+            );
+            // The replacement rewrites the whole trimmed remainder of the
+            // line, so the half-open range ends just before the terminator.
+            let end = Position::line_end(line_no, line);
 
             let fix = Fix {
                 description: "Replace bare `[]` with `- [ ]`".to_owned(),
                 replacement: Some(replacement),
-                start: Position {
-                    line: line_no,
-                    column: col,
-                },
-                end: Position {
-                    line: line_no,
-                    column: end_col,
-                },
+                start,
+                end,
             };
 
             // The line number is carried by the violation's `line` field and
