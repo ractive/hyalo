@@ -121,6 +121,14 @@ lines in text mode, a `"hints"` array in the JSON envelope). Read and follow the
 concrete next commands to explore deeper. Use `--no-hints` to suppress them, or `--jq` which
 suppresses hints automatically.
 
+**Check the `writes` marker before running a hint.** Read-only suggestions are prefixed `->`;
+a suggestion that modifies the vault or `.hyalo.toml` is prefixed `=>` and tagged `[writes]`
+(JSON: `"writes": true` on the hint object). Only the `->` ones are safe to run unattended:
+
+```bash
+hyalo find --tag rust --jq '[.hints[] | select(.writes | not) | .cmd]'
+```
+
 Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports.
 `--jq` requires JSON output; piping naturally produces JSON, so `--jq` works without
 an explicit `--format json` in most contexts:

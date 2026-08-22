@@ -9,6 +9,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
   and the `[links.auto]` auto-link settings.
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
+- **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
+  (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
+  built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every
+  mutating command with exit 1 (reads continue on defaults, with a `-q`-proof warning).
+- **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
+  `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
 - **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`

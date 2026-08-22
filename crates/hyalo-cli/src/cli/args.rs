@@ -211,7 +211,21 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
 pub(crate) struct Cli {
     /// Root directory for resolving all file and --glob paths.
     /// Default: "." (Override via .hyalo.toml)
-    #[arg(short, long, global = true)]
+    #[arg(
+        short,
+        long,
+        global = true,
+        long_help = concat!(
+            "Root directory for resolving all file and --glob paths. ",
+            "Default: \".\" (override via .hyalo.toml).\n\n",
+            "--dir names a VAULT, not a config file. Naming the directory .hyalo.toml already ",
+            "resolves to keeps that config in effect (the flag is redundant, and hyalo says so). ",
+            "Naming a different directory switches to that directory's own .hyalo.toml if it has ",
+            "one, else built-in defaults \u{2014} reported on stderr, because the config in your ",
+            "working directory then no longer applies.\n\n",
+            "Run `hyalo config --dir <path>` to see which config file an invocation would use."
+        )
+    )]
     pub dir: Option<PathBuf>,
 
     /// Output format: "json" or "text".
@@ -274,6 +288,10 @@ pub(crate) struct Cli {
     /// Useful in scripts or CI pipelines where warning noise is undesirable.
     /// Identical warnings are always deduplicated regardless of this flag;
     /// use `--quiet` to suppress them entirely.
+    ///
+    /// One exception: a `.hyalo.toml` that could not be parsed is always
+    /// reported. That warning means the run is using a different vault and a
+    /// different rule set than the config asked for, which is not noise.
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 

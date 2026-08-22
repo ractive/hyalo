@@ -69,6 +69,41 @@ and this project adheres to
 
 ### Changed
 
+- **BREAKING: `--dir` no longer discards `.hyalo.toml`** (iter-201). `--dir`
+  names a *vault*, not a config. When the path it resolves to is the one the
+  working directory's `.hyalo.toml` already points at (`dir = "kb"` +
+  `--dir kb`, the standard repo-root layout), that config now stays in effect;
+  previously hyalo reloaded `.hyalo.toml` from the *vault* directory instead,
+  found nothing there, and silently ran on built-in defaults — dropping the
+  schema, saved views, `[lint] ignore`, per-rule severity overrides,
+  `site_prefix` and the changelog path while printing "--dir is redundant".
+  A `lint --strict` CI gate written that way went vacuously green. When `--dir`
+  names a *different* tree the behaviour is unchanged (that tree's own
+  `.hyalo.toml`, else defaults), but hyalo now says so on stderr, naming the
+  file that took over. `hyalo config --dir <path>` reports the same resolution
+  and no longer returns `config_path: null` while a config is in effect.
+  **Migration:** runs that relied on `--dir` as a way to *ignore* the local
+  config now honor it; pass `--dir` to a directory outside the configured vault,
+  or move/rename the config, to get the old behaviour.
+- **BREAKING: a malformed `.hyalo.toml` blocks mutating commands** (iter-201).
+  One unknown key or type error anywhere in the file — including inside
+  `[links.auto]` — made the whole config unusable and hyalo fell back to *all*
+  defaults, `dir` included. `hyalo links auto --apply -q` could therefore
+  rewrite a completely different tree than the one configured, with the warning
+  suppressed. Writers (`set`, `remove`, `append`, `mv`, `new`, `task toggle`,
+  `views set`, `links fix/auto --apply`, `lint --fix`, …) now exit 1 with the
+  parse diagnostic and touch nothing; `--dry-run` invocations and `init`/`deinit`
+  are unaffected. Read-only commands still run on defaults, but keep the `dir`
+  value when it can be recovered from the file, and their config warning is no
+  longer suppressed by `--quiet`.
+- **Mutating drill-down hints are marked** (iter-201). `hyalo find` with two or
+  more filters suggests saving the query as a view — a command that writes
+  `.hyalo.toml` — and it was rendered in the same `-> hyalo …` list as read-only
+  drill-downs. Writing hints now use a `=>` arrow with a trailing `[writes]`
+  tag in text output and carry `"writes": true` in the JSON envelope, so "run
+  the hints" is safe advice again. An e2e gate runs every hint the CLI marks
+  read-only and fails if it changes a single byte of the vault or the config.
+
 - **`summary --help` now documents the `-n` divergence** (iter-195). `-n` means
   `--recent` on `summary` but `--limit` on `find` and `backlinks`. The semantics
   are deliberately unchanged — `--recent` caps only the "recently modified" list,
@@ -125,6 +160,12 @@ and this project adheres to
 
 ### Fixed
 
+- **`.hyalo.toml` is parsed once per run, not twice** (iter-201). The help
+  banner re-loaded the config the CLI had already resolved, so every invocation
+  paid a second parse and any config warning ended with a spurious
+  "1 additional identical warning(s) suppressed" line. The deprecation check for
+  the kebab-case `required-sections` key also re-parsed the whole file; it now
+  reads the already-parsed `[schema]` value.
 - **`links fix --apply` no longer breaks the links it rewrites** (iter-200).
   The writer emitted the *vault-relative* path of the repaired target, but the
   resolver reads a bare markdown destination as relative to the source file's

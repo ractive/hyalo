@@ -27,7 +27,7 @@ Then use target/release/hyalo to work with the documentation in `./hyalo-knowled
 - **Manage schemas**: `hyalo types list`, `hyalo types show <name>`, `hyalo types set <name> --required title,date`
 - Only fall back to Edit for body content changes (markdown prose) that hyalo can't handle
 - **Do NOT pass `--dir hyalo-knowledgebase/`** — `.hyalo.toml` already sets it as the default
-- **Follow hints**: hyalo outputs drill-down hints by default — read and follow them to navigate deeper into the knowledgebase. Use `--no-hints` only when you need raw output.
+- **Follow hints**: hyalo outputs drill-down hints by default — read and follow them to navigate deeper into the knowledgebase. Use `--no-hints` only when you need raw output. Hints prefixed `->` are read-only and safe to run; a `=>` prefix with a `[writes]` tag (JSON: `"writes": true`) means running it modifies the vault or `.hyalo.toml`.
 
 **Iteration file rules:**
 - Always name `iteration-NN-slug.md` — no standalone plan files

@@ -32,6 +32,58 @@ type = "enum"
 values = ["planned", "in-progress", "completed", "superseded"]
 ```
 
+## Config resolution: which `.hyalo.toml` applies
+
+hyalo reads **one** `.hyalo.toml` per run — the one in the current working
+directory. It does not merge configs and does not walk up the directory tree.
+`dir` inside that file names the vault, resolved relative to the config file, so
+the standard layout is a config at the repo root and a vault in a subdirectory:
+
+```text
+my-project/
+  .hyalo.toml        # dir = "kb"  → this is the config in effect
+  kb/                # the vault
+```
+
+### What `--dir` does
+
+| Invocation | Config in effect | Vault |
+| --- | --- | --- |
+| `hyalo lint` (from `my-project/`) | `my-project/.hyalo.toml` | `kb/` |
+| `hyalo lint --dir kb` | `my-project/.hyalo.toml` | `kb/` |
+| `hyalo lint --dir other` | `other/.hyalo.toml` if it exists, else built-in defaults | `other/` |
+
+`--dir` names a **vault**, not a config. When it resolves to the directory the
+config already points at, the config keeps applying and hyalo emits a one-time
+`note:` that the flag is redundant. When it names a different tree, the CWD
+config no longer applies and hyalo says so on stderr, naming the config file
+that took over (or reporting that it is running on built-in defaults).
+
+> **Changed in 0.21.0.** `--dir <configured-vault>` used to *discard* the
+> config: schema, saved views, `[lint] ignore`, per-rule severity overrides and
+> `site_prefix` were all silently dropped, which could turn a `lint --strict` CI
+> gate vacuously green. Run `hyalo config --dir <path>` to see exactly which
+> file is in effect for any invocation.
+
+### When `.hyalo.toml` cannot be parsed
+
+An unknown key or a type error anywhere in the file — including inside
+`[links.auto]` or `[schema.*]` — makes the whole file unusable. hyalo then:
+
+- prints the parse diagnostic (with line, column and the accepted key names).
+  This warning is **not** suppressed by `--quiet`: a config that stopped
+  applying changes which vault and which rules a command uses, so it is not
+  chatter;
+- **refuses mutating commands** (`set`, `remove`, `append`, `mv`, `new`,
+  `task toggle`, `views set`, `links auto --apply`, `lint --fix`, …) with exit
+  code 1, writing nothing. `--dry-run` invocations are unaffected;
+- lets read-only commands continue on built-in defaults, keeping the `dir` value
+  if it can still be recovered from the file, so reads stay inside the vault you
+  configured.
+
+`hyalo init` and `hyalo deinit` are never blocked — they are how a broken config
+gets repaired.
+
 ## Case-insensitive link resolution
 
 `[links] case_insensitive` controls whether a link whose target differs only in
@@ -162,7 +214,25 @@ When you run hyalo from a directory that has a `.hyalo.toml`, it becomes _contex
 - **`hyalo summary`** includes the resolved `kb dir:` as its first output line. The `--format json` envelope exposes the same value as a top-level `dir` field alongside `total`, `tags`, `properties`, etc.
 - **`hyalo config`** prints the full resolved configuration — handy for debugging `.hyalo.toml` resolution or feeding config into an LLM context. `--format json` uses the standard envelope, so `hyalo config --jq '.results.dir'` works like it does everywhere else; the config's own hints switch is reported as `results.hints_enabled` so it never collides with the envelope's `hints` array. `dir` is also hoisted to the envelope root.
 - Running from _inside_ the vault directory emits a warning banner suggesting you `cd ..` to the project root so hyalo can find `.hyalo.toml`.
-- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time `note:` that `--dir` is redundant.
+- Passing `--dir <path>` when it already matches `.hyalo.toml` emits a one-time `note:` that `--dir` is redundant. The config still applies — see [Config resolution](#config-resolution-which-hyalotoml-applies).
+
+## Drill-down hints
+
+Commands append a short list of follow-up commands unless `hints = false` (or
+`--no-hints`) is set. Read-only suggestions use `->`; a suggestion that would
+**write** to the vault or to `.hyalo.toml` uses `=>` and is tagged `[writes]`:
+
+```text
+  -> hyalo find --property status=draft --tag rust  # Narrow by tag: rust (3 files)
+  => hyalo views set draft-rust --property status=draft --tag rust  # Save this query as a view [writes]
+```
+
+In `--format json` every hint object carries a boolean `writes` field, so an
+agent can execute the read-only ones unattended:
+
+```sh
+hyalo find --tag rust --format json --jq '[.hints[] | select(.writes | not) | .cmd]'
+```
 
 ## Snapshot index
 
