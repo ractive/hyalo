@@ -830,6 +830,85 @@ fn split_target_and_fragment(target: &str) -> (&str, Option<String>) {
 mod tests {
     use super::*;
 
+    // --- inert link zones (iter-200) ---
+
+    /// Whether `needle`'s first occurrence in `line` falls inside an inert zone.
+    fn needle_is_inert(line: &str, needle: &str) -> bool {
+        let start = line.find(needle).expect("needle must occur in line");
+        let zones = inert_link_zones(line);
+        overlaps_zone(&zones, start, start + needle.len())
+    }
+
+    #[test]
+    fn inert_zone_covers_external_markdown_destination() {
+        assert!(needle_is_inert(
+            "Link: [x](https://pkg.go.dev/x/actions.summerwind.net/v1)",
+            "net"
+        ));
+    }
+
+    #[test]
+    fn inert_zone_covers_internal_markdown_link_and_label() {
+        assert!(needle_is_inert("See [read about net](other.md) here", "net"));
+        assert!(needle_is_inert("See [label](sub/net.md) here", "net.md"));
+    }
+
+    #[test]
+    fn inert_zone_covers_bare_urls_and_autolinks() {
+        assert!(needle_is_inert("Bare: https://example.net/path here", "net"));
+        assert!(needle_is_inert("Auto: <https://example.net/p>", "net"));
+        assert!(needle_is_inert("Mail: mailto:a@example.net now", "net"));
+        assert!(needle_is_inert("Site: www.example.net/x", "net"));
+    }
+
+    #[test]
+    fn inert_zone_covers_wikilinks() {
+        assert!(needle_is_inert("See [[sub/net|the net]] here", "net"));
+    }
+
+    #[test]
+    fn inert_zone_leaves_plain_prose_alone() {
+        assert!(!needle_is_inert("A plain net mention", "net"));
+        // A mention after a URL on the same line is still linkable.
+        assert!(!needle_is_inert("See https://example.com/x then net", "net"));
+        // Trailing sentence punctuation is outside the URL zone.
+        let line = "See https://example.com/x. net follows";
+        let start = line.rfind("net").unwrap();
+        assert!(!overlaps_zone(&inert_link_zones(line), start, start + 3));
+    }
+
+    #[test]
+    fn inert_zone_does_not_treat_a_word_ending_in_a_scheme_as_a_url() {
+        // `xhttps://` must not start a URL run — the boundary check rejects it.
+        let line = "notahttps://example.net";
+        let zones = inert_link_zones(line);
+        assert!(
+            zones.is_empty(),
+            "no URL run should start mid-word: {zones:?}"
+        );
+    }
+
+    #[test]
+    fn inert_zone_handles_multibyte_lines() {
+        // Byte-indexed scanning must never slice a multibyte char.
+        let line = "日本語 テキスト [x](https://example.net/日本) 末尾 net";
+        let zones = inert_link_zones(line);
+        let tail = line.rfind("net").unwrap();
+        assert!(!overlaps_zone(&zones, tail, tail + 3));
+        let inside = line.find("example.net").unwrap() + "example.".len();
+        assert!(overlaps_zone(&zones, inside, inside + 3));
+    }
+
+    #[test]
+    fn inert_zone_ranges_are_ascending_and_disjoint() {
+        let line = "[a](x.md) plain https://e.example/z and [[w]] end";
+        let zones = inert_link_zones(line);
+        assert!(zones.len() >= 3, "expected three zones: {zones:?}");
+        for pair in zones.windows(2) {
+            assert!(pair[0].1 <= pair[1].0, "zones must be disjoint: {zones:?}");
+        }
+    }
+
     // --- .md suffix stripping (Obsidian compatibility) ---
 
     #[test]

@@ -1654,6 +1654,266 @@ See [broken](old-name.md) here.
         assert_eq!(report.broken[2].line, 3);
     }
 
+    // -----------------------------------------------------------------
+    // iter-200 H-1: emission must round-trip through the read-side resolver
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn emit_site_absolute_target_stays_site_absolute() {
+        // Dogfood H-1 minimal repro: `/how-tos/old-home/moved-page` in
+        // `docs/page.md`, real file at `how-tos/new-home/moved-page.md`.
+        // Dropping the leading `/` produced a target the resolver reads as
+        // relative to `docs/`, i.e. permanently broken.
+        let emitted = emit_markdown_fix_target(
+            "/how-tos/old-home/moved-page",
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None,
+        );
+        assert_eq!(emitted, "/how-tos/new-home/moved-page");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn emit_site_absolute_preserves_authors_site_prefix() {
+        let emitted = emit_markdown_fix_target(
+            "/docs/old/page.md",
+            "new/page.md",
+            "sub/linker.md",
+            Some("docs"),
+        );
+        assert_eq!(emitted, "/docs/new/page.md");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "new/page.md",
+            "sub/linker.md",
+            Some("docs")
+        ));
+    }
+
+    #[test]
+    fn emit_site_absolute_does_not_inject_a_derived_site_prefix() {
+        // `site_prefix` is auto-derived from the vault directory name when
+        // nothing is configured; a link the author wrote without it must not
+        // grow one (dogfood L-11).
+        let emitted = emit_markdown_fix_target(
+            "/how-tos/old/page",
+            "how-tos/new/page.md",
+            "index.md",
+            Some("my-vault"),
+        );
+        assert_eq!(emitted, "/how-tos/new/page");
+    }
+
+    #[test]
+    fn emit_relative_target_is_relative_to_the_source_directory() {
+        // A vault-relative target written verbatim into a nested file is the
+        // same H-1 asymmetry without the leading slash.
+        let emitted = emit_markdown_fix_target("../c/target.md", "z/target.md", "a/b/page.md", None);
+        assert_eq!(emitted, "../../z/target.md");
+        assert!(markdown_fix_round_trips(
+            &emitted,
+            "z/target.md",
+            "a/b/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn emit_preserves_md_suffix_style() {
+        assert_eq!(
+            emit_markdown_fix_target("wrong", "sub/right.md", "index.md", None),
+            "sub/right"
+        );
+        assert_eq!(
+            emit_markdown_fix_target("wrong.md", "sub/right.md", "index.md", None),
+            "sub/right.md"
+        );
+    }
+
+    #[test]
+    fn round_trip_guard_rejects_vault_relative_emission_from_a_nested_source() {
+        // The pre-iter-200 writer emitted exactly this: the vault-relative
+        // path, verbatim, from a nested source. The guard must reject it.
+        assert!(!markdown_fix_round_trips(
+            "how-tos/new-home/moved-page",
+            "how-tos/new-home/moved-page.md",
+            "docs/page.md",
+            None
+        ));
+    }
+
+    #[test]
+    fn round_trip_guard_accepts_wikilink_path_and_short_forms() {
+        assert!(wikilink_fix_round_trips("sub/note", "sub/note.md"));
+        assert!(wikilink_fix_round_trips("note", "sub/note.md"));
+        assert!(!wikilink_fix_round_trips("other", "sub/note.md"));
+    }
+
+    #[test]
+    fn apply_fixes_site_absolute_link_resolves_after_rewrite() {
+        let tmp = vault_with_files(&[
+            (
+                "docs/page.md",
+                "See [AUTOTITLE](/how-tos/old-home/moved-page) here.\n",
+            ),
+            ("how-tos/new-home/moved-page.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "docs/page.md".to_string(),
+            line: 1,
+            old_target: "/how-tos/old-home/moved-page".to_string(),
+            new_target: "how-tos/new-home/moved-page.md".to_string(),
+            strategy: FixStrategy::BasenameFallback,
+            confidence: BASENAME_FALLBACK_CONFIDENCE,
+        }];
+
+        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        assert_eq!(plans.len(), 1);
+        assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
+        assert!(rejected.is_empty(), "unexpected rejected: {rejected:?}");
+
+        let written = fs::read_to_string(tmp.path().join("docs").join("page.md")).unwrap();
+        assert!(
+            written.contains("[AUTOTITLE](/how-tos/new-home/moved-page)"),
+            "site-absolute form must survive the rewrite, got: {written}"
+        );
+
+        // The rewritten link must actually resolve.
+        let canonical = crate::discovery::canonicalize_vault_dir(tmp.path()).unwrap();
+        assert_eq!(
+            crate::discovery::resolve_target(
+                &canonical,
+                "/how-tos/new-home/moved-page",
+                None,
+                None
+            )
+            .as_deref(),
+            Some("how-tos/new-home/moved-page.md"),
+            "rewritten target must resolve"
+        );
+    }
+
+    #[test]
+    fn apply_fixes_refuses_a_fix_whose_emitted_target_would_not_resolve() {
+        // Stand-in for any future writer/resolver asymmetry: a `new_target`
+        // whose text the resolver normalizes to something else. The guard must
+        // turn that into a refusal (reported as unfixable) rather than a
+        // corrupted link.
+        let tmp = vault_with_files(&[
+            ("index.md", "See [text](wrong.md) for details.\n"),
+            ("b.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrong.md".to_string(),
+            new_target: "a/../b.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        assert!(plans.is_empty(), "nothing may be written: {plans:?}");
+        assert!(unapplied.is_empty(), "not a stale-text case: {unapplied:?}");
+        assert_eq!(rejected.len(), 1, "guard must reject the fix: {rejected:?}");
+
+        let written = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+        assert_eq!(
+            written, "See [text](wrong.md) for details.\n",
+            "file must be untouched"
+        );
+    }
+
+    #[test]
+    fn dry_run_reports_the_same_guard_rejection_as_apply() {
+        let tmp = vault_with_files(&[
+            ("index.md", "See [text](wrong.md) for details.\n"),
+            ("b.md", ""),
+        ]);
+
+        let fixes = vec![FixPlan {
+            source: "index.md".to_string(),
+            line: 1,
+            old_target: "wrong.md".to_string(),
+            new_target: "a/../b.md".to_string(),
+            strategy: FixStrategy::ShortestPath,
+            confidence: 0.95,
+        }];
+
+        let (would_modify, unapplied, rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        assert!(would_modify.is_empty(), "nothing would change");
+        assert!(unapplied.is_empty());
+        assert_eq!(rejected.len(), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-200 M-1: site-absolute basename guesses are gated
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn site_absolute_basename_match_is_a_gated_fallback() {
+        let matcher = LinkMatcher::new(
+            make_files(&["actions/index.md", "graphql/reference/actions.md"]),
+            0.85,
+        );
+        let result = matcher
+            .find_match("/actions", "index.md")
+            .expect("basename match still found");
+        assert!(
+            matches!(result.strategy, FixStrategy::BasenameFallback),
+            "site-absolute basename guess must not masquerade as a certain fix: {:?}",
+            result.strategy
+        );
+        assert!(
+            result.confidence < 1.0,
+            "a guess must not claim confidence 1.0"
+        );
+    }
+
+    #[test]
+    fn relative_basename_match_stays_shortest_path() {
+        let matcher = LinkMatcher::new(make_files(&["z/target.md"]), 0.85);
+        let result = matcher
+            .find_match("../c/target.md", "a/b/page.md")
+            .expect("basename match found");
+        assert!(matches!(result.strategy, FixStrategy::ShortestPath));
+    }
+
+    #[test]
+    fn site_absolute_case_mismatch_is_a_certain_fix() {
+        // Before iter-200 the leading `/` made every strategy but the basename
+        // guess unreachable for site-absolute targets.
+        let matcher = LinkMatcher::new(make_files(&["how-tos/moved-page.md"]), 0.85);
+        let result = matcher
+            .find_match("/how-tos/Moved-Page", "a/b/page.md")
+            .expect("case-insensitive match found");
+        assert!(
+            matches!(result.strategy, FixStrategy::CaseInsensitive),
+            "expected a certain case fix, got {:?}",
+            result.strategy
+        );
+        assert_eq!(result.matched_file, "how-tos/moved-page.md");
+    }
+
+    #[test]
+    fn site_prefix_is_stripped_before_matching() {
+        let matcher =
+            LinkMatcher::with_site_prefix(make_files(&["how-tos/page.md"]), 0.85, Some("docs"));
+        let result = matcher
+            .find_match("/docs/how-tos/Page", "index.md")
+            .expect("prefixed site-absolute target must match");
+        assert_eq!(result.matched_file, "how-tos/page.md");
+    }
+
     // --- apply_fixes: wikilink rewrite ---
 
     #[test]
