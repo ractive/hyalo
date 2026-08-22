@@ -23,8 +23,10 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
   rather than replacing them, and a run whose config exclusions removed candidates reports
   `config_excluded`. `--no-first-only` forces first-only OFF for one run when the config
-  persists `first_only = true`. When a proposed link comes from a page titled with a common English word,
-  a stderr `note:` names it with its match count — act on it or silence it with
+  persists `first_only = true`. When a candidate title looks noisy — an ordinary English word,
+  or unusually frequent (>= 25 matches and >= 2.5% of the run, which also catches non-English
+  titles) — a stderr `note:` names it with its match count and share, and suggests
+  `--exclude-title` for every offender; act on it or silence it with
   `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)

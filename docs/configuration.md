@@ -18,7 +18,7 @@ case_insensitive = "auto"                             # "auto", "true", or "fals
 exclude_titles = ["permissions", "README"]            # titles hyalo links auto never links
 exclude_target_globs = ["templates/*"]                # pages hyalo links auto never links to
 first_only = true                                     # link only the first mention per file
-warn_common_titles = true                             # note when a candidate title is a common word
+warn_common_titles = true                             # note when a candidate title looks noisy
 
 [schema.default]
 required = ["title"]
@@ -127,7 +127,7 @@ every invocation. `[links.auto]` persists them per vault:
 exclude_titles = ["permissions", "README", "index"]   # like --exclude-title (case-insensitive)
 exclude_target_globs = ["templates/*"]                # like --exclude-target-glob (case-insensitive)
 first_only = true                                     # like --first-only
-warn_common_titles = false                            # opt out of the common-word note
+warn_common_titles = false                            # opt out of the noisy-title note
 ```
 
 Merge rules with the CLI flags:
@@ -161,20 +161,40 @@ line in text output. `hyalo config` prints the effective settings as
 `links.auto.first_only` / `links.auto.warn_common_titles` (and
 `results.links_auto` in JSON).
 
-### The common-word title note
+### The noisy candidate title note
 
 Exclusions only help once you have noticed the noise. On a first run, `hyalo
-links auto` also checks whether any proposed link came from a page whose title
-is an ordinary English word or a generic doc filename (`permissions`, `index`,
-`notes`, `README`) and, if so, prints one advisory line on stderr:
+links auto` also looks at the links it is about to propose and, if any of them
+come from a title that looks like a source of over-linking, prints one advisory
+line on stderr:
 
 ```text
-note: 2 auto-link candidate titles are common English words and account for 31 of 33
-proposed links: "permissions" (24×), "index" (7×). If those are prose mentions rather
-than deliberate references, skip them with --exclude-title permissions
---exclude-title index — or persist them once under [links.auto] exclude_titles in
-.hyalo.toml. Silence this note with --no-warn-common-titles.
+note: 3 auto-link candidate titles are common English words or unusually frequent and
+account for 588 of 1179 proposed links (showing the 5 noisiest of 7): "Workflows"
+(502×, 43%, unusually frequent), "limits" (46×, common English word), "runner groups"
+(45×, 4%, unusually frequent). If those are prose mentions rather than deliberate
+references, skip them with --exclude-title Workflows --exclude-title limits
+--exclude-title 'runner groups' — or persist them once under [links.auto]
+exclude_titles in .hyalo.toml. Silence this note with --no-warn-common-titles.
 ```
+
+Two independent triggers put a title in that list:
+
+- **Common English word.** The title is an ordinary English word or a generic
+  doc filename (`permissions`, `index`, `notes`, `README`). The list lives in
+  `hyalo-core::common_words` — bundled, no dependency — and covers regular
+  plurals, so `permissions` matches the stored `permission`. Titles shorter
+  than 3 characters are never classified; `--min-length` already excludes them.
+  Being an English word list, it only ever matches ASCII titles.
+- **Unusually frequent.** The title produced at least **25** proposed links
+  *and* at least **2.5%** of the run — `max(25, ceil(total / 40))` matches, so
+  the absolute floor governs runs below 1,000 links and the share governs
+  larger ones. This trigger is purely arithmetic and therefore
+  language-independent: a German or Japanese vault gets the note too.
+
+A title flagged by both is labelled as both. When every offender was flagged
+for the same reason the note states it once in the opening clause instead of
+repeating it per entry.
 
 Properties of the check, all deliberate:
 
@@ -184,13 +204,15 @@ Properties of the check, all deliberate:
   run are named. Excluding them — by flag or config — removes the note.
 - **Match-count honest.** The counts quoted are the links being offered, not an
   estimate over the title inventory.
+- **One paste-back is enough.** The prose list stops at the five noisiest and
+  says so (`showing the 5 noisiest of 7`), but the suggested `--exclude-title`
+  flags cover *every* offender.
+- **Spelled the way your vault spells it.** A title is displayed in its most
+  frequent original casing (`README`, not `readme`), while matching and
+  exclusion stay case-insensitive.
 - **Silenced by `-q`** like every other note, or permanently by
-  `warn_common_titles = false`.
-- **Bundled word list, no dependency.** The list lives in
-  `hyalo-core::common_words` and covers high-frequency English words (plus
-  regular plurals, so `permissions` matches the stored `permission`) and generic
-  doc filenames. Titles shorter than 3 characters are never classified —
-  `--min-length` already excludes them.
+  `warn_common_titles = false`. One key governs both triggers; there are no
+  configurable thresholds.
 
 `hyalo links fix` has a similar per-invocation filter spelled
 `--ignore-target <substring>`. It matches link *targets* by substring rather
