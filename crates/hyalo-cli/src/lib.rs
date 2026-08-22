@@ -6,6 +6,7 @@ mod dispatch;
 mod error;
 pub mod hints;
 mod list_commands;
+mod mutation;
 pub mod output;
 mod output_pipeline;
 mod run;

@@ -204,7 +204,7 @@ struct ConfigFile {
 }
 
 /// Resolved configuration with all defaults applied.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedDefaults {
     pub(crate) dir: PathBuf,
     /// The directory where `.hyalo.toml` was found.  Views and types are stored
@@ -272,6 +272,16 @@ pub(crate) struct ResolvedDefaults {
     /// `false` when the file was missing, unreadable, or malformed (in which
     /// case all other fields are hardcoded defaults).
     pub(crate) loaded_from_file: bool,
+    /// The parse/read diagnostic when a `.hyalo.toml` **existed** but could not
+    /// be used, `None` otherwise (iter-201, M-2).
+    ///
+    /// A missing file is not an error — it is the "no config" case and leaves
+    /// this `None`. A file that is present but unusable is different in kind:
+    /// every setting the user wrote (`dir`, `[lint] ignore`, schema, views) is
+    /// gone, so a mutating command run in that state would operate on a vault
+    /// and a rule set the user never configured. Callers use this to refuse the
+    /// run instead of silently proceeding on defaults.
+    pub(crate) malformed: Option<String>,
     /// Active conformance profiles from `[lint] profiles` (or the deprecated
     /// `[lint] profile` alias) in `.hyalo.toml` (e.g. `["okf", "madr"]`).
     /// Enables every listed profile's advisory lint rules for plain
@@ -323,6 +333,7 @@ impl ResolvedDefaults {
             auto_link_warn_common_titles: true,
             lint_strict: false,
             loaded_from_file: false,
+            malformed: None,
             lint_profiles: Vec::new(),
         }
     }
@@ -334,6 +345,32 @@ impl ResolvedDefaults {
             ..Self::hardcoded()
         }
     }
+
+    /// Defaults for a directory whose `.hyalo.toml` exists but is unusable.
+    ///
+    /// Records `diagnostic` in [`ResolvedDefaults::malformed`] so writers can
+    /// refuse the run, and salvages the `dir` key when a lenient re-read can
+    /// still find it. Salvaging `dir` matters even though every other setting
+    /// is lost: it keeps read-only commands pointed at the vault the user
+    /// configured instead of silently re-rooting them at the config directory.
+    fn unusable_for(dir: &Path, diagnostic: String, salvaged_dir: Option<PathBuf>) -> Self {
+        Self {
+            dir: salvaged_dir.unwrap_or_else(|| PathBuf::from(".")),
+            malformed: Some(diagnostic),
+            ..Self::defaults_for(dir)
+        }
+    }
+}
+
+/// Best-effort extraction of the `dir` key from a `.hyalo.toml` that failed the
+/// strict parse.
+///
+/// Used only on the error path. Returns `None` when the text is not even valid
+/// TOML syntax, or when `dir` is absent or not a string.
+fn salvage_dir(contents: &str) -> Option<PathBuf> {
+    let raw: toml::Value = toml::from_str(contents).ok()?;
+    let dir = raw.get("dir")?.as_str()?;
+    Some(PathBuf::from(dir))
 }
 
 /// Load configuration from `.hyalo.toml` in the current working directory.
@@ -368,13 +405,16 @@ fn parse_case_insensitive_mode(raw: Option<&str>) -> anyhow::Result<CaseInsensit
 
 /// Load configuration from `.hyalo.toml` inside `dir`.
 ///
-/// Walks `[schema.types.*]` tables in a parsed `.hyalo.toml` looking for a real
-/// `required-sections` key (the deprecated kebab-case alias). Used to gate the
-/// deprecation warning so we don't false-positive on the string appearing in a
-/// comment, doc string, or unrelated value.
-fn schema_table_has_required_sections_key(raw: &toml::Value) -> bool {
-    let Some(types) = raw
-        .get("schema")
+/// Walks `types.*` tables inside the already-parsed `[schema]` value looking for
+/// a real `required-sections` key (the deprecated kebab-case alias). Used to
+/// gate the deprecation warning so we don't false-positive on the string
+/// appearing in a comment, doc string, or unrelated value.
+///
+/// Takes the `[schema]` value out of the parsed [`ConfigFile`] rather than a
+/// second `toml::from_str` of the file text: the loader used to parse every
+/// `.hyalo.toml` twice just to run this check (iter-201, M-2 double-parse).
+fn schema_table_has_required_sections_key(schema: Option<&toml::Value>) -> bool {
+    let Some(types) = schema
         .and_then(|s| s.get("types"))
         .and_then(toml::Value::as_table)
     else {
@@ -397,30 +437,33 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             return ResolvedDefaults::defaults_for(dir);
         }
         Err(e) => {
-            crate::warn::warn(format!("could not read .hyalo.toml: {e}"));
-            return ResolvedDefaults::defaults_for(dir);
+            // The file exists but cannot be read — a config-integrity problem,
+            // so the warning is not suppressible by `-q` (iter-201, M-2).
+            let diagnostic = format!("could not read .hyalo.toml: {e}");
+            crate::warn::warn_always(&diagnostic);
+            return ResolvedDefaults::unusable_for(dir, diagnostic, None);
         }
     };
-
-    // Deprecation: warn when the kebab-case `required-sections` key is used.
-    // The canonical key is `required_sections`; the alias is kept for one release.
-    // Parse as generic TOML so a string value or comment containing the literal
-    // text "required-sections" doesn't trigger a false positive.
-    if let Ok(raw) = toml::from_str::<toml::Value>(&contents)
-        && schema_table_has_required_sections_key(&raw)
-    {
-        crate::warn::warn(
-            "deprecated: 'required-sections' in .hyalo.toml — rename to 'required_sections'",
-        );
-    }
 
     let mut cfg: ConfigFile = match toml::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {
-            crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
-            return ResolvedDefaults::defaults_for(dir);
+            let diagnostic = format!("malformed .hyalo.toml: {e}");
+            crate::warn::warn_always(&diagnostic);
+            return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
         }
     };
+
+    // Deprecation: warn when the kebab-case `required-sections` key is used.
+    // The canonical key is `required_sections`; the alias is kept for one
+    // release. Checked against the already-parsed `[schema]` value (which the
+    // loader keeps as raw TOML), so a string value or comment containing the
+    // literal text "required-sections" still cannot trigger a false positive.
+    if schema_table_has_required_sections_key(cfg.schema.as_ref()) {
+        crate::warn::warn(
+            "deprecated: 'required-sections' in .hyalo.toml — rename to 'required_sections'",
+        );
+    }
 
     // Warn when the resolved config points its `dir` at a subdirectory that
     // itself contains a `.hyalo.toml`. The inner file is shadowed by this
@@ -523,6 +566,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         auto_link_warn_common_titles: links_auto.warn_common_titles.unwrap_or(true),
         lint_strict,
         loaded_from_file: true,
+        malformed: None,
         lint_profiles,
     }
 }
@@ -731,6 +775,124 @@ pub(crate) fn overlay_scan_include(config_dir: &Path, profile_name: &str) -> Vec
         return Vec::new();
     };
     cfg.scan.map(|s| s.include).unwrap_or_default()
+}
+
+/// Where a run's effective configuration came from, and what an explicit
+/// `--dir` did to it.
+///
+/// Built by [`resolve_effective`], which is the single place that answers "which
+/// `.hyalo.toml` governs this invocation?". Before iter-201 that question had
+/// two different answers — one in `run.rs` and one in `hyalo config` — and both
+/// of them discarded the caller's config whenever `--dir` was present.
+pub(crate) struct EffectiveConfig {
+    /// The settings the run must use.
+    pub(crate) config: ResolvedDefaults,
+    /// The vault directory to operate on.
+    pub(crate) dir: PathBuf,
+    /// The `.hyalo.toml` actually in effect, or `None` when the run is on
+    /// built-in defaults. Never `None` while a config file was read — that
+    /// mismatch is exactly what made `hyalo config --dir X` lie.
+    pub(crate) config_path: Option<PathBuf>,
+    /// `true` when `--dir` named precisely the vault the CWD config already
+    /// resolves to. The config still applies; the flag was just noise.
+    pub(crate) dir_redundant: bool,
+    /// `true` when `--dir` selected a *different* vault and the CWD did have a
+    /// `.hyalo.toml`, so that file no longer applies to this run.
+    pub(crate) cwd_config_shadowed: bool,
+}
+
+/// Path of the `.hyalo.toml` in `dir`, or `None` when there is no file there.
+fn config_file_in(dir: &Path) -> Option<PathBuf> {
+    let path = dir.join(".hyalo.toml");
+    path.is_file().then_some(path)
+}
+
+/// Resolve the configuration that governs a run.
+///
+/// `cwd_config` is the already-loaded config for the process working directory;
+/// `cli_dir` is the explicit `--dir` value, if any.
+///
+/// The `--dir` semantics (iter-201, H-4):
+///
+/// - **No `--dir`** — the CWD config applies, vault = its `dir`.
+/// - **`--dir` naming the same directory the CWD config resolves to** — the CWD
+///   config *still applies*. Previously hyalo reloaded `.hyalo.toml` from the
+///   vault directory instead, which for the overwhelmingly common layout
+///   (`dir = "docs"`, config at the repo root) meant no config at all: schema,
+///   views, `[lint] ignore`, severity overrides and `site_prefix` were dropped
+///   while the CLI printed "--dir is redundant". `lint --dir <same> --strict`
+///   went vacuously green in CI as a result.
+/// - **`--dir` naming a different directory** — that directory's own
+///   `.hyalo.toml` applies if it has one, else built-in defaults. The caller
+///   announces which, because this is the case where the user's config really
+///   does stop applying.
+pub(crate) fn resolve_effective(
+    cwd_config: ResolvedDefaults,
+    cli_dir: Option<&Path>,
+) -> EffectiveConfig {
+    let cwd_config_path = config_file_in(&cwd_config.config_dir);
+
+    let Some(cli_dir) = cli_dir else {
+        let dir = cwd_config.dir.clone();
+        return EffectiveConfig {
+            config: cwd_config,
+            dir,
+            config_path: cwd_config_path,
+            dir_redundant: false,
+            cwd_config_shadowed: false,
+        };
+    };
+
+    // "Same vault" is decided on canonicalized paths so `--dir ./kb`,
+    // `--dir kb/` and an absolute path all count as the configured vault.
+    let cwd_vault = cwd_config.config_dir.join(&cwd_config.dir);
+    let same_vault = cwd_config.loaded_from_file
+        && match (dunce::canonicalize(cli_dir), dunce::canonicalize(&cwd_vault)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+
+    if same_vault {
+        return EffectiveConfig {
+            config: cwd_config,
+            dir: cli_dir.to_path_buf(),
+            config_path: cwd_config_path,
+            dir_redundant: true,
+            cwd_config_shadowed: false,
+        };
+    }
+
+    let target = load_config_from(cli_dir);
+    EffectiveConfig {
+        config: target,
+        dir: cli_dir.to_path_buf(),
+        config_path: config_file_in(cli_dir),
+        dir_redundant: false,
+        cwd_config_shadowed: cwd_config_path.is_some(),
+    }
+}
+
+/// The stderr note that names the configuration a `--dir` override switched to.
+///
+/// Returns `None` when nothing was switched away from (no `--dir`, a redundant
+/// `--dir`, or a CWD with no config to lose). Kept as a pure function so the
+/// exact wording is unit-testable without spawning a process.
+pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
+    if !effective.cwd_config_shadowed {
+        return None;
+    }
+    let dir = effective.dir.display();
+    Some(match &effective.config_path {
+        Some(path) => format!(
+            "--dir {dir} selects a different vault: ./.hyalo.toml does not apply, \
+             {} is in effect",
+            path.display()
+        ),
+        None => format!(
+            "--dir {dir} selects a different vault: ./.hyalo.toml does not apply and \
+             {dir} has no .hyalo.toml — running on built-in defaults"
+        ),
+    })
 }
 
 #[cfg(test)]

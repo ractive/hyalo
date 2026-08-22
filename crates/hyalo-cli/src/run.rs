@@ -740,22 +740,14 @@ fn run_inner() -> Result<(), AppError> {
     let cli_dir_str: Option<String> = cli.dir.as_deref().map(|p| p.to_string_lossy().into_owned());
     let format_from_cli = cli.format.is_some();
     let hints_from_cli = cli.hints;
-    // Save the CWD-derived vault dir for the redundant-dir warning below.
-    // We need this before `config` is potentially shadowed by the target config.
-    let cwd_config_resolved_dir = config.config_dir.join(&config.dir);
+    // Save the CWD config's own `dir` string for the redundant-`--dir` note.
+    // We need it before `config` is potentially shadowed by the target config.
     let cwd_config_dir_str = config.dir.display().to_string();
-    // Whether the CWD `.hyalo.toml` was actually parsed cleanly. Used to gate
-    // the redundant-`--dir` warning so we don't claim a malformed/ignored config
-    // "already sets dir = ...".
-    let cwd_config_parsed_ok = config.loaded_from_file;
-    // Determine the effective vault directory and the config to use:
-    //
-    // - When --dir is explicitly provided on the CLI, validate first, then
-    //   reload .hyalo.toml from the target directory so its schema, format,
-    //   hints, site_prefix, and search config apply — not the caller's CWD
-    //   config.
-    // - Otherwise, keep the CWD config (already loaded) and use its dir.
-    let (dir, config) = if let Some(cli_dir) = cli.dir {
+    // Determine the effective vault directory and the config to use. The
+    // `--dir` semantics live in `config::resolve_effective` so `hyalo config`
+    // and every other command answer "which .hyalo.toml applies?" identically
+    // (iter-201, H-4).
+    if let Some(cli_dir) = cli.dir.as_deref() {
         // Validate before loading config to avoid misleading file-read warnings.
         if !cli_dir.exists() {
             let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
@@ -780,12 +772,43 @@ fn run_inner() -> Result<(), AppError> {
                 None,
             )));
         }
-        let target_config = crate::config::load_config_from(&cli_dir);
-        (cli_dir, target_config)
-    } else {
-        let vault_dir = config.dir.clone();
-        (vault_dir, config)
-    };
+    }
+    let effective = crate::config::resolve_effective(config, cli.dir.as_deref());
+    // Announce a `--dir` that switched to a different configuration before the
+    // command runs, so the change of rules is visible in the same stream as the
+    // results it shaped.
+    if let Some(note) = crate::config::dir_override_note(&effective) {
+        crate::warn::note(note);
+    }
+    let crate::config::EffectiveConfig {
+        config,
+        dir,
+        dir_redundant,
+        ..
+    } = effective;
+
+    // A `.hyalo.toml` that exists but could not be parsed leaves the run on
+    // built-in defaults: a different vault root, no schema, no `[lint] ignore`,
+    // no views. Reads may proceed on those defaults (the warning is
+    // `-q`-proof), but a command that *writes* must not — it would edit files
+    // the user did not configure hyalo to touch, using rules they did not
+    // write. Refuse with the parse diagnostic and exit 1 (iter-201, M-2).
+    if let Some(diagnostic) = config.malformed.as_deref()
+        && cli.command.writes()
+    {
+        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
+        return Err(AppError::User(crate::output::format_error(
+            fmt,
+            &format!(
+                "refusing to run a mutating command with an unusable .hyalo.toml \
+                 ({}/.hyalo.toml): {diagnostic}",
+                config.config_dir.display()
+            ),
+            None,
+            Some("Fix the config file, or pass --dir to target a vault whose config parses."),
+            None,
+        )));
+    }
     // The directory where .hyalo.toml lives. Views/types are stored there.
     let config_dir = config.config_dir.clone();
 
@@ -809,22 +832,13 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
-    // Warn when --dir is redundant: the user passed a dir that matches what
-    // .hyalo.toml would have resolved to anyway. Only fires when .hyalo.toml
-    // is present AND parsed successfully — otherwise the loader fell back to
-    // defaults and the message would be misleading.
-    if dir_from_cli && cwd_has_config && cwd_config_parsed_ok {
-        // Compare the CLI-provided dir against what the CWD config resolved to.
-        // `cwd_config_resolved_dir` was captured before `config` was shadowed.
-        if let (Ok(a), Ok(b)) = (
-            dunce::canonicalize(&dir),
-            dunce::canonicalize(&cwd_config_resolved_dir),
-        ) && a == b
-        {
-            crate::warn::note(format!(
-                "--dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
-            ));
-        }
+    // Note when --dir is redundant: the user passed the dir .hyalo.toml already
+    // resolves to. The config still applies (iter-201) — the flag is simply
+    // noise, which is all this note now claims.
+    if dir_redundant {
+        crate::warn::note(format!(
+            "--dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
+        ));
     }
 
     // Validate that the resolved dir exists and is a directory (for the
