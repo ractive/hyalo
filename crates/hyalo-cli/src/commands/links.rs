@@ -467,18 +467,88 @@ impl AutoFilters<'_> {
     }
 }
 
-/// How many offending titles the common-title note names before it summarises
-/// the rest as `+N more`. Five keeps the note (and the ready-to-paste flag list
-/// it suggests) inside a terminal line or two.
+/// How many offending titles the common-title note names in its prose list
+/// before it admits it is truncating ("showing the 5 noisiest of 7"). Five
+/// keeps the sentence inside a terminal line or two.
+///
+/// The suggested `--exclude-title` flags are deliberately **not** capped
+/// (dogfood L-12): a truncated flag list needs two paste-backs to extinguish
+/// the note, and flags are cheap.
 const COMMON_TITLE_NOTE_MAX_LISTED: usize = 5;
 
+/// Absolute floor for the frequency trigger: below this many proposed links a
+/// title is never called out on frequency alone, however dominant its share
+/// (DEC-205). It keeps small vaults — where the user simply reads every
+/// proposed link — from being nagged.
+const FREQUENT_TITLE_MIN_MATCHES: usize = 25;
+
+/// Denominator of the frequency trigger's share: `1/40` = 2.5% of a run's
+/// proposed links (DEC-205). Kept as an integer divisor so the threshold is
+/// computed without floating point.
+const FREQUENT_TITLE_SHARE_DIVISOR: usize = 40;
+
+/// Minimum match count at which a title counts as frequency-dominant in a run
+/// of `total` proposed links: `max(25, ceil(total / 40))`.
+///
+/// The two terms cross at exactly 1,000 proposed links: below that the
+/// absolute floor rules, above it the 2.5% share does. Measured against three
+/// corpora in DEC-205 — it flags `workflows` (502/1,179) through `concurrency`
+/// (39/1,179) on a GitHub Docs slice while leaving that slice's 28-match
+/// runner-up alone.
+fn frequent_title_threshold(total: usize) -> usize {
+    total
+        .div_ceil(FREQUENT_TITLE_SHARE_DIVISOR)
+        .max(FREQUENT_TITLE_MIN_MATCHES)
+}
+
+/// `count` as a whole-percent share of `total`, rounded to nearest.
+fn percent_of(count: usize, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    (count * 200 + total) / (total * 2)
+}
+
+/// Running tally for one candidate title: how many links it produced, and how
+/// each occurrence was spelled in the prose.
+#[derive(Default)]
+struct TitleTally {
+    count: usize,
+    /// Surface form → occurrences, so the note can display the spelling the
+    /// vault actually uses (dogfood L-13) instead of the lowercased key.
+    surfaces: std::collections::HashMap<String, usize>,
+}
+
+/// One title the note will complain about, with the reason(s) it was flagged.
+struct Offender {
+    /// The `to_ascii_lowercase` key — what `--exclude-title` compares against.
+    key: String,
+    /// The most frequent original spelling; ties broken lexicographically so
+    /// the note is deterministic.
+    display: String,
+    count: usize,
+    /// Flagged because the title is an ordinary English word (wordlist path).
+    common_word: bool,
+    /// Flagged because the title dominates this run (frequency path).
+    frequent: bool,
+}
+
 /// Build the advisory common-title note for a `links auto` run, or `None` when
-/// no proposed link came from a common English word (iter-197).
+/// no proposed link came from a suspicious title (iter-197, widened in
+/// iter-205).
+///
+/// A title is suspicious when it is **either**
+///
+/// - a common English word (`is_common_word`; ASCII-only by construction —
+///   the list is an English word list), **or**
+/// - frequency-dominant for this run (`frequent_title_threshold`), which is
+///   language-independent and therefore the only trigger a non-English vault
+///   ever sees.
 ///
 /// The heuristic runs on the *emitted* matches, not on the title inventory, so
 /// it is self-extinguishing and never speculative:
 ///
-/// - a common-word title that produced no match is not mentioned — nothing to
+/// - a suspicious title that produced no match is not mentioned — nothing to
 ///   act on
 /// - a title already excluded (by `--exclude-title` or `[links.auto]
 ///   exclude_titles`) cannot produce a match, so acting on the note makes it
@@ -496,64 +566,130 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
         return None;
     }
 
-    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut tallies: HashMap<String, TitleTally> = HashMap::new();
     for m in matches {
-        // Key on the lowercased matched text: `--exclude-title` compares
-        // case-insensitively, so "Permissions" and "permissions" are one title
-        // and the note must not split them into two entries.
-        let key = m.matched_text.trim().to_ascii_lowercase();
-        if key.is_empty() {
+        // Key on the ASCII-lowercased matched text: `auto_link` compares
+        // `exclude_titles` with `to_ascii_lowercase` too, so "Permissions" and
+        // "permissions" are one title here exactly as they are one exclusion
+        // there. A Unicode-aware lowercase would merge titles the exclusion
+        // would then fail to cover, and the note would suggest a flag that
+        // does not work.
+        let surface = m.matched_text.trim();
+        if surface.is_empty() {
             continue;
         }
-        *counts.entry(key).or_insert(0) += 1;
+        let tally = tallies.entry(surface.to_ascii_lowercase()).or_default();
+        tally.count += 1;
+        *tally.surfaces.entry(surface.to_owned()).or_insert(0) += 1;
     }
 
-    let mut offenders: Vec<(String, usize)> = counts
+    let frequent_at = frequent_title_threshold(total);
+    let mut offenders: Vec<Offender> = tallies
         .into_iter()
-        .filter(|(title, _)| hyalo_core::common_words::is_common_word(title))
+        .filter_map(|(key, tally)| {
+            let common_word = hyalo_core::common_words::is_common_word(&key);
+            let frequent = tally.count >= frequent_at;
+            if !common_word && !frequent {
+                return None;
+            }
+            // Most frequent spelling wins; equal counts resolve alphabetically
+            // so the same vault always produces the same note.
+            let display = tally
+                .surfaces
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                .map_or_else(|| key.clone(), |(surface, _)| surface);
+            Some(Offender {
+                key,
+                display,
+                count: tally.count,
+                common_word,
+                frequent,
+            })
+        })
         .collect();
     if offenders.is_empty() {
         return None;
     }
     // Most-noisy first; ties broken alphabetically so the note is deterministic.
-    offenders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    offenders.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
 
-    let affected: usize = offenders.iter().map(|(_, count)| *count).sum();
+    let affected: usize = offenders.iter().map(|o| o.count).sum();
     let listed = offenders.len().min(COMMON_TITLE_NOTE_MAX_LISTED);
-    let mut names: Vec<String> = offenders[..listed]
-        .iter()
-        .map(|(title, count)| format!("\"{title}\" ({count}×)"))
-        .collect();
-    if offenders.len() > listed {
-        names.push(format!("+{} more", offenders.len() - listed));
-    }
 
-    let subject = if offenders.len() == 1 {
-        "1 auto-link candidate title is a common English word and accounts for".to_owned()
+    // When every offender was flagged for the same reason the subject line can
+    // state it once; a mixed set has to label each entry instead, because the
+    // user's judgment differs per cause.
+    let mixed = offenders
+        .iter()
+        .any(|o| o.common_word != offenders[0].common_word || o.frequent != offenders[0].frequent);
+    let plural = offenders.len() != 1;
+    let reason_clause = if mixed {
+        "are common English words or unusually frequent".to_owned()
     } else {
-        format!(
-            "{} auto-link candidate titles are common English words and account for",
-            offenders.len()
-        )
+        let first = &offenders[0];
+        match (first.common_word, first.frequent, plural) {
+            (true, true, false) => "is a common English word and unusually frequent".to_owned(),
+            (true, true, true) => "are common English words and unusually frequent".to_owned(),
+            (true, false, false) => "is a common English word".to_owned(),
+            (true, false, true) => "are common English words".to_owned(),
+            (false, _, false) => "is unusually frequent".to_owned(),
+            (false, _, true) => "are unusually frequent".to_owned(),
+        }
     };
+    let subject = format!(
+        "{count} auto-link candidate title{s} {reason_clause} and account{verb} for",
+        count = offenders.len(),
+        s = if plural { "s" } else { "" },
+        verb = if plural { "" } else { "s" },
+    );
+
+    // L-12: the prose list is capped, and says so; the flag list below is not.
+    let truncation = if offenders.len() > listed {
+        format!(" (showing the {listed} noisiest of {})", offenders.len())
+    } else {
+        String::new()
+    };
+
+    let names: Vec<String> = offenders[..listed]
+        .iter()
+        .map(|o| {
+            let mut detail = format!("{}×", o.count);
+            if o.frequent {
+                use std::fmt::Write as _;
+                let _ = write!(detail, ", {}%", percent_of(o.count, total));
+            }
+            if mixed {
+                detail.push_str(match (o.common_word, o.frequent) {
+                    (true, true) => ", common English word + unusually frequent",
+                    (true, false) => ", common English word",
+                    (false, _) => ", unusually frequent",
+                });
+            }
+            format!("\"{}\" ({detail})", o.display)
+        })
+        .collect();
+
     let mut flags = String::new();
-    for (title, _) in &offenders[..listed] {
+    for o in &offenders {
         use std::fmt::Write as _;
         // Writing into a String is infallible; the Result only exists to satisfy
         // the `fmt::Write` signature. Reuse the same shell-quoting the other
         // suggested-flag hints use (`hints::shell_quote`) rather than a
         // bespoke whitespace-only check — titles can contain apostrophes,
         // `$`, backticks, or double quotes, none of which a naive
-        // whitespace check would escape.
+        // whitespace check would escape. The displayed spelling is used
+        // verbatim: `--exclude-title` matches case-insensitively, so it works
+        // either way and stays greppable in the user's own files.
         let _ = write!(
             flags,
             " --exclude-title {}",
-            crate::hints::shell_quote(title)
+            crate::hints::shell_quote(&o.display)
         );
     }
 
     Some(format!(
-        "{subject} {affected} of {total} proposed links: {names}. \
+        "{subject} {affected} of {total} proposed links{truncation}: {names}. \
          If those are prose mentions rather than deliberate references, skip them with{flags} \
          — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
          Silence this note with --no-warn-common-titles.",
