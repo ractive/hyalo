@@ -1891,13 +1891,20 @@ pub(crate) enum LinksAction {
             Matching strategies (in priority order):\n\
             1. Case-insensitive exact match\n\
             2. Extension mismatch (.md present/absent)\n\
-            3. Unique stem match anywhere in the vault (shortest-path)\n\
+            3. Unique stem match anywhere in the vault (shortest-path); for a\n\
+               site-absolute target (/a/b) this is only a basename guess and is\n\
+               reported as the separate basename-fallback strategy\n\
             4. Jaro-Winkler fuzzy match above --threshold\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
-            FUZZY MATCHES ARE LOW-CONFIDENCE: a broken [[foo]] can \"match\" an unrelated bar.md.\n\
-            Strategy-4 fuzzy fixes are reported in their own bucket and are NOT written by plain\n\
-            --apply. Opt in with --apply-fuzzy, optionally gating on --min-confidence <0.0-1.0>\n\
-            (which implies --apply-fuzzy). Strategies 1-3 (case/extension/unique-stem) always apply.\n\n\
+            LOW-CONFIDENCE MATCHES ARE GATED: a broken [[foo]] can \"match\" an unrelated bar.md,\n\
+            and a site-absolute /actions can \"match\" any actions.md anywhere in the vault. Both\n\
+            fuzzy and basename-fallback fixes are reported in their own bucket and are NOT written\n\
+            by plain --apply. Opt in with --apply-fuzzy, optionally gating on --min-confidence\n\
+            <0.0-1.0> (which implies --apply-fuzzy). Strategies 1-3 otherwise always apply.\n\n\
+            FIXES ALWAYS ROUND-TRIP: a repair is written in the form the link was written in —\n\
+            site-absolute stays site-absolute, a relative destination is computed from the source\n\
+            file's own directory — and any fix whose emitted target would still not resolve is\n\
+            refused and reported under unfixable rather than written.\n\n\
             SHORT-FORM WIKILINKS (Obsidian compatibility):\n\
             A bare [[Note]] that resolves to some **/Note.md anywhere in the vault is NOT\n\
             broken and is left untouched. Only a stem-casing mismatch ([[note]] for Note.md)\n\
@@ -1920,12 +1927,14 @@ pub(crate) enum LinksAction {
         /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
-        /// Apply fuzzy-match fixes too (excluded from --apply by default).
+        /// Apply low-confidence fixes too (excluded from --apply by default).
         ///
-        /// Jaro-Winkler fuzzy matches are low-confidence guesses: a broken
-        /// [[foo]] can "match" an unrelated bar.md at 0.9 similarity. They are
-        /// reported in a separate bucket and are NOT written by plain --apply.
-        /// Pass --apply-fuzzy to opt in, optionally narrowing with
+        /// Jaro-Winkler fuzzy matches are guesses: a broken [[foo]] can
+        /// "match" an unrelated bar.md at 0.9 similarity. So is a
+        /// basename fallback, where a site-absolute target such as /actions
+        /// matches some actions.md elsewhere in the vault. Both are reported
+        /// in a separate bucket and are NOT written by plain --apply. Pass
+        /// --apply-fuzzy to opt in, optionally narrowing with
         /// --min-confidence.
         #[arg(long)]
         apply_fuzzy: bool,
@@ -1961,7 +1970,9 @@ pub(crate) enum LinksAction {
             2. Frontmatter `title` property\n\
             3. Frontmatter `aliases` property (list of alternate names)\n\n\
             Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
-            existing [[wikilinks]] and [markdown](links), headings, comment fences (%%), self-links.\n\n\
+            existing [[wikilinks]] and [markdown](links) — label AND destination, whether the\n\
+            destination is internal or external — bare URLs and <autolinks> in prose, headings,\n\
+            comment fences (%%), self-links.\n\n\
             Filtering options:\n\
             --first-only          Only emit the first mention of each target per source file. An\n\
             \u{00a0}                      existing [[wikilink]] (or aliased [[target|label]]) to a target\n\

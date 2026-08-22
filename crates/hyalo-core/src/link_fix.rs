@@ -147,6 +147,17 @@ pub struct FixReport {
     pub unfixable: Vec<BrokenLinkInfo>,
 }
 
+/// What one `--apply` pass did with the fixes it was handed.
+///
+/// Tuple order: `(applied_plans, unapplied, failed, rejected)` — see
+/// [`apply_fixes`] for what each bucket means. Named so the four-way split
+/// stays readable at the call site.
+pub type ApplyOutcome = (Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>, Vec<FixPlan>);
+
+/// What one dry-run pass would do: `(would_modify, unapplied, rejected)` —
+/// see [`plan_fixes_dry_run`].
+pub type DryRunOutcome = (Vec<String>, Vec<FixPlan>, Vec<FixPlan>);
+
 /// A fix whose source file's on-disk write failed during `--apply` (L-11).
 ///
 /// Distinct from an *unapplied* fix (whose on-disk text no longer matched what
@@ -615,7 +626,7 @@ pub fn apply_fixes(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>, Vec<FixPlan>)> {
+) -> Result<ApplyOutcome> {
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -785,7 +796,7 @@ pub fn plan_fixes_dry_run(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<String>, Vec<FixPlan>, Vec<FixPlan>)> {
+) -> Result<DryRunOutcome> {
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
         by_source.entry(fix.source.as_str()).or_default().push(fix);
@@ -1714,7 +1725,8 @@ See [broken](old-name.md) here.
     fn emit_relative_target_is_relative_to_the_source_directory() {
         // A vault-relative target written verbatim into a nested file is the
         // same H-1 asymmetry without the leading slash.
-        let emitted = emit_markdown_fix_target("../c/target.md", "z/target.md", "a/b/page.md", None);
+        let emitted =
+            emit_markdown_fix_target("../c/target.md", "z/target.md", "a/b/page.md", None);
         assert_eq!(emitted, "../../z/target.md");
         assert!(markdown_fix_round_trips(
             &emitted,
@@ -2780,7 +2792,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert_eq!(would_modify, vec!["index.md"]);
         assert!(unapplied.is_empty(), "fresh text: nothing stale");
 
@@ -2821,7 +2834,8 @@ See [broken](old-name.md) here.
         );
 
         // apply must report the identical unapplied set.
-        let (plans, unapplied_apply, failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied_apply, failed, _rejected) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty());
         assert!(failed.is_empty());
         assert_eq!(unapplied_apply.len(), unapplied_dry.len());
@@ -2912,7 +2926,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "a vanished file must modify nothing"
@@ -2944,7 +2959,8 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) =
+            plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "an oversized file must modify nothing"

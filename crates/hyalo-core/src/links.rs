@@ -849,13 +849,19 @@ mod tests {
 
     #[test]
     fn inert_zone_covers_internal_markdown_link_and_label() {
-        assert!(needle_is_inert("See [read about net](other.md) here", "net"));
+        assert!(needle_is_inert(
+            "See [read about net](other.md) here",
+            "net"
+        ));
         assert!(needle_is_inert("See [label](sub/net.md) here", "net.md"));
     }
 
     #[test]
     fn inert_zone_covers_bare_urls_and_autolinks() {
-        assert!(needle_is_inert("Bare: https://example.net/path here", "net"));
+        assert!(needle_is_inert(
+            "Bare: https://example.net/path here",
+            "net"
+        ));
         assert!(needle_is_inert("Auto: <https://example.net/p>", "net"));
         assert!(needle_is_inert("Mail: mailto:a@example.net now", "net"));
         assert!(needle_is_inert("Site: www.example.net/x", "net"));
@@ -870,7 +876,10 @@ mod tests {
     fn inert_zone_leaves_plain_prose_alone() {
         assert!(!needle_is_inert("A plain net mention", "net"));
         // A mention after a URL on the same line is still linkable.
-        assert!(!needle_is_inert("See https://example.com/x then net", "net"));
+        assert!(!needle_is_inert(
+            "See https://example.com/x then net",
+            "net"
+        ));
         // Trailing sentence punctuation is outside the URL zone.
         let line = "See https://example.com/x. net follows";
         let start = line.rfind("net").unwrap();
