@@ -42,7 +42,8 @@ pub(crate) const LIST_COMMANDS: &[&str] = &[
 /// (M-8). The two claims now come from two constants.
 ///
 /// Asserted against the real binary by
-/// `tests/e2e/count.rs::limited_commands_constant_matches_binary`.
+/// `tests/e2e/count.rs::every_capped_command_accepts_limit` and
+/// `tests/e2e/count.rs::capped_commands_are_a_subset_of_list_commands`.
 pub(crate) const LIMITED_COMMANDS: &[&str] = &[
     "find",
     "lint",
