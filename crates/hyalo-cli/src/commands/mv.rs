@@ -430,6 +430,13 @@ fn build_rename_map(
     for (src, dst) in &proposed {
         let dst_path = dir.join(dst);
         let src_path = dir.join(src);
+        // L-4: a dangling symlink is an existing directory entry even though
+        // `exists()` (which follows the link) says otherwise — treat it as a
+        // collision so batch mode reports it instead of clobbering it.
+        if dst_path.symlink_metadata().is_ok() && !dst_path.exists() {
+            pre_existing.insert(dst.clone());
+            continue;
+        }
         if dst_path.exists() {
             // Only skip if source and destination are literally the same file
             // (same path on disk — after normalization this shouldn't happen
@@ -834,6 +841,20 @@ fn validate_target_single(
     }
 
     let target_path = dir.join(&normalized);
+    // L-4: `exists()` follows symlinks, so a *dangling* symlink at DEST reads as
+    // absent and the rename silently replaced it — destroying the link without a
+    // word. `symlink_metadata` answers "is there an entry here", which is the
+    // question the collision guard is actually asking.
+    if target_path.symlink_metadata().is_ok() && !target_path.exists() {
+        let out = crate::output::format_error(
+            format,
+            "target path is a broken symlink",
+            Some(&normalized),
+            Some("remove the dangling symlink first, then re-run the move"),
+            None,
+        );
+        return Err(CommandOutcome::UserError(out));
+    }
     if target_path.exists() {
         // L-14: on a case-insensitive filesystem, a pure case rename like
         // `a.md` → `A.md` reports the destination as "existing" because it

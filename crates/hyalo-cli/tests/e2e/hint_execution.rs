@@ -334,8 +334,12 @@ fn every_emitted_hint_executes_cleanly() {
 fn gate_rejects_a_hint_that_does_not_parse() {
     let tmp = TempDir::new().unwrap();
     build_fixture(tmp.path());
-    // The exact pre-iter-192 bug: `--limit` belongs to `tags summary`, not `tags`.
-    let argv = to_argv("hyalo tags --limit 0", tmp.path());
+    // The pre-iter-192 bug was `hyalo tags --limit 0` — a flag that belonged to
+    // `tags summary`, not the bare group. iter-204 (M-8) made bare `tags` take
+    // the summary flags, so the canary moved to a flag that genuinely does not
+    // exist anywhere: `types list` has no `--limit`, and the "Default output
+    // limits" help block no longer claims it does.
+    let argv = to_argv("hyalo types list --limit 0", tmp.path());
     let output = hyalo().args(&argv).output().unwrap();
     let reason = rejection_reason(
         output.status.code(),
@@ -344,7 +348,7 @@ fn gate_rejects_a_hint_that_does_not_parse() {
     );
     assert!(
         reason.is_some(),
-        "`hyalo tags --limit 0` must be classified as a rejection"
+        "`hyalo types list --limit 0` must be classified as a rejection"
     );
 }
 

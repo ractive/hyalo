@@ -545,3 +545,85 @@ title: Target
         "expected 'not supported' rejection message; stdout={stdout} stderr={stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-1 (iter-204): case-mismatched wikilinks are counted once
+// ---------------------------------------------------------------------------
+
+/// `[[NOTE]]` pointing at `note.md` was registered under both the written and
+/// the canonical key, so `backlinks` returned the one edge twice while
+/// `find --fields links` correctly reported one.
+#[test]
+fn case_mismatched_wikilink_is_counted_once() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\nBody.\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nSee [[NOTE]].\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["backlinks", "note.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(json["total"], 1, "one link must count once: {json}");
+    assert_eq!(
+        json["results"]["backlinks"].as_array().unwrap().len(),
+        1,
+        "duplicate entry in the backlink list: {json}"
+    );
+    // The written spelling is preserved so callers can still see what the
+    // author typed.
+    assert_eq!(json["results"]["backlinks"][0]["target"], "NOTE");
+}
+
+/// The de-duplication must not lose the edge: `mv` still rewrites the
+/// case-mismatched link, which is what made the double registration tempting.
+#[test]
+fn case_mismatched_wikilink_is_still_rewritten_by_mv() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\nBody.\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nSee [[NOTE]].\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["mv", "note.md", "renamed.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "mv failed: {output:?}");
+    let src = std::fs::read_to_string(tmp.path().join("src.md")).unwrap();
+    assert!(
+        src.contains("[[renamed]]"),
+        "the case-mismatched link must still be rewritten: {src}"
+    );
+}
+
+/// An exact-case link is unaffected.
+#[test]
+fn exact_case_wikilink_still_counts_once() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\nBody.\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nSee [[note]].\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["backlinks", "note.md", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(json["total"], 1, "{json}");
+}

@@ -292,3 +292,80 @@ fn mv_link_rewrite_through_symlink_updates_target() {
     );
     assert_still_symlink(&tmp.path().join("alias.md"));
 }
+
+// ---------------------------------------------------------------------------
+// L-4 (iter-204): mv refuses to clobber a dangling symlink at DEST
+// ---------------------------------------------------------------------------
+
+/// `Path::exists()` follows symlinks, so a symlink whose target is missing
+/// read as "nothing there" and the rename destroyed the link silently.
+#[cfg(unix)]
+#[test]
+fn mv_refuses_to_clobber_a_dangling_symlink() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    std::os::unix::fs::symlink("missing-inside.md", tmp.path().join("dest.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["mv", "a.md", "dest.md", "--format", "text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "must refuse the move");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("broken symlink"),
+        "must name the real obstacle: {stderr}"
+    );
+    assert!(
+        stderr.contains("remove the dangling symlink"),
+        "must say how to proceed: {stderr}"
+    );
+
+    // Nothing moved, and the symlink survives.
+    assert!(tmp.path().join("a.md").exists(), "source must stay put");
+    assert!(
+        tmp.path().join("dest.md").symlink_metadata().is_ok(),
+        "the dangling symlink must survive"
+    );
+    assert!(
+        tmp.path()
+            .join("dest.md")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "dest must still be a symlink, not the moved file"
+    );
+}
+
+/// Batch mode treats it as a collision rather than clobbering it.
+#[cfg(unix)]
+#[test]
+fn mv_batch_treats_a_dangling_symlink_as_a_collision() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: note\n---\nBody.\n",
+    );
+    std::fs::create_dir_all(tmp.path().join("out")).unwrap();
+    std::os::unix::fs::symlink("gone.md", tmp.path().join("out/a.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "mv", "--glob", "a.md", "--to", "out/", "--apply", "--format", "json",
+        ])
+        .output()
+        .unwrap();
+    // Either a refusal or a report that skipped the collision — what must NOT
+    // happen is the symlink being replaced by the moved file.
+    let dest = tmp.path().join("out/a.md");
+    assert!(
+        dest.symlink_metadata().unwrap().file_type().is_symlink(),
+        "batch mv clobbered the dangling symlink (exit {:?}, stderr {})",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

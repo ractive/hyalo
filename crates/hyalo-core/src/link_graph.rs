@@ -631,11 +631,26 @@ fn insert_file_links(
             line,
             link: link.clone(),
         };
-        index
-            .entry(link.target.clone())
-            .or_default()
-            .push(entry.clone());
-        if let Some(key) = resolved_key.or(dir_index_key) {
+        let extra_key = resolved_key.or(dir_index_key);
+        // L-1: when the written target differs from the canonical key only in
+        // ASCII case (`[[NOTE]]` resolving to `note.md`), both keys fall into
+        // the same lowercased bucket and `backlinks_ci` returns the one edge
+        // twice — `hyalo backlinks note.md` reported 2 for a single link while
+        // `find --fields links` and `summary` correctly reported 1. Register
+        // the canonical spelling alone in that case: `backlinks_ci` still finds
+        // it, `mv` still rewrites it (the entry carries the original written
+        // link), and the case-sensitive `backlinks` no longer answers to a
+        // spelling no file on disk has.
+        let written_is_case_variant = extra_key
+            .as_deref()
+            .is_some_and(|k| k != link.target && k.eq_ignore_ascii_case(&link.target));
+        if !written_is_case_variant {
+            index
+                .entry(link.target.clone())
+                .or_default()
+                .push(entry.clone());
+        }
+        if let Some(key) = extra_key {
             index.entry(key).or_default().push(entry);
         }
     }
@@ -753,10 +768,23 @@ impl FileVisitor for LinkGraphVisitor {
 pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> String {
     let without_slash = target.strip_prefix('/').unwrap_or(target);
     if let Some(prefix) = site_prefix {
-        // Try stripping "prefix/" from the front
+        // Try stripping "prefix/" from the front.
+        //
+        // iter-204: the comparison is case-insensitive. The prefix is usually
+        // auto-derived from the vault directory name, and directory casing
+        // rarely matches the URL casing an author writes: MDN checked out into
+        // `en-us/` publishes its links as `/en-US/docs/...`, so a
+        // case-sensitive strip left every single site-absolute link
+        // unresolved. Only the ASCII case is folded, which is all URL path
+        // prefixes use in practice.
         let with_slash = format!("{prefix}/");
-        if let Some(rest) = without_slash.strip_prefix(&with_slash) {
-            return rest.to_owned();
+        // `get` rather than slicing: the prefix length is a byte count, and a
+        // multibyte target could put it mid-character.
+        if without_slash
+            .get(..with_slash.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(&with_slash))
+        {
+            return without_slash[with_slash.len()..].to_owned();
         }
     }
     without_slash.to_owned()

@@ -2043,7 +2043,8 @@ pub(crate) enum LinksAction {
             \u{00a0}                      first_only = true is set in .hyalo.toml. Conflicts with\n\
             \u{00a0}                      --first-only.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
-            --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
+            --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable,\n\
+            \u{00a0}                      case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
             COMMON-WORD TITLES: when a proposed link comes from a page whose title is an ordinary \
             English word or a generic doc filename (\"permissions\", \"index\", \"README\"), the run \
             prints one advisory note on stderr naming those titles with their match counts and the \
@@ -2097,7 +2098,8 @@ pub(crate) enum LinksAction {
         /// run without editing the config. Cannot be combined with --first-only.
         #[arg(long, conflicts_with = "first_only")]
         no_first_only: bool,
-        /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
+        /// Exclude target pages whose vault-relative path matches a glob pattern
+        /// (repeatable; matched case-insensitively, mirroring --exclude-title)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
         /// Do not print the advisory note naming candidate titles that are common

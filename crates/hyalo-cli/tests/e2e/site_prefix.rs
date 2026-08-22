@@ -263,3 +263,126 @@ fn site_prefix_wrong_prefix_misses_absolute_links() {
         "wrong prefix: expected 0 backlinks, got: {json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-204: site-prefix stripping is case-insensitive (MDN-shaped fixture)
+// ---------------------------------------------------------------------------
+
+/// Build an MDN-shaped vault: the checkout directory is lower-case (`en-us`)
+/// while the published links carry the real, mixed-case URL prefix
+/// (`/en-US/docs/...`). This is the exact shape that left MDN reading as
+/// 49,703-of-49,705 links broken.
+fn write_mdn_shaped_vault(root: &std::path::Path) {
+    write_md(
+        root,
+        "web/api/index.md",
+        "---\ntitle: Web API\n---\nBody.\n",
+    );
+    write_md(root, "web/css/index.md", "---\ntitle: CSS\n---\nBody.\n");
+}
+
+/// With the prefix auto-derived from the directory name (`en-us`), a link
+/// written `/en-US/web/api` must resolve: only ASCII case differs.
+#[test]
+fn derived_site_prefix_strips_case_insensitively() {
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().join("en-us");
+    std::fs::create_dir_all(&vault).unwrap();
+    write_mdn_shaped_vault(&vault);
+    write_md(
+        &vault,
+        "src.md",
+        "---\ntitle: Src\n---\nSee [Web API](/en-US/web/api).\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    assert_eq!(
+        json["total"], 0,
+        "a mixed-case site prefix must still strip: {json}"
+    );
+}
+
+/// The full MDN shape needs the *two-segment* prefix, which auto-derivation
+/// cannot guess — but once passed explicitly it too matches case-insensitively.
+#[test]
+fn explicit_multi_segment_site_prefix_resolves_mdn_links() {
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().join("en-us");
+    std::fs::create_dir_all(&vault).unwrap();
+    write_mdn_shaped_vault(&vault);
+    write_md(
+        &vault,
+        "src.md",
+        "---\ntitle: Src\n---\nSee [Web API](/en-US/docs/web/api) and [CSS](/EN-us/DOCS/web/css).\n",
+    );
+
+    // Without the second segment the links cannot resolve.
+    let derived = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .unwrap();
+    let derived_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&derived.stdout)).unwrap();
+    assert_eq!(
+        derived_json["total"], 1,
+        "the single-segment derived prefix cannot cover /en-US/docs: {derived_json}"
+    );
+
+    let explicit = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--site-prefix", "en-US/docs"])
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .unwrap();
+    let explicit_json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&explicit.stdout)).unwrap();
+    assert_eq!(
+        explicit_json["total"], 0,
+        "both casings of the explicit prefix must strip: {explicit_json}"
+    );
+}
+
+/// `hyalo config` warns that a derived prefix is only ever one segment, so the
+/// MDN case is discoverable rather than silently wrong.
+#[test]
+fn config_notes_that_derived_prefixes_are_single_segment() {
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().join("en-us");
+    std::fs::create_dir_all(&vault).unwrap();
+    write_mdn_shaped_vault(&vault);
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("site_prefix: en-us (derived)"),
+        "the derived value must still be reported: {stdout}"
+    );
+    assert!(
+        stdout.contains("single path segment"),
+        "the derivation limit must be stated: {stdout}"
+    );
+
+    // An explicit prefix is authoritative — no note.
+    let explicit = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--site-prefix", "en-US/docs"])
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+    let explicit_out = String::from_utf8_lossy(&explicit.stdout);
+    assert!(
+        !explicit_out.contains("single path segment"),
+        "an explicit prefix needs no advice: {explicit_out}"
+    );
+}
