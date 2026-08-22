@@ -280,6 +280,7 @@ pub(crate) struct Cli {
     ///
     /// Also settable via `site_prefix = "docs"` in .hyalo.toml.
     /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
+    /// Run `hyalo config` to see the effective value and where it came from.
     #[arg(long, global = true, value_name = "PREFIX")]
     pub site_prefix: Option<String>,
 

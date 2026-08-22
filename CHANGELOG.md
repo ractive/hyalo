@@ -11,6 +11,26 @@ and this project adheres to
 
 ### Added
 
+- **Directory link targets resolve to `<target>/index.md`** (iter-203). A link
+  that names a directory now reaches that directory's index file: `/foo`, `foo`
+  and `/foo/` all resolve to `foo/index.md`. This is the convention every
+  static-site corpus publishes against (MDN, GitHub Docs, Docusaurus, Hugo),
+  and without it such vaults read as almost entirely broken — MDN reported
+  49,703 of 49,705 links broken and `backlinks` returned 0 for its most-linked
+  pages. The rule lives in the single shared resolver, so every surface agrees:
+  `find --broken-links`, `links`, the HYALO006 lint rule, `backlinks` (a link to
+  `/foo` is a backlink of `foo/index.md`), anchors (`/foo#section` checks
+  `foo/index.md`'s headings), and `mv` (renaming `foo/index.md` rewrites `/foo`
+  to `/bar`, keeping the author's spelling). Precedence: a real file wins, so
+  `foo` still resolves to `foo.md` when both `foo.md` and `foo/index.md` exist —
+  write `foo/` to name the directory explicitly and flip that order.
+- **`hyalo config` reports the effective `site_prefix` and its source**
+  (iter-203). The prefix is usually *auto-derived* from the vault directory
+  name, and it decides what a site-absolute `/foo` means — but `config` printed
+  `site_prefix: (none)` whenever it had not been set explicitly, hiding the
+  value actually in force. It now prints the resolved value with a
+  `flag` / `config` / `derived` / `disabled` label, and the JSON envelope gains
+  a `site_prefix_source` field.
 - **`links auto --no-first-only`** (iter-198). The counter-flag to
   `--first-only`: it forces first-mention-only *off* for a single run, so a
   vault that persists `[links.auto] first_only = true` can still get a one-off
@@ -193,6 +213,12 @@ and this project adheres to
 
 ### Fixed
 
+- **`mv` no longer injects a site prefix the author never wrote** (iter-203,
+  L-11). Rewriting a site-absolute link always prepended the effective prefix,
+  so a working `[x](/notes/old.md)` in a vault whose prefix was auto-derived
+  from its directory name became `[x](/my-vault/notes/renamed.md)` — a link that
+  resolves nowhere. The prefix is now re-emitted only when the original
+  spelling carried it.
 - **`.hyalo.toml` is parsed once per run, not twice** (iter-201). The help
   banner re-loaded the config the CLI had already resolved, so every invocation
   paid a second parse and any config warning ended with a spurious
