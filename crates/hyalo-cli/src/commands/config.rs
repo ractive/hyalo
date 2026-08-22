@@ -63,7 +63,7 @@ pub(crate) struct LinksAutoReport {
     /// `[links.auto] first_only`.
     pub first_only: bool,
     /// `[links.auto] warn_common_titles` — `true` (the default) means `links
-    /// auto` may print the advisory common-English-word note on stderr.
+    /// auto` may print the advisory noisy-candidate-title note on stderr.
     pub warn_common_titles: bool,
 }
 

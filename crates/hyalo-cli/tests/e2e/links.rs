@@ -4131,11 +4131,12 @@ fn links_auto_notes_common_word_titles_on_stderr() {
         "note should explain why the titles are flagged: {stderr}"
     );
     assert!(
-        stderr.contains("\"permissions\" (2×)"),
-        "note should name the offending title with its match count: {stderr}"
+        stderr.contains("\"Permissions\" (2×)"),
+        "note should name the offending title, in the vault's own spelling \
+         (L-13), with its match count: {stderr}"
     );
     assert!(
-        stderr.contains("--exclude-title permissions"),
+        stderr.contains("--exclude-title Permissions"),
         "note should hand the user a ready-to-paste flag: {stderr}"
     );
     assert!(
@@ -4257,6 +4258,255 @@ We deploy on Kubernetes twice a week.
     assert!(
         stderr.is_empty(),
         "no common-word title means no note at all: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-205: frequency trigger for the common-title note (dogfood UX-1)
+// ---------------------------------------------------------------------------
+
+/// Run `links auto` in `dir` with an explicit output format and return
+/// `(stdout, stderr)` verbatim.
+fn run_links_auto_capturing_format(
+    dir: &std::path::Path,
+    format: &str,
+    extra_args: &[&str],
+) -> (String, String) {
+    let output = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["links", "auto", "--format", format])
+        .args(extra_args)
+        .output()
+        .expect("hyalo links auto should run");
+    assert!(
+        output.status.success(),
+        "links auto exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A GitHub-Docs-shaped vault: one page whose title dominates the run without
+/// being an English word (`mentions` prose mentions), plus a quiet
+/// domain-specific title. This is the shape UX-1 was invisible on.
+fn setup_frequent_title_vault(config: &str, title: &str, mentions: usize) -> TempDir {
+    use std::fmt::Write as _;
+
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    fs::write(tmp.path().join(".hyalo.toml"), config).expect("config should be writable");
+
+    write_md(
+        tmp.path(),
+        "dominant.md",
+        &format!("---\ntitle: {title}\n---\nThe page everything mentions.\n"),
+    );
+    write_md(
+        tmp.path(),
+        "kubernetes.md",
+        md!(r"
+---
+title: Kubernetes
+---
+Container orchestration.
+"),
+    );
+
+    let mut guide = String::from("---\ntitle: Guide\n---\n");
+    for i in 0..mentions {
+        let _ = writeln!(guide, "Step {i}: {title} is configured in the usual place.");
+    }
+    for i in 0..10 {
+        let _ = writeln!(guide, "Note {i}: Kubernetes schedules the run.");
+    }
+    write_md(tmp.path(), "guide.md", &guide);
+
+    tmp
+}
+
+#[test]
+fn links_auto_notes_a_dominant_title_that_is_not_an_english_word() {
+    // Dogfood UX-1: on GitHub Docs a page titled "Workflows" produced 43% of
+    // all proposed links and the wordlist-only trigger never mentioned it.
+    let tmp = setup_frequent_title_vault("", "Workflows", 30);
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.contains("note:"),
+        "the advisory should be a note, not a warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("unusually frequent"),
+        "the note should name frequency as the reason: {stderr}"
+    );
+    assert!(
+        !stderr.contains("common English word"),
+        "\"Workflows\" is not a wordlist hit — the reason must not claim it is: {stderr}"
+    );
+    assert!(
+        stderr.contains("\"Workflows\" (30×, 75%)"),
+        "the note should quote the count and the share of the run: {stderr}"
+    );
+    assert!(
+        stderr.contains("--exclude-title Workflows"),
+        "the note should hand the user a ready-to-paste flag: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Kubernetes"),
+        "the quiet title should not be mentioned: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_frequency_note_disappears_after_one_paste_back() {
+    // The whole point of the suggestion: one round, not two.
+    let tmp = setup_frequent_title_vault("", "Workflows", 30);
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &["--exclude-title", "Workflows"]);
+
+    assert!(
+        stderr.is_empty(),
+        "excluding the dominant title should extinguish the note: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_frequency_note_never_touches_the_stdout_report() {
+    // Same contract as the wordlist path: the note is stderr-only, in every
+    // output format.
+    let tmp = setup_frequent_title_vault("", "Workflows", 30);
+
+    for format in ["json", "text"] {
+        let (with_note, stderr) = run_links_auto_capturing_format(tmp.path(), format, &[]);
+        let (without_note, silent_stderr) =
+            run_links_auto_capturing_format(tmp.path(), format, &["--no-warn-common-titles"]);
+
+        assert!(
+            stderr.contains("unusually frequent"),
+            "the control run should actually have emitted the note ({format}): {stderr}"
+        );
+        assert!(
+            silent_stderr.is_empty(),
+            "--no-warn-common-titles should leave stderr empty ({format}): {silent_stderr}"
+        );
+        assert_eq!(
+            with_note, without_note,
+            "the note must not change the stdout envelope ({format})"
+        );
+        assert!(
+            !with_note.contains("unusually frequent"),
+            "the advisory text must never leak into stdout ({format}): {with_note}"
+        );
+    }
+}
+
+#[test]
+fn links_auto_config_opt_out_also_silences_the_frequency_note() {
+    let tmp = setup_frequent_title_vault(
+        "[links.auto]\nwarn_common_titles = false\n",
+        "Workflows",
+        30,
+    );
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.is_empty(),
+        "warn_common_titles = false governs both triggers: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_multiword_frequent_title_round_trips_through_the_suggested_flag() {
+    // "runner groups" (45 links on the dogfood's GitHub Docs slice) is the
+    // real-data case for the shell-quoting path: paste the flag back verbatim
+    // and the note has to go away.
+    let tmp = setup_frequent_title_vault("", "runner groups", 30);
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+    assert!(
+        stderr.contains("--exclude-title 'runner groups'"),
+        "a title with a space must be shell-quoted in the suggestion: {stderr}"
+    );
+
+    // What the shell hands back after stripping the quotes.
+    let (_stdout, quiet) =
+        run_links_auto_capturing(tmp.path(), &["--exclude-title", "runner groups"]);
+    assert!(
+        quiet.is_empty(),
+        "pasting the quoted flag should extinguish the note: {quiet}"
+    );
+}
+
+#[test]
+fn links_auto_notes_a_dominant_non_ascii_title() {
+    // The wordlist is ASCII-gated, so before iter-205 a German vault never saw
+    // the note at all however dominant its titles were.
+    let tmp = setup_frequent_title_vault("", "Übersicht", 30);
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.contains("\"Übersicht\" (30×, 75%)"),
+        "a non-ASCII title should reach the frequency trigger: {stderr}"
+    );
+    assert!(
+        stderr.contains("--exclude-title 'Übersicht'"),
+        "the suggested flag should be shell-safe: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_stays_silent_when_no_title_clears_the_frequency_floor() {
+    // The knowledgebase-shaped case: a handful of domain-specific titles, none
+    // of them an English word and none anywhere near 25 matches.
+    let tmp = setup_frequent_title_vault("", "Workflows", 20);
+
+    let (stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stdout.contains("Workflows"),
+        "the links themselves should still be proposed: {stdout}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "20 matches is under the floor — no note: {stderr}"
+    );
+}
+
+#[test]
+fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
+    // Dogfood L-12: with more offenders than the note lists, the flag list
+    // still has to cover all of them, and the note has to admit it truncated.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    let words = [
+        "access", "account", "action", "active", "address", "agree", "answer",
+    ];
+    let mut guide = String::from("---\ntitle: Guide\n---\n");
+    for word in words {
+        use std::fmt::Write as _;
+        write_md(
+            tmp.path(),
+            &format!("{word}.md"),
+            &format!("---\ntitle: {word}\n---\nA page.\n"),
+        );
+        let _ = writeln!(guide, "The {word} page is over there.");
+    }
+    write_md(tmp.path(), "guide.md", &guide);
+
+    let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+
+    assert!(
+        stderr.contains("showing the 5 noisiest of 7"),
+        "the note should admit that its prose list is capped: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("--exclude-title ").count(),
+        7,
+        "every offender needs a flag so one paste-back extinguishes the note: {stderr}"
     );
 }
 

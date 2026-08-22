@@ -2045,10 +2045,15 @@ pub(crate) enum LinksAction {
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable,\n\
             \u{00a0}                      case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
-            COMMON-WORD TITLES: when a proposed link comes from a page whose title is an ordinary \
-            English word or a generic doc filename (\"permissions\", \"index\", \"README\"), the run \
-            prints one advisory note on stderr naming those titles with their match counts and the \
-            --exclude-title flags that would skip them. It only names titles that actually produced \
+            NOISY CANDIDATE TITLES: the run prints one advisory note on stderr when a candidate \
+            title looks like a source of over-linking. Two things trigger it: the title is an \
+            ordinary English word or a generic doc filename (\"permissions\", \"index\", \"README\"), \
+            or the title is unusually frequent — at least 25 proposed links and at least 2.5% of \
+            the run. The frequency trigger is language-independent, so non-English titles are \
+            covered too. The note names the offenders with their match counts (plus their share of \
+            the run when frequency is the reason) and the --exclude-title flags that would skip \
+            them; the prose list stops at the five noisiest and says so, but the flags cover every \
+            offender, so one paste-back is enough. It only names titles that actually produced \
             matches, so excluding them makes the note disappear. The note never appears on stdout — \
             the report is unchanged — and -q or --no-warn-common-titles silences it.\n\n\
             PERSISTING THESE: put them in the [links.auto] section of .hyalo.toml so they apply to every run:\n\
@@ -2056,7 +2061,7 @@ pub(crate) enum LinksAction {
             \u{00a0} exclude_titles = [\"permissions\", \"README\"]\n\
             \u{00a0} exclude_target_globs = [\"templates/*\"]\n\
             \u{00a0} first_only = true\n\
-            \u{00a0} warn_common_titles = false   # opt out of the common-word note\n\
+            \u{00a0} warn_common_titles = false   # opt out of the noisy-title note\n\
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
             config says, and --no-first-only turns it off for a single run whatever the config says. \
@@ -2102,8 +2107,9 @@ pub(crate) enum LinksAction {
         /// (repeatable; matched case-insensitively, mirroring --exclude-title)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
-        /// Do not print the advisory note naming candidate titles that are common
-        /// English words (e.g. "permissions", "index").
+        /// Do not print the advisory note naming noisy candidate titles: common
+        /// English words (e.g. "permissions", "index") and titles that dominate
+        /// the run (at least 25 matches and 2.5% of the proposed links).
         ///
         /// The note goes to stderr only and never changes the report on stdout.
         /// Persist the opt-out with `warn_common_titles = false` under

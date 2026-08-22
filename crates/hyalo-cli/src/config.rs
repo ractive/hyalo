@@ -56,8 +56,9 @@ struct AutoLinksConfig {
     /// When `true`, behaves as if `--first-only` had been passed.
     #[serde(default)]
     first_only: Option<bool>,
-    /// When `false`, suppresses the advisory stderr note that names candidate
-    /// titles which are common English words (iter-197). Defaults to `true`;
+    /// When `false`, suppresses the advisory stderr note that names noisy
+    /// candidate titles — common English words (iter-197) and titles that
+    /// dominate the run (iter-205). Defaults to `true`;
     /// `--no-warn-common-titles` turns it off for a single run.
     #[serde(default)]
     warn_common_titles: Option<bool>,
@@ -259,10 +260,10 @@ pub(crate) struct ResolvedDefaults {
     /// when the config says `false`.
     pub(crate) auto_link_first_only: bool,
     /// `[links.auto] warn_common_titles`, default `true`. When `false`, `hyalo
-    /// links auto` never emits the advisory note naming candidate titles that are
-    /// common English words (iter-197). `--no-warn-common-titles` turns it off for
-    /// a single run; there is no flag to turn it back on, because the default
-    /// already does.
+    /// links auto` never emits the advisory note naming noisy candidate titles —
+    /// common English words (iter-197) or titles that dominate the run
+    /// (iter-205). `--no-warn-common-titles` turns it off for a single run; there
+    /// is no flag to turn it back on, because the default already does.
     pub(crate) auto_link_warn_common_titles: bool,
     /// When `true`, "no 'type' property" and "undeclared property in frontmatter"
     /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.

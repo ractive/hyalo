@@ -11,6 +11,20 @@ and this project adheres to
 
 ### Added
 
+- **The `links auto` noisy-title note now fires on frequency, not just on an
+  English word list** (iter-205). A title is flagged when it is a common
+  English word **or** when it dominates the run — at least 25 proposed links
+  and at least 2.5% of them, i.e. `max(25, ceil(total / 40))`. The wordlist
+  alone missed the titles that actually matter: on a GitHub Docs slice a page
+  titled `Workflows` produced 502 of 1,179 proposed links (43%) and was never
+  mentioned, while the note named `limits` at 4%. The frequency trigger is
+  arithmetic, so it is also the first version of this note a non-English vault
+  ever sees — the word list is ASCII-only by construction. The note says which
+  trigger fired per title, and quotes the share of the run for frequency hits.
+  `[links.auto] warn_common_titles` and `--no-warn-common-titles` still govern
+  both triggers; there are no configurable thresholds, and stdout stays
+  byte-identical either way.
+
 - **Directory link targets resolve to `<target>/index.md`** (iter-203). A link
   that names a directory now reaches that directory's index file: `/foo`, `foo`
   and `/foo/` all resolve to `foo/index.md`. This is the convention every
@@ -88,6 +102,15 @@ and this project adheres to
   dependency.
 
 ### Changed
+
+- **The `links auto` noisy-title note is honest about truncation and spells
+  titles the way your vault does** (iter-205, dogfood L-12/L-13). With more
+  offenders than it lists, the note now says `showing the 5 noisiest of 7`
+  instead of `+2 more`, and the suggested `--exclude-title` flags cover *every*
+  offender rather than only the listed ones — pasting them back extinguishes
+  the note in one round instead of two. Titles are displayed in their most
+  frequent original casing (`README`, not `readme`), while matching and
+  exclusion stay case-insensitive.
 
 - **`hyalo lint --rule <id>` validates the id, and matches it
   case-insensitively** (iter-204, M-10). A typo'd rule id used to select
