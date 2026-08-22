@@ -494,9 +494,13 @@ structure.
 
 ## Default output limits
 
-List commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`, `types list`, `views list`, `lint-rules list`) return at
+Capped commands (`find`, `lint`, `tags summary`, `properties summary`, `backlinks`) return at
 most **50 results** by default to avoid flooding the context window. When results are truncated,
 output shows "showing N of M matches" and a hint to get all results.
+
+`types list`, `views list` and `lint-rules list` emit a `total` (so `--count` works) but are
+*not* capped and reject `--limit` — they enumerate small fixed catalogs and always return
+everything.
 
 - `--limit N` — override the default (e.g. `--limit 20` for fewer, `--limit 200` for more)
 - `--limit 0` — unlimited output (returns everything)
