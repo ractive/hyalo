@@ -73,34 +73,28 @@ impl Default for LinksAutoReport {
 
 /// Build and return the config report for `cwd`.
 ///
-/// When `dir_override` is `Some` (the user passed a global `--dir`), the report
-/// loads the config from that directory and reports it as the effective `dir`,
-/// so `hyalo config --dir X` mirrors what the rest of the CLI would use rather
-/// than echoing the CWD config's shadowed `dir` value (ff-rdp B6).
+/// `effective` comes from [`crate::config::resolve_effective`] — the same
+/// resolution every other command goes through — so `hyalo config` reports what
+/// the CLI would actually use. It used to answer the `--dir` question on its
+/// own by reloading `.hyalo.toml` from the target directory, which reported
+/// `config_path: null` while a config *was* in effect (iter-201, H-4).
 pub(crate) fn collect_config_report(
     cwd: &Path,
-    dir_override: Option<&Path>,
+    effective: crate::config::EffectiveConfig,
+    dir_overridden: bool,
 ) -> anyhow::Result<ConfigReport> {
-    // The directory whose `.hyalo.toml` we read: the `--dir` override if given,
-    // else the CWD.
-    let config_search_dir = dir_override.unwrap_or(cwd);
-    let toml_path = config_search_dir.join(".hyalo.toml");
-    let (config_path, raw_contents) = if toml_path.is_file() {
-        let contents = std::fs::read_to_string(&toml_path)
-            .with_context(|| format!("reading {}", toml_path.display()))?;
-        (Some(toml_path), Some(contents))
-    } else {
-        (None, None)
-    };
+    let crate::config::EffectiveConfig {
+        config: resolved,
+        dir,
+        config_path,
+        ..
+    } = effective;
 
-    // Load the full resolved config (handles partial files, malformed TOML, etc.)
-    let resolved = crate::config::load_config_from(config_search_dir);
-
-    // A `--dir` override is the effective vault dir regardless of the config's
-    // own `dir` key.
-    let (dir, dir_overridden) = match dir_override {
-        Some(d) => (d.to_path_buf(), true),
-        None => (resolved.dir, false),
+    let raw_contents = match &config_path {
+        Some(path) => Some(
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
+        ),
+        None => None,
     };
 
     Ok(ConfigReport {
@@ -130,12 +124,14 @@ pub(crate) fn collect_config_report(
 /// execution-based hint gate (`tests/e2e/hint_execution.rs`) can run them.
 pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
     let dir = report.dir.display().to_string();
-    // Only pass --dir when it is not the implicit default; a bare `hyalo summary`
-    // reads the same .hyalo.toml this report came from.
-    let suffix = if dir == "." {
-        String::new()
-    } else {
+    // Only pass --dir when the caller passed one. When `dir` came from the
+    // config file, a bare `hyalo summary` run from the same CWD reads that very
+    // file — re-emitting `--dir <configured>` adds nothing and, before
+    // iter-201, actively changed which config applied (H-4).
+    let suffix = if report.dir_overridden && dir != "." {
         format!(" --dir {}", crate::hints::shell_quote(&dir))
+    } else {
+        String::new()
     };
     vec![
         crate::hints::Hint::new(
@@ -165,7 +161,7 @@ pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
 pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
     let hints: Vec<serde_json::Value> = config_hints(report)
         .iter()
-        .map(|h| json!({"description": &h.description, "cmd": &h.cmd}))
+        .map(|h| json!({"description": &h.description, "cmd": &h.cmd, "writes": h.writes}))
         .collect();
     json!({
         "results": {

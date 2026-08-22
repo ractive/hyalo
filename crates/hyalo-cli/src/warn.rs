@@ -68,13 +68,48 @@ pub fn note(msg: impl AsRef<str>) {
     emit_with_prefix("note", msg.as_ref());
 }
 
+/// Emit a warning that `--quiet` cannot suppress.
+///
+/// Reserved for **config-integrity** problems (iter-201): a `.hyalo.toml` that
+/// could not be parsed silently changes *which vault* and *which rules* apply.
+/// Letting `-q` hide that turns the flag into "run against a configuration you
+/// did not ask for", which is how `links auto --apply -q` ended up able to
+/// rewrite a different tree than `dir` configured. Dedup still applies, so the
+/// message is printed at most once per run.
+pub fn warn_always(msg: impl AsRef<str>) {
+    emit(&Emit {
+        prefix: "warning",
+        msg: msg.as_ref(),
+        force: true,
+    });
+}
+
 /// Shared backend for [`warn`] and [`note`].
 ///
 /// The dedup key combines `prefix` with `msg` so that a `warn("x")` does not
 /// suppress a later `note("x")` (and vice versa) — the surface forms differ
 /// and a user reading stderr expects to see both.
 fn emit_with_prefix(prefix: &str, msg: &str) {
-    if QUIET.load(Ordering::Relaxed) {
+    emit(&Emit {
+        prefix,
+        msg,
+        force: false,
+    });
+}
+
+/// Arguments for [`emit`], grouped so the function keeps a single parameter and
+/// call sites read as named fields rather than a row of bare positionals.
+struct Emit<'a> {
+    prefix: &'a str,
+    msg: &'a str,
+    /// When `true`, quiet mode does not suppress the message (dedup still does).
+    force: bool,
+}
+
+/// Shared backend for every stderr channel.
+fn emit(args: &Emit<'_>) {
+    let Emit { prefix, msg, force } = *args;
+    if !force && QUIET.load(Ordering::Relaxed) {
         return;
     }
 

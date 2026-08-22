@@ -118,6 +118,11 @@ const SEED_COMMANDS: &[&[&str]] = &[
     &["find", "--task", "todo"],
     &["find", "--property", "status=draft"],
     &["find", "--tag", "shared"],
+    // Two view-serializable filter dimensions on a single-file result set, so
+    // the "Save this query as a view" hint fires without being crowded out of
+    // the MAX_HINTS budget — that hint is the one that writes `.hyalo.toml`
+    // (iter-201, M-7).
+    &["find", "--property", "status=draft", "--tag", "topic-3"],
     &["tags", "summary"],
     &["properties", "summary"],
     &["backlinks", "notes/note-1.md"],
@@ -166,6 +171,8 @@ struct Harvested {
     seed: String,
     description: String,
     cmd: String,
+    /// The `writes` marker the CLI attached to the hint (iter-201, M-7).
+    writes: bool,
 }
 
 /// Run one seed command and collect the hints from its JSON envelope.
@@ -206,6 +213,14 @@ fn harvest(seed: &[&str]) -> Vec<Harvested> {
                             .unwrap_or_default()
                             .to_owned(),
                         cmd: cmd.to_owned(),
+                        // Absent `writes` is a bug in the envelope, not a
+                        // read-only hint: default to `true` so a missing marker
+                        // surfaces as an unexpected mutation rather than a
+                        // silently skipped check.
+                        writes: h
+                            .get("writes")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true),
                     })
                 })
                 .collect()
@@ -375,5 +390,180 @@ fn to_argv_injects_dir_when_the_hint_omits_it() {
             "--limit",
             "0"
         ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Side-effect gate (iter-201, M-7)
+// ---------------------------------------------------------------------------
+//
+// The gate above proves every hint *runs*. It says nothing about what running
+// it does. `hyalo find --property … --tag …` used to suggest a `views set …`
+// command that rewrites `.hyalo.toml`, rendered in the same `-> hyalo …` list
+// as read-only drill-downs — so "run the hints to explore" was not safe advice
+// to give an agent. Hints now carry a `writes` flag; this gate holds the flag
+// honest by running every hint marked read-only and diffing the vault.
+
+/// A content fingerprint of every file under `root`, including `.hyalo.toml`.
+///
+/// Sorted vault-relative paths paired with their bytes, so the comparison
+/// catches creations, deletions, and in-place edits alike.
+fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, bytes));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Describe how two snapshots differ, or `None` when they are identical.
+fn describe_diff(before: &[(String, Vec<u8>)], after: &[(String, Vec<u8>)]) -> Option<String> {
+    let mut changes: Vec<String> = Vec::new();
+    for (path, bytes) in after {
+        match before.iter().find(|(p, _)| p == path) {
+            None => changes.push(format!("created {path}")),
+            Some((_, old)) if old != bytes => changes.push(format!("modified {path}")),
+            Some(_) => {}
+        }
+    }
+    for (path, _) in before {
+        if !after.iter().any(|(p, _)| p == path) {
+            changes.push(format!("deleted {path}"));
+        }
+    }
+    (!changes.is_empty()).then(|| changes.join(", "))
+}
+
+/// Every hint the CLI presents as read-only must leave the vault byte-identical.
+#[test]
+fn unmarked_hints_have_no_side_effects() {
+    let harvested: Vec<Harvested> = SEED_COMMANDS.iter().flat_map(|s| harvest(s)).collect();
+    let read_only: Vec<&Harvested> = harvested.iter().filter(|h| !h.writes).collect();
+
+    assert!(
+        read_only.len() >= 20,
+        "only {} read-only hints harvested — the gate would be near-vacuous",
+        read_only.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for h in read_only {
+        let tmp = TempDir::new().unwrap();
+        build_fixture(tmp.path());
+        let before = snapshot(tmp.path());
+        let argv = to_argv(&h.cmd, tmp.path());
+        let _ = hyalo().args(&argv).output().unwrap();
+        let after = snapshot(tmp.path());
+        if let Some(diff) = describe_diff(&before, &after) {
+            failures.push(format!(
+                "  hint from `hyalo {}`\n    description: {}\n    command:     {}\n    changed:     {diff}",
+                h.seed, h.description, h.cmd
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} hint(s) presented as read-only modified the vault:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// At least one hint must actually be *marked* as writing, otherwise
+/// `unmarked_hints_have_no_side_effects` could pass by the marker being applied
+/// to everything.
+#[test]
+fn the_views_set_hint_is_marked_as_writing() {
+    let harvested: Vec<Harvested> =
+        harvest(&["find", "--property", "status=draft", "--tag", "topic-3"]);
+    let views_set = harvested
+        .iter()
+        .find(|h| h.cmd.contains("views set"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the save-as-view hint stopped firing; harvested: {:?}",
+                harvested.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        views_set.writes,
+        "`{}` writes .hyalo.toml but is not marked",
+        views_set.cmd
+    );
+}
+
+/// The marker must reach text output too — JSON consumers are not the only
+/// audience, and the plain `->` list is what a human reads.
+#[test]
+fn text_output_distinguishes_writing_hints() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "find",
+            "--property",
+            "status=draft",
+            "--tag",
+            "topic-3",
+            "--format",
+            "text",
+            "--hints",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let writing_line = stdout
+        .lines()
+        .find(|l| l.contains("views set"))
+        .unwrap_or_else(|| panic!("no views-set hint in text output:\n{stdout}"));
+    assert!(
+        writing_line.trim_start().starts_with("=>"),
+        "writing hint must use the `=>` arrow, got: {writing_line}"
+    );
+    assert!(
+        writing_line.ends_with("[writes]"),
+        "writing hint must be tagged [writes], got: {writing_line}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.trim_start().starts_with("-> ")),
+        "read-only hints must keep the `->` arrow:\n{stdout}"
+    );
+}
+
+/// The snapshot helper must notice a change, or the gate above is decorative.
+#[test]
+fn snapshot_diff_detects_a_write() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let before = snapshot(tmp.path());
+    let argv = to_argv(
+        "hyalo set --property touched=true --file notes/note-1.md",
+        tmp.path(),
+    );
+    let _ = hyalo().args(&argv).output().unwrap();
+    let after = snapshot(tmp.path());
+    let diff = describe_diff(&before, &after).expect("a write must show up as a diff");
+    assert!(
+        diff.contains("modified notes/note-1.md"),
+        "unexpected diff: {diff}"
     );
 }

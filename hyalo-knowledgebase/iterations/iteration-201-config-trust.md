@@ -2,7 +2,7 @@
 title: Iteration 201 — config trust (no silent config discard)
 type: iteration
 date: 2026-08-18
-status: planned
+status: completed
 branch: iter-201/config-trust
 tags:
   - iteration
@@ -47,46 +47,46 @@ Repros in [[dogfood-results/dogfood-v0210-pre-release-iters-191-198]]
   `.hyalo.toml`, emitted in the same `-> hyalo …` list as read-only
   drill-downs when 2+ filters combine.
 
-## Tasks
+## Tasks [7/7]
 
-- [ ] H-4 decision first, recorded as a DEC entry: when `--dir` equals the
+- [x] H-4 decision first, recorded as a DEC entry: when `--dir` equals the
       configured dir, the config MUST apply (the note stays, minus the
       lie). When `--dir` names a different directory, pick one semantic
       and implement it everywhere: load that directory's own
       `.hyalo.toml` if present, else defaults — and say which config file
       is in effect on stderr. `hyalo config --dir X` must report the truth
       (`config_path` never silently null while a config was read).
-- [ ] H-4: stop emitting `--dir` in hints when the flag would change which
+- [x] H-4: stop emitting `--dir` in hints when the flag would change which
       config applies (hint builders already thread flags — reuse that).
-- [ ] M-2: a malformed `.hyalo.toml` must NOT fall back to all-defaults
+- [x] M-2: a malformed `.hyalo.toml` must NOT fall back to all-defaults
       for mutating commands — hard error, exit 1, with today's excellent
       parse diagnostics. Read-only commands may keep the
       warn-and-defaults behavior, but the warning must survive `-q`
       (config-integrity warnings are not chatter).
-- [ ] M-2: fix the double-parse (config parsed twice per invocation per
+- [x] M-2: fix the double-parse (config parsed twice per invocation per
       the dedup notice).
-- [ ] M-7: mutating hints get a distinct marker (e.g. `=> … # writes
+- [x] M-7: mutating hints get a distinct marker (e.g. `=> … # writes
       .hyalo.toml`) or move to a separate labelled block. The iter-192
       hint-execution e2e gate must then assert that every UNMARKED hint is
       side-effect-free (run it, snapshot-diff the vault + config).
-- [ ] e2e: `--dir` same-dir keeps schema/views/lint config (assert the 4
+- [x] e2e: `--dir` same-dir keeps schema/views/lint config (assert the 4
       HYALO002 warnings appear WITH the flag); malformed-config mutation
       refusal; `-q` still shows the config warning on reads.
-- [ ] Docs: configuration.md section on config resolution order and the
+- [x] Docs: configuration.md section on config resolution order and the
       `--dir` semantics; CHANGELOG (breaking if H-4 changes `--dir`
       behavior — call it out).
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
-- [ ] `hyalo lint --dir hyalo-knowledgebase --strict` reports the same
+- [x] `hyalo lint --dir hyalo-knowledgebase --strict` reports the same
       findings as without the flag (repo KB: 4 warnings, not vacuous
       green)
-- [ ] Every hint emitted by `hyalo config` runs and returns non-degraded
+- [x] Every hint emitted by `hyalo config` runs and returns non-degraded
       results
-- [ ] `hyalo set`/`links auto`/any writer exits 1 on a malformed
+- [x] `hyalo set`/`links auto`/any writer exits 1 on a malformed
       `.hyalo.toml` and touches nothing
-- [ ] No unmarked hint mutates anything (gate-enforced)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] No unmarked hint mutates anything (gate-enforced)
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

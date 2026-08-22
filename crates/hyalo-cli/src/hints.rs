@@ -38,13 +38,24 @@ const SITE_URL_BROKEN_PERCENT: u64 = 95;
 pub struct Hint {
     pub(crate) description: String,
     pub(crate) cmd: String,
+    /// `true` when running `cmd` would modify the vault or `.hyalo.toml`.
+    ///
+    /// Derived from the command text by
+    /// [`crate::mutation::command_line_writes`] rather than set by each hint
+    /// builder, so a new hint cannot be added *without* being classified. The
+    /// `views set …` suggestion sat unmarked among read-only drill-downs until
+    /// iter-201; renderers now separate the two (see
+    /// [`crate::output::format_envelope`]).
+    pub(crate) writes: bool,
 }
 
 impl Hint {
     pub(crate) fn new(description: impl Into<String>, cmd: String) -> Self {
+        let writes = crate::mutation::command_line_writes(&cmd);
         Self {
             description: description.into(),
             cmd,
+            writes,
         }
     }
 
@@ -55,6 +66,7 @@ impl Hint {
         Self {
             description: description.into(),
             cmd: String::new(),
+            writes: false,
         }
     }
 }
