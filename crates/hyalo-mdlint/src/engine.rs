@@ -859,18 +859,36 @@ mod tests {
         out
     }
 
-    // --- H-1a: line_col_to_byte must use byte columns, not char columns ---
+    // --- iter-196: the 0.16 coordinate contract replaces `line_col_to_byte` ---
 
     #[test]
-    fn line_col_to_byte_handles_multibyte_utf8() {
-        // "café" — 'é' is 2 bytes in UTF-8, so byte and char columns diverge
-        // partway through the line.
+    fn upstream_position_columns_are_unicode_scalars_not_bytes() {
+        use mdbook_lint_core::violation::Position;
+
+        // "café" — 'é' is 2 bytes in UTF-8, so byte and scalar columns diverge
+        // partway through the line. Under the 0.16 contract the line ends at
+        // scalar column 5, which resolves to byte offset 5.
         let text = "café\n";
-        // Byte column 6 is the position right after 'é' (byte offset 5,
-        // since c=1,a=1,f=1,é=2 bytes -> line is 5 bytes long).
-        assert_eq!(line_col_to_byte(text, 1, 6, true), Some(5));
-        // Char column 5 is the same position under the char convention.
-        assert_eq!(line_col_to_byte(text, 1, 5, false), Some(5));
+        assert_eq!(
+            Position { line: 1, column: 5 }.to_byte_offset(text),
+            Some(5),
+            "scalar column 5 is the end of `café`"
+        );
+        // The old byte-column convention (column 6) is now out of range.
+        assert_eq!(Position { line: 1, column: 6 }.to_byte_offset(text), None);
+    }
+
+    #[test]
+    fn upstream_position_treats_crlf_as_atomic() {
+        use mdbook_lint_core::violation::Position;
+
+        let text = "ab\r\ncd\r\n";
+        // End of line 1 is before the terminator.
+        assert_eq!(Position { line: 1, column: 3 }.to_byte_offset(text), Some(2));
+        // Column 1 of line 2 is after the whole CRLF pair — nothing addresses
+        // the gap between '\r' and '\n'.
+        assert_eq!(Position { line: 2, column: 1 }.to_byte_offset(text), Some(4));
+        assert_eq!(Position::from_byte_offset(text, 3), None);
     }
 
     #[test]
@@ -962,9 +980,25 @@ mod tests {
     }
 
     #[test]
-    fn trim_md034_liquid_leaves_clean_urls_untouched() {
-        // No Liquid tag → no trim, upstream fix is kept as-is.
-        assert!(trim_md034_liquid("<https://example.com>", "x", 0, 0).is_none());
+    fn md034_fix_wraps_a_clean_url_exactly() {
+        // The former `trim_md034_liquid` no-op case: a URL with no Liquid tag
+        // must round-trip through the upstream fix untouched apart from the
+        // autolink brackets.
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "See https://example.com for details.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD034")
+            .expect("MD034 should fire on a bare URL");
+        let fix = d.fix.as_ref().expect("MD034 fix should convert");
+        assert_eq!(
+            apply(body, fix),
+            "See <https://example.com> for details.\n"
+        );
     }
 
     #[test]
