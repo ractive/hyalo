@@ -614,3 +614,144 @@ Nothing here.
         "indexed backlinks must match the live scan after links fix --apply --index"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-5 (iter-204): every `read` error path honors the piped-JSON default
+// ---------------------------------------------------------------------------
+
+/// `read` prints raw markdown by default even when piped — but its *errors*
+/// must still be JSON there, like every sibling command's.
+#[test]
+fn read_error_paths_emit_json_when_piped() {
+    let tmp = setup_vault();
+
+    // (args, substring the error message must contain)
+    let cases: [(&[&str], &str); 5] = [
+        (&["read", "missing.md"], "file not found"),
+        (&["read", "."], "directory"),
+        (&["read", "note.md", "--lines", "bogus"], "line number"),
+        (&["read", "note.md", "--count"], "--count"),
+        (
+            &["read", "note.md", "--section", "nope"],
+            "section not found",
+        ),
+    ];
+
+    for (args, needle) in cases {
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?} must be a user error"
+        );
+        let json = assert_json_error(&output.stderr);
+        let err = json["error"].as_str().unwrap_or_default();
+        assert!(
+            err.contains(needle),
+            "{args:?}: expected {needle:?} in {err:?}"
+        );
+    }
+}
+
+/// An explicit `--format text` still gets human-readable `read` errors.
+#[test]
+fn read_error_respects_explicit_format_text() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["read", "missing.md", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error:"),
+        "explicit text format must stay text: {stderr}"
+    );
+}
+
+/// `read` results themselves stay raw text when piped — only errors changed.
+#[test]
+fn read_success_output_stays_raw_text_when_piped() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["read", "note.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Some text."),
+        "read must still emit raw markdown: {stdout}"
+    );
+    assert!(
+        !stdout.trim_start().starts_with('{'),
+        "read must not switch to JSON results: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L-6 (iter-204): `find -e` regex errors use the standard envelope
+// ---------------------------------------------------------------------------
+
+/// A bad `-e` pattern must produce the JSON error envelope, quote the pattern
+/// as typed, and never leak hyalo's internal `(?i)` prefix.
+#[test]
+fn find_regex_error_uses_json_envelope_without_internal_flag() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "-e", "a(b", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let json = assert_json_error(&output.stderr);
+    assert_eq!(
+        json["error"], "invalid regular expression: a(b",
+        "error must quote the pattern as typed: {json}"
+    );
+    let cause = json["cause"].as_str().unwrap_or_default();
+    assert!(
+        !cause.contains("(?i)"),
+        "internal case-insensitivity flag must not leak: {cause}"
+    );
+    assert!(
+        cause.contains("unclosed group"),
+        "the engine's diagnostic must survive: {cause}"
+    );
+}
+
+/// The caret in the engine's diagnostic must point at the real offender once
+/// the `(?i)` prefix is stripped (it used to sit four columns to the right).
+#[test]
+fn find_regex_error_caret_is_realigned() {
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "-e", "a(b", "--format", "json"])
+        .output()
+        .unwrap();
+    let json = assert_json_error(&output.stderr);
+    let cause = json["cause"].as_str().unwrap_or_default().to_owned();
+    let lines: Vec<&str> = cause.lines().collect();
+    let pat_idx = lines
+        .iter()
+        .position(|l| l.trim() == "a(b")
+        .unwrap_or_else(|| panic!("pattern line missing: {cause}"));
+    let caret_line = lines[pat_idx + 1];
+    let pattern_line = lines[pat_idx];
+    let caret_col = caret_line.find('^').expect("caret");
+    let paren_col = pattern_line.find('(').expect("paren");
+    assert_eq!(
+        caret_col, paren_col,
+        "caret must sit under the '(' in:\n{cause}"
+    );
+}

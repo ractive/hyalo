@@ -249,11 +249,25 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let format_str = report.format.as_deref().unwrap_or("(none)");
     // Always say where the prefix came from: `(none)` alone hid the fact that
     // an auto-derived prefix was deciding what `/foo` means (iter-203, UX-4).
-    let site_prefix_str = format!(
+    let mut site_prefix_str = format!(
         "{} ({})",
         report.site_prefix.as_deref().unwrap_or("(none)"),
         report.site_prefix_source.as_str()
     );
+    // iter-204: auto-derivation can only ever produce ONE path segment — the
+    // vault directory's name — while real corpora publish multi-segment URL
+    // prefixes (MDN checked out into `en-us/` writes `/en-US/docs/...`).
+    // Matching is case-insensitive, so casing is no longer the problem; the
+    // missing second segment still is, and nothing detects it automatically.
+    // Say so where the value is shown, since a wrong prefix silently breaks
+    // every site-absolute link rather than erroring.
+    if report.site_prefix_source == crate::config::SitePrefixSource::Derived {
+        site_prefix_str.push_str(
+            "\n  note: derived prefixes are a single path segment, matched case-insensitively; \
+             if links are written with a multi-segment prefix (e.g. /en-US/docs/...), \
+             pass --site-prefix 'en-US/docs' or set site_prefix in .hyalo.toml",
+        );
+    }
     let exempt_str = list_or_none(&report.exempt);
 
     // Annotate the dir line when a `--dir` override is in effect, so the report

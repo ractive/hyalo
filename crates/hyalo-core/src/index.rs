@@ -986,6 +986,56 @@ fn is_pid_alive(pid: u32) -> bool {
     }
 }
 
+/// Tolerance, in seconds, applied to the snapshot staleness probe.
+///
+/// `SnapshotHeader::created_at` is truncated to whole seconds while directory
+/// mtimes are not, so a directory touched in the same second the snapshot was
+/// written can read as up to one second newer. One second of slack keeps the
+/// probe from crying stale about the index's own creation.
+pub const STALENESS_TOLERANCE_SECS: u64 = 1;
+
+/// Cheap staleness probe: the newest mtime among `dir` and its immediate
+/// subdirectories, as whole seconds since the Unix epoch.
+///
+/// A directory's mtime moves when an entry is created, renamed or removed
+/// inside it, so this catches notes added or deleted in the top two levels of
+/// a vault — the common "the vault was edited behind the index's back" case —
+/// at the cost of one `read_dir` plus one `stat` per top-level entry, never a
+/// full walk (which is exactly what the snapshot exists to avoid).
+///
+/// It deliberately does NOT catch every drift: an in-place edit of an existing
+/// note leaves every directory mtime untouched, and changes more than one
+/// level deep are invisible. Callers must treat a `None`/older result as "no
+/// evidence of staleness", never as "the index is current".
+pub fn newest_shallow_dir_mtime(dir: &Path) -> Option<u64> {
+    fn mtime_secs(path: &Path) -> Option<u64> {
+        std::fs::metadata(path)
+            .ok()?
+            .modified()
+            .ok()?
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs())
+    }
+
+    let mut newest = mtime_secs(dir);
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return newest;
+    };
+    for entry in read_dir.flatten() {
+        // `file_type()` comes from the directory entry on every platform we
+        // support, so this costs no extra syscall in the common case.
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        if !is_dir {
+            continue;
+        }
+        if let Some(m) = mtime_secs(&entry.path()) {
+            newest = Some(newest.map_or(m, |n: u64| n.max(m)));
+        }
+    }
+    newest
+}
+
 /// Scan `dir` for `.hyalo-index` files whose creator PID is no longer running.
 ///
 /// Returns a list of `(path, vault_dir, created_at)` tuples for stale files.

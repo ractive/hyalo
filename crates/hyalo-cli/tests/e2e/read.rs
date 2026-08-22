@@ -918,3 +918,96 @@ fn read_leading_space_dashes_file_shows_full_content() {
         "no lines may be swallowed as pseudo-frontmatter, got: {content:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// UX-2 (iter-204): `--section` misses list the closest headings, not all of them
+// ---------------------------------------------------------------------------
+
+/// Write a note with `count` numbered sections plus one distinctive heading.
+fn write_many_sections(dir: &std::path::Path, count: usize) {
+    use std::fmt::Write as _;
+    let mut body = String::from("---\ntitle: Many\n---\n");
+    for i in 1..=count {
+        let _ = write!(body, "## Section {i}\n\nbody\n\n");
+    }
+    body.push_str("## Decision Log\n\nbody\n");
+    write_md(dir, "many.md", &body);
+}
+
+#[test]
+fn section_not_found_lists_closest_five_and_a_count() {
+    let tmp = TempDir::new().unwrap();
+    write_many_sections(tmp.path(), 12);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "read",
+            "many.md",
+            "--section",
+            "Decison Lg",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // The closest heading is ranked first, not buried in document order.
+    let hint = stderr
+        .lines()
+        .find(|l| l.trim_start().starts_with("hint:"))
+        .unwrap_or_else(|| panic!("no hint line: {stderr}"));
+    assert!(
+        hint.contains("closest sections: ## Decision Log"),
+        "the fuzzy-closest heading must lead: {hint}"
+    );
+    assert!(
+        hint.contains("and 8 more"),
+        "the remaining count must be stated: {hint}"
+    );
+    // 13 headings exist; only 5 may be listed.
+    assert_eq!(hint.matches("## ").count(), 5, "exactly 5 shown: {hint}");
+    assert!(
+        !hint.contains("## Section 12"),
+        "the full dump must be gone: {hint}"
+    );
+}
+
+/// With few headings, the full list is still the friendliest answer.
+#[test]
+fn section_not_found_lists_all_when_few_headings() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "few.md", "---\ntitle: F\n---\n## One\n## Two\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["read", "few.md", "--section", "nope", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("available sections: ## One, ## Two"),
+        "short lists stay complete: {stderr}"
+    );
+    assert!(!stderr.contains("more"), "no truncation notice: {stderr}");
+}
+
+/// A file with no headings at all keeps its own message.
+#[test]
+fn section_not_found_says_no_headings() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "flat.md", "---\ntitle: F\n---\nJust prose.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["read", "flat.md", "--section", "nope", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("this file has no headings"),
+        "got: {stderr}"
+    );
+}

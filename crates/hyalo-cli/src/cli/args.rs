@@ -12,6 +12,12 @@ use crate::output::Format;
 /// Shared with [`crate::cli::help`] so both templates use the same marker.
 pub(crate) const LIST_COMMANDS_PLACEHOLDER: &str = "{LIST_COMMANDS}";
 
+/// Token substituted with [`crate::list_commands::limited_commands_phrase`].
+///
+/// Distinct from [`LIST_COMMANDS_PLACEHOLDER`]: "emits a total" and "caps at
+/// `default_limit` and takes `--limit`" are different sets (M-8).
+pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
+
 /// Shared `--file` doc string used on every command that accepts `--file`,
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
@@ -579,6 +585,15 @@ pub(crate) enum Commands {
         \u{00a0} hyalo properties summary --glob 'research/**/*.md'\n\
         \u{00a0} hyalo properties rename --from old-key --to new-key")]
     Properties {
+        /// Glob pattern(s) to filter which files to scan, relative to --dir
+        /// (repeatable); prefix '!' to negate. Bare-group form of
+        /// `properties summary --glob`.
+        #[arg(short, long)]
+        glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited). Bare-group
+        /// form of `properties summary --limit`.
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
         #[command(subcommand)]
         action: Option<PropertiesAction>,
     },
@@ -592,6 +607,15 @@ pub(crate) enum Commands {
         \u{00a0} hyalo tags summary --glob 'research/**/*.md'\n\
         \u{00a0} hyalo tags rename --from old-tag --to new-tag")]
     Tags {
+        /// Glob pattern(s) to filter which files to scan, relative to --dir
+        /// (repeatable); prefix '!' to negate. Bare-group form of
+        /// `tags summary --glob`.
+        #[arg(short, long)]
+        glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited). Bare-group
+        /// form of `tags summary --limit`.
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
         #[command(subcommand)]
         action: Option<TagsAction>,
     },
@@ -966,6 +990,14 @@ Repeatable (AND).\n\
             read/write files on disk but also patch the index in-place after each\n\
             mutation — keeping it current for subsequent queries. This is safe as\n\
             long as no external tool modifies vault files while the index is active.\n\n\
+            SNAPSHOT CONTRACT: the index is a point-in-time copy, not a live view.\n\
+            Edits made while it exists — by hand, by another tool, or by hyalo run\n\
+            without an index flag — are invisible to indexed queries, which still\n\
+            exit 0. Commands that load an index cheaply compare the vault's\n\
+            top-level directory mtimes against the snapshot's creation time and\n\
+            warn `index older than vault` when they postdate it; that probe misses\n\
+            in-place edits of existing notes and changes more than one level deep,\n\
+            so re-run create-index whenever the vault may have changed.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\
@@ -2011,7 +2043,8 @@ pub(crate) enum LinksAction {
             \u{00a0}                      first_only = true is set in .hyalo.toml. Conflicts with\n\
             \u{00a0}                      --first-only.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
-            --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable)\n\n\
+            --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable,\n\
+            \u{00a0}                      case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
             COMMON-WORD TITLES: when a proposed link comes from a page whose title is an ordinary \
             English word or a generic doc filename (\"permissions\", \"index\", \"README\"), the run \
             prints one advisory note on stderr naming those titles with their match counts and the \
@@ -2065,7 +2098,8 @@ pub(crate) enum LinksAction {
         /// run without editing the config. Cannot be combined with --first-only.
         #[arg(long, conflicts_with = "first_only")]
         no_first_only: bool,
-        /// Exclude target pages whose vault-relative path matches a glob pattern (repeatable)
+        /// Exclude target pages whose vault-relative path matches a glob pattern
+        /// (repeatable; matched case-insensitively, mirroring --exclude-title)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
         /// Do not print the advisory note naming candidate titles that are common

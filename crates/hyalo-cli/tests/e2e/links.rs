@@ -4585,3 +4585,38 @@ Bare URL: https://example.com/z/target.md
         "a resolving link in a rewritten file must not change: {nested}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-15 (iter-204): JSON match positions are 1-based in both axes
+// ---------------------------------------------------------------------------
+
+/// `links auto` reported a 1-based `line` next to a 0-based `col`, so a
+/// consumer that trusted one was off by one on the other.
+#[test]
+fn links_auto_match_col_is_one_based() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target Note\n---\nBody.\n",
+    );
+    // "Target Note" starts at byte offset 4 of line 4 → column 5.
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nSee Target Note here.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "links auto failed: {output:?}");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let m = &json["results"]["matches"][0];
+    assert_eq!(m["line"], 4, "line is 1-based: {json}");
+    assert_eq!(m["col"], 5, "col must be 1-based too: {json}");
+    assert_eq!(m["matched_text"], "Target Note");
+}

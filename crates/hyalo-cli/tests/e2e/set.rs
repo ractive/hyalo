@@ -1578,3 +1578,134 @@ fn set_valid_enum_value_has_no_advisory_note() {
         json["note"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-2 (iter-204): a single explicitly named unparseable file is an error
+// ---------------------------------------------------------------------------
+
+/// Write a vault holding one unparseable note and one clean note.
+fn setup_unparseable_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "bad.md",
+        md!(r"
+---
+title: [unclosed
+ bad: : yaml
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "good.md",
+        md!(r"
+---
+title: Good
+---
+Body.
+"),
+    );
+    tmp
+}
+
+/// `set` on the single named file that cannot be parsed must exit 1 and say
+/// that nothing was modified, not report `0/0 modified (1 scanned)` at exit 0.
+#[test]
+fn set_single_named_unparseable_file_exits_1() {
+    let tmp = setup_unparseable_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "bad.md", "--property", "status=done"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "single unparseable named file must exit 1"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nothing was modified"),
+        "error must state nothing was modified: {stderr}"
+    );
+    assert!(
+        stderr.contains("bad.md"),
+        "error must name the file: {stderr}"
+    );
+}
+
+/// Same rule for `remove` and `append`.
+#[test]
+fn remove_and_append_single_named_unparseable_file_exit_1() {
+    let tmp = setup_unparseable_vault();
+
+    for args in [
+        vec!["remove", "bad.md", "--property", "status"],
+        vec!["append", "bad.md", "--property", "tags=x"],
+    ] {
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?} must exit 1 on a single unparseable named file"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("nothing was modified"),
+            "{args:?} stderr: {stderr}"
+        );
+    }
+}
+
+/// Batch behavior is unchanged: a glob run warns and keeps going at exit 0.
+#[test]
+fn glob_write_with_one_unparseable_file_still_exits_0() {
+    let tmp = setup_unparseable_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "--glob", "*.md", "--property", "status=done"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "glob writes must not fail because one note is unparseable"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("good.md"),
+        "the parseable file must still be written: {stdout}"
+    );
+}
+
+/// Two explicitly named files (one bad, one good) is a batch too: exit 0.
+#[test]
+fn two_named_files_with_one_unparseable_still_exits_0() {
+    let tmp = setup_unparseable_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "set",
+            "--file",
+            "bad.md",
+            "--file",
+            "good.md",
+            "--property",
+            "status=done",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0));
+}

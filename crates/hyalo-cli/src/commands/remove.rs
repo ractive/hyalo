@@ -219,6 +219,7 @@ pub fn remove(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let files_arg = files;
     let files = collect_files(dir, files, globs, format)?;
     let files = match files {
         FilesOrOutcome::Files(f) => f,
@@ -234,6 +235,8 @@ pub fn remove(
         vec![(Vec::new(), Vec::new()); tag_args.len()];
 
     let mut index_dirty = false;
+    // L-2: relative paths skipped because their frontmatter would not parse.
+    let mut skipped_unparseable: Vec<String> = Vec::new();
 
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
@@ -242,6 +245,7 @@ pub fn remove(
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 crate::warn::warn(format!("skipping {rel_path}: {e}"));
+                skipped_unparseable.push(rel_path.clone());
                 continue;
             }
             Err(e) => return Err(e),
@@ -297,6 +301,14 @@ pub fn remove(
                 &mut index_dirty,
             )?;
         }
+    }
+
+    // L-2: the single file the user named by hand was unparseable — report it
+    // as an error rather than a 0-modified success.
+    if let Some(outcome) =
+        super::single_named_file_unparseable(files_arg, globs, &skipped_unparseable, format)
+    {
+        return Ok(outcome);
     }
 
     if !dry_run {

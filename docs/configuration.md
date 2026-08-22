@@ -125,7 +125,7 @@ every invocation. `[links.auto]` persists them per vault:
 ```toml
 [links.auto]
 exclude_titles = ["permissions", "README", "index"]   # like --exclude-title (case-insensitive)
-exclude_target_globs = ["templates/*"]                # like --exclude-target-glob
+exclude_target_globs = ["templates/*"]                # like --exclude-target-glob (case-insensitive)
 first_only = true                                     # like --first-only
 warn_common_titles = false                            # opt out of the common-word note
 ```
@@ -136,6 +136,12 @@ Merge rules with the CLI flags:
 | --- | --- |
 | `exclude_titles` | **Unioned** with `--exclude-title` — the flag extends the config list, never replaces it |
 | `exclude_target_globs` | **Unioned** with `--exclude-target-glob` |
+
+Both exclusion lists match **case-insensitively**. `exclude_titles = ["readme"]`
+excludes a page titled `README`, and `exclude_target_globs = ["templates/*"]`
+excludes `Templates/Note.md` — so a vault whose directory casing is
+inconsistent (or which lives on a case-insensitive filesystem) does not need a
+pattern per spelling.
 | `first_only` | `--first-only` turns it on for a single run; the config turns it on for every run; `--no-first-only` turns it off for a single run |
 | `warn_common_titles` | On by default; `--no-warn-common-titles` turns it off for a single run, the config for every run |
 

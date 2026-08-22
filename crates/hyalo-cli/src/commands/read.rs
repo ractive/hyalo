@@ -133,6 +133,49 @@ fn collect_headings(body_lines: &[String]) -> Vec<String> {
     headings
 }
 
+/// How many candidate headings a section-not-found error lists (UX-2).
+const MAX_SUGGESTED_HEADINGS: usize = 5;
+
+/// Build the hint for a `--section` miss: the closest headings, then a count.
+///
+/// Dumping every heading on one line cost ~4 KB on this project's own
+/// decision-log — punitive in a terminal and pure token burn for an agent, and
+/// the useful part (the heading you meant) was buried. Rank by edit distance to
+/// what was asked for, show the [`MAX_SUGGESTED_HEADINGS`] closest, and point
+/// at the full listing for the rest.
+fn section_not_found_hint(query: &str, available: &[String]) -> String {
+    if available.is_empty() {
+        return "this file has no headings".to_owned();
+    }
+    let needle = query.to_lowercase();
+    let mut ranked: Vec<&String> = available.iter().collect();
+    // Stable sort keeps document order among equally-close headings.
+    ranked.sort_by_key(|h| {
+        // Compare against the heading text, not its `#` prefix — the prefix is
+        // identical noise that would otherwise dominate short queries.
+        let text = h.trim_start_matches('#').trim().to_lowercase();
+        // A substring match is what `--section` actually does, so rank those
+        // first regardless of length difference.
+        let contains = usize::from(!text.contains(&needle));
+        (contains, hyalo_core::util::levenshtein(&text, &needle))
+    });
+
+    let shown: Vec<&str> = ranked
+        .iter()
+        .take(MAX_SUGGESTED_HEADINGS)
+        .map(|h| h.as_str())
+        .collect();
+    let remaining = available.len().saturating_sub(shown.len());
+    if remaining == 0 {
+        format!("available sections: {}", shown.join(", "))
+    } else {
+        format!(
+            "closest sections: {} — and {remaining} more, run `hyalo read <file>` to list them all",
+            shown.join(", ")
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Read body lines from file (raw, no stripping)
 // ---------------------------------------------------------------------------
@@ -309,11 +352,7 @@ pub fn run(
         let sections = extract_sections(&content_lines, &filter);
         if sections.is_empty() {
             let available = collect_headings(&content_lines);
-            let hint = if available.is_empty() {
-                "this file has no headings".to_owned()
-            } else {
-                format!("available sections: {}", available.join(", "))
-            };
+            let hint = section_not_found_hint(query, &available);
             return Ok(CommandOutcome::UserError(format_error(
                 format,
                 &format!("section not found: {query}"),

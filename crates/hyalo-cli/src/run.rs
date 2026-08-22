@@ -130,13 +130,13 @@ fn effective_index_path_for(
         | Commands::Read { index_flags, .. }
         | Commands::Lint { index_flags, .. }
         | Commands::New { index_flags, .. } => Some(index_flags),
-        Commands::Tags { action } => match action {
+        Commands::Tags { action, .. } => match action {
             Some(
                 TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
             ) => Some(index_flags),
             None => None,
         },
-        Commands::Properties { action } => match action {
+        Commands::Properties { action, .. } => match action {
             Some(
                 PropertiesAction::Summary { index_flags, .. }
                 | PropertiesAction::Rename { index_flags, .. },
@@ -991,6 +991,11 @@ fn run_inner() -> Result<(), AppError> {
     // --jq operates on JSON, so it conflicts with an explicit --format text.
     let jq_filter = cli.jq.as_deref();
 
+    // L-5: the `read` override below is a decision about *results* only — the
+    // ambient format (explicit `--format`, else json when stdout is a pipe)
+    // still governs error envelopes, so a scripted `hyalo read` failure parses
+    // like every other command's.
+    let error_format = format;
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
     let format =
@@ -1109,25 +1114,43 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.glob.clone_from(glob);
                 Some(ctx)
             }
+            // The summary flags live on the explicit subcommand OR, for the bare
+            // group form, on the group itself (M-8) — read whichever holds them.
             Commands::Properties {
-                action: Some(crate::cli::args::PropertiesAction::Summary { glob, limit, .. }),
-            } => {
+                glob: bare_glob,
+                limit: bare_limit,
+                action,
+            } if !matches!(
+                action,
+                Some(crate::cli::args::PropertiesAction::Rename { .. })
+            ) =>
+            {
+                let (glob, limit) = match action {
+                    Some(crate::cli::args::PropertiesAction::Summary { glob, limit, .. }) => {
+                        (glob, limit)
+                    }
+                    _ => (bare_glob, bare_limit),
+                };
                 let mut ctx = HintContext::from_common(HintSource::PropertiesSummary, &common);
                 ctx.glob.clone_from(glob);
                 ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
             Commands::Tags {
-                action: Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }),
-            } => {
+                glob: bare_glob,
+                limit: bare_limit,
+                action,
+            } if !matches!(action, Some(crate::cli::args::TagsAction::Rename { .. })) => {
+                let (glob, limit) = match action {
+                    Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }) => {
+                        (glob, limit)
+                    }
+                    _ => (bare_glob, bare_limit),
+                };
                 let mut ctx = HintContext::from_common(HintSource::TagsSummary, &common);
                 ctx.glob.clone_from(glob);
                 ctx.has_limit = limit.is_some();
                 Some(ctx)
-            }
-            Commands::Tags { action: None } => {
-                // Bare `hyalo tags` defaults to summary with no glob.
-                Some(HintContext::from_common(HintSource::TagsSummary, &common))
             }
             Commands::Find {
                 pattern,
@@ -1472,6 +1495,21 @@ fn run_inner() -> Result<(), AppError> {
                 let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
                 let vault_dir_str = canonical_dir.to_string_lossy();
                 if idx.validate(&vault_dir_str, site_prefix) {
+                    // M-6: a snapshot is a point-in-time copy — edits made
+                    // outside it (by hand, by another tool, or by hyalo itself
+                    // without `--index`) are simply invisible, and the run
+                    // still exits 0. Probe the vault's shallow directory mtimes
+                    // and warn when they postdate the snapshot, so a stale
+                    // index is at least noisy instead of silently wrong.
+                    let (_, _, created_at, _) = idx.header_info();
+                    if let Some(newest) = hyalo_core::index::newest_shallow_dir_mtime(&dir)
+                        && newest
+                            > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                    {
+                        crate::warn::warn(
+                            "index older than vault; results may be stale — re-run create-index",
+                        );
+                    }
                     Some(idx)
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
@@ -1588,6 +1626,7 @@ fn run_inner() -> Result<(), AppError> {
                 );
                 let pipeline = OutputPipeline {
                     user_format: format,
+                    error_format,
                     jq_filter,
                     hint_ctx: hint_ctx.as_ref(),
                     count: cli.count,
@@ -1706,6 +1745,7 @@ fn run_inner() -> Result<(), AppError> {
 
     let pipeline = OutputPipeline {
         user_format: format,
+        error_format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
         count: cli.count,

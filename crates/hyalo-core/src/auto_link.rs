@@ -33,6 +33,18 @@ pub struct AutoLinkOptions<'a> {
     pub glob_filter: &'a [String],
 }
 
+/// Serialize a 0-based in-memory offset as a 1-based JSON position (L-15).
+///
+/// `serde`'s `serialize_with` contract fixes the by-reference signature, so the
+/// trivially-copy lint does not apply here.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn serialize_one_based<S>(value: &usize, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u64(u64::try_from(value.saturating_add(1)).unwrap_or(u64::MAX))
+}
+
 /// A single proposed auto-link replacement.
 #[derive(Debug, Clone, Serialize)]
 pub struct AutoLinkMatch {
@@ -40,7 +52,13 @@ pub struct AutoLinkMatch {
     pub file: String,
     /// 1-based line number.
     pub line: usize,
-    /// Column offset (0-based byte offset within the line).
+    /// Byte offset of the match within its line.
+    ///
+    /// Held 0-based in memory (it indexes straight into the line's bytes when
+    /// building the replacement) but **serialized 1-based** under `col`, so
+    /// every position in hyalo's JSON — `line` and `col` alike — counts from
+    /// one (L-15).
+    #[serde(serialize_with = "serialize_one_based")]
     pub col: usize,
     /// The matched text as it appears in the file.
     pub matched_text: String,

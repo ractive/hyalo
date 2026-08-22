@@ -2453,3 +2453,182 @@ fn iter157_find_without_link_flags_works_with_empty_stem_map() {
     assert!(files.contains(&"c.md".to_string()));
     assert!(files.contains(&"sub/d.md".to_string()));
 }
+
+// ---------------------------------------------------------------------------
+// M-6 (iter-204): snapshot staleness signal
+// ---------------------------------------------------------------------------
+
+/// A freshly built index must NOT warn — the index's own creation touches the
+/// vault directory, so an mtime-only probe would false-positive here.
+#[test]
+fn fresh_index_does_not_warn_about_staleness() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("index older than vault"),
+        "fresh index must not warn: {stderr}"
+    );
+}
+
+/// A note added to a subdirectory after the index was built makes the vault
+/// newer than the snapshot: warn on stderr, still exit 0.
+#[test]
+fn stale_index_warns_when_vault_is_newer() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    // The probe compares whole seconds with one second of slack, so the vault
+    // edit has to land at least two seconds after the snapshot was written.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    write_md(tmp.path(), "sub/c.md", "---\ntitle: C\n---\nBody.\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "staleness is a warning, not an error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("index older than vault"),
+        "stale index must warn: {stderr}"
+    );
+    assert!(
+        stderr.contains("create-index"),
+        "warning must name the remedy: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L-10 (iter-204): create-index text output has JSON parity
+// ---------------------------------------------------------------------------
+
+/// `--help` promises `path`, `files_indexed` and `warnings`; the text
+/// rendering must carry all three, plus the "replaced existing index" note
+/// when it applies — otherwise a text-mode caller cannot tell an overwrite
+/// from a first build.
+#[test]
+fn create_index_text_output_matches_json_fields() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    let first = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index", "--format", "text"])
+        .output()
+        .unwrap();
+    let first_out = String::from_utf8_lossy(&first.stdout);
+    assert!(
+        first_out.contains("files_indexed: 1"),
+        "text output must carry files_indexed: {first_out}"
+    );
+    assert!(
+        first_out.contains("warnings: 0"),
+        "text output must carry warnings: {first_out}"
+    );
+    assert!(
+        !first_out.contains("replaced existing index"),
+        "a first build must not claim a replacement: {first_out}"
+    );
+
+    let second = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index", "--format", "text"])
+        .output()
+        .unwrap();
+    let second_out = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        second_out.contains("note: replaced existing index"),
+        "an overwrite must say so in text mode too: {second_out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L-7 (iter-204): drop-index diagnoses a missing file as missing
+// ---------------------------------------------------------------------------
+
+/// A nonexistent path *inside* the vault used to be reported as a
+/// boundary-check failure, complete with an `--allow-outside-vault` hint that
+/// could not possibly help.
+#[test]
+fn drop_index_missing_in_vault_path_reports_not_found() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["drop-index", "--path", "nope-index", "--format", "text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index file not found"),
+        "must name the real problem: {stderr}"
+    );
+    assert!(
+        stderr.contains("nope-index"),
+        "must name the path: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--allow-outside-vault"),
+        "the boundary hint is irrelevant here: {stderr}"
+    );
+}
+
+/// The boundary guarantee survives: a missing path *outside* the vault is
+/// still refused, not waved through as a harmless miss.
+#[test]
+fn drop_index_missing_out_of_vault_path_still_refused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("nope-index");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "drop-index",
+            "--path",
+            target.to_str().unwrap(),
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("outside vault"),
+        "out-of-vault paths must stay refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("--allow-outside-vault"),
+        "and keep the override hint: {stderr}"
+    );
+}

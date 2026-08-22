@@ -765,10 +765,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             }
         }
-        Commands::Properties { action } => {
+        Commands::Properties {
+            glob: bare_glob,
+            limit: bare_limit,
+            action,
+        } => {
+            // M-8: bare `hyalo properties` IS `properties summary`, so it takes
+            // the summary flags COMMAND REFERENCE documents for it rather than
+            // rejecting them at parse time.
             let action = action.unwrap_or(PropertiesAction::Summary {
-                glob: vec![],
-                limit: None,
+                glob: bare_glob,
+                limit: bare_limit,
                 index_flags: IndexFlags::default(),
             });
             match action {
@@ -849,10 +856,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ),
             }
         }
-        Commands::Tags { action } => {
+        Commands::Tags {
+            glob: bare_glob,
+            limit: bare_limit,
+            action,
+        } => {
+            // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
             let action = action.unwrap_or(TagsAction::Summary {
-                glob: vec![],
-                limit: None,
+                glob: bare_glob,
+                limit: bare_limit,
                 index_flags: IndexFlags::default(),
             });
             match action {
@@ -1929,6 +1941,41 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             let md_engine = hyalo_mdlint::HyaloLintEngine::create()
                 .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
 
+            // M-10: `--rule` names a rule id, so validate it the way
+            // `lint-rules show` does instead of silently linting with a filter
+            // that matches nothing (an unknown id used to exit 0 with "no
+            // issues found", which reads as "clean" in CI). The match is
+            // case-insensitive and canonicalizes to the catalog spelling so
+            // `--rule hyalo006` behaves exactly like `--rule HYALO006`.
+            let rule = match rule {
+                Some(raw) => match md_engine.rule_entry_ci(&raw) {
+                    Some(entry) => Some(entry.id.clone()),
+                    None => {
+                        return Ok(crate::output::CommandOutcome::UserError(
+                            crate::output::format_error(
+                                ctx.user_format,
+                                &format!("no such rule: {raw}"),
+                                None,
+                                Some("run `hyalo lint-rules list` to see available rules"),
+                                None,
+                            ),
+                        ));
+                    }
+                },
+                None => None,
+            };
+            // M-10: `--rule-prefix` legitimately selects a family, so an empty
+            // selection is not fatal — but it must not look like a clean run.
+            // Warn on stderr; the prefix match itself is case-insensitive.
+            if let Some(prefix) = rule_prefix.as_deref()
+                && md_engine.rules_matching_prefix_ci(prefix).is_empty()
+            {
+                eprintln!(
+                    "warning: --rule-prefix {prefix} matches no rule; nothing will be linted \
+                     (run `hyalo lint-rules list` to see available rules)"
+                );
+            }
+
             // `--format github` emits one annotation per violation, so every
             // finding must be materialized: force `detailed` and lift the
             // per-rule / per-file caps. Otherwise the summary-mode truncation
@@ -1971,7 +2018,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 .unwrap_or(true);
             let hyalo006_selected = match (&rule, &rule_prefix) {
                 (Some(r), _) => r == lint_commands::RULE_ID_BROKEN_LINK,
-                (None, Some(p)) => lint_commands::RULE_ID_BROKEN_LINK.starts_with(p.as_str()),
+                (None, Some(p)) => lint_commands::RULE_ID_BROKEN_LINK
+                    .to_ascii_uppercase()
+                    .starts_with(&p.to_ascii_uppercase()),
                 (None, None) => true,
             };
             let link_lint_ctx = if hyalo006_enabled && hyalo006_selected {
