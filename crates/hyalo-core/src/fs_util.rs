@@ -43,6 +43,86 @@ fn resolve_write_target(path: &Path) -> Result<PathBuf> {
     )
 }
 
+/// Walk up from `path` to the nearest ancestor that exists on disk.
+///
+/// Used to find a canonicalizable anchor when the destination of a prospective
+/// write (and possibly several of its parent directories) does not exist yet.
+fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
+            _ => return current.to_path_buf(),
+        }
+    }
+}
+
+/// The one wording every vault-boundary refusal in hyalo uses (iter-202 L-16).
+///
+/// `subject` names what was refused — `"file"`, `"target path"`, `"output
+/// path"`, … — and `resolved` is the canonical destination the path escaped
+/// to. Pass `Some(target)` whenever an actual resolution happened (symlink or
+/// `..` following) so the user sees both halves of the story: the path they
+/// typed and where it really lands. Pass `None` for a purely lexical rejection,
+/// where no resolved target exists.
+#[must_use]
+pub fn outside_vault_message(subject: &str, resolved: Option<&Path>) -> String {
+    match resolved {
+        Some(target) => format!(
+            "{subject} resolves outside vault boundary: {}",
+            target.display()
+        ),
+        None => format!("{subject} resolves outside vault boundary"),
+    }
+}
+
+/// Report where a prospective write to `path` would really land, when that is
+/// outside `vault_root`.
+///
+/// Resolves `path` through any symlink chain, then anchors on the nearest
+/// ancestor that exists on disk (the destination itself, its parent, or higher
+/// for a brand-new nested file) and canonicalizes that. Because
+/// `fs::create_dir_all` only ever creates plain directories — never symlinks —
+/// an in-vault anchor guarantees every component created below it also stays
+/// in the vault.
+///
+/// Returns:
+/// - `Ok(None)` — the write stays inside the vault
+/// - `Ok(Some(target))` — the write would land at `target`, outside the vault
+/// - `Err(_)` — the vault root or the anchor could not be canonicalized
+///
+/// Call this *before* any `create_dir_all`/`OpenOptions::create_new`/rename so
+/// the refusal is a user error (exit 1) rather than a mid-write failure.
+pub fn escaping_write_target(vault_root: &Path, path: &Path) -> Result<Option<PathBuf>> {
+    let canonical_root = dunce::canonicalize(vault_root).with_context(|| {
+        format!(
+            "failed to canonicalize vault dir {} while checking a write destination",
+            vault_root.display()
+        )
+    })?;
+    let dest = resolve_write_target(path)?;
+    let anchor = nearest_existing_ancestor(&dest);
+    let canonical_anchor = dunce::canonicalize(&anchor)
+        .with_context(|| format!("failed to resolve write destination {}", anchor.display()))?;
+    if canonical_anchor.starts_with(&canonical_root) {
+        return Ok(None);
+    }
+    // Re-attach the not-yet-existing components so the reported target names
+    // the real file rather than the deepest directory that happens to exist.
+    // The boundary decision itself is made on the anchor alone, so a `..` in
+    // the suffix cannot widen what is accepted.
+    let suffix = dest.strip_prefix(&anchor).unwrap_or(Path::new(""));
+    if suffix.as_os_str().is_empty() {
+        // `join("")` would append a trailing separator; the anchor *is* the
+        // destination here.
+        return Ok(Some(canonical_anchor));
+    }
+    Ok(Some(canonical_anchor.join(suffix)))
+}
+
 /// Verify that a symlink-resolved destination is still inside `vault_root`.
 ///
 /// Called only when resolution actually changed the path, so ordinary
@@ -71,9 +151,8 @@ fn ensure_resolved_within(vault_root: &Path, original: &Path, resolved: &Path) -
     };
     if !canonical_target.starts_with(&canonical_root) {
         bail!(
-            "refusing to write through symlink: {} resolves outside vault boundary: {}",
-            original.display(),
-            canonical_target.display()
+            "refusing to write through symlink: {}",
+            outside_vault_message(&original.display().to_string(), Some(&canonical_target))
         );
     }
     Ok(())
@@ -379,6 +458,109 @@ mod tests {
         atomic_write(&link, b"created").unwrap();
 
         assert_eq!(std::fs::read_to_string(&missing).unwrap(), "created");
+    }
+
+    #[test]
+    fn outside_vault_message_two_path_form() {
+        let msg = outside_vault_message("file", Some(Path::new("/elsewhere/secret.md")));
+        assert_eq!(
+            msg,
+            "file resolves outside vault boundary: /elsewhere/secret.md"
+        );
+    }
+
+    #[test]
+    fn outside_vault_message_without_resolved_target() {
+        assert_eq!(
+            outside_vault_message("path", None),
+            "path resolves outside vault boundary"
+        );
+    }
+
+    #[test]
+    fn escaping_write_target_accepts_plain_in_vault_path() {
+        let vault = tempfile::tempdir().unwrap();
+        let dest = vault.path().join("note.md");
+        std::fs::write(&dest, "x").unwrap();
+        assert!(
+            escaping_write_target(vault.path(), &dest)
+                .unwrap()
+                .is_none(),
+            "an ordinary in-vault file must not be refused"
+        );
+    }
+
+    #[test]
+    fn escaping_write_target_accepts_not_yet_existing_nested_path() {
+        let vault = tempfile::tempdir().unwrap();
+        let dest = vault.path().join("a").join("b").join("new.md");
+        assert!(
+            escaping_write_target(vault.path(), &dest)
+                .unwrap()
+                .is_none(),
+            "a brand-new nested destination anchors on the vault root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_reports_symlink_escape() {
+        let outside = tempfile::tempdir().unwrap();
+        let escapee = outside.path().join("secret.md");
+        std::fs::write(&escapee, "untouched").unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        let link = vault.path().join("alias.md");
+        std::os::unix::fs::symlink(&escapee, &link).unwrap();
+
+        let target = escaping_write_target(vault.path(), &link)
+            .unwrap()
+            .expect("the escape must be reported");
+        assert_eq!(
+            target,
+            dunce::canonicalize(&escapee).unwrap(),
+            "the reported target must be the canonical destination"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_reports_escape_through_symlinked_directory() {
+        let outside = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("outdir")).unwrap();
+
+        // Neither the file nor its intermediate directories exist yet: the
+        // check must anchor on the symlinked directory, which already does.
+        let dest = vault.path().join("outdir").join("a").join("planted.md");
+        let target = escaping_write_target(vault.path(), &dest)
+            .unwrap()
+            .expect("a write below a symlinked-out directory must be refused");
+        assert!(
+            target.ends_with("a/planted.md"),
+            "the reported target keeps the not-yet-created components: {}",
+            target.display()
+        );
+        assert!(
+            !outside.path().join("a").exists(),
+            "the check must not create anything"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaping_write_target_accepts_intra_vault_symlink() {
+        let vault = tempfile::tempdir().unwrap();
+        let real = vault.path().join("real.md");
+        std::fs::write(&real, "x").unwrap();
+        let link = vault.path().join("alias.md");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(
+            escaping_write_target(vault.path(), &link)
+                .unwrap()
+                .is_none(),
+            "a symlink that stays inside the vault is fine"
+        );
     }
 
     #[test]

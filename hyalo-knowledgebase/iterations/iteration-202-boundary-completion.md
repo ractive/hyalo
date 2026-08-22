@@ -2,7 +2,7 @@
 title: Iteration 202 — vault boundary completion and symlink walker dedup
 type: iteration
 date: 2026-08-18
-status: planned
+status: completed
 branch: iter-202/boundary-completion
 tags:
   - iteration
@@ -52,42 +52,42 @@ Repros in [[dogfood-results/dogfood-v0210-pre-release-iters-191-198]]
 
 ## Tasks
 
-- [ ] H-3: `madr toc` canonicalizes the ADR dir (following symlinks) and
+- [x] H-3: `madr toc` canonicalizes the ADR dir (following symlinks) and
       refuses when the resolved `README.md` falls outside the vault —
       same `atomic_write_within` path the iter-191 writers use. e2e for
       the `../` and symlinked-dir vectors.
-- [ ] M-3: `changelog add`/`release --apply` resolve `CHANGELOG.md`
+- [x] M-3: `changelog add`/`release --apply` resolve `CHANGELOG.md`
       through symlinks and refuse an out-of-vault target, mirroring
       `okf log`. Note: an INTENTIONAL out-of-vault changelog is
       configured via `[changelog] path` — that documented path stays
       allowed; only the silent symlink escape is refused.
-- [ ] M-4: `new --file` canonicalizes the parent directory after the
+- [x] M-4: `new --file` canonicalizes the parent directory after the
       lexical checks and refuses out-of-vault resolution with the same
       message `set` gives.
-- [ ] M-5: dedup vault enumeration by canonical path (first spelling
+- [x] M-5: dedup vault enumeration by canonical path (first spelling
       wins, stable order). Asserts: `links fix --apply` with an in-vault
       symlink exits 0 and rewrites once; `find --count` counts one file;
       the skip warning prints once. Watch Windows: canonicalize via the
       existing helpers, no `\\?\` surprises (CI covers it).
-- [ ] Unify refusal UX: one exit code (1) and one message shape for the
+- [x] Unify refusal UX: one exit code (1) and one message shape for the
       whole boundary family, adopting the two-path phrasing ("path X
       resolves outside vault Y"). Update the e2e escape-refusal suite.
-- [ ] Sweep for other unchecked writers: grep every `--apply`/write
+- [x] Sweep for other unchecked writers: grep every `--apply`/write
       command for missing canonicalize+boundary (okf index, lint --fix,
       task, set/append/remove already covered — verify and list in the
       PR body).
 
 ## Acceptance criteria
 
-- [ ] All H-3/M-3/M-4 repros from the report refuse at exit 1 with
+- [x] All H-3/M-3/M-4 repros from the report refuse at exit 1 with
       nothing written outside the vault
-- [ ] `links fix --apply` on the M-5 repro vault exits 0; the note is
+- [x] `links fix --apply` on the M-5 repro vault exits 0; the note is
       rewritten exactly once
-- [ ] `summary` on a vault with an in-vault symlink to one note reports
+- [x] `summary` on a vault with an in-vault symlink to one note reports
       1 file
-- [ ] Boundary refusals share exit code and message shape (asserted in
+- [x] Boundary refusals share exit code and message shape (asserted in
       e2e)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

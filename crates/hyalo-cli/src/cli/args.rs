@@ -1380,7 +1380,8 @@ Repeatable (AND).\n\
         /// Document type to scaffold (must exist in `[schema.types.*]`)
         #[arg(long, value_name = "TYPE", required = true)]
         r#type: String,
-        /// Vault-relative path for the new file (must not exist; parent dirs created if missing)
+        /// Vault-relative path for the new file (must not exist; parent dirs created if
+        /// missing; must still resolve inside the vault after symlinks)
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
         /// When `--index` or `--index-file` is set, patch the snapshot index in
@@ -1458,6 +1459,10 @@ Repeatable (AND).\n\
               exists (idempotency guard).\n\n\
             Both default to --dry-run and exit non-zero on drift (a CI signal); pass\n\
             --apply to write.\n\n\
+            The target file is `<vault>/CHANGELOG.md` unless `[changelog] path` names one\n\
+            (resolved against the config directory — that is how a repo-root CHANGELOG.md\n\
+            is used with a docs-subdir vault). Either way the file must still resolve\n\
+            inside that root: a CHANGELOG.md symlinked out of it is refused (exit 1).\n\n\
             VALIDATE: after releasing, replace the `TBD` link target with the real\n\
             compare/tag URL and run `hyalo lint --profile changelog`.\n\n\
             EXAMPLES:\n\
@@ -1640,13 +1645,17 @@ pub(crate) enum MadrAction {
             instead. Running with --apply twice is a no-op (idempotent). In --dry-run (the\n\
             default) the command exits non-zero when the TOC would change — use this in CI.\n\n\
             SIDE EFFECTS: writes `<adr-dir>/README.md` only with --apply.\n\n\
+            DIR must stay inside the vault once symlinks are resolved: a `../` traversal\n\
+            or a symlinked ADR directory pointing out is refused (exit 1) in dry-run and\n\
+            apply alike.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo madr toc --dry-run\n\
             \u{00a0} hyalo madr toc --apply\n\
             \u{00a0} hyalo madr toc docs/adr --apply"
     )]
     Toc {
-        /// ADR directory (vault-relative); defaults to `docs/decisions`
+        /// ADR directory (vault-relative, must resolve inside the vault);
+        /// defaults to `docs/decisions`
         #[arg(value_name = "DIR")]
         adr_dir: Option<String>,
         /// Write changes to disk. Without this flag the command is a dry run.

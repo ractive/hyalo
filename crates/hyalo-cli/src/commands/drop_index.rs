@@ -29,7 +29,10 @@ pub fn drop_index(
                 if !canonical_path.starts_with(&canonical_dir) {
                     let out = crate::output::format_error(
                         format,
-                        "index path is outside the vault boundary",
+                        &hyalo_core::fs_util::outside_vault_message(
+                            "index path",
+                            Some(&canonical_path),
+                        ),
                         Some(&index_path.display().to_string()),
                         Some("use --allow-outside-vault to override"),
                         None,

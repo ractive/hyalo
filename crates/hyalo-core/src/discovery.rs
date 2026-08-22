@@ -2,9 +2,10 @@
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::link_graph::strip_site_prefix;
@@ -128,6 +129,30 @@ pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
     errors
 }
 
+/// Paths already reported as skipped by [`discover_files`], so a command that
+/// walks the vault more than once per run does not repeat itself.
+///
+/// A single `hyalo` invocation calls `discover_files` several times (counting,
+/// then collecting, then hinting), which made every out-of-vault symlink skip
+/// print two or three identical warnings (iter-202 M-5). The set is
+/// process-global and never cleared: one process is one CLI run.
+static WARNED_SKIPS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Emit `message` for `path` unless the same path was already reported.
+///
+/// A poisoned lock is treated as "not yet warned" — a duplicate warning is a
+/// far better outcome than aborting a walk over it.
+fn warn_skip_once(path: &Path, message: &str) {
+    let first = match WARNED_SKIPS.lock() {
+        Ok(mut seen) => seen.insert(path.to_path_buf()),
+        Err(_) => true,
+    };
+    if first {
+        eprintln!("warning: skipping {}: {message}", path.display());
+    }
+}
+
 /// True when any component of `rel` is a hidden (dot-prefixed) segment.
 fn has_hidden_component(rel: &str) -> bool {
     rel.split('/')
@@ -209,42 +234,56 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
 
     let mut files: Vec<PathBuf> = rx.into_iter().collect();
 
-    // Filter out symlinks whose target resolves outside the vault boundary.
-    // Only canonicalize paths that are actually symlinks to avoid unnecessary
-    // syscalls on the common (non-symlink) path.
+    // Sort before filtering so the dedup below is deterministic: when a file is
+    // reachable under two spellings, the lexicographically first one wins on
+    // every platform and every run.
+    files.sort();
+
+    // Two jobs in one pass:
+    //
+    // 1. Drop symlinks whose target resolves outside the vault boundary.
+    // 2. Drop duplicate spellings of the same file (iter-202 M-5). An in-vault
+    //    symlink and its target are two directory entries but one file; left
+    //    unmerged they make `links fix --apply` rewrite the same note twice
+    //    (the second write trips the concurrent-modification guard) and
+    //    double-count `find --count`, `summary` and glob-write totals.
+    //
+    // Only paths that are actually symlinks are canonicalized — the common
+    // (non-symlink) case pays one `symlink_metadata` call and no more. A
+    // non-symlink entry's canonical form is just the canonical vault root
+    // joined with its vault-relative path, because the walker never descends
+    // through directory symlinks.
     let canonical_dir = canonicalize_vault_dir(dir)?;
-    files.retain(|path| {
+    let mut seen: HashSet<PathBuf> = HashSet::with_capacity(files.len());
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(files.len());
+    for path in files {
         let is_symlink = path
             .symlink_metadata()
             .is_ok_and(|m| m.file_type().is_symlink());
-        if !is_symlink {
-            return true;
-        }
-        match dunce::canonicalize(path) {
-            Ok(canonical) => {
-                if canonical.starts_with(&canonical_dir) {
-                    true
-                } else {
-                    eprintln!(
-                        "warning: skipping {}: symlink target resolves outside vault",
-                        path.display()
-                    );
-                    false
+        let canonical = if is_symlink {
+            match dunce::canonicalize(&path) {
+                Ok(canonical) if canonical.starts_with(&canonical_dir) => canonical,
+                Ok(_) => {
+                    warn_skip_once(&path, "symlink target resolves outside vault");
+                    continue;
+                }
+                Err(e) => {
+                    warn_skip_once(&path, &format!("failed to resolve path: {e}"));
+                    continue;
                 }
             }
-            Err(e) => {
-                eprintln!(
-                    "warning: skipping {}: failed to resolve path: {}",
-                    path.display(),
-                    e
-                );
-                false
+        } else {
+            match path.strip_prefix(dir) {
+                Ok(rel) => canonical_dir.join(rel),
+                Err(_) => path.clone(),
             }
+        };
+        if seen.insert(canonical) {
+            kept.push(path);
         }
-    });
+    }
 
-    files.sort();
-    Ok(files)
+    Ok(kept)
 }
 
 /// Resolve a path argument relative to `--dir`. Verifies it exists and is `.md`.
@@ -304,7 +343,10 @@ pub fn resolve_file_ci(
         || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
     {
-        return Err(FileResolveError::OutsideVault { path: normalized });
+        return Err(FileResolveError::OutsideVault {
+            path: normalized,
+            resolved: None,
+        });
     }
 
     if !std::path::Path::new(&normalized)
@@ -369,8 +411,14 @@ pub fn resolve_file_ci(
     match ensure_within_vault(&canonical_dir, &full) {
         Ok(true) => {}
         Ok(false) => {
+            // Report where the path really lands, not just what the user typed
+            // (iter-202 L-16): a symlink escape is far easier to understand
+            // with both halves shown.
             return Err(FileResolveError::OutsideVault {
                 path: normalized.clone(),
+                resolved: dunce::canonicalize(&full)
+                    .ok()
+                    .map(|p| p.display().to_string()),
             });
         }
         Err(_) => {
@@ -762,12 +810,31 @@ pub fn relative_path(dir: &Path, file: &Path) -> String {
 /// Errors specific to file resolution.
 #[derive(Debug)]
 pub enum FileResolveError {
-    NotFound { path: String },
-    NotFoundSuggestion { path: String, suggestion: String },
-    MissingExtension { path: String, hint: String },
-    IsDirectory { path: String, hint: String },
-    OutsideVault { path: String },
-    InvalidPath { path: String, reason: &'static str },
+    NotFound {
+        path: String,
+    },
+    NotFoundSuggestion {
+        path: String,
+        suggestion: String,
+    },
+    MissingExtension {
+        path: String,
+        hint: String,
+    },
+    IsDirectory {
+        path: String,
+        hint: String,
+    },
+    OutsideVault {
+        path: String,
+        /// Canonical destination the path escaped to, when resolution (symlink
+        /// following) produced one. `None` for a purely lexical rejection.
+        resolved: Option<String>,
+    },
+    InvalidPath {
+        path: String,
+        reason: &'static str,
+    },
 }
 
 impl std::fmt::Display for FileResolveError {
@@ -783,7 +850,19 @@ impl std::fmt::Display for FileResolveError {
             Self::IsDirectory { path, hint } => {
                 write!(f, "path is a directory, not a file: {path} (try {hint})")
             }
-            Self::OutsideVault { path } => {
+            Self::OutsideVault {
+                path,
+                resolved: Some(target),
+            } => {
+                write!(
+                    f,
+                    "file resolves outside vault boundary: {path} -> {target}"
+                )
+            }
+            Self::OutsideVault {
+                path,
+                resolved: None,
+            } => {
                 write!(f, "file resolves outside vault boundary: {path}")
             }
             Self::InvalidPath { path, reason } => {
@@ -1496,6 +1575,63 @@ mod tests {
         let files = discover_files(tmp.path()).unwrap();
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|f| f.extension().unwrap() == "md"));
+    }
+
+    /// M-5 (iter-202): a symlink and its target are two directory entries but
+    /// one file. Enumerating both made whole-vault writers rewrite the same
+    /// note twice — the second write tripping the concurrent-modification
+    /// guard — and inflated every count the CLI reports.
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedups_intra_vault_symlink_and_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("real.md"), "# Real").unwrap();
+        std::os::unix::fs::symlink("real.md", tmp.path().join("alias.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 1, "one file, two spellings: {files:?}");
+        assert!(
+            files[0].ends_with("alias.md"),
+            "the first spelling in sort order wins: {files:?}"
+        );
+    }
+
+    /// The surviving spelling must not depend on walk order, which is
+    /// non-deterministic (the walker is parallel).
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedup_is_stable_across_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("zzz")).unwrap();
+        fs::write(tmp.path().join("zzz/real.md"), "# Real").unwrap();
+        std::os::unix::fs::symlink("zzz/real.md", tmp.path().join("aaa.md")).unwrap();
+        fs::write(tmp.path().join("other.md"), "# Other").unwrap();
+
+        let first = discover_files(tmp.path()).unwrap();
+        for _ in 0..5 {
+            assert_eq!(
+                discover_files(tmp.path()).unwrap(),
+                first,
+                "dedup must pick the same spelling every run"
+            );
+        }
+        assert_eq!(first.len(), 2, "aaa.md + other.md: {first:?}");
+        assert!(first[0].ends_with("aaa.md"), "{first:?}");
+    }
+
+    /// Two distinct notes that merely *look* similar must both survive — the
+    /// dedup key is the canonical path, not the file name or content.
+    #[cfg(unix)]
+    #[test]
+    fn discover_keeps_distinct_files_with_symlinks_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "# A").unwrap();
+        fs::write(tmp.path().join("b.md"), "# B").unwrap();
+        std::os::unix::fs::symlink("a.md", tmp.path().join("c.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 2, "a.md (as a.md) and b.md: {files:?}");
+        assert!(files.iter().any(|f| f.ends_with("b.md")), "{files:?}");
     }
 
     #[test]

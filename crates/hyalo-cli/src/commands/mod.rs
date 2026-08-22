@@ -41,6 +41,40 @@ use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
 use hyalo_core::discovery::{self, FileResolveError};
 
+/// Refuse a write whose destination resolves outside the vault.
+///
+/// One gate for the whole boundary family (iter-202): every writer that builds
+/// a destination from user input — `madr toc`, `changelog add/release`,
+/// `new --file`, `okf index/log` — calls this *before* touching the
+/// filesystem, so an escape is a user error (exit 1) with the unified
+/// two-path wording rather than a mid-write `anyhow` bail (exit 2).
+///
+/// `subject` names what is being refused (`"TOC path"`, `"changelog"`, …) and
+/// `display` is the path as the user expressed it, surfaced as the error's
+/// `path` field. Returns `Some(outcome)` when the write must be refused and
+/// `None` when it may proceed.
+pub(crate) fn refuse_escaping_write(
+    dir: &std::path::Path,
+    full: &std::path::Path,
+    subject: &str,
+    display: &str,
+    hint: Option<&str>,
+    format: Format,
+) -> Result<Option<CommandOutcome>> {
+    let Some(target) = hyalo_core::fs_util::escaping_write_target(dir, full)? else {
+        return Ok(None);
+    };
+    Ok(Some(CommandOutcome::UserError(
+        crate::output::format_error(
+            format,
+            &hyalo_core::fs_util::outside_vault_message(subject, Some(&target)),
+            Some(display),
+            hint,
+            None,
+        ),
+    )))
+}
+
 /// Wrap `discovery::resolve_file` with the LLM-misuse warning.
 ///
 /// If `path_arg` is an absolute path that lies inside the canonical vault,
@@ -213,6 +247,12 @@ pub fn collect_files(
                     }
                     FileResolveError::IsDirectory { hint, .. } => {
                         format!("path is a directory, not a file: {path} (try {hint})")
+                    }
+                    FileResolveError::OutsideVault {
+                        resolved: Some(target),
+                        ..
+                    } => {
+                        format!("file resolves outside vault boundary: {path} -> {target}")
                     }
                     FileResolveError::OutsideVault { .. } => {
                         format!("file resolves outside vault boundary: {path}")
@@ -500,10 +540,13 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
                 None,
             ))
         }
-        FileResolveError::OutsideVault { path } => {
+        FileResolveError::OutsideVault { path, resolved } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,
-                "file resolves outside vault boundary",
+                &hyalo_core::fs_util::outside_vault_message(
+                    "file",
+                    resolved.as_deref().map(std::path::Path::new),
+                ),
                 Some(&path),
                 None,
                 None,

@@ -733,54 +733,34 @@ fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-/// Walk up from `path` to find the nearest ancestor that exists on disk.
-///
-/// Used to find a safe point to canonicalize when the destination itself
-/// (and possibly several of its parent directories) doesn't exist yet.
-fn nearest_existing_ancestor(path: &Path) -> PathBuf {
-    let mut current = path;
-    loop {
-        if current.exists() {
-            return current.to_path_buf();
-        }
-        match current.parent() {
-            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
-            _ => return current.to_path_buf(),
-        }
-    }
-}
-
 /// Verify that a prospective destination `new_rel` (relative to `dir`) stays
 /// within the vault, even when its parent directories don't exist yet or an
 /// in-vault path component is a symlink that resolves outside the vault
 /// (H-3).
 ///
-/// `fs::create_dir_all` only ever creates plain directories — never symlinks
-/// — so canonicalizing the nearest *existing* ancestor of the destination and
-/// checking it resolves inside `canonical_vault` is sufficient to guarantee
-/// every path component that would be created below it also stays in the
-/// vault. Must be called before any `fs::create_dir_all`/`fs::rename` on the
-/// destination.
+/// Delegates to [`hyalo_core::fs_util::escaping_write_target`], which anchors
+/// on the nearest existing ancestor: `fs::create_dir_all` only ever creates
+/// plain directories — never symlinks — so an in-vault anchor guarantees every
+/// component created below it also stays in the vault. Must be called before
+/// any `fs::create_dir_all`/`fs::rename` on the destination.
+///
+/// `canonical_vault` is accepted (rather than re-derived) so callers that
+/// already canonicalized the vault keep a single source of truth for it.
 fn ensure_dest_within_vault(
     canonical_vault: &Path,
     dir: &Path,
     new_rel: &str,
 ) -> std::result::Result<(), String> {
     let dst = dir.join(new_rel);
-    let start = dst.parent().unwrap_or(dir);
-    let ancestor = nearest_existing_ancestor(start);
-    let canonical_ancestor = dunce::canonicalize(&ancestor).map_err(|e| {
-        format!(
-            "failed to verify destination {} stays within the vault: {e}",
-            ancestor.display()
-        )
-    })?;
-    if canonical_ancestor.starts_with(canonical_vault) {
-        Ok(())
-    } else {
-        Err(format!(
-            "target path resolves outside vault boundary: {new_rel}"
-        ))
+    match hyalo_core::fs_util::escaping_write_target(canonical_vault, &dst) {
+        Ok(None) => Ok(()),
+        Ok(Some(target)) => Err(hyalo_core::fs_util::outside_vault_message(
+            "target path",
+            Some(&target),
+        )),
+        Err(e) => Err(format!(
+            "failed to verify destination {new_rel} stays within the vault: {e}"
+        )),
     }
 }
 

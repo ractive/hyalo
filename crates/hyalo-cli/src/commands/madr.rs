@@ -58,6 +58,24 @@ pub fn run_toc(
     let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
     let adr_rel = adr_rel_normalized.trim_end_matches('/');
     let adr_full = dir.join(adr_rel);
+    let toc_rel = format!("{adr_rel}/README.md");
+
+    // H-3 (iter-202): `--adr-dir` is user input joined straight onto the vault
+    // root. Without this gate a plain `../` — or an in-vault ADR directory that
+    // is a symlink pointing out — made `--apply` create/rewrite a README.md
+    // anywhere on disk at exit 0. Checked before the `is_dir` probe so a
+    // traversal attempt is always reported as a boundary refusal, and in
+    // dry-run as well as apply so the two modes agree.
+    if let Some(outcome) = crate::commands::refuse_escaping_write(
+        dir,
+        &dir.join(&toc_rel),
+        "TOC path",
+        &toc_rel,
+        Some("pass an ADR directory inside the vault"),
+        format,
+    )? {
+        return Ok((outcome, None));
+    }
 
     if !adr_full.is_dir() {
         return Ok((
@@ -75,7 +93,6 @@ pub fn run_toc(
     let entries = collect_adrs(&adr_full, adr_rel, schema)?;
     let body = render_toc_body(&entries);
 
-    let toc_rel = format!("{adr_rel}/README.md");
     let old_content = read_old_content(dir, &toc_rel)?;
     let markers = Markers::new(TOC_PREFIX);
     let mode = if replace {

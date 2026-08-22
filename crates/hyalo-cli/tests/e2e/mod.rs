@@ -54,6 +54,7 @@ mod symlinks;
 mod tags;
 mod task;
 mod types;
+mod vault_boundary;
 mod vault_side_effects;
 mod version;
 mod views;

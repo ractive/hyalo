@@ -81,6 +81,24 @@ pub(crate) fn create_new(
     let full_path: PathBuf = dir.join(file_arg);
 
     // ------------------------------------------------------------------
+    // Step 2b: the lexical checks above are not enough (M-4, iter-202)
+    // ------------------------------------------------------------------
+    // `outdir -> ../outside` inside the vault contains neither `..` nor a root
+    // component, so the component walk waves it through; only resolution
+    // catches it. Must run before `create_dir_all`, which would otherwise
+    // fabricate directories out of the vault before anything refused.
+    if let Some(outcome) = crate::commands::refuse_escaping_write(
+        dir,
+        &full_path,
+        "file",
+        file_arg,
+        Some("provide a path that stays inside the vault after symlinks are resolved"),
+        format,
+    )? {
+        return Ok(outcome);
+    }
+
+    // ------------------------------------------------------------------
     // Step 3: ensure parent directory exists (create if needed)
     // ------------------------------------------------------------------
     if let Some(parent) = full_path.parent()
