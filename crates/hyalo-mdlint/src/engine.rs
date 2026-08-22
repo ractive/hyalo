@@ -407,6 +407,31 @@ impl HyaloLintEngine {
         self.catalog.iter().find(|e| e.id == id)
     }
 
+    /// Look up a single rule entry by ID, falling back to a case-insensitive
+    /// match when the exact spelling is unknown.
+    ///
+    /// Rule ids are conventionally upper-case (`MD013`, `HYALO006`), but
+    /// hand-typed filters routinely arrive lower-cased. Callers that only need
+    /// to *select* a rule (`hyalo lint --rule`) should use this and then
+    /// canonicalize to [`RuleCatalogEntry::id`]; callers that *write* the id
+    /// into config keep using the exact [`Self::rule_entry`].
+    pub fn rule_entry_ci(&self, id: &str) -> Option<&RuleCatalogEntry> {
+        self.rule_entry(id)
+            .or_else(|| self.catalog.iter().find(|e| e.id.eq_ignore_ascii_case(id)))
+    }
+
+    /// Every rule id whose spelling starts with `prefix`, case-insensitively.
+    ///
+    /// Backs `hyalo lint --rule-prefix`, which selects a rule family rather
+    /// than a single rule; an empty result means the filter matches nothing.
+    pub fn rules_matching_prefix_ci(&self, prefix: &str) -> Vec<&RuleCatalogEntry> {
+        let upper = prefix.to_ascii_uppercase();
+        self.catalog
+            .iter()
+            .filter(|e| e.id.to_ascii_uppercase().starts_with(&upper))
+            .collect()
+    }
+
     /// Check HYALO003 (date-format) against the parsed frontmatter properties.
     ///
     /// Returns a `Vec<Diagnostic>` (zero or more) that can be merged with

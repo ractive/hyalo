@@ -1565,10 +1565,11 @@ pub fn lint_files_extended(
     // Build rule filter list
     let rule_filter: Vec<String> = match (opts.rule_filter, opts.rule_prefix) {
         (Some(rule), _) => vec![rule.to_owned()],
+        // M-10: prefix matching is case-insensitive so `--rule-prefix hyalo`
+        // selects the same family as `--rule-prefix HYALO`.
         (None, Some(prefix)) => md_lint_engine
-            .available_rules()
+            .rules_matching_prefix_ci(prefix)
             .iter()
-            .filter(|e| e.id.starts_with(prefix))
             .map(|e| e.id.clone())
             .collect(),
         (None, None) => vec![],

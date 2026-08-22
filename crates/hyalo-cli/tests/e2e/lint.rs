@@ -2943,3 +2943,129 @@ fn hyalo006_files_from_scoped_link_to_unscoped_file() {
         "genuinely broken link must still fire under --files-from: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M-10 (iter-204): `--rule` / `--rule-prefix` validation
+// ---------------------------------------------------------------------------
+
+/// A misspelled `--rule` id used to exit 0 with "no issues found", which reads
+/// as a clean run in CI. It must now be a user error with the discovery hint.
+#[test]
+fn lint_rule_unknown_id_is_user_error() {
+    let tmp = setup_vault_with_schema();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "MD0133"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "unknown --rule id must exit 1, got {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no such rule: MD0133"),
+        "stderr must name the unknown rule: {stderr}"
+    );
+    assert!(
+        stderr.contains("hyalo lint-rules list"),
+        "stderr must carry the discovery hint: {stderr}"
+    );
+}
+
+/// The unknown-rule error uses the standard JSON error envelope when piped.
+#[test]
+fn lint_rule_unknown_id_json_envelope() {
+    let tmp = setup_vault_with_schema();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "NOPE1", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let val: serde_json::Value =
+        serde_json::from_str(stderr.trim()).unwrap_or_else(|e| panic!("not JSON: {stderr} ({e})"));
+    assert!(
+        val["error"].as_str().unwrap_or_default().contains("NOPE1"),
+        "envelope must name the rule: {val}"
+    );
+    assert!(
+        val["hint"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("lint-rules list"),
+        "envelope must carry the discovery hint: {val}"
+    );
+}
+
+/// `--rule hyalo006` must find exactly what `--rule HYALO006` finds.
+#[test]
+fn lint_rule_id_match_is_case_insensitive() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "src.md", "---\ntitle: S\n---\nSee [[gone]].\n");
+
+    let run = |rule: &str| {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(["lint", "--rule", rule, "--detailed", "--format", "json"])
+            .output()
+            .unwrap();
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+
+    let (upper_code, upper) = run("HYALO006");
+    let (lower_code, lower) = run("hyalo006");
+    assert_eq!(upper_code, lower_code, "exit codes must match");
+    assert_eq!(upper, lower, "lower-case rule id must select the same rule");
+    assert!(
+        upper.contains("HYALO006"),
+        "the broken link must actually be reported: {upper}"
+    );
+}
+
+/// `--rule-prefix` is case-insensitive too, and a prefix that matches nothing
+/// warns on stderr instead of looking like a clean run.
+#[test]
+fn lint_rule_prefix_case_insensitive_and_warns_when_empty() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "src.md", "---\ntitle: S\n---\nSee [[gone]].\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--rule-prefix",
+            "hyalo",
+            "--detailed",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("HYALO006"),
+        "lower-case prefix must select the HYALO family: {stdout}"
+    );
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule-prefix", "ZZZ"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("matches no rule"),
+        "empty prefix selection must warn: {stderr}"
+    );
+}
