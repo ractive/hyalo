@@ -2,7 +2,7 @@
 title: Iteration 203 — resolve directory link targets to <target>/index.md
 type: iteration
 date: 2026-08-18
-status: planned
+status: completed
 branch: iter-203/index-md-resolution
 tags:
   - iteration
@@ -50,42 +50,71 @@ UX-4). Anchors at `931a226`:
   `foo/` dir rewrites `/foo`-style inbound links), anchors
   (`/foo#section` checks headings of `foo/index.md`).
 
-## Tasks
+## Tasks [8/8]
 
-- [ ] Core rule in the shared resolver (single entry point — do NOT fork
+- [x] Core rule in the shared resolver (single entry point — do NOT fork
       per-caller logic; iter-189 collapsed the resolvers, keep it that
       way). Unit tests: `/foo`, `foo`, `/foo/`, `foo/` with and without
       `foo/index.md`; `foo` when BOTH `foo.md` and `foo/index.md` exist
       (file wins — document the precedence); case variants.
-- [ ] Thread through the index path; bump index data only if required
+- [x] Thread through the index path; bump index data only if required
       (prefer derivable-at-query like iter-190's fail-safe).
-- [ ] `backlinks` counts directory-target links for the index file.
-- [ ] HYALO006 and `find --broken-links` stop flagging resolvable
+- [x] `backlinks` counts directory-target links for the index file.
+- [x] HYALO006 and `find --broken-links` stop flagging resolvable
       directory targets; `broken_anchor` works against the index file's
       headings.
-- [ ] `mv` rewrites `/foo`-style inbound links when `foo/index.md` moves
+- [x] `mv` rewrites `/foo`-style inbound links when `foo/index.md` moves
       — WITHOUT reintroducing L-11 (do not inject the site prefix or
       append `.md` to spellings that lacked them; preserve the original
       form).
-- [ ] UX-4: `hyalo config` shows the EFFECTIVE site_prefix (auto-derived
+- [x] UX-4: `hyalo config` shows the EFFECTIVE site_prefix (auto-derived
       value, marked as derived).
-- [ ] Measure on MDN (read-only, snapshot index in scratch): record
+- [x] Measure on MDN (read-only, snapshot index in scratch): record
       before/after broken-link counts and `backlinks` results for
       `web/api/document/index.md` in this file. Expect broken to drop
       from ~49.7k to the low thousands.
-- [ ] Docs: links documentation resolution-order section, CHANGELOG
+- [x] Docs: links documentation resolution-order section, CHANGELOG
       (Added), README only if its prose becomes wrong.
 
-## Acceptance criteria
+## Measurements (MDN, read-only)
 
-- [ ] The F-1 fixture (A-E link matrix from the report) resolves
+Corpus: `~/devel/mdn/files/en-us` (14,375 `.md` files). Baseline binary
+`hyalo 0.20.0` (homebrew), candidate `target/release/hyalo` at this branch.
+MDN publishes `web/api/document/index.md` as the URL `/en-US/docs/Web/API/Document`,
+so the runs pass `--site-prefix "en-US/docs"`.
+
+| Measurement | before (0.20.0) | after (iter-203) |
+| --- | --- | --- |
+| `links` broken | 49,703 | **509** (−99.0%) |
+| `links` unfixable | 49,703 | 509 |
+| `links` case_mismatches | 0 | 49,194 |
+| `links` fixable | 0 | 0 |
+| `backlinks web/api/document/index.md` | 0 | **13** (9 files) |
+
+The 13 backlinks match a `grep -rlE "\(/en-US/docs/Web/API/Document[)#]"`
+cross-check (9 files). The 49,194 case mismatches are the directory targets
+now *resolving*: MDN writes `Web/API/Document` while the files are lowercase
+on disk, so the case index answers with the canonical path. `fixable` stays 0,
+so `links fix --apply` writes nothing — no bulk-rewrite risk.
+
+Two findings worth their own follow-ups, both out of scope here:
+
+- **Site-prefix stripping is case-sensitive and single-guess.** With the
+  auto-derived prefix (`en-us`, from the directory name) MDN still reports
+  49,703 broken links, because its URL prefix is the two-segment, differently
+  cased `en-US/docs`. Nothing resolves until the prefix is passed by hand.
+- **`links` on MDN takes ~80 s** — the known perf item, unchanged here.
+
+## Acceptance criteria [5/5]
+
+- [x] The F-1 fixture (A-E link matrix from the report) resolves
       `/foo`, `foo`, `/foo/`; `/bar/page` and `/foo/index` keep working
-- [ ] MDN broken-link count drops by >90%; `backlinks` on
+- [x] MDN broken-link count drops by >90%; `backlinks` on
       `web/api/document/index.md` returns non-zero
-- [ ] `foo.md` beats `foo/index.md` when both exist, and the precedence
+- [x] `foo.md` beats `foo/index.md` when both exist, and the precedence
       is documented
-- [ ] No `mv` rewrite changes a link's spelling style (prefix/extension)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] No `mv` rewrite changes a link's spelling style (prefix/extension)
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

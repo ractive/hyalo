@@ -880,6 +880,86 @@ pub(crate) fn resolve_effective(
 /// Returns `None` when nothing was switched away from (no `--dir`, a redundant
 /// `--dir`, or a CWD with no config to lose). Kept as a pure function so the
 /// exact wording is unit-testable without spawning a process.
+/// Where the effective `site_prefix` came from.
+///
+/// `hyalo config` reports this alongside the value so users can tell an
+/// explicitly configured prefix from one hyalo inferred for them — the prefix
+/// decides what a site-absolute link like `/foo` means, so a silent
+/// auto-derived value is the difference between a vault of resolved links and
+/// a vault of broken ones (iter-203, dogfood UX-4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SitePrefixSource {
+    /// From the `--site-prefix` CLI flag.
+    Flag,
+    /// From `site_prefix = "…"` in `.hyalo.toml`.
+    Config,
+    /// Inferred from the last component of the resolved vault directory.
+    Derived,
+    /// Explicitly disabled with an empty string (flag or config).
+    Disabled,
+}
+
+impl SitePrefixSource {
+    /// Short label used in `hyalo config` output and the JSON envelope.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Flag => "flag",
+            Self::Config => "config",
+            Self::Derived => "derived",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+/// Resolve the effective site prefix and record where it came from.
+///
+/// Tri-state precedence, highest first:
+///
+/// 1. `--site-prefix` — present wins; an empty string explicitly disables.
+/// 2. `site_prefix` in `.hyalo.toml` — same empty-string rule.
+/// 3. Auto-derived from the last component of the canonicalized vault dir.
+///
+/// This is the single owner of that chain: `run.rs` uses it to build the
+/// pipeline context and `hyalo config` uses it to *report* the same answer,
+/// so the two can never disagree.
+pub(crate) fn resolve_site_prefix(
+    cli_site_prefix: Option<&str>,
+    config_site_prefix: Option<&str>,
+    dir: &Path,
+) -> (Option<String>, SitePrefixSource) {
+    if let Some(flag) = cli_site_prefix {
+        return if flag.is_empty() {
+            (None, SitePrefixSource::Disabled)
+        } else {
+            (Some(flag.to_owned()), SitePrefixSource::Flag)
+        };
+    }
+    if let Some(from_config) = config_site_prefix {
+        return if from_config.is_empty() {
+            (None, SitePrefixSource::Disabled)
+        } else {
+            (Some(from_config.to_owned()), SitePrefixSource::Config)
+        };
+    }
+    // Auto-derive from the last component of the resolved dir.
+    let derived = match std::fs::canonicalize(dir) {
+        Ok(canonical) => canonical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(std::borrow::ToOwned::to_owned),
+        Err(_) => {
+            // canonicalize can still fail on valid directories (e.g. broken
+            // symlink chains on some platforms). Fall back to the raw path
+            // component rather than losing the prefix entirely.
+            dir.file_name()
+                .and_then(|n| n.to_str())
+                .filter(|s| *s != ".")
+                .map(std::borrow::ToOwned::to_owned)
+        }
+    };
+    (derived, SitePrefixSource::Derived)
+}
+
 pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
     if !effective.cwd_config_shadowed {
         return None;

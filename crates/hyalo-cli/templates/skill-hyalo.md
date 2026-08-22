@@ -234,6 +234,34 @@ hyalo --site-prefix "" find --fields links
 
 Also settable in `.hyalo.toml` as `site_prefix = "docs"`.
 Precedence: `--site-prefix` flag > `.hyalo.toml` > auto-derived from `--dir`.
+`hyalo config` reports the effective value and its source
+(`flag` / `config` / `derived` / `disabled`).
+
+## Link target resolution order
+
+A link target is resolved against the vault in this order — the first hit wins:
+
+1. **The path as written** — `guides/setup.md`.
+2. **With `.md` appended** — `guides/setup` → `guides/setup.md`.
+3. **As a directory** — `guides` → `guides/index.md`.
+4. **Bare stem lookup** (wikilinks only, no `/` in the target) — `[[setup]]`
+   finds `guides/setup.md` when exactly one file has that basename.
+
+Directory-index resolution (step 3) is what makes docs corpora that publish
+`foo/index.md` as the page `/foo` — MDN, GitHub Docs, Docusaurus, Hugo — read
+as linked rather than 100% broken. All the site-absolute spellings work:
+`/foo`, `foo` and `/foo/` reach `foo/index.md`, and `/foo#section` checks that
+file's headings.
+
+**Precedence:** a real file beats a directory index, so `foo` resolves to
+`foo.md` when both `foo.md` and `foo/index.md` exist. Write the target with a
+trailing slash (`foo/`) to name the directory explicitly — that flips the
+order and reaches `foo/index.md`.
+
+`hyalo backlinks foo/index.md` counts every directory spelling, and
+`hyalo mv foo/index.md bar/index.md` rewrites `/foo` to `/bar` — keeping the
+spelling style, never appending `.md` or injecting a site prefix the author
+did not write.
 
 ## When to use hyalo vs. built-in tools
 
