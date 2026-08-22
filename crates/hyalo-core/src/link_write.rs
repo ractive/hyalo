@@ -266,9 +266,18 @@ impl LinkWriter {
             // Mirror presence/absence of `.md` suffix from the original.
             let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
             let target = if had_md { new_vault_rel } else { new_stem };
+            // L-11: only re-emit the site prefix when the original spelling
+            // carried it. The prefix is often *auto-derived* from the vault
+            // directory name, and blindly prepending it turns a working
+            // `/foo` into `/my-vault/bar` — a link that resolves nowhere.
+            let carries_prefix = site_prefix.is_some_and(|prefix| {
+                let head = span.link.target.trim_start_matches('/');
+                head.strip_prefix(prefix)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            });
             match site_prefix {
-                Some(prefix) => format!("/{prefix}/{target}"),
-                None => format!("/{target}"),
+                Some(prefix) if carries_prefix => format!("/{prefix}/{target}"),
+                _ => format!("/{target}"),
             }
         } else {
             relative_path_between(source_rel, new_vault_rel)
@@ -464,6 +473,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.new_text, "[text](notes/renamed.md)");
+    }
+
+    #[test]
+    fn rewrite_vault_absolute_does_not_inject_an_unwritten_site_prefix() {
+        // L-11: `/notes/old.md` was written without the prefix (which is often
+        // auto-derived from the vault directory name); the rewrite must not
+        // invent one.
+        let line = "See [text](/notes/old.md) here";
+        let span = span_from(line, 0);
+        let r = LinkWriter::rewrite(
+            &span,
+            line,
+            "notes/renamed.md",
+            "a.md",
+            PreserveForm::Preserve,
+            Some("docs"),
+        )
+        .unwrap();
+        assert_eq!(r.new_text, "[text](/notes/renamed.md)");
+    }
+
+    #[test]
+    fn rewrite_directory_index_style_emits_the_directory_path() {
+        let line = "See [text](/foo) here";
+        let span = span_from(line, 0);
+        let r = LinkWriter::rewrite_styled(
+            &span,
+            line,
+            "bar/index.md",
+            "a.md",
+            PreserveForm::Preserve,
+            None,
+            TargetStyle::DirectoryIndex {
+                trailing_slash: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.new_text, "[text](/bar)");
+    }
+
+    #[test]
+    fn rewrite_directory_index_style_keeps_the_trailing_slash() {
+        let line = "See [text](/foo/) here";
+        let span = span_from(line, 0);
+        let r = LinkWriter::rewrite_styled(
+            &span,
+            line,
+            "bar/index.md",
+            "a.md",
+            PreserveForm::Preserve,
+            None,
+            TargetStyle::DirectoryIndex {
+                trailing_slash: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.new_text, "[text](/bar/)");
+    }
+
+    #[test]
+    fn rewrite_directory_index_style_falls_back_when_target_is_not_an_index() {
+        let line = "See [text](/foo) here";
+        let span = span_from(line, 0);
+        let r = LinkWriter::rewrite_styled(
+            &span,
+            line,
+            "notes/readme.md",
+            "a.md",
+            PreserveForm::Preserve,
+            None,
+            TargetStyle::DirectoryIndex {
+                trailing_slash: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.new_text, "[text](/notes/readme)");
     }
 
     #[test]

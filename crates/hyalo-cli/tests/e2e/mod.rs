@@ -11,6 +11,7 @@ mod config;
 mod config_dir;
 mod config_trust;
 mod count;
+mod directory_index;
 mod cwd_features;
 mod errors;
 mod examples_contract;
