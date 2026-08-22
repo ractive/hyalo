@@ -694,8 +694,13 @@ fn run_inner() -> Result<(), AppError> {
             crate::warn::note(note);
         }
         let report =
-            crate::commands::config::collect_config_report(&cwd, effective, dir_override.is_some())
-                .map_err(AppError::Internal)?;
+            crate::commands::config::collect_config_report(
+                &cwd,
+                effective,
+                dir_override.is_some(),
+                cli.site_prefix.as_deref(),
+            )
+            .map_err(AppError::Internal)?;
 
         // `--jq` operates on the full envelope, exactly as it does for pipeline
         // commands. Before iter-192 the filter was accepted and silently
@@ -892,30 +897,11 @@ fn run_inner() -> Result<(), AppError> {
     //
     // Empty strings in (1) and (2) short-circuit the chain and result in
     // site_prefix = None, suppressing all absolute-link resolution.
-    let site_prefix_owned: Option<String> = if cli.site_prefix.is_some() {
-        // Explicit CLI flag wins — empty string intentionally disables prefix.
-        cli.site_prefix.filter(|s| !s.is_empty())
-    } else if config.site_prefix.is_some() {
-        // Config file override — empty string intentionally disables prefix.
-        config.site_prefix.filter(|s| !s.is_empty())
-    } else {
-        // Auto-derive from the last component of the resolved dir.
-        match std::fs::canonicalize(&dir) {
-            Ok(canonical) => canonical
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(std::borrow::ToOwned::to_owned),
-            Err(_) => {
-                // canonicalize can still fail on valid directories (e.g. broken
-                // symlink chains on some platforms). Fall back to the raw path
-                // component rather than losing the prefix entirely.
-                dir.file_name()
-                    .and_then(|n| n.to_str())
-                    .filter(|s| *s != ".")
-                    .map(std::borrow::ToOwned::to_owned)
-            }
-        }
-    };
+    let (site_prefix_owned, _site_prefix_source) = crate::config::resolve_site_prefix(
+        cli.site_prefix.as_deref(),
+        config.site_prefix.as_deref(),
+        &dir,
+    );
     let site_prefix = site_prefix_owned.as_deref();
     // Resolve the output format.
     //

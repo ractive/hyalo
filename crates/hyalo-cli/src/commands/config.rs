@@ -5,7 +5,8 @@
 ///
 /// - The resolved config file path (or `(none)` if absent).
 /// - The raw file contents (when present), prefixed with a separator line.
-/// - All effective values: `dir`, `cwd`, `format`, `hints`, `site_prefix`.
+/// - All effective values: `dir`, `cwd`, `format`, `hints`, `site_prefix`
+///   (with the source it was resolved from).
 ///
 /// Supports both text and JSON output via the standard `--format` flag.
 use std::path::{Path, PathBuf};
@@ -32,8 +33,15 @@ pub(crate) struct ConfigReport {
     pub format: Option<String>,
     /// Whether hints are enabled.
     pub hints: bool,
-    /// Resolved site prefix (from config or `None`).
+    /// The **effective** site prefix — what site-absolute links like `/foo`
+    /// actually resolve against, including the value hyalo auto-derives from
+    /// the vault directory name. Before iter-203 this only reported the
+    /// `.hyalo.toml` value and printed `(none)` while a derived prefix was
+    /// silently in effect (dogfood UX-4).
     pub site_prefix: Option<String>,
+    /// Where [`Self::site_prefix`] came from — flag, config, derived, or
+    /// explicitly disabled.
+    pub site_prefix_source: crate::config::SitePrefixSource,
     /// Vault-relative exempt globs from `[schema] exempt` (files bound to no schema).
     pub exempt: Vec<String>,
     /// Effective `[links.auto]` settings (iter-195a).
@@ -82,6 +90,7 @@ pub(crate) fn collect_config_report(
     cwd: &Path,
     effective: crate::config::EffectiveConfig,
     dir_overridden: bool,
+    cli_site_prefix: Option<&str>,
 ) -> anyhow::Result<ConfigReport> {
     let crate::config::EffectiveConfig {
         config: resolved,
@@ -89,6 +98,14 @@ pub(crate) fn collect_config_report(
         config_path,
         ..
     } = effective;
+
+    // Report the prefix the rest of the CLI would use, derived through the
+    // shared resolver rather than reading the raw config value (iter-203).
+    let (site_prefix, site_prefix_source) = crate::config::resolve_site_prefix(
+        cli_site_prefix,
+        resolved.site_prefix.as_deref(),
+        &dir,
+    );
 
     let raw_contents = match &config_path {
         Some(path) => Some(
@@ -105,7 +122,8 @@ pub(crate) fn collect_config_report(
         dir_overridden,
         format: resolved.format,
         hints: resolved.hints,
-        site_prefix: resolved.site_prefix,
+        site_prefix,
+        site_prefix_source,
         exempt: resolved.schema.exempt.patterns().to_vec(),
         links_auto: LinksAutoReport {
             exclude_titles: resolved.auto_link_exclude_titles,
@@ -173,6 +191,7 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "format": report.format,
             "hints_enabled": report.hints,
             "site_prefix": report.site_prefix,
+            "site_prefix_source": report.site_prefix_source.as_str(),
             "exempt": report.exempt,
             // Effective `[links.auto]` baseline for `hyalo links auto`
             // (iter-195a). Always present, empty lists / false when unset, so
@@ -231,7 +250,13 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         .map_or_else(|| "(none)".to_owned(), |p| p.display().to_string());
 
     let format_str = report.format.as_deref().unwrap_or("(none)");
-    let site_prefix_str = report.site_prefix.as_deref().unwrap_or("(none)");
+    // Always say where the prefix came from: `(none)` alone hid the fact that
+    // an auto-derived prefix was deciding what `/foo` means (iter-203, UX-4).
+    let site_prefix_str = format!(
+        "{} ({})",
+        report.site_prefix.as_deref().unwrap_or("(none)"),
+        report.site_prefix_source.as_str()
+    );
     let exempt_str = list_or_none(&report.exempt);
 
     // Annotate the dir line when a `--dir` override is in effect, so the report

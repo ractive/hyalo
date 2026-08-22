@@ -4357,10 +4357,10 @@ See [x](../c/target.md) here.
 }
 
 #[test]
-fn links_fix_site_absolute_basename_guess_is_behind_the_fuzzy_gate() {
-    // Dogfood M-1: `/actions` "resolved" to `graphql/reference/actions.md`
-    // labelled LinkCaseMismatch at confidence 1.0, in the default apply
-    // bucket — even though `actions/index.md` exists.
+fn links_fix_site_absolute_directory_target_resolves_to_index_md() {
+    // iter-203: the fixture behind dogfood M-1 — `/actions` alongside
+    // `actions/index.md` — now simply *resolves*. There is nothing broken to
+    // guess about, which is the whole point of directory-index resolution.
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     write_md(
         tmp.path(),
@@ -4370,6 +4370,39 @@ See [GitHub Actions](/actions) for details.
 "),
     );
     write_md(tmp.path(), "actions/index.md", "# Actions\n");
+    write_md(tmp.path(), "graphql/reference/actions.md", "# GraphQL\n");
+
+    let report = links_fix_results(tmp.path(), &[]);
+    assert_eq!(report["broken"].as_u64(), Some(0), "{report}");
+    assert_eq!(report["fixable"].as_u64(), Some(0), "{report}");
+    assert_eq!(
+        report["fuzzy_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "a resolving link must not appear as a fuzzy candidate: {report}"
+    );
+
+    // A plain --apply leaves the file alone.
+    let before = fs::read_to_string(tmp.path().join("index.md")).expect("readable");
+    let _ = links_fix_results(tmp.path(), &["--apply"]);
+    let after = fs::read_to_string(tmp.path().join("index.md")).expect("readable");
+    assert_eq!(before, after, "plain --apply must not rewrite a valid link");
+}
+
+#[test]
+fn links_fix_site_absolute_basename_guess_is_behind_the_fuzzy_gate() {
+    // Dogfood M-1: `/actions` "resolved" to `graphql/reference/actions.md`
+    // labelled LinkCaseMismatch at confidence 1.0, in the default apply
+    // bucket. With no `actions/index.md` to resolve to (see the test above),
+    // the link is genuinely broken and the cross-directory basename guess must
+    // stay behind the fuzzy gate.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "index.md",
+        md!(r"
+See [GitHub Actions](/actions) for details.
+"),
+    );
     write_md(tmp.path(), "graphql/reference/actions.md", "# GraphQL\n");
 
     let report = links_fix_results(tmp.path(), &[]);
