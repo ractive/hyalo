@@ -88,6 +88,49 @@ pub(crate) fn resolve_changelog_file(
     Ok(joined)
 }
 
+/// The directory a resolved changelog must stay inside.
+///
+/// With no `[changelog] path` the changelog is `dir/CHANGELOG.md` and the vault
+/// is the boundary. With a configured path the boundary is the *config*
+/// directory: [`resolve_changelog_file`] already bounds the lexical path there,
+/// so an intentional repo-root `CHANGELOG.md` for a docs-subdir vault stays
+/// allowed (that is a documented setup, not an escape). Passing this root to
+/// the write gate makes the same bound survive symlink resolution — M-3
+/// (iter-202), where a `CHANGELOG.md` symlinked out of the vault was followed
+/// silently.
+pub(crate) fn changelog_boundary_root(
+    dir: &Path,
+    config_dir: &Path,
+    config_path: Option<&str>,
+) -> std::path::PathBuf {
+    if config_path.is_some() {
+        config_dir.to_path_buf()
+    } else {
+        dir.to_path_buf()
+    }
+}
+
+/// Refuse a changelog write whose target resolves outside `boundary_root`.
+///
+/// Shared by `release` and `add` so both refuse identically, in dry-run as
+/// well as apply — a mode that reports a change it would refuse to make is
+/// worse than useless in CI.
+fn boundary_refusal(
+    boundary_root: &Path,
+    changelog_file: &Path,
+    display: &str,
+    format: Format,
+) -> Result<Option<CommandOutcome>> {
+    crate::commands::refuse_escaping_write(
+        boundary_root,
+        changelog_file,
+        "changelog",
+        display,
+        Some("point [changelog] path at a file inside the repository, or remove the symlink"),
+        format,
+    )
+}
+
 /// A parsed view of a changelog sufficient for the release/add splices.
 struct Changelog {
     /// Raw lines with both the trailing `\n` and any trailing `\r` stripped;
@@ -215,6 +258,7 @@ fn changelog_display(path: &Path) -> String {
 /// change the file, matching the `okf index` / `madr toc` CI convention).
 pub fn run_release(
     changelog_file: &Path,
+    boundary_root: &Path,
     version: &str,
     date: Option<&str>,
     apply: bool,
@@ -222,6 +266,9 @@ pub fn run_release(
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     let display = changelog_display(changelog_file);
+    if let Some(outcome) = boundary_refusal(boundary_root, changelog_file, &display, format)? {
+        return Ok((outcome, None));
+    }
     if !is_semver(version) {
         return Ok((
             CommandOutcome::UserError(format_error(
@@ -303,9 +350,10 @@ pub fn run_release(
     let new_content = cl.render();
     let changed = new_content != old_content;
     if apply && changed {
-        // No vault root here: `changelog` targets an arbitrary CHANGELOG.md
-        // path (often the repo root), so there is no boundary to check against.
-        hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
+        // Defense in depth: the early `boundary_refusal` gate already ran, but
+        // re-check against the same root right before the write so the
+        // invariant survives future refactors.
+        hyalo_core::fs_util::atomic_write_within(boundary_root, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }
 
@@ -386,6 +434,7 @@ fn upsert_release_link_ref(cl: &mut Changelog, version: &str) {
 /// `## [Unreleased]`, creating the section / subsection when missing.
 pub fn run_add(
     changelog_file: &Path,
+    boundary_root: &Path,
     category: &str,
     message: &str,
     wrap: Option<usize>,
@@ -394,6 +443,9 @@ pub fn run_add(
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     let display = changelog_display(changelog_file);
+    if let Some(outcome) = boundary_refusal(boundary_root, changelog_file, &display, format)? {
+        return Ok((outcome, None));
+    }
     let Some(canonical) = CATEGORIES.iter().find(|c| c.eq_ignore_ascii_case(category)) else {
         return Ok((
             CommandOutcome::UserError(format_error(
@@ -461,9 +513,10 @@ pub fn run_add(
     let new_content = cl.render();
     let changed = new_content != old_content;
     if apply && changed {
-        // No vault root here: `changelog` targets an arbitrary CHANGELOG.md
-        // path (often the repo root), so there is no boundary to check against.
-        hyalo_core::fs_util::atomic_write(&full, new_content.as_bytes())
+        // Defense in depth: the early `boundary_refusal` gate already ran, but
+        // re-check against the same root right before the write so the
+        // invariant survives future refactors.
+        hyalo_core::fs_util::atomic_write_within(boundary_root, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }
 

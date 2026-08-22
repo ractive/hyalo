@@ -326,7 +326,10 @@ pub fn resolve_file_ci(
         || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
     {
-        return Err(FileResolveError::OutsideVault { path: normalized });
+        return Err(FileResolveError::OutsideVault {
+            path: normalized,
+            resolved: None,
+        });
     }
 
     if !std::path::Path::new(&normalized)
@@ -391,8 +394,14 @@ pub fn resolve_file_ci(
     match ensure_within_vault(&canonical_dir, &full) {
         Ok(true) => {}
         Ok(false) => {
+            // Report where the path really lands, not just what the user typed
+            // (iter-202 L-16): a symlink escape is far easier to understand
+            // with both halves shown.
             return Err(FileResolveError::OutsideVault {
                 path: normalized.clone(),
+                resolved: dunce::canonicalize(&full)
+                    .ok()
+                    .map(|p| p.display().to_string()),
             });
         }
         Err(_) => {
@@ -788,7 +797,12 @@ pub enum FileResolveError {
     NotFoundSuggestion { path: String, suggestion: String },
     MissingExtension { path: String, hint: String },
     IsDirectory { path: String, hint: String },
-    OutsideVault { path: String },
+    OutsideVault {
+        path: String,
+        /// Canonical destination the path escaped to, when resolution (symlink
+        /// following) produced one. `None` for a purely lexical rejection.
+        resolved: Option<String>,
+    },
     InvalidPath { path: String, reason: &'static str },
 }
 
@@ -805,7 +819,16 @@ impl std::fmt::Display for FileResolveError {
             Self::IsDirectory { path, hint } => {
                 write!(f, "path is a directory, not a file: {path} (try {hint})")
             }
-            Self::OutsideVault { path } => {
+            Self::OutsideVault {
+                path,
+                resolved: Some(target),
+            } => {
+                write!(f, "file resolves outside vault boundary: {path} -> {target}")
+            }
+            Self::OutsideVault {
+                path,
+                resolved: None,
+            } => {
                 write!(f, "file resolves outside vault boundary: {path}")
             }
             Self::InvalidPath { path, reason } => {

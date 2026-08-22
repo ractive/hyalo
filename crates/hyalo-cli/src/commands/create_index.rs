@@ -50,7 +50,10 @@ pub fn create_index(
         if !canonical_parent.starts_with(&canonical_dir) {
             let out = crate::output::format_error(
                 format,
-                "output path is outside the vault boundary",
+                &hyalo_core::fs_util::outside_vault_message(
+                    "output path",
+                    Some(&canonical_parent),
+                ),
                 Some(&index_path.display().to_string()),
                 Some("use --allow-outside-vault to override"),
                 None,

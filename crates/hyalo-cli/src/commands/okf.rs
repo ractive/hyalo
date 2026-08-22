@@ -962,6 +962,22 @@ pub fn run_log(
     };
     let full = dir.join(&rel_path);
 
+    // L-16 (iter-202): `atomic_write_within` already refuses a `log.md`
+    // symlinked out of the vault, but it does so with an `anyhow` bail, which
+    // the CLI reports as exit 2 — the "internal error" class — while every
+    // other boundary refusal exits 1. Gate here instead so the whole family
+    // agrees on exit code and wording, and so `--dry-run` refuses too.
+    if let Some(outcome) = crate::commands::refuse_escaping_write(
+        dir,
+        &full,
+        "log path",
+        &rel_path,
+        Some("log into a file inside the vault, or remove the escaping symlink"),
+        format,
+    )? {
+        return Ok(outcome);
+    }
+
     // The target must be a regular file or absent — a directory named `log.md`
     // (or any non-file at that path) can't be written; reject it in both
     // dry-run and apply so they agree (BUG-11 parity for `okf log`).
@@ -1225,7 +1241,10 @@ fn normalize_vault_rel(dir: &Path, raw: &str) -> std::result::Result<String, Str
         || Path::new(normalized).is_absolute()
         || discovery::has_parent_traversal(normalized)
     {
-        return Err(format!("path resolves outside the vault boundary: {raw}"));
+        return Err(format!(
+            "{}: {raw}",
+            hyalo_core::fs_util::outside_vault_message("path", None)
+        ));
     }
     Ok(normalized.to_owned())
 }

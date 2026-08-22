@@ -2503,8 +2503,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     ctx.config_dir,
                     ctx.changelog_path,
                 )?;
+                let boundary_root = crate::commands::changelog::changelog_boundary_root(
+                    ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                );
                 let (outcome, exit_override) = crate::commands::changelog::run_release(
                     &changelog_file,
+                    &boundary_root,
                     &version,
                     date.as_deref(),
                     apply,
@@ -2528,8 +2534,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     ctx.config_dir,
                     ctx.changelog_path,
                 )?;
+                let boundary_root = crate::commands::changelog::changelog_boundary_root(
+                    ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                );
                 let (outcome, exit_override) = crate::commands::changelog::run_add(
                     &changelog_file,
+                    &boundary_root,
                     &category,
                     &message,
                     wrap,
