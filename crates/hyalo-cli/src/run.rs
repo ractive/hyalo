@@ -991,6 +991,11 @@ fn run_inner() -> Result<(), AppError> {
     // --jq operates on JSON, so it conflicts with an explicit --format text.
     let jq_filter = cli.jq.as_deref();
 
+    // L-5: the `read` override below is a decision about *results* only — the
+    // ambient format (explicit `--format`, else json when stdout is a pipe)
+    // still governs error envelopes, so a scripted `hyalo read` failure parses
+    // like every other command's.
+    let error_format = format;
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
     let format =
@@ -1604,6 +1609,7 @@ fn run_inner() -> Result<(), AppError> {
                 );
                 let pipeline = OutputPipeline {
                     user_format: format,
+                    error_format,
                     jq_filter,
                     hint_ctx: hint_ctx.as_ref(),
                     count: cli.count,
@@ -1722,6 +1728,7 @@ fn run_inner() -> Result<(), AppError> {
 
     let pipeline = OutputPipeline {
         user_format: format,
+        error_format,
         jq_filter,
         hint_ctx: hint_ctx.as_ref(),
         count: cli.count,

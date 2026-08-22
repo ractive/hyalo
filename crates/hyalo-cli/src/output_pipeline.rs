@@ -14,8 +14,16 @@ pub(crate) use crate::list_commands::count_unsupported_error;
 /// Encapsulates the post-command output pipeline: jq filtering, hint generation,
 /// and envelope wrapping.
 pub(crate) struct OutputPipeline<'a> {
-    /// Format the user requested.
+    /// Format the user requested for *results*.
     pub user_format: Format,
+    /// Format used for error envelopes (L-5).
+    ///
+    /// Normally identical to [`Self::user_format`]. They diverge for `read`,
+    /// whose results default to raw text (you want the note's markdown, not a
+    /// JSON string) even when stdout is a pipe — but whose *errors* must still
+    /// follow the ambient piped-JSON default, exactly like every sibling
+    /// command, so a script can parse them.
+    pub error_format: Format,
     /// Optional jq filter expression (operates on the full envelope).
     pub jq_filter: Option<&'a str>,
     /// Optional hint context for drill-down commands.
@@ -131,7 +139,7 @@ impl OutputPipeline<'_> {
                     eprintln!(
                         "{}",
                         crate::output::format_error(
-                            self.user_format,
+                            self.error_format,
                             count_unsupported_error(),
                             None,
                             None,
@@ -147,7 +155,7 @@ impl OutputPipeline<'_> {
                     Ok(v) => v,
                     Err(e) => {
                         let msg = crate::output::format_error(
-                            self.user_format,
+                            self.error_format,
                             "internal error: failed to parse command JSON output",
                             None,
                             None,
@@ -249,7 +257,7 @@ impl OutputPipeline<'_> {
                     eprintln!(
                         "{}",
                         crate::output::format_error(
-                            self.user_format,
+                            self.error_format,
                             count_unsupported_error(),
                             None,
                             None,
@@ -275,7 +283,7 @@ impl OutputPipeline<'_> {
             Ok(CommandOutcome::UserError(output)) => {
                 // UserError strings are always formatted as JSON internally (effective_format=Json).
                 // When the user requested text format, re-format the error as human-readable text.
-                let displayed = if self.user_format == Format::Text {
+                let displayed = if self.error_format == Format::Text {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&output) {
                         let error = v["error"].as_str().unwrap_or("unknown error");
                         let path = v["path"].as_str();
@@ -293,7 +301,7 @@ impl OutputPipeline<'_> {
             }
             Err(e) => {
                 let msg = crate::output::format_error(
-                    self.user_format,
+                    self.error_format,
                     &e.to_string(),
                     None,
                     None,
@@ -316,6 +324,7 @@ mod tests {
     fn pipeline_with_counters(counters: FilesFromCounters) -> OutputPipeline<'static> {
         OutputPipeline {
             user_format: Format::Text,
+            error_format: Format::Text,
             jq_filter: None,
             hint_ctx: None,
             count: false,
@@ -367,6 +376,7 @@ mod tests {
     fn skip_summary_none_when_no_counters() {
         let pipeline = OutputPipeline {
             user_format: Format::Text,
+            error_format: Format::Text,
             jq_filter: None,
             hint_ctx: None,
             count: false,

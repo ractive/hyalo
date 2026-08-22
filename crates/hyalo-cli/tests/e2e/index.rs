@@ -2523,3 +2523,47 @@ fn stale_index_warns_when_vault_is_newer() {
         "warning must name the remedy: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-10 (iter-204): create-index text output has JSON parity
+// ---------------------------------------------------------------------------
+
+/// `--help` promises `path`, `files_indexed` and `warnings`; the text
+/// rendering must carry all three, plus the "replaced existing index" note
+/// when it applies — otherwise a text-mode caller cannot tell an overwrite
+/// from a first build.
+#[test]
+fn create_index_text_output_matches_json_fields() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    let first = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index", "--format", "text"])
+        .output()
+        .unwrap();
+    let first_out = String::from_utf8_lossy(&first.stdout);
+    assert!(
+        first_out.contains("files_indexed: 1"),
+        "text output must carry files_indexed: {first_out}"
+    );
+    assert!(
+        first_out.contains("warnings: 0"),
+        "text output must carry warnings: {first_out}"
+    );
+    assert!(
+        !first_out.contains("replaced existing index"),
+        "a first build must not claim a replacement: {first_out}"
+    );
+
+    let second = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index", "--format", "text"])
+        .output()
+        .unwrap();
+    let second_out = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        second_out.contains("note: replaced existing index"),
+        "an overwrite must say so in text mode too: {second_out}"
+    );
+}

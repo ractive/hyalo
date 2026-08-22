@@ -39,6 +39,45 @@ use sort::{apply_sort, presort_index_entries};
 ///
 /// Backlinks are resolved via `index.link_graph()` without a fresh vault scan.
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+/// Strip hyalo's internal `(?i)` prefix out of a regex engine error message
+/// and re-align the caret line beneath it (L-6).
+///
+/// `find -e` compiles `(?i)<pattern>` so searches are case-insensitive by
+/// default. The regex crate echoes that effective pattern in its parse error
+/// and positions the caret against it, so an unedited message shows a pattern
+/// the user never typed with the caret four columns to the right of the real
+/// offending character.
+fn strip_case_flag_prefix(msg: &str) -> String {
+    const FLAG: &str = "(?i)";
+    let mut out = String::with_capacity(msg.len());
+    // Column shift applied to the *next* caret line, set by the pattern line
+    // immediately above it. Reset after use so unrelated lines are untouched.
+    let mut caret_shift = 0usize;
+    for (i, line) in msg.lines().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(FLAG) {
+            let indent = line.len() - trimmed.len();
+            out.push_str(&line[..indent]);
+            out.push_str(rest);
+            caret_shift = FLAG.len();
+            continue;
+        }
+        if caret_shift > 0 && trimmed.starts_with('^') {
+            let indent = line.len() - trimmed.len();
+            out.push_str(&" ".repeat(indent.saturating_sub(caret_shift)));
+            out.push_str(trimmed);
+            caret_shift = 0;
+            continue;
+        }
+        caret_shift = 0;
+        out.push_str(line);
+    }
+    out
+}
+
 pub fn find(
     index: &dyn VaultIndex,
     dir: &Path,
@@ -105,8 +144,18 @@ pub fn find(
             {
                 Ok(r) => Some(r),
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format!(
-                        "invalid regular expression: {re}\n{e}"
+                    // L-6: report through the standard error envelope (so a
+                    // piped `--format json` run gets JSON, like every sibling),
+                    // and quote the pattern the user actually typed. `find -e`
+                    // compiles `(?i)<pattern>` internally; leaking that prefix
+                    // into the message also shifted the regex engine's caret by
+                    // four columns, pointing at the wrong character.
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        format,
+                        &format!("invalid regular expression: {re}"),
+                        None,
+                        None,
+                        Some(&strip_case_flag_prefix(&e.to_string())),
                     )));
                 }
             }
