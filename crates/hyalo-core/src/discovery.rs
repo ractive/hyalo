@@ -4,8 +4,8 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::link_graph::strip_site_prefix;
@@ -129,6 +129,30 @@ pub fn set_scan_include(patterns: &[String]) -> Vec<(String, String)> {
     errors
 }
 
+/// Paths already reported as skipped by [`discover_files`], so a command that
+/// walks the vault more than once per run does not repeat itself.
+///
+/// A single `hyalo` invocation calls `discover_files` several times (counting,
+/// then collecting, then hinting), which made every out-of-vault symlink skip
+/// print two or three identical warnings (iter-202 M-5). The set is
+/// process-global and never cleared: one process is one CLI run.
+static WARNED_SKIPS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Emit `message` for `path` unless the same path was already reported.
+///
+/// A poisoned lock is treated as "not yet warned" — a duplicate warning is a
+/// far better outcome than aborting a walk over it.
+fn warn_skip_once(path: &Path, message: &str) {
+    let first = match WARNED_SKIPS.lock() {
+        Ok(mut seen) => seen.insert(path.to_path_buf()),
+        Err(_) => true,
+    };
+    if first {
+        eprintln!("warning: skipping {}: {message}", path.display());
+    }
+}
+
 /// True when any component of `rel` is a hidden (dot-prefixed) segment.
 fn has_hidden_component(rel: &str) -> bool {
     rel.split('/')
@@ -240,18 +264,11 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
             match dunce::canonicalize(&path) {
                 Ok(canonical) if canonical.starts_with(&canonical_dir) => canonical,
                 Ok(_) => {
-                    eprintln!(
-                        "warning: skipping {}: symlink target resolves outside vault",
-                        path.display()
-                    );
+                    warn_skip_once(&path, "symlink target resolves outside vault");
                     continue;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "warning: skipping {}: failed to resolve path: {}",
-                        path.display(),
-                        e
-                    );
+                    warn_skip_once(&path, &format!("failed to resolve path: {e}"));
                     continue;
                 }
             }

@@ -115,6 +115,11 @@ pub fn escaping_write_target(vault_root: &Path, path: &Path) -> Result<Option<Pa
     // The boundary decision itself is made on the anchor alone, so a `..` in
     // the suffix cannot widen what is accepted.
     let suffix = dest.strip_prefix(&anchor).unwrap_or(Path::new(""));
+    if suffix.as_os_str().is_empty() {
+        // `join("")` would append a trailing separator; the anchor *is* the
+        // destination here.
+        return Ok(Some(canonical_anchor));
+    }
     Ok(Some(canonical_anchor.join(suffix)))
 }
 
