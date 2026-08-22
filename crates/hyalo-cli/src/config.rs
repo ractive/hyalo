@@ -1285,13 +1285,19 @@ site_prefix = "docs"
         .unwrap();
 
         // Same behaviour as every other unknown key: warn, then fall back to
-        // hardcoded defaults for the whole file (deny_unknown_fields).
+        // hardcoded defaults for the whole file (deny_unknown_fields) — except
+        // `dir`, which is salvaged so read-only commands stay pointed at the
+        // configured vault instead of silently re-rooting (iter-201).
         let _guard = crate::warn::WARN_TEST_LOCK.lock().unwrap();
         crate::warn::reset_for_test();
         crate::warn::init(false);
         let resolved = load_config_from(dir.path());
         assert!(resolved.auto_link_exclude_titles.is_empty());
-        assert_eq!(resolved.dir, PathBuf::from("."));
+        assert_eq!(resolved.dir, PathBuf::from("vault"));
+        assert!(
+            resolved.malformed.is_some(),
+            "an unusable config must be flagged so writers can refuse"
+        );
         assert!(crate::warn::any_tracked_starts_with(
             "malformed .hyalo.toml"
         ));

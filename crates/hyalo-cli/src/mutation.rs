@@ -223,6 +223,7 @@ const VALUE_OPTIONS: &[&str] = &[
     "--output",
     "--target",
     "--action",
+    "--type",
 ];
 
 /// Classify an already-tokenized `hyalo …` command line.
@@ -386,7 +387,7 @@ mod tests {
             true,
         ),
         ("hyalo mv notes/a.md notes/b.md", true),
-        ("hyalo new --file notes/c.md", true),
+        ("hyalo new --type note --file notes/c.md", true),
         ("hyalo create-index", true),
         ("hyalo task toggle notes/a.md --line 5", true),
         ("hyalo task set notes/a.md --line 5 --status doing", true),
@@ -397,7 +398,7 @@ mod tests {
         ("hyalo types set note --required title", true),
         ("hyalo lint-rules set MD013 --enabled false", true),
         ("hyalo lint --fix", true),
-        ("hyalo lint --fix-rule HYALO001", true),
+        ("hyalo lint --fix --fix-rule HYALO001", true),
         ("hyalo links fix --apply", true),
         ("hyalo links auto --apply", true),
         ("hyalo okf index --apply", true),
