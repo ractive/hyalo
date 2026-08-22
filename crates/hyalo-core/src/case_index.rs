@@ -131,6 +131,19 @@ impl CaseInsensitiveIndex {
         }
     }
 
+    /// Whether the vault contains this exact, case-sensitive relative path.
+    ///
+    /// Unlike [`lookup_unique`](Self::lookup_unique) this answers plain
+    /// membership and is **not** gated on the `case_insensitive_paths`
+    /// toggle — callers that need "does this file exist?" without a
+    /// filesystem hit (iter-203's directory-index backlink keys) use it.
+    #[must_use]
+    pub fn contains_path(&self, rel_path: &str) -> bool {
+        self.map
+            .get(&rel_path.to_ascii_lowercase())
+            .is_some_and(|candidates| candidates.iter().any(|c| c == rel_path))
+    }
+
     /// Look up a bare filename stem (no directory, no `.md` extension).
     /// Returns the canonical real path only when exactly one file has that
     /// stem (unambiguous Obsidian-style resolution).
@@ -535,6 +548,16 @@ mod tests {
     }
 
     // ---- Stem lookup (Obsidian-style bare wikilink resolution) ----
+
+    #[test]
+    fn contains_path_is_case_sensitive_and_ignores_toggle() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("Foo/index.md");
+        // Toggle is off by default; contains_path must still answer.
+        assert!(idx.contains_path("Foo/index.md"));
+        assert!(!idx.contains_path("foo/index.md"));
+        assert!(!idx.contains_path("bar/index.md"));
+    }
 
     #[test]
     fn lookup_stem_unique() {

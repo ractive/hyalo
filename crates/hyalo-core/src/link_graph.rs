@@ -501,6 +501,53 @@ fn strip_md_extension(s: &str) -> &str {
     }
 }
 
+/// Extra backlink index key for a link target that names a *directory*
+/// (iter-203).
+///
+/// `[x](/foo)`, `[x](foo/)` and `[[foo]]` all resolve to `foo/index.md` when
+/// that file exists, so the graph stores an additional `foo/index` key —
+/// `.md`-stripped, matching how path-form wikilinks are stored — and
+/// `backlinks("foo/index.md")` finds them through its built-in `.md` toggle.
+///
+/// Mirrors `discovery::resolve_target`'s precedence so the graph and the
+/// read-side resolver agree: a target that already names a real file (`foo`
+/// with `foo.md` present) is not a directory reference, unless it was written
+/// with a trailing slash, which is explicit.
+///
+/// `trailing_slash` must describe the target **as written** — normalization
+/// drops it, but it is what makes the reference explicit.
+///
+/// Returns `None` when the target is not a resolvable directory reference.
+fn directory_index_key(
+    target: &str,
+    trailing_slash: bool,
+    case_index: &CaseInsensitiveIndex,
+) -> Option<String> {
+    let trimmed = target.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return None;
+    }
+    // A target that already carries `.md` names a file, never a directory.
+    if strip_md_extension(trimmed) != trimmed {
+        return None;
+    }
+    let exists = |path: &str| {
+        case_index.contains_path(path) || case_index.lookup_unique(path).is_some()
+    };
+    if exists(trimmed) {
+        return None;
+    }
+    if !trailing_slash && exists(&format!("{trimmed}.md")) {
+        return None;
+    }
+    let dir_index = format!("{trimmed}/{}", crate::discovery::DIRECTORY_INDEX_FILE);
+    if case_index.contains_path(&dir_index) {
+        return Some(strip_md_extension(&dir_index).to_owned());
+    }
+    let canonical = case_index.lookup_unique(&dir_index)?;
+    Some(strip_md_extension(canonical).to_owned())
+}
+
 /// Normalize and insert one file's links into the shared index.
 fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
@@ -509,6 +556,9 @@ fn insert_file_links(
     case_index: &CaseInsensitiveIndex,
 ) {
     for (line, mut link) in file_links.links {
+        // Captured before normalization, which drops it: a trailing slash is
+        // what marks a target as an explicit directory reference (iter-203).
+        let raw_trailing_slash = link.target.ends_with('/');
         // Normalize markdown link targets that contain path separators
         // so that, for example, `sub/a.md` linking to `../target.md`
         // is stored as `target.md`, matching how callers query by
@@ -567,6 +617,16 @@ fn insert_file_links(
         .flatten()
         .filter(|resolved| *resolved != link.target);
 
+        // iter-203: a target naming a directory (`/foo`, `foo`, `foo/`) is a
+        // backlink of `foo/index.md`. Store the extra key so `backlinks` and
+        // `mv` see those edges. Only one extra key is ever added: a target is
+        // either a stem hit or a directory hit, never both.
+        let dir_index_key = resolved_key
+            .is_none()
+            .then(|| directory_index_key(&link.target, raw_trailing_slash, case_index))
+            .flatten()
+            .filter(|resolved| *resolved != link.target);
+
         let entry = BacklinkEntry {
             source: file_links.source.clone(),
             line,
@@ -576,7 +636,7 @@ fn insert_file_links(
             .entry(link.target.clone())
             .or_default()
             .push(entry.clone());
-        if let Some(key) = resolved_key {
+        if let Some(key) = resolved_key.or(dir_index_key) {
             index.entry(key).or_default().push(entry);
         }
     }
@@ -1869,6 +1929,77 @@ mod tests {
             bl.len(),
             3,
             "all three .md casings must resolve as backlinks"
+        );
+    }
+
+    // --- iter-203: directory targets are backlinks of <dir>/index.md ---
+
+    #[test]
+    fn backlinks_counts_directory_targets_for_the_index_file() {
+        let vault = create_vault(&[
+            ("web/api/document/index.md", "# Document\n"),
+            ("a.md", "See [Document](/web/api/document)\n"),
+            ("b.md", "See [Document](/web/api/document/)\n"),
+            ("c.md", "See [[web/api/document]]\n"),
+            ("d.md", "See [Document](/web/api/document/index.md)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        let sources: std::collections::BTreeSet<String> = graph
+            .backlinks("web/api/document/index.md")
+            .iter()
+            .map(|e| e.source.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            sources,
+            ["a.md", "b.md", "c.md", "d.md"]
+                .into_iter()
+                .map(String::from)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "every directory spelling must count as a backlink of the index file"
+        );
+    }
+
+    #[test]
+    fn backlinks_directory_target_not_double_counted() {
+        let vault = create_vault(&[
+            ("foo/index.md", "# Foo\n"),
+            ("a.md", "[x](/foo) and [y](foo/)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        assert_eq!(
+            graph.backlinks("foo/index.md").len(),
+            2,
+            "two links must yield exactly two backlink entries"
+        );
+    }
+
+    #[test]
+    fn backlinks_directory_key_skipped_when_a_real_file_wins() {
+        // `foo.md` beats `foo/index.md`, so `[x](foo)` is NOT a backlink of
+        // the index file — matching `resolve_target`'s precedence.
+        let vault = create_vault(&[
+            ("foo.md", "# Foo\n"),
+            ("foo/index.md", "# Foo index\n"),
+            ("a.md", "[x](foo)\n"),
+            ("b.md", "[y](foo/)\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        let index_sources: Vec<String> = graph
+            .backlinks("foo/index.md")
+            .iter()
+            .map(|e| e.source.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(
+            index_sources,
+            vec!["b.md".to_string()],
+            "only the explicit trailing-slash form targets the index file"
+        );
+        assert!(
+            graph
+                .backlinks("foo.md")
+                .iter()
+                .any(|e| e.source.to_string_lossy().replace('\\', "/") == "a.md"),
+            "the bare form still belongs to foo.md"
         );
     }
 
