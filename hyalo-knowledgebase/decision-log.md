@@ -1237,3 +1237,94 @@ run.
 **Not done:** counter-flags for `exclude_titles` / `exclude_target_globs`. They
 are unioned lists, so "ignore the config's list for this run" is a different
 and larger question (partial vs. total override) with no demand behind it.
+
+## DEC-069: `--dir` selects a vault, not a config (2026-08-22)
+
+**Decision:** `--dir <path>` names the *vault* to operate on and never decides,
+on its own, which `.hyalo.toml` applies. Resolution is now a single function,
+`config::resolve_effective`, used by every command including `hyalo config`:
+
+1. **No `--dir`** — the CWD's `.hyalo.toml` applies; the vault is its `dir`.
+2. **`--dir` canonicalizing to the vault that config already resolves to** — the
+   CWD config *still applies*. The existing `note: --dir is redundant` stays,
+   because the flag genuinely adds nothing.
+3. **`--dir` naming a different directory** — that directory's own
+   `.hyalo.toml` applies if present, else built-in defaults. Either way hyalo
+   writes a `note:` on stderr naming the file that took over, because this is
+   the case where the user's config really does stop applying.
+
+`hyalo config --dir X` reports exactly this, so `config_path` is never `null`
+while a config was read.
+
+**Why:** [[dogfood-results/dogfood-v0210-pre-release-iters-191-198]] H-4. Case 2
+is the overwhelmingly common layout — config at the repo root with
+`dir = "hyalo-knowledgebase"` — and hyalo's behaviour there was to reload
+`.hyalo.toml` from *inside* the vault, find nothing, and run on built-in
+defaults: no schema, no views, no `[lint] ignore`, no severity overrides, no
+`site_prefix`, no changelog path. Measured on this repo, `lint --dir
+hyalo-knowledgebase --strict` reported 125 files/694 warnings against the
+config-honoring run's 4 warnings — a CI gate written with the flag was
+inspecting a different rule set than the one the project maintains, and hyalo's
+own hint output emitted `--dir`-bearing commands that walked users into it. The
+"redundant" note made it worse by asserting the two forms were equivalent.
+
+**Why not "always load the target dir's config":** that is what the code did,
+and it is only coherent if `--dir` is understood as "switch projects". But
+`--dir` is documented as "root directory for resolving all file and --glob
+paths" and is what `hyalo config`'s own hints emit — it reads as a path
+argument, not a project switch. Making case 2 a no-op restores the property the
+flag's name implies.
+
+**Why not walk ancestors for a config in case 3:** hyalo has never merged or
+inherited configs, and an ancestor walk would make `--dir /tmp/scratch` silently
+pick up whatever config sits above `/tmp`. Case 3 keeps the existing rule (own
+file or defaults) and only adds the stderr note.
+
+**Consequence:** breaking for anyone who used `--dir <configured-vault>` as a
+way to *ignore* the local config. Called out in the changelog with the
+migration (point `--dir` outside the configured vault instead).
+
+## DEC-070: unusable `.hyalo.toml` is fatal for writers, advisory for readers (2026-08-22)
+
+**Decision:** A `.hyalo.toml` that exists but does not parse sets
+`ResolvedDefaults::malformed`. Commands that would actually write — per
+`Commands::writes()`, which excludes `--dry-run` and preview-only forms — exit 1
+with the parse diagnostic and touch nothing. Read-only commands continue on
+built-in defaults, except that `dir` is salvaged from the file when a lenient
+re-read can still find it. The diagnostic is emitted through
+`warn::warn_always`, which `--quiet` cannot suppress. `init`/`deinit` are never
+blocked.
+
+**Why:** dogfood M-2. One unknown key anywhere in the file discarded everything
+including `dir`, so `hyalo links auto --apply -q` could rewrite a tree the
+config never pointed at, with no output at all. The asymmetry is deliberate: a
+read on the wrong defaults produces a confusing answer the user can discard; a
+write produces edits they have to find and undo. Salvaging `dir` narrows even
+the read case to "wrong rules" rather than "wrong tree".
+
+**Why `-q` does not apply:** `--quiet` exists to suppress per-file chatter in
+scripts. A config that stopped applying is not chatter — it changes which vault
+and which rules the command used, which is precisely the thing a script author
+must not miss.
+
+## DEC-071: hints carry a `writes` flag, derived not declared (2026-08-22)
+
+**Decision:** `Hint` gains a `writes: bool`, computed inside `Hint::new` from
+the command string by `mutation::command_line_writes` rather than passed in by
+each hint builder. Text output renders writing hints with a `=>` arrow and a
+trailing `[writes]` tag; the JSON envelope always includes `"writes"`. An e2e
+gate harvests every hint the CLI emits, runs the ones marked read-only, and
+fails on any byte-level change to the vault or `.hyalo.toml`.
+
+**Why:** dogfood M-7. `hyalo find` with two or more filters suggests
+`hyalo views set …`, which rewrites `.hyalo.toml`, in the same `-> hyalo …`
+list as read-only drill-downs. "Follow the hints" is standing instruction in
+this repo's `CLAUDE.md`, so an unmarked mutation is a trap for exactly the
+audience hints are written for.
+
+**Why derived rather than declared:** a `Hint::writing(…)` constructor is one
+that a future hint site can forget to use, and the failure mode is silent. A
+classifier in `Hint::new` cannot be bypassed. Its risk — misclassification —
+is covered two ways: `mutation::tests` runs a command corpus through both the
+string classifier and the typed `Commands::writes()` and asserts they agree, and
+the e2e gate independently proves the read-only marker by executing the hints.
