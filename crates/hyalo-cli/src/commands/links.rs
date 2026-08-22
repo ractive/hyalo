@@ -172,6 +172,11 @@ pub fn links_fix(
     // Fixes whose file produced a valid plan but the durable write failed
     // mid-batch (L-11). Non-empty ⇒ partial failure ⇒ non-zero exit code.
     let mut failed_fixes: Vec<hyalo_core::link_fix::FailedFix> = Vec::new();
+    // Fixes the H-1 round-trip guard refused: the target hyalo would have
+    // written does not resolve, so nothing was written and they are reported
+    // as unfixable rather than fixed (iter-200). A non-empty list here means a
+    // writer/resolver asymmetry was caught before it could corrupt a link.
+    let mut rejected_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
 
     // Merge broken-link fixes and case-mismatch fixes into a single batch so the
     // apply/dry-run planner reads and rewrites each source file once — two
@@ -187,14 +192,16 @@ pub fn links_fix(
             // dry-run `unapplied` set matches what `--apply` would report.
             // `modified_files` stays empty here — dry-run must NOT patch the
             // index; `_would_modify` is informational only.
-            let (_would_modify, unapplied) =
+            let (_would_modify, unapplied, rejected) =
                 hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?;
             unapplied_fixes = unapplied;
+            rejected_fixes = rejected;
         }
     } else if !all_fixes.is_empty() {
-        let (plans, unapplied, failed) = apply_fixes(dir, &all_fixes, site_prefix)?;
+        let (plans, unapplied, failed, rejected) = apply_fixes(dir, &all_fixes, site_prefix)?;
         unapplied_fixes = unapplied;
         failed_fixes = failed;
+        rejected_fixes = rejected;
 
         // Only files that actually received a durable rewrite are "modified" —
         // do not patch the index for files whose fixes were all unapplied or
@@ -235,6 +242,15 @@ pub fn links_fix(
                 ff.fix.new_target.as_str(),
             ));
         }
+        // Guard-rejected fixes were never written either.
+        for rf in &rejected_fixes {
+            excluded_keys.insert((
+                rf.source.as_str(),
+                rf.line,
+                rf.old_target.as_str(),
+                rf.new_target.as_str(),
+            ));
+        }
         certain_fixes
             .iter()
             .chain(applicable_fuzzy.iter())
@@ -251,6 +267,20 @@ pub fn links_fix(
             .collect()
     };
 
+    // Guard-rejected fixes join the unfixable bucket: there *is* no
+    // representable target for them, which is exactly what "unfixable" means.
+    let mut unfixable_links = fix_report.unfixable.clone();
+    unfixable_links.extend(
+        rejected_fixes
+            .iter()
+            .map(|f| hyalo_core::link_fix::BrokenLinkInfo {
+                source: f.source.clone(),
+                line: f.line,
+                target: f.old_target.clone(),
+            }),
+    );
+    unfixable_links.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+
     let output = serde_json::json!({
         "broken": broken.len(),
         // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
@@ -259,10 +289,10 @@ pub fn links_fix(
         // would make "Fixable: N" (and the "Apply N fixes" hint) overpromise
         // what a plain `--apply` actually writes.
         "fixable": certain_fixes.len(),
-        "unfixable": fix_report.unfixable.len(),
+        "unfixable": unfixable_links.len(),
         "ignored": ignored_count,
         "fixes": certain_fixes,
-        "unfixable_links": fix_report.unfixable,
+        "unfixable_links": unfixable_links,
         "applied": !dry_run,
         "applied_fixes": applied_fixes,
         "unapplied": unapplied_count,

@@ -26,7 +26,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
-use crate::link_graph::normalize_target;
+use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
@@ -529,21 +529,25 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
 /// wikilinks), applies them via [`apply_replacements`], and writes back via
 /// [`execute_plans`].
 ///
-/// Returns `(applied_plans, unapplied, failed)` where:
+/// Returns `(applied_plans, unapplied, failed, rejected)` where:
 /// - `applied_plans` are the [`RewritePlan`]s that were durably written to disk.
 /// - `unapplied` lists input [`FixPlan`]s that produced no [`Replacement`]
 ///   (e.g. because the on-disk text no longer matched what detection saw, or
 ///   the file exceeded the size limit).
 /// - `failed` lists fixes whose file produced a valid plan but the durable
 ///   write failed mid-batch (L-11); remaining files still get written.
+/// - `rejected` lists fixes refused by the H-1 round-trip guard: the emitted
+///   target would not have resolved, so nothing was written and the caller
+///   must report them as unfixable rather than fixed.
 ///
-/// Callers must treat both `unapplied` and `failed` fixes as NOT applied when
-/// reporting results, and set a non-zero exit code when `failed` is non-empty.
+/// Callers must treat `unapplied`, `failed`, and `rejected` fixes as NOT
+/// applied when reporting results, and set a non-zero exit code when `failed`
+/// is non-empty.
 pub fn apply_fixes(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>)> {
+) -> Result<(Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>, Vec<FixPlan>)> {
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -552,6 +556,9 @@ pub fn apply_fixes(
 
     let mut plans: Vec<RewritePlan> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    // Fixes refused by the H-1 round-trip guard (emitted target would not
+    // resolve) — reported to the caller as unfixable, never written.
+    let mut rejected: Vec<FixPlan> = Vec::new();
     // I/O failures (stat/read) encountered while building plans, keyed by the
     // fixes they belong to — reported as `failed`, not `unapplied`, since
     // these are genuine errors rather than stale-text mismatches. Fixes for a
@@ -590,12 +597,14 @@ pub fn apply_fixes(
             }
         };
 
-        let (replacements, satisfied) =
+        let (replacements, satisfied, guard_rejected) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
 
         let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
         for (idx, fix) in file_fixes.iter().enumerate() {
-            if satisfied.contains(&idx) {
+            if guard_rejected.contains(&idx) {
+                rejected.push((*fix).clone());
+            } else if satisfied.contains(&idx) {
                 satisfied_fixes.push((*fix).clone());
             } else {
                 unapplied.push((*fix).clone());
@@ -644,7 +653,8 @@ pub fn apply_fixes(
         }
     }
 
-    Ok((applied_plans, unapplied, failed))
+    rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    Ok((applied_plans, unapplied, failed, rejected))
 }
 
 /// Outcome of reading a source file's on-disk content for fix planning.
@@ -698,14 +708,16 @@ fn read_source_file(abs_path: &Path) -> SourceRead {
 /// unapplied in *both* modes. Without this, dry-run always reported an empty
 /// `unapplied` and could promise fixes that a subsequent `--apply` would drop.
 ///
-/// Returns `(would_modify, unapplied)` where `would_modify` is the set of
-/// vault-relative paths that would receive at least one rewrite, and
-/// `unapplied` lists the fixes whose on-disk text no longer matches.
+/// Returns `(would_modify, unapplied, rejected)` where `would_modify` is the
+/// set of vault-relative paths that would receive at least one rewrite,
+/// `unapplied` lists the fixes whose on-disk text no longer matches, and
+/// `rejected` lists the fixes the H-1 round-trip guard refuses (their emitted
+/// target would not resolve, so `--apply` would report them as unfixable).
 pub fn plan_fixes_dry_run(
     dir: &Path,
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
-) -> Result<(Vec<String>, Vec<FixPlan>)> {
+) -> Result<(Vec<String>, Vec<FixPlan>, Vec<FixPlan>)> {
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
         by_source.entry(fix.source.as_str()).or_default().push(fix);
@@ -713,6 +725,7 @@ pub fn plan_fixes_dry_run(
 
     let mut would_modify: Vec<String> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
+    let mut rejected: Vec<FixPlan> = Vec::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
@@ -730,11 +743,13 @@ pub fn plan_fixes_dry_run(
             }
         };
 
-        let (replacements, satisfied) =
+        let (replacements, satisfied, guard_rejected) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
 
         for (idx, fix) in file_fixes.iter().enumerate() {
-            if !satisfied.contains(&idx) {
+            if guard_rejected.contains(&idx) {
+                rejected.push((*fix).clone());
+            } else if !satisfied.contains(&idx) {
                 unapplied.push((*fix).clone());
             }
         }
@@ -746,7 +761,100 @@ pub fn plan_fixes_dry_run(
 
     would_modify.sort();
     unapplied.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    Ok((would_modify, unapplied))
+    rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    Ok((would_modify, unapplied, rejected))
+}
+
+// ---------------------------------------------------------------------------
+// Emission: turning a vault-relative fix target into on-page link text
+// ---------------------------------------------------------------------------
+
+/// Strip a trailing `.md` (case-insensitively) from a target string.
+fn strip_md_suffix(target: &str) -> &str {
+    if target.len() > 3 && target.as_bytes()[target.len() - 3..].eq_ignore_ascii_case(b".md") {
+        &target[..target.len() - 3]
+    } else {
+        target
+    }
+}
+
+/// Compute the destination text to write for a fixed **markdown** link.
+///
+/// [`FixPlan::new_target`] is always *vault-relative*, but the read-side
+/// resolver reads a bare markdown destination as *file-relative* and a
+/// leading-`/` destination as *site-absolute*. Writing the vault-relative path
+/// verbatim therefore only round-trips when the source file happens to sit at
+/// the vault root — everywhere else the rewritten link cannot resolve, and on
+/// a site-absolute corpus every single rewrite was corruption (dogfood H-1:
+/// 1,097 GitHub Docs files modified, broken count 6,565 → 6,582).
+///
+/// Emission rules, mirroring [`crate::link_write::LinkWriter`]:
+/// - site-absolute in ⇒ site-absolute out (re-attaching `site_prefix`);
+/// - otherwise a path relative to the *source file's directory*;
+/// - the original's `.md` presence/absence is preserved either way.
+fn emit_markdown_fix_target(
+    raw_target: &str,
+    new_vault_rel: &str,
+    source_rel: &str,
+    site_prefix: Option<&str>,
+) -> String {
+    let had_md = raw_target.len() > 3
+        && raw_target.as_bytes()[raw_target.len() - 3..].eq_ignore_ascii_case(b".md");
+
+    if raw_target.starts_with('/') {
+        let body = if had_md {
+            new_vault_rel
+        } else {
+            strip_md_suffix(new_vault_rel)
+        };
+        return match site_prefix {
+            Some(prefix) => format!("/{}/{}", prefix.trim_matches('/'), body),
+            None => format!("/{body}"),
+        };
+    }
+
+    let rel = relative_path_between(source_rel, new_vault_rel);
+    if had_md {
+        rel
+    } else {
+        strip_md_suffix(&rel).to_string()
+    }
+}
+
+/// Whether the emitted markdown destination reads back — through the exact
+/// normalization the read-side resolver applies — as `new_vault_rel`.
+///
+/// This is the H-1 *guard*: any writer/resolver asymmetry (present or future)
+/// turns into a refused fix and a visible `unfixable` count instead of a
+/// silently corrupted link. `.md` presence is ignored on both sides because
+/// [`crate::discovery::resolve_target`] appends the extension itself.
+fn markdown_fix_round_trips(
+    emitted: &str,
+    new_vault_rel: &str,
+    source_rel: &str,
+    site_prefix: Option<&str>,
+) -> bool {
+    let normalized = if emitted.starts_with('/') {
+        strip_site_prefix(emitted, site_prefix)
+    } else {
+        normalize_target(Path::new(source_rel), emitted)
+    };
+    strip_md_suffix(&normalized) == strip_md_suffix(new_vault_rel)
+}
+
+/// Whether the emitted wikilink target reads back as `new_vault_rel`.
+///
+/// Wikilink targets are vault-relative as written, so a path-form emission has
+/// to match exactly; a bare stem is accepted when it is the basename of the
+/// target (Obsidian short-form, which detection only proposes for stems that
+/// are unique in the vault).
+fn wikilink_fix_round_trips(emitted: &str, new_vault_rel: &str) -> bool {
+    let emitted = strip_md_suffix(emitted);
+    let target = strip_md_suffix(new_vault_rel);
+    emitted == target
+        || (!emitted.contains('/')
+            && !emitted.contains('\\')
+            && target.rsplit('/').next() == Some(emitted))
 }
 
 /// Walk `content` line by line and build [`Replacement`]s for all link fixes
@@ -754,21 +862,27 @@ pub fn plan_fixes_dry_run(
 /// link properties and links in the document body (code fences and Obsidian
 /// comment fences are skipped for the latter).
 ///
-/// Returns `(replacements, satisfied)` where `satisfied` holds the indices
-/// (into `fixes`) of plans that were matched to an on-disk occurrence and
-/// rewritten. Tracking is per-occurrence: each on-disk match consumes the
-/// first not-yet-satisfied plan with that target, so duplicate plans for the
-/// same `(line, old_target)` — a legitimate case when the same broken target
-/// appears twice — are only satisfied by distinct occurrences. Callers use
-/// the unsatisfied remainder to detect fixes whose on-disk text no longer
-/// matches what detection saw (stale plan) so they are never misreported as
-/// applied.
+/// Returns `(replacements, satisfied, rejected)` where `satisfied` holds the
+/// indices (into `fixes`) of plans that were matched to an on-disk occurrence
+/// and `rejected` the subset of those whose emitted target failed the H-1
+/// round-trip guard (see [`markdown_fix_round_trips`]) and was therefore *not*
+/// turned into a `Replacement`. Tracking is per-occurrence: each on-disk match
+/// consumes the first not-yet-satisfied plan with that target, so duplicate
+/// plans for the same `(line, old_target)` — a legitimate case when the same
+/// broken target appears twice — are only satisfied by distinct occurrences.
+/// Callers use the unsatisfied remainder to detect fixes whose on-disk text no
+/// longer matches what detection saw (stale plan) so they are never
+/// misreported as applied, and `rejected` to report them as unfixable.
 fn build_replacements_for_file(
     content: &str,
     source_rel: &str,
     fixes: &[&FixPlan],
-    _site_prefix: Option<&str>,
-) -> (Vec<Replacement>, std::collections::HashSet<usize>) {
+    site_prefix: Option<&str>,
+) -> (
+    Vec<Replacement>,
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
     // Index fixes by line number for O(1) lookup during the scan, carrying
     // each plan's index into `fixes` for per-occurrence satisfaction
     // tracking.
@@ -779,6 +893,7 @@ fn build_replacements_for_file(
 
     let mut replacements = Vec::new();
     let mut satisfied: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut rejected: std::collections::HashSet<usize> = std::collections::HashSet::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B): one lexer
     // for frontmatter, fences, `%%` comments, and cross-line code/HTML spans.
     let mut scanner = LineScanner::new();
@@ -890,30 +1005,44 @@ fn build_replacements_for_file(
                 continue;
             };
 
-            // Compute new target text based on link kind.
-            let new_target_text = match span.kind {
+            // Compute new target text based on link kind, then verify it
+            // round-trips through the read-side resolver (H-1 guard).
+            let (new_target_text, round_trips) = match span.kind {
                 LinkKind::Wikilink => {
-                    // Use stem (without .md) for wikilinks.
-                    fix.new_target
-                        .strip_suffix(".md")
-                        .unwrap_or(&fix.new_target)
-                        .to_string()
+                    // Use stem (without .md) for wikilinks; wikilink targets
+                    // are vault-relative as written, so the plan's target is
+                    // already in the right coordinate system.
+                    let emitted = strip_md_suffix(&fix.new_target).to_string();
+                    let ok = wikilink_fix_round_trips(&emitted, &fix.new_target);
+                    (emitted, ok)
                 }
                 LinkKind::Markdown => {
-                    // Preserve the original `.md` presence/absence in the link.
-                    // If the original target had no `.md` suffix, strip it from
-                    // the new target too so the style is unchanged.
-                    let orig_had_md = fix.old_target.to_ascii_lowercase().ends_with(".md");
-                    if orig_had_md {
-                        fix.new_target.clone()
-                    } else {
-                        fix.new_target
-                            .strip_suffix(".md")
-                            .unwrap_or(&fix.new_target)
-                            .to_string()
-                    }
+                    // The plan's target is vault-relative; a markdown
+                    // destination is read as site-absolute or file-relative.
+                    let emitted = emit_markdown_fix_target(
+                        &span.link.target,
+                        &fix.new_target,
+                        source_rel,
+                        site_prefix,
+                    );
+                    let ok = markdown_fix_round_trips(
+                        &emitted,
+                        &fix.new_target,
+                        source_rel,
+                        site_prefix,
+                    );
+                    (emitted, ok)
                 }
             };
+
+            // A fix whose emitted target would not resolve is never written:
+            // it is consumed (so a duplicate plan is not re-matched) and
+            // reported as unfixable instead of corrupting the link.
+            if !round_trips {
+                satisfied.insert(fix_idx);
+                rejected.insert(fix_idx);
+                continue;
+            }
 
             // Build old_text / new_text from the ORIGINAL line bytes.
             let old_text = line[span.full_start..span.full_end].to_string();
@@ -936,7 +1065,7 @@ fn build_replacements_for_file(
         }
     }
 
-    (replacements, satisfied)
+    (replacements, satisfied, rejected)
 }
 
 // ---------------------------------------------------------------------------

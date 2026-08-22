@@ -671,6 +671,14 @@ fn scan_file_for_matches(
         // ---- Extract existing link spans to avoid overlapping them ----
         let link_spans = extract_link_spans_with_original(cleaned_str, line);
 
+        // ---- Zones that are syntactically part of a link (iter-200, H-2) ----
+        // `link_spans` only covers *vault* links: external destinations and
+        // bare URLs are invisible to it, so a title mention inside a URL or
+        // inside an external link's label used to be rewritten in place,
+        // destroying the URL. `inert_link_zones` covers both, plus the label
+        // text of every markdown link.
+        let inert = crate::links::inert_link_zones(cleaned_str);
+
         // ---- Run Aho-Corasick on the cleaned line ----
         for mat in ac.find_iter(cleaned_str) {
             let start = mat.start();
@@ -690,6 +698,12 @@ fn scan_file_for_matches(
 
             // Existing link overlap check.
             if overlaps_any_link(&link_spans, start, end) {
+                continue;
+            }
+
+            // Link-syntax zone check: markdown link destinations (including
+            // external ones), bare URLs, autolinks, and existing link labels.
+            if crate::links::overlaps_zone(&inert, start, end) {
                 continue;
             }
 
