@@ -797,7 +797,6 @@ fn md047_fix(body: &str) -> Option<DiagFix> {
     })
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -884,10 +883,16 @@ mod tests {
 
         let text = "ab\r\ncd\r\n";
         // End of line 1 is before the terminator.
-        assert_eq!(Position { line: 1, column: 3 }.to_byte_offset(text), Some(2));
+        assert_eq!(
+            Position { line: 1, column: 3 }.to_byte_offset(text),
+            Some(2)
+        );
         // Column 1 of line 2 is after the whole CRLF pair — nothing addresses
         // the gap between '\r' and '\n'.
-        assert_eq!(Position { line: 2, column: 1 }.to_byte_offset(text), Some(4));
+        assert_eq!(
+            Position { line: 2, column: 1 }.to_byte_offset(text),
+            Some(4)
+        );
         assert_eq!(Position::from_byte_offset(text, 3), None);
     }
 
@@ -995,10 +1000,7 @@ mod tests {
             .find(|d| d.rule_id == "MD034")
             .expect("MD034 should fire on a bare URL");
         let fix = d.fix.as_ref().expect("MD034 fix should convert");
-        assert_eq!(
-            apply(body, fix),
-            "See <https://example.com> for details.\n"
-        );
+        assert_eq!(apply(body, fix), "See <https://example.com> for details.\n");
     }
 
     #[test]
@@ -1140,5 +1142,152 @@ mod tests {
         let fix = d.fix.as_ref().expect("MD047 fix should not be dropped");
         let fixed = apply(body, fix);
         assert_eq!(fixed, "body without newline\n");
+    }
+    // -----------------------------------------------------------------
+    // iter-196: fixtures proving the mdbook-lint 0.16.0 upstream fixes are
+    // present in the *published* crate, so the downstream workarounds they
+    // replace stay deleted. Each of these fails under 0.15.2 semantics.
+    // -----------------------------------------------------------------
+
+    /// Upstream #486: before 0.16.0 MD011 emitted an *inclusive* end column
+    /// (the position of the closing `]`), so applying the fix verbatim left a
+    /// stray `]` behind on every line, ASCII included. That is what the
+    /// deleted `end += 1` guard compensated for.
+    #[test]
+    fn md011_fix_leaves_no_stray_bracket() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "(some text)[http://example.com] tail\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD011")
+            .expect("MD011 should fire on a reversed link");
+        let fix = d.fix.as_ref().expect("MD011 fix should convert");
+        let fixed = apply(body, fix);
+        assert_eq!(fixed, "[some text](http://example.com) tail\n");
+        assert!(
+            !fixed.contains("]] "),
+            "no stray closing bracket may survive: {fixed:?}"
+        );
+    }
+
+    /// Upstream #486: MD034's URL boundary scan now stops before Liquid /
+    /// Handlebars openers, so the deleted `trim_md034_liquid` pull-back is no
+    /// longer needed. Unlike the older tolerant test above, this one insists
+    /// the shipped crate gets it right on its own.
+    #[test]
+    fn md034_upstream_stops_autolink_before_liquid_tag() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "See https://example.com{% ifversion ghes %} for details.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        if let Some(fix) = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD034")
+            .and_then(|d| d.fix.as_ref())
+        {
+            let fixed = apply(body, fix);
+            assert_eq!(
+                fixed, "See <https://example.com>{% ifversion ghes %} for details.\n",
+                "upstream must close the autolink before the Liquid opener"
+            );
+        }
+    }
+
+    /// Upstream #492 (our issue #491): a paragraph continuation line that
+    /// starts with an issue reference such as `#472` is prose, not a
+    /// malformed ATX heading, and must not be flagged. A genuinely standalone
+    /// `#foo` still is, and a mid-line `PR #472` never was.
+    #[test]
+    fn md018_ignores_paragraph_continuation_lines() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "Upstream tracked this in\n#472 which is a continuation line.\n\nSee PR #472 for the fix.\n\n#standalone\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD018".to_owned()])
+            .unwrap();
+        let lines: Vec<usize> = diagnostics
+            .iter()
+            .filter(|d| d.rule_id == "MD018")
+            .map(|d| d.line)
+            .collect();
+        assert!(
+            !lines.contains(&2),
+            "continuation line `#472` must not be flagged: {lines:?}"
+        );
+        assert!(
+            !lines.contains(&4),
+            "mid-line `PR #472` must not be flagged: {lines:?}"
+        );
+        assert!(
+            lines.contains(&6),
+            "a standalone `#standalone` is still a malformed heading: {lines:?}"
+        );
+    }
+
+    /// Upstream #493: insertion-shaped fixes (MD022 adds a blank line around
+    /// a heading) and replacement-shaped fixes (MD009 rewrites a line) are
+    /// now distinguished by the half-open range itself, so the deleted
+    /// `line_len + 1` replace-vs-insert heuristic is unnecessary. Applying
+    /// MD022's fix must add a blank line without eating the heading.
+    #[test]
+    fn md022_insertion_fix_adds_blank_line_without_duplicating_content() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "Some prose.\n# Heading\n\nMore prose.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD022".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD022")
+            .expect("MD022 should fire on a heading with no blank line above");
+        let fix = d.fix.as_ref().expect("MD022 fix should convert");
+        let fixed = apply(body, fix);
+        assert_eq!(fixed, "Some prose.\n\n# Heading\n\nMore prose.\n");
+    }
+
+    /// Upstream #493 promises CRLF preservation, but the shipped 0.16.0
+    /// MD047 still hard-codes `"\n"` for the missing-EOF-newline insertion
+    /// (see [`md047_fix`]). This asserts hyalo's remaining CRLF
+    /// compensation, which is the one documented exception to the
+    /// "no downstream workarounds" rule.
+    #[test]
+    fn md047_crlf_body_keeps_crlf_when_adding_the_final_terminator() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "line one\r\nlast line";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD047")
+            .expect("MD047 should fire");
+        let fix = d.fix.as_ref().expect("MD047 fix should not be dropped");
+        assert_eq!(apply(body, fix), "line one\r\nlast line\r\n");
+    }
+
+    /// A multibyte line with CRLF terminators exercises both halves of the
+    /// 0.16 contract at once: scalar columns and atomic CRLF.
+    #[test]
+    fn fixes_are_exact_on_multibyte_crlf_content() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "café — naïve   \r\nsecond ünïcode line\r\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD009")
+            .expect("MD009 should fire on the trailing spaces");
+        let fix = d.fix.as_ref().expect("MD009 fix should not be dropped");
+        assert_eq!(apply(body, fix), "café — naïve\r\nsecond ünïcode line\r\n");
     }
 }

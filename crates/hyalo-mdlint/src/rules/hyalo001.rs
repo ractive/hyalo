@@ -81,12 +81,11 @@ impl Rule for Hyalo001 {
             let col = indent + 1;
             let replacement = build_replacement(trimmed);
 
-            let start = Position::from_byte_offset_in_line(line_no, line, indent).unwrap_or(
-                Position {
+            let start =
+                Position::from_byte_offset_in_line(line_no, line, indent).unwrap_or(Position {
                     line: line_no,
                     column: col,
-                },
-            );
+                });
             // The replacement rewrites the whole trimmed remainder of the
             // line, so the half-open range ends just before the terminator.
             let end = Position::line_end(line_no, line);
