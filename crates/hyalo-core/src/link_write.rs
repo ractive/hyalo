@@ -108,14 +108,8 @@ impl LinkWriter {
                 // no `.md` suffix, `new_stem == new_dir`, so every written form
                 // (bare, path-relative, vault-absolute, relative markdown)
                 // emits the directory spelling.
-                let mut target = Self::compute_new_target(
-                    span,
-                    line,
-                    new_dir,
-                    source_rel,
-                    policy,
-                    site_prefix,
-                );
+                let mut target =
+                    Self::compute_new_target(span, line, new_dir, source_rel, policy, site_prefix);
                 if trailing_slash && !target.ends_with('/') {
                     target.push('/');
                 }

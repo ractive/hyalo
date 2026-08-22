@@ -2404,7 +2404,10 @@ mod tests {
         make_files(tmp.path(), &["foo/index.md"]);
         let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
         assert_eq!(resolve_target(&canonical, "../foo", None, None), None);
-        assert_eq!(resolve_target(&canonical, "sub/../../foo", None, None), None);
+        assert_eq!(
+            resolve_target(&canonical, "sub/../../foo", None, None),
+            None
+        );
     }
 
     #[test]

@@ -47,7 +47,11 @@ Body.
 "),
     );
     write_md(tmp.path(), "bar/page.md", "---\ntitle: Page\n---\n# Page\n");
-    write_md(tmp.path(), "baz.md", "---\ntitle: Baz file\n---\n# Baz file\n");
+    write_md(
+        tmp.path(),
+        "baz.md",
+        "---\ntitle: Baz file\n---\n# Baz file\n",
+    );
     write_md(
         tmp.path(),
         "baz/index.md",
@@ -170,7 +174,13 @@ fn directory_target_resolves_to_the_index_file_path() {
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
         .args([
-            "find", "--file", "linker.md", "--fields", "links", "--format", "json",
+            "find",
+            "--file",
+            "linker.md",
+            "--fields",
+            "links",
+            "--format",
+            "json",
         ])
         .output()
         .expect("find should run");

@@ -531,9 +531,8 @@ fn directory_index_key(
     if strip_md_extension(trimmed) != trimmed {
         return None;
     }
-    let exists = |path: &str| {
-        case_index.contains_path(path) || case_index.lookup_unique(path).is_some()
-    };
+    let exists =
+        |path: &str| case_index.contains_path(path) || case_index.lookup_unique(path).is_some();
     if exists(trimmed) {
         return None;
     }

@@ -1560,10 +1560,7 @@ mod tests {
     fn plan_mv_directory_index_preserves_site_prefix_spelling() {
         // L-11 guard: the prefix must not be injected into a link that already
         // carries it, and no `.md` may appear where the author wrote none.
-        let vault = create_vault(&[
-            ("foo/index.md", "# Foo\n"),
-            ("a.md", "[x](/docs/foo)\n"),
-        ]);
+        let vault = create_vault(&[("foo/index.md", "# Foo\n"), ("a.md", "[x](/docs/foo)\n")]);
         let plans = plan_mv(
             vault.path(),
             "foo/index.md",
@@ -1581,10 +1578,7 @@ mod tests {
 
     #[test]
     fn plan_mv_directory_index_relative_markdown_link() {
-        let vault = create_vault(&[
-            ("foo/index.md", "# Foo\n"),
-            ("sub/a.md", "[x](../foo)\n"),
-        ]);
+        let vault = create_vault(&[("foo/index.md", "# Foo\n"), ("sub/a.md", "[x](../foo)\n")]);
         let plans = plan_mv(vault.path(), "foo/index.md", "bar/index.md", None, false)
             .unwrap()
             .plans;

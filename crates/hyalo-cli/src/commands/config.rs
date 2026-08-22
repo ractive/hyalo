@@ -101,11 +101,8 @@ pub(crate) fn collect_config_report(
 
     // Report the prefix the rest of the CLI would use, derived through the
     // shared resolver rather than reading the raw config value (iter-203).
-    let (site_prefix, site_prefix_source) = crate::config::resolve_site_prefix(
-        cli_site_prefix,
-        resolved.site_prefix.as_deref(),
-        &dir,
-    );
+    let (site_prefix, site_prefix_source) =
+        crate::config::resolve_site_prefix(cli_site_prefix, resolved.site_prefix.as_deref(), &dir);
 
     let raw_contents = match &config_path {
         Some(path) => Some(

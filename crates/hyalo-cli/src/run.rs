@@ -693,14 +693,13 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
-        let report =
-            crate::commands::config::collect_config_report(
-                &cwd,
-                effective,
-                dir_override.is_some(),
-                cli.site_prefix.as_deref(),
-            )
-            .map_err(AppError::Internal)?;
+        let report = crate::commands::config::collect_config_report(
+            &cwd,
+            effective,
+            dir_override.is_some(),
+            cli.site_prefix.as_deref(),
+        )
+        .map_err(AppError::Internal)?;
 
         // `--jq` operates on the full envelope, exactly as it does for pipeline
         // commands. Before iter-192 the filter was accepted and silently
