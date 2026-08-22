@@ -823,7 +823,10 @@ pub fn links_auto(
 
 #[cfg(test)]
 mod tests {
-    use super::{AutoFilters, COMMON_TITLE_NOTE_MAX_LISTED, common_title_note};
+    use super::{
+        AutoFilters, COMMON_TITLE_NOTE_MAX_LISTED, common_title_note, frequent_title_threshold,
+        percent_of,
+    };
     use hyalo_core::auto_link::AutoLinkMatch;
 
     fn strings(values: &[&str]) -> Vec<String> {
@@ -844,6 +847,11 @@ mod tests {
 
     fn matches_for(surface_forms: &[&str]) -> Vec<AutoLinkMatch> {
         surface_forms.iter().map(|t| match_for(t)).collect()
+    }
+
+    /// `n` proposed links that all share the same surface form.
+    fn repeated(surface: &str, n: usize) -> Vec<AutoLinkMatch> {
+        (0..n).map(|_| match_for(surface)).collect()
     }
 
     // -----------------------------------------------------------------------
@@ -1079,7 +1087,44 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // iter-197: note text
+    // iter-205: the frequency threshold itself (DEC-205)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn frequency_threshold_is_the_absolute_floor_for_small_runs() {
+        assert_eq!(frequent_title_threshold(1), 25);
+        // The own knowledgebase, measured in DEC-205.
+        assert_eq!(frequent_title_threshold(195), 25);
+        assert_eq!(frequent_title_threshold(999), 25);
+    }
+
+    #[test]
+    fn frequency_threshold_switches_to_the_share_at_a_thousand_links() {
+        // 2.5% overtakes the 25-match floor exactly at 1,000 proposed links.
+        assert_eq!(frequent_title_threshold(1_000), 25);
+        assert_eq!(frequent_title_threshold(1_040), 26);
+        // The two corpora DEC-205 was tuned against.
+        assert_eq!(frequent_title_threshold(1_179), 30);
+        assert_eq!(frequent_title_threshold(33_859), 847);
+    }
+
+    #[test]
+    fn frequency_threshold_rounds_the_share_up() {
+        // ceil, not floor: a title has to clear the share outright.
+        assert_eq!(frequent_title_threshold(1_001), 26);
+    }
+
+    #[test]
+    fn percent_rounds_to_nearest_and_survives_an_empty_run() {
+        assert_eq!(percent_of(502, 1_179), 43);
+        assert_eq!(percent_of(1, 3), 33);
+        assert_eq!(percent_of(2, 3), 67);
+        assert_eq!(percent_of(1, 1), 100);
+        assert_eq!(percent_of(0, 0), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-197: note text (wordlist trigger)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -1089,6 +1134,7 @@ mod tests {
 
     #[test]
     fn domain_specific_titles_produce_no_note() {
+        // Neither an English word nor anywhere near the frequency floor.
         let matches = matches_for(&["Kubernetes", "hyalo", "frontmatter"]);
         assert!(common_title_note(&matches).is_none());
     }
@@ -1110,6 +1156,10 @@ mod tests {
             "the offender should be named with its count: {note}"
         );
         assert!(
+            !note.contains('%'),
+            "a wordlist-only offender has no share to report: {note}"
+        );
+        assert!(
             note.contains("--exclude-title permissions"),
             "the note should suggest the flag: {note}"
         );
@@ -1122,7 +1172,7 @@ mod tests {
         let note = common_title_note(&matches).expect("common words should be flagged");
         let pos = |needle: &str| note.find(needle).expect("offender should be listed");
         assert!(
-            pos("\"note\" (3×)") < pos("\"index\" (1×)"),
+            pos("(3×)") < pos("\"index\" (1×)"),
             "highest count first: {note}"
         );
         assert!(
@@ -1138,7 +1188,9 @@ mod tests {
     #[test]
     fn case_variants_of_one_title_are_counted_once() {
         // `--exclude-title` is case-insensitive, so the note must not split
-        // "Note" and "note" into two separate offenders.
+        // "Note" and "note" into two separate offenders. With the two
+        // spellings equally frequent the display form is the alphabetically
+        // first one, so the note is deterministic (L-13).
         let matches = matches_for(&["Note", "note"]);
         let note = common_title_note(&matches).expect("common word should be flagged");
         assert!(
@@ -1146,38 +1198,213 @@ mod tests {
             "case variants are one title: {note}"
         );
         assert!(
-            note.contains("\"note\" (2×)"),
-            "counts should be merged under the lowercased title: {note}"
+            note.contains("\"Note\" (2×)"),
+            "counts should be merged under one spelling: {note}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-205 / L-13: the displayed spelling is the vault's, not the key's
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_note_displays_the_most_frequent_original_spelling() {
+        // A page titled README, mentioned mostly as "README": the note has to
+        // say README, not the lowercased lookup key (dogfood L-13).
+        let mut matches = repeated("README", 3);
+        matches.extend(repeated("readme", 1));
+        let note = common_title_note(&matches).expect("common word should be flagged");
+        assert!(
+            note.contains("\"README\" (4×)"),
+            "the dominant spelling should be displayed: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title README"),
+            "the suggested flag uses the same spelling: {note}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-205: the frequency trigger (dogfood UX-1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_dominant_title_is_flagged_even_when_it_is_not_an_english_word() {
+        // The UX-1 repro in miniature: "Workflows" drove 43% of a GitHub Docs
+        // run and the wordlist trigger never mentioned it.
+        let mut matches = repeated("Workflows", 30);
+        matches.extend(repeated("Kubernetes", 10));
+        let note = common_title_note(&matches).expect("a dominant title should be flagged");
+        assert!(
+            note.starts_with("1 auto-link candidate title is unusually frequent"),
+            "the reason should be frequency, not the wordlist: {note}"
+        );
+        assert!(
+            note.contains("\"Workflows\" (30×, 75%)"),
+            "a frequency offender reports its share of the run: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title Workflows"),
+            "the note should suggest the flag: {note}"
+        );
+        assert!(
+            !note.contains("Kubernetes"),
+            "the quiet title is nobody's business: {note}"
         );
     }
 
     #[test]
-    fn long_offender_lists_are_capped_with_a_remainder_count() {
+    fn a_title_under_the_absolute_floor_is_never_flagged_on_frequency() {
+        // 24 of 25 links is a 96% share, but on a run this small the user
+        // simply reads them — the floor keeps the note quiet.
+        let mut matches = repeated("Workflows", 24);
+        matches.extend(repeated("Kubernetes", 1));
+        assert!(
+            common_title_note(&matches).is_none(),
+            "the 25-match floor should hold on tiny runs"
+        );
+    }
+
+    #[test]
+    fn a_title_under_the_share_is_not_flagged_in_a_large_run() {
+        // 2,000 proposed links → the threshold is 50, not the floor's 25.
+        let filler: Vec<AutoLinkMatch> = (0..49)
+            .flat_map(|i| repeated(&format!("filler-{i}"), 40))
+            .collect();
+
+        let mut quiet = repeated("Workflows", 40);
+        quiet.extend(filler.iter().cloned());
+        assert_eq!(quiet.len(), 2_000);
+        assert!(
+            common_title_note(&quiet).is_none(),
+            "40 of 2,000 links is under 2.5% — the floor must not carry it"
+        );
+
+        let mut loud = repeated("Workflows", 60);
+        loud.extend(filler);
+        let note = common_title_note(&loud).expect("60 of 2,020 links clears the share");
+        assert!(
+            note.contains("\"Workflows\" (60×"),
+            "the dominant title should be named: {note}"
+        );
+    }
+
+    #[test]
+    fn non_ascii_titles_reach_the_frequency_trigger() {
+        // The wordlist is English and ASCII-gated, which left non-English
+        // vaults with no note at all; the frequency path has no such gate.
+        let mut matches = repeated("Übersicht", 30);
+        matches.extend(repeated("Kubernetes", 10));
+        let note = common_title_note(&matches).expect("a German title should still be flagged");
+        assert!(
+            note.contains("\"Übersicht\" (30×, 75%)"),
+            "the non-ASCII title should be named with its share: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title 'Übersicht'"),
+            "the suggested flag should be shell-safe: {note}"
+        );
+    }
+
+    #[test]
+    fn a_mixed_offender_set_labels_every_entry_with_its_reason() {
+        let mut matches = repeated("Workflows", 30); // frequency only
+        matches.extend(repeated("README", 26)); // both triggers
+        matches.extend(repeated("permissions", 2)); // wordlist only
+        matches.extend(repeated("Kubernetes", 10)); // neither
+        let note = common_title_note(&matches).expect("three offenders should be flagged");
+        assert!(
+            note.starts_with(
+                "3 auto-link candidate titles are common English words or unusually frequent \
+                 and account for 58 of 68 proposed links"
+            ),
+            "a mixed set names both reasons in the subject: {note}"
+        );
+        assert!(
+            note.contains("\"Workflows\" (30×, 44%, unusually frequent)"),
+            "frequency-only offender should be labelled: {note}"
+        );
+        assert!(
+            note.contains("\"README\" (26×, 38%, common English word + unusually frequent)"),
+            "a doubly-flagged offender should say so: {note}"
+        );
+        assert!(
+            note.contains("\"permissions\" (2×, common English word)"),
+            "wordlist-only offender should be labelled and carry no share: {note}"
+        );
+    }
+
+    #[test]
+    fn a_homogeneous_offender_set_states_the_reason_once() {
+        let mut matches = repeated("Workflows", 30);
+        matches.extend(repeated("Übersicht", 30));
+        let note = common_title_note(&matches).expect("two dominant titles should be flagged");
+        assert!(
+            note.starts_with("2 auto-link candidate titles are unusually frequent"),
+            "plural frequency phrasing expected: {note}"
+        );
+        assert!(
+            !note.contains(", unusually frequent)"),
+            "no per-entry label is needed when every offender shares a reason: {note}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-205 / L-12: honest truncation, complete flag list
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn long_offender_lists_are_truncated_in_prose_but_not_in_flags() {
         let matches = matches_for(&[
             "access", "account", "action", "active", "address", "agree", "answer",
         ]);
         let note = common_title_note(&matches).expect("common words should be flagged");
         assert!(
-            note.contains(&format!("+{} more", 7 - COMMON_TITLE_NOTE_MAX_LISTED)),
-            "the tail should be summarised, not listed: {note}"
+            note.contains(&format!(
+                "(showing the {COMMON_TITLE_NOTE_MAX_LISTED} noisiest of 7)"
+            )),
+            "the note should admit that it is truncating: {note}"
+        );
+        assert!(
+            !note.contains("more"),
+            "the old '+N more' phrasing is gone: {note}"
         );
         assert_eq!(
             note.matches("--exclude-title ").count(),
-            COMMON_TITLE_NOTE_MAX_LISTED,
-            "only the named offenders get a suggested flag: {note}"
+            7,
+            "every offender gets a flag so one paste-back extinguishes the note: {note}"
+        );
+        assert_eq!(
+            note.matches('"').count(),
+            COMMON_TITLE_NOTE_MAX_LISTED * 2,
+            "only the named offenders appear in the prose list: {note}"
         );
     }
 
     #[test]
-    fn multiword_titles_are_shell_quoted_in_the_suggestion() {
-        // "state of the art" is not a title we would flag, but a common word
-        // *is* reachable as a multi-word title via frontmatter aliases, and the
-        // suggested flag has to survive a copy-paste into a shell. Uses the
-        // same `hints::shell_quote` every other suggested-flag hint uses, so
-        // it also escapes apostrophes/`$`/backticks/double quotes, not just
-        // whitespace.
-        let quoted = crate::hints::shell_quote("data model");
-        assert_eq!(quoted, "'data model'");
+    fn multiword_frequent_titles_are_shell_quoted_in_the_suggestion() {
+        // "runner groups" (45 links on the GitHub Docs slice) is the real-data
+        // case: a frequency offender whose title contains a space, so the
+        // suggested flag has to survive a copy-paste into a shell.
+        let mut matches = repeated("runner groups", 30);
+        matches.extend(repeated("Kubernetes", 10));
+        let note = common_title_note(&matches).expect("a dominant title should be flagged");
+        assert!(
+            note.contains("\"runner groups\" (30×, 75%)"),
+            "the multi-word title should be named: {note}"
+        );
+        assert!(
+            note.contains("--exclude-title 'runner groups'"),
+            "the suggested flag should be quoted: {note}"
+        );
+    }
+
+    #[test]
+    fn suggested_flags_use_the_shared_shell_quoting_helper() {
+        // Uses the same `hints::shell_quote` every other suggested-flag hint
+        // uses, so it also escapes apostrophes/`$`/backticks/double quotes,
+        // not just whitespace.
+        assert_eq!(crate::hints::shell_quote("data model"), "'data model'");
         assert_eq!(crate::hints::shell_quote("permissions"), "permissions");
         assert_eq!(
             crate::hints::shell_quote("it's a trap"),
