@@ -173,7 +173,8 @@ pub(crate) struct CommandContext<'a> {
     /// `[links.auto] first_only` — `--first-only` for every run.
     pub auto_link_first_only: bool,
     /// `[links.auto] warn_common_titles` (default `true`) — whether `links auto`
-    /// may emit the advisory note naming common-English-word candidate titles.
+    /// may emit the advisory note naming noisy candidate titles (common English
+    /// words, or titles that dominate the run).
     pub auto_link_warn_common_titles: bool,
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this

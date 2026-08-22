@@ -4487,12 +4487,13 @@ fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
     ];
     let mut guide = String::from("---\ntitle: Guide\n---\n");
     for word in words {
+        use std::fmt::Write as _;
         write_md(
             tmp.path(),
             &format!("{word}.md"),
             &format!("---\ntitle: {word}\n---\nA page.\n"),
         );
-        guide.push_str(&format!("The {word} page is over there.\n"));
+        let _ = writeln!(guide, "The {word} page is over there.");
     }
     write_md(tmp.path(), "guide.md", &guide);
 
