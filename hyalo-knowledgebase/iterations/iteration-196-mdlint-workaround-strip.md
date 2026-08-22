@@ -70,7 +70,7 @@ migration notes before bumping.
   arriving via `comrak -> syntect`, and a `toml` 0.5 duplicate tracked as
   upstream #459 — both worth re-checking on any bump.
 
-## Tasks
+## Tasks [6/6]
 
 - [x] Bump `mdbook-lint-core` / `mdbook-lint-rulesets` in
       `crates/hyalo-mdlint/Cargo.toml` to the triggering release. Read the
@@ -118,7 +118,7 @@ the pattern.
   below (hard-coded `"\n"` insertion, and `check_file_ending` under-counting
   CRLF terminators).
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] Each removed workaround has a fixture test proving the upstream fix
       is present in the *published* crate hyalo now pins
