@@ -1349,6 +1349,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn excluding_the_dominant_title_can_reveal_the_next_tier() {
+        // A share-relative trigger re-scales when the run shrinks: excluding a
+        // 74% title leaves a much smaller run in which the runner-up clears
+        // the threshold it previously missed. That is the trigger working as
+        // designed, not a nag loop — the 25-match floor bounds it, because
+        // every round removes at least 25 links from the run.
+        let filler: Vec<AutoLinkMatch> = (0..19)
+            .flat_map(|i| repeated(&format!("filler-{i}"), 20))
+            .collect();
+
+        // Round 1: 1,620 links, threshold 41. Only the dominant title clears it.
+        let mut round1 = repeated("Workflows", 1_200);
+        round1.extend(repeated("runner groups", 40));
+        round1.extend(filler.iter().cloned());
+        assert_eq!(round1.len(), 1_620);
+        let note = common_title_note(&round1).expect("the dominant title should be flagged");
+        assert!(
+            note.starts_with("1 auto-link candidate title is unusually frequent"),
+            "the 40-match runner-up is under 2.5% of 1,620: {note}"
+        );
+
+        // Round 2: the same vault with "Workflows" excluded — 420 links, so
+        // the threshold falls back to the floor and the runner-up surfaces.
+        let mut round2 = repeated("runner groups", 40);
+        round2.extend(filler.iter().cloned());
+        let note = common_title_note(&round2).expect("the next tier should surface");
+        assert!(
+            note.contains("\"runner groups\" (40×, 10%)"),
+            "the runner-up is now the dominant title: {note}"
+        );
+
+        // Round 3: nothing left clears the 25-match floor. The process ends.
+        assert!(
+            common_title_note(&filler).is_none(),
+            "the floor terminates the cascade"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // iter-205 / L-12: honest truncation, complete flag list
     // -----------------------------------------------------------------------

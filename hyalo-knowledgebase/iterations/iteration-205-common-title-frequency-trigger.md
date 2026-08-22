@@ -91,13 +91,21 @@ lowercase would let the note suggest a flag that does not actually exclude.
 The *display* form (L-13) is the most frequent original surface spelling,
 ties broken lexicographically.
 
+**Cascade, measured.** Excluding the seven GitHub Docs offenders shrinks that
+run from 1,179 to 265 links, which drops the threshold from 30 to the floor of
+25 — and two titles that were previously quiet (`actions-runner-controller`
+28, `runner-groups` 27) now cross it. This is inherent to a share-relative
+trigger and it terminates: every round removes at least 25 links, so the
+cascade is bounded by `total / 25` rounds (two, here). Documented in
+`docs/configuration.md` and covered by a unit test rather than smoothed over.
+
 **Non-goal reaffirmed.** No new config key and no user-configurable
 thresholds; `[links.auto] warn_common_titles` keeps governing both triggers.
 Revisit only on demand.
 
 ## Tasks
 
-- [ ] Design the trigger and record it in the plan before coding (a DEC
+- [x] Design the trigger and record it in the plan before coding (a DEC
       entry): a candidate title is flagged when wordlist-common OR
       frequency-dominant. Starting point to validate against the
       report's data: matches >= max(15, 20% of total proposed links),
@@ -107,46 +115,49 @@ Revisit only on demand.
       the own KB (192 candidates, 22 titles — currently zero notes, keep
       it that way; tune thresholds against both corpora and record the
       chosen values + measured outcomes here).
-- [ ] Non-ASCII titles participate in the frequency path (drop the ASCII
+- [x] Non-ASCII titles participate in the frequency path (drop the ASCII
       gate for frequency; keep it for the wordlist, whose entries are
       ASCII by construction).
-- [ ] Note wording distinguishes the reason: "common English words" vs
+- [x] Note wording distinguishes the reason: "common English words" vs
       "unusually frequent" (or a merged phrasing naming both) — the
       user's judgment differs per cause.
-- [ ] L-12: when offenders exceed the listing cap, say so ("showing the
+- [x] L-12: when offenders exceed the listing cap, say so ("showing the
       5 noisiest of 7") AND include --exclude-title flags for ALL
       offenders (flags are cheap; the cap is for the prose list only) so
       one paste-back fully extinguishes.
-- [ ] L-13: display the most frequent original casing ("README (3x)")
+- [x] L-13: display the most frequent original casing ("README (3x)")
       while matching stays case-insensitive; the suggested flag value
       keeps working either way.
-- [ ] Frequency titles containing spaces/quotes now make the
+- [x] Frequency titles containing spaces/quotes now make the
       shell-quoting path (hints::shell_quote, #232 review fix) live —
       add an e2e proving a multi-word frequent title round-trips through
       the suggested flag ("runner groups" is the real-data case).
-- [ ] e2e: GitHub Docs-shaped fixture where the dominant title is NOT a
+- [x] e2e: GitHub Docs-shaped fixture where the dominant title is NOT a
       wordlist word; own-KB-shaped fixture asserting silence; stdout
       byte-identity re-asserted for the frequency path; opt-outs cover
       both trigger kinds.
-- [ ] Docs: links auto --help, configuration.md ([links.auto]
+- [x] Docs: links auto --help, configuration.md ([links.auto]
       warn_common_titles covers both triggers — confirm the key name
       still fits or add a separate key ONLY if user-configurable
       thresholds are demanded; default: no new config).
-- [ ] CHANGELOG entry.
+- [x] CHANGELOG entry.
 
 ## Acceptance criteria
 
-- [ ] The report's GitHub Docs scenario names Workflows first with its
-      count/share; pasting the suggestion extinguishes the note in one
-      round
-- [ ] Own KB emits exactly one note, naming `backlinks` (130 of 195,
+- [x] The report's GitHub Docs scenario names `workflows` first with its
+      count and share (502×, 43%); pasting the suggested flags back removes
+      all seven named offenders in one round. The now-much-smaller run then
+      surfaces the next tier (`actions-runner-controller` 28,
+      `runner-groups` 27) — inherent to a share-relative trigger, bounded by
+      the 25-match floor, documented and unit-tested rather than hidden
+- [x] Own KB emits exactly one note, naming `backlinks` (130 of 195,
       67%) — amended from "note-free" by DEC-205, which shows the
       original criterion is unachievable and the note is a true positive
-- [ ] A German-titled scratch vault with one dominant title gets the
+- [x] A German-titled scratch vault with one dominant title gets the
       note (ASCII gate no longer total)
-- [ ] stdout remains byte-identical with/without the note in both
+- [x] stdout remains byte-identical with/without the note in both
       formats
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

@@ -214,6 +214,13 @@ Properties of the check, all deliberate:
   `warn_common_titles = false`. One key governs both triggers; there are no
   configurable thresholds.
 
+Because the share is measured against *this* run, excluding a dominant title
+can bring the next tier above the threshold: on a large vault the second run
+may name titles the first one did not, simply because the run it is measured
+against is now much smaller. That converges rather than nagging — every round
+removes at least 25 links, and once nothing clears the 25-match floor the note
+stops for good.
+
 `hyalo links fix` has a similar per-invocation filter spelled
 `--ignore-target <substring>`. It matches link *targets* by substring rather
 than page titles or paths, so it is deliberately not part of `[links.auto]` and
