@@ -2,7 +2,7 @@
 title: Iteration 203 — resolve directory link targets to <target>/index.md
 type: iteration
 date: 2026-08-18
-status: in-progress
+status: completed
 branch: iter-203/index-md-resolution
 tags:
   - iteration
@@ -50,7 +50,7 @@ UX-4). Anchors at `931a226`:
   `foo/` dir rewrites `/foo`-style inbound links), anchors
   (`/foo#section` checks headings of `foo/index.md`).
 
-## Tasks
+## Tasks [8/8]
 
 - [x] Core rule in the shared resolver (single entry point — do NOT fork
       per-caller logic; iter-189 collapsed the resolvers, keep it that
@@ -105,7 +105,7 @@ Two findings worth their own follow-ups, both out of scope here:
   cased `en-US/docs`. Nothing resolves until the prefix is passed by hand.
 - **`links` on MDN takes ~80 s** — the known perf item, unchanged here.
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] The F-1 fixture (A-E link matrix from the report) resolves
       `/foo`, `foo`, `/foo/`; `/bar/page` and `/foo/index` keep working
