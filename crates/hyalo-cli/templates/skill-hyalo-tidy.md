@@ -251,7 +251,9 @@ hyalo links fix --apply --index
 ```
 
 Review the dry-run output first. For any links it can't resolve (reported as unfixable),
-leave them and report them in Phase 5.
+leave them and report them in Phase 5. Guesses — fuzzy matches, and basename fallbacks
+for site-absolute targets — sit in the `fuzzy` bucket and are only written when you add
+`--apply-fuzzy`; check those by hand before opting in.
 
 ### Update stale statuses
 If an iteration's branch was merged:
