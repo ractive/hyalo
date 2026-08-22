@@ -1507,8 +1507,7 @@ fn run_inner() -> Result<(), AppError> {
                             > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
                     {
                         crate::warn::warn(
-                            "index older than vault; results may be stale — re-run create-index"
-                                .to_owned(),
+                            "index older than vault; results may be stale — re-run create-index",
                         );
                     }
                     Some(idx)

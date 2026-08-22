@@ -34,6 +34,10 @@ pub struct AutoLinkOptions<'a> {
 }
 
 /// Serialize a 0-based in-memory offset as a 1-based JSON position (L-15).
+///
+/// `serde`'s `serialize_with` contract fixes the by-reference signature, so the
+/// trivially-copy lint does not apply here.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn serialize_one_based<S>(value: &usize, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,

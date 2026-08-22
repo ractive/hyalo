@@ -1025,7 +1025,7 @@ pub fn newest_shallow_dir_mtime(dir: &Path) -> Option<u64> {
     for entry in read_dir.flatten() {
         // `file_type()` comes from the directory entry on every platform we
         // support, so this costs no extra syscall in the common case.
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
         if !is_dir {
             continue;
         }

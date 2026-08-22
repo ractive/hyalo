@@ -89,6 +89,39 @@ and this project adheres to
 
 ### Changed
 
+- **`hyalo lint --rule <id>` validates the id, and matches it
+  case-insensitively** (iter-204, M-10). A typo'd rule id used to select
+  nothing and exit 0 with "no issues found" — a CI gate that reads as green
+  forever. An unknown id is now a user error naming the id, with the
+  `hyalo lint-rules list` hint `lint-rules show` already gave; `--rule hyalo006`
+  selects exactly what `--rule HYALO006` does. `--rule-prefix` matches
+  case-insensitively too and warns on stderr when it selects no rule at all.
+- **A write command whose single named file is unparseable exits 1**
+  (iter-204, L-2). `hyalo set bad.md --property x=y` warned about the YAML
+  parse error and then reported `0/0 modified (1 scanned)` at exit 0 —
+  indistinguishable, to a script, from "already in the requested state". The
+  same applies to `remove` and `append`. Batch runs (`--glob`, several
+  `--file`s, whole-vault) are unchanged: there the other files genuinely were
+  processed, and one bad note must not fail the run.
+- **JSON match positions are 1-based in both axes** (iter-204, L-15).
+  **Breaking for consumers that parse `col`.** `links auto` reported a 1-based
+  `line` next to a 0-based `col`, so trusting one meant being off by one on the
+  other. `col` now counts from 1, like `line` and like the `column` lint
+  already emitted. Subtract 1 to recover the old byte offset.
+- **The `--help` limit contract names only commands that actually cap**
+  (iter-204, M-8). "Default output limits" listed all eight `total`-emitting
+  commands, but `types list`, `views list` and `lint-rules list` reject
+  `--limit` outright (they enumerate small fixed catalogs). Those two claims —
+  "emits a total" and "caps at `default_limit`" — now come from two separate
+  constants, each asserted against the real binary. Relatedly, bare
+  `hyalo tags` and `hyalo properties` now accept the `--glob`/`--limit` flags
+  COMMAND REFERENCE has always documented for them, instead of exiting 2.
+- **`create-index`'s help documents the snapshot contract** (iter-204, M-6),
+  and commands that load an index warn `index older than vault; results may be
+  stale — re-run create-index` when the vault's top-level directory mtimes
+  postdate the snapshot. Cheap by construction (one `read_dir`, no walk), so it
+  misses in-place edits of existing notes and changes more than one level deep
+  — it is a smoke alarm, not a guarantee.
 - **mdbook-lint bumped to 0.16.0** (iter-196). `mdbook-lint-core` and
   `mdbook-lint-rulesets` move from 0.15.2 to 0.16.0, which ships the exact
   autofix-coordinate contract hyalo asked for upstream: `Fix` ranges are
@@ -213,6 +246,49 @@ and this project adheres to
 
 ### Fixed
 
+- **Site-prefix stripping is case-insensitive** (iter-204). The prefix that
+  decides what a site-absolute `/foo` means is usually auto-derived from the
+  vault directory's name, and directory casing rarely matches the casing
+  authors write: an MDN checkout in `en-us/` publishes `/en-US/docs/...`, so
+  every site-absolute link stayed unresolved. Auto-derivation still yields a
+  single path segment — a multi-segment prefix such as `en-US/docs` must be
+  passed explicitly — and `hyalo config` now says so next to the derived value.
+- **`backlinks` counts a case-mismatched wikilink once** (iter-204, L-1).
+  `[[NOTE]]` pointing at `note.md` was registered under both the written and
+  the canonical key, which land in the same case-folded bucket, so one link
+  reported as two. `find --fields links` and `summary` were always right.
+  `mv` still rewrites such links.
+- **`mv` refuses to clobber a dangling symlink at the destination** (iter-204,
+  L-4). The collision guard used `exists()`, which follows symlinks, so a
+  symlink with a missing target read as "nothing there" and the rename
+  destroyed it silently. Both single-file and batch mode now see the directory
+  entry and stop, naming the broken symlink.
+- **`drop-index` says "index file not found" when that is the problem**
+  (iter-204, L-7). A nonexistent path *inside* the vault was reported as a
+  boundary-check failure with an `--allow-outside-vault` hint that could not
+  possibly help. The boundary is still enforced — a missing path under an
+  out-of-vault directory is refused as before.
+- **`create-index -o <custom>`'s drop hint carries `--path <custom>`**
+  (iter-204, L-9). The hint said bare `drop-index`, which targets
+  `<vault>/.hyalo-index` — a different file. The pairing is now gate-checked
+  end-to-end by executing the emitted hint.
+- **`read` errors honor the piped-JSON default** (iter-204, L-5). `read`
+  prints raw markdown rather than JSON when piped, by design — but its errors
+  followed that override too, so a scripted failure came back as prose. Every
+  `read` error path (missing file, directory target, bad `--lines`, the
+  `--count` rejection, `--section` miss) now emits the standard JSON envelope
+  when piped, and still reads as text on a terminal or under
+  `--format text`.
+- **`find -e` regex errors use the standard error envelope** (iter-204, L-6),
+  quote the pattern as typed, and no longer leak hyalo's internal `(?i)`
+  prefix — which also shifted the regex engine's caret four columns off the
+  real offending character.
+- **`read --section` misses list the five closest headings, not all of them**
+  (iter-204, UX-2). The error dumped every heading on one line — about 4 KB on
+  this project's own decision log, punitive in a terminal and pure token burn
+  for an agent, with the heading you meant buried in the middle. Candidates are
+  now ranked by closeness to what was asked for, capped at five, and followed
+  by a count. Files with five or fewer headings still list them all.
 - **`mv` no longer injects a site prefix the author never wrote** (iter-203,
   L-11). Rewriting a site-absolute link always prepended the effective prefix,
   so a working `[x](/notes/old.md)` in a vault whose prefix was auto-derived

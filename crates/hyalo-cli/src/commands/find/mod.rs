@@ -29,16 +29,6 @@ use hyalo_core::types::{
 use build::{TitleMatcher, extract_title, matches_task_filter};
 use sort::{apply_sort, presort_index_entries};
 
-/// Find files matching the given filters and return them as a JSON array.
-///
-/// Uses pre-scanned index data for all metadata (properties, tags, sections,
-/// tasks, outbound links). `dir` is still used for:
-/// - Content search (disk I/O is required to read file bodies when
-///   `pattern` or `regexp` is specified)
-/// - Link path resolution (`discovery::resolve_target`)
-///
-/// Backlinks are resolved via `index.link_graph()` without a fresh vault scan.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 /// Strip hyalo's internal `(?i)` prefix out of a regex engine error message
 /// and re-align the caret line beneath it (L-6).
 ///
@@ -78,6 +68,16 @@ fn strip_case_flag_prefix(msg: &str) -> String {
     out
 }
 
+/// Find files matching the given filters and return them as a JSON array.
+///
+/// Uses pre-scanned index data for all metadata (properties, tags, sections,
+/// tasks, outbound links). `dir` is still used for:
+/// - Content search (disk I/O is required to read file bodies when
+///   `pattern` or `regexp` is specified)
+/// - Link path resolution (`discovery::resolve_target`)
+///
+/// Backlinks are resolved via `index.link_graph()` without a fresh vault scan.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub fn find(
     index: &dyn VaultIndex,
     dir: &Path,

@@ -925,9 +925,10 @@ fn read_leading_space_dashes_file_shows_full_content() {
 
 /// Write a note with `count` numbered sections plus one distinctive heading.
 fn write_many_sections(dir: &std::path::Path, count: usize) {
+    use std::fmt::Write as _;
     let mut body = String::from("---\ntitle: Many\n---\n");
     for i in 1..=count {
-        body.push_str(&format!("## Section {i}\n\nbody\n\n"));
+        let _ = write!(body, "## Section {i}\n\nbody\n\n");
     }
     body.push_str("## Decision Log\n\nbody\n");
     write_md(dir, "many.md", &body);

@@ -258,12 +258,38 @@ pub fn undocumented_flags(command: &str, sub_help: &str, entry: &str) -> Vec<Str
         .collect()
 }
 
-fn subcommand_help(root: &std::path::Path, name: &str) -> Result<String> {
-    let out = Command::new("cargo")
-        .args(["run", "-q", "-p", "hyalo-cli", "--", name, "--help"])
+/// Build `hyalo` once and return the path to the binary.
+///
+/// The accuracy pass needs one `--help` per subcommand (~27 runs). Going
+/// through `cargo run` each time would pay cargo's startup cost 27 times over
+/// — about 30 seconds of pure overhead in CI — so the binary is built once and
+/// executed directly.
+fn build_hyalo_binary(root: &std::path::Path) -> Result<std::path::PathBuf> {
+    let status = Command::new("cargo")
+        .args(["build", "-q", "-p", "hyalo-cli"])
         .current_dir(root)
+        .status()
+        .context("running `cargo build -p hyalo-cli`")?;
+    anyhow::ensure!(status.success(), "`cargo build -p hyalo-cli` failed");
+
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map_or_else(|| root.join("target"), std::path::PathBuf::from);
+    let bin = target_dir
+        .join("debug")
+        .join(format!("hyalo{}", std::env::consts::EXE_SUFFIX));
+    anyhow::ensure!(
+        bin.exists(),
+        "built hyalo binary not found at {}",
+        bin.display()
+    );
+    Ok(bin)
+}
+
+fn subcommand_help(bin: &std::path::Path, name: &str) -> Result<String> {
+    let out = Command::new(bin)
+        .args([name, "--help"])
         .output()
-        .with_context(|| format!("running `cargo run -p hyalo-cli -- {name} --help`"))?;
+        .with_context(|| format!("running `hyalo {name} --help`"))?;
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
@@ -316,6 +342,7 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
 
     // Accuracy pass (M-9): an entry that exists is not necessarily current.
     let entries = reference_entries(reference);
+    let bin = build_hyalo_binary(root)?;
     let mut stale: Vec<(String, Vec<String>)> = Vec::new();
     for name in &subcommands {
         if REFERENCE_EXEMPT.contains(&name.as_str()) {
@@ -324,7 +351,7 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
         let Some((_, entry)) = entries.iter().find(|(cmd, _)| cmd == name) else {
             continue;
         };
-        let sub_help = subcommand_help(root, name)?;
+        let sub_help = subcommand_help(&bin, name)?;
         let undocumented = undocumented_flags(name, &sub_help, entry);
         if !undocumented.is_empty() {
             stale.push((name.clone(), undocumented));
