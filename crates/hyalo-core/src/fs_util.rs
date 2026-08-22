@@ -43,6 +43,81 @@ fn resolve_write_target(path: &Path) -> Result<PathBuf> {
     )
 }
 
+/// Walk up from `path` to the nearest ancestor that exists on disk.
+///
+/// Used to find a canonicalizable anchor when the destination of a prospective
+/// write (and possibly several of its parent directories) does not exist yet.
+fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return current.to_path_buf();
+        }
+        match current.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => current = parent,
+            _ => return current.to_path_buf(),
+        }
+    }
+}
+
+/// The one wording every vault-boundary refusal in hyalo uses (iter-202 L-16).
+///
+/// `subject` names what was refused — `"file"`, `"target path"`, `"output
+/// path"`, … — and `resolved` is the canonical destination the path escaped
+/// to. Pass `Some(target)` whenever an actual resolution happened (symlink or
+/// `..` following) so the user sees both halves of the story: the path they
+/// typed and where it really lands. Pass `None` for a purely lexical rejection,
+/// where no resolved target exists.
+#[must_use]
+pub fn outside_vault_message(subject: &str, resolved: Option<&Path>) -> String {
+    match resolved {
+        Some(target) => format!(
+            "{subject} resolves outside vault boundary: {}",
+            target.display()
+        ),
+        None => format!("{subject} resolves outside vault boundary"),
+    }
+}
+
+/// Report where a prospective write to `path` would really land, when that is
+/// outside `vault_root`.
+///
+/// Resolves `path` through any symlink chain, then anchors on the nearest
+/// ancestor that exists on disk (the destination itself, its parent, or higher
+/// for a brand-new nested file) and canonicalizes that. Because
+/// `fs::create_dir_all` only ever creates plain directories — never symlinks —
+/// an in-vault anchor guarantees every component created below it also stays
+/// in the vault.
+///
+/// Returns:
+/// - `Ok(None)` — the write stays inside the vault
+/// - `Ok(Some(target))` — the write would land at `target`, outside the vault
+/// - `Err(_)` — the vault root or the anchor could not be canonicalized
+///
+/// Call this *before* any `create_dir_all`/`OpenOptions::create_new`/rename so
+/// the refusal is a user error (exit 1) rather than a mid-write failure.
+pub fn escaping_write_target(vault_root: &Path, path: &Path) -> Result<Option<PathBuf>> {
+    let canonical_root = dunce::canonicalize(vault_root).with_context(|| {
+        format!(
+            "failed to canonicalize vault dir {} while checking a write destination",
+            vault_root.display()
+        )
+    })?;
+    let dest = resolve_write_target(path)?;
+    let anchor = nearest_existing_ancestor(&dest);
+    let canonical_anchor = dunce::canonicalize(&anchor)
+        .with_context(|| format!("failed to resolve write destination {}", anchor.display()))?;
+    if canonical_anchor.starts_with(&canonical_root) {
+        return Ok(None);
+    }
+    // Re-attach the not-yet-existing components so the reported target names
+    // the real file rather than the deepest directory that happens to exist.
+    // The boundary decision itself is made on the anchor alone, so a `..` in
+    // the suffix cannot widen what is accepted.
+    let suffix = dest.strip_prefix(&anchor).unwrap_or(Path::new(""));
+    Ok(Some(canonical_anchor.join(suffix)))
+}
+
 /// Verify that a symlink-resolved destination is still inside `vault_root`.
 ///
 /// Called only when resolution actually changed the path, so ordinary
@@ -71,9 +146,8 @@ fn ensure_resolved_within(vault_root: &Path, original: &Path, resolved: &Path) -
     };
     if !canonical_target.starts_with(&canonical_root) {
         bail!(
-            "refusing to write through symlink: {} resolves outside vault boundary: {}",
-            original.display(),
-            canonical_target.display()
+            "refusing to write through symlink: {}",
+            outside_vault_message(&original.display().to_string(), Some(&canonical_target))
         );
     }
     Ok(())

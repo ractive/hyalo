@@ -2,6 +2,7 @@
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::mpsc;
@@ -209,42 +210,63 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
 
     let mut files: Vec<PathBuf> = rx.into_iter().collect();
 
-    // Filter out symlinks whose target resolves outside the vault boundary.
-    // Only canonicalize paths that are actually symlinks to avoid unnecessary
-    // syscalls on the common (non-symlink) path.
+    // Sort before filtering so the dedup below is deterministic: when a file is
+    // reachable under two spellings, the lexicographically first one wins on
+    // every platform and every run.
+    files.sort();
+
+    // Two jobs in one pass:
+    //
+    // 1. Drop symlinks whose target resolves outside the vault boundary.
+    // 2. Drop duplicate spellings of the same file (iter-202 M-5). An in-vault
+    //    symlink and its target are two directory entries but one file; left
+    //    unmerged they make `links fix --apply` rewrite the same note twice
+    //    (the second write trips the concurrent-modification guard) and
+    //    double-count `find --count`, `summary` and glob-write totals.
+    //
+    // Only paths that are actually symlinks are canonicalized — the common
+    // (non-symlink) case pays one `symlink_metadata` call and no more. A
+    // non-symlink entry's canonical form is just the canonical vault root
+    // joined with its vault-relative path, because the walker never descends
+    // through directory symlinks.
     let canonical_dir = canonicalize_vault_dir(dir)?;
-    files.retain(|path| {
+    let mut seen: HashSet<PathBuf> = HashSet::with_capacity(files.len());
+    let mut kept: Vec<PathBuf> = Vec::with_capacity(files.len());
+    for path in files {
         let is_symlink = path
             .symlink_metadata()
             .is_ok_and(|m| m.file_type().is_symlink());
-        if !is_symlink {
-            return true;
-        }
-        match dunce::canonicalize(path) {
-            Ok(canonical) => {
-                if canonical.starts_with(&canonical_dir) {
-                    true
-                } else {
+        let canonical = if is_symlink {
+            match dunce::canonicalize(&path) {
+                Ok(canonical) if canonical.starts_with(&canonical_dir) => canonical,
+                Ok(_) => {
                     eprintln!(
                         "warning: skipping {}: symlink target resolves outside vault",
                         path.display()
                     );
-                    false
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: skipping {}: failed to resolve path: {}",
+                        path.display(),
+                        e
+                    );
+                    continue;
                 }
             }
-            Err(e) => {
-                eprintln!(
-                    "warning: skipping {}: failed to resolve path: {}",
-                    path.display(),
-                    e
-                );
-                false
+        } else {
+            match path.strip_prefix(dir) {
+                Ok(rel) => canonical_dir.join(rel),
+                Err(_) => path.clone(),
             }
+        };
+        if seen.insert(canonical) {
+            kept.push(path);
         }
-    });
+    }
 
-    files.sort();
-    Ok(files)
+    Ok(kept)
 }
 
 /// Resolve a path argument relative to `--dir`. Verifies it exists and is `.md`.
