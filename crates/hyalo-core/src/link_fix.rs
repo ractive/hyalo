@@ -105,8 +105,21 @@ pub enum FixStrategy {
     CaseInsensitive,
     /// The target was written with or without `.md` and the other form matched.
     ExtensionMismatch,
-    /// The bare stem matched exactly one file anywhere in the vault.
+    /// The target was a bare basename (no directory part) and its stem
+    /// matched exactly one file anywhere in the vault — the Obsidian
+    /// short-form resolution rule, applied to a link that was already written
+    /// short-form.
     ShortestPath,
+    /// A *site-absolute* target (`/actions`) matched a file only by its last
+    /// path segment (iter-200 / dogfood M-1).
+    ///
+    /// This is a guess, not a resolution: the site-root path the author wrote
+    /// is thrown away and a same-named file from somewhere else is
+    /// substituted (`/actions` → `graphql/reference/actions.md`). It therefore
+    /// carries a reduced confidence and is grouped with fuzzy matches, so
+    /// plain `--apply` never writes it — `--apply-fuzzy` / `--min-confidence`
+    /// opt in.
+    BasenameFallback,
     /// Jaro-Winkler similarity above the configured threshold.
     FuzzyMatch,
     /// The target resolves to an existing file but with different casing.
@@ -306,6 +319,13 @@ pub(crate) struct MatchResult {
     pub confidence: f64,
 }
 
+/// Confidence reported for [`FixStrategy::BasenameFallback`] matches.
+///
+/// Deliberately well below the 0.95 of a genuine short-form stem match: the
+/// only evidence is the filename, and the directory the author actually wrote
+/// contradicts it.
+pub const BASENAME_FALLBACK_CONFIDENCE: f64 = 0.6;
+
 impl LinkMatcher {
     /// Build a matcher from a list of vault-relative file paths.
     pub fn new(files: Vec<String>, threshold: f64) -> Self {
@@ -427,15 +447,33 @@ impl LinkMatcher {
         }
 
         // --- Strategy 3: Shortest-path (unique stem match) ---
+        //
+        // Split by how the broken target was written (M-1). A *site-absolute*
+        // target (`/actions`) asserts a path from the site root; matching it
+        // by basename alone means discarding that assertion and substituting a
+        // same-named file from somewhere else entirely — on GitHub Docs this
+        // turned `[GitHub Actions](/actions)` into
+        // `graphql/reference/actions.md`, 17 times, under a plain `--apply`.
+        // That is a guess and belongs behind the fuzzy gate. Bare and
+        // relative targets keep the long-standing shortest-path treatment:
+        // for them the basename is the reliable signal (short-form semantics,
+        // or a stale relative path after a move), and the H-1 round-trip
+        // guard now guarantees whatever gets written actually resolves.
         let target_stem_lower = target_stem.to_ascii_lowercase();
         if let Some(indices) = self.stem_to_indices.get(&target_stem_lower)
             && indices.len() == 1
             && !Self::is_self_link(source, &self.files[indices[0]])
         {
+            let site_absolute = raw_target.starts_with('/');
+            let (strategy, confidence) = if site_absolute {
+                (FixStrategy::BasenameFallback, BASENAME_FALLBACK_CONFIDENCE)
+            } else {
+                (FixStrategy::ShortestPath, 0.95)
+            };
             return Some(MatchResult {
                 matched_file: self.files[indices[0]].clone(),
-                strategy: FixStrategy::ShortestPath,
-                confidence: 0.95,
+                strategy,
+                confidence,
             });
         }
 
@@ -1288,7 +1326,7 @@ mod tests {
         // `[[decision-log#DEC-041]]` into `[[decision-log-archive]]`.
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1, "one frontmatter link repaired: {repls:?}");
         assert_eq!(repls[0].old_text, "[[decision-log#DEC-041]]");
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041]]");
@@ -1298,7 +1336,7 @@ mod tests {
     fn build_replacements_frontmatter_repair_preserves_anchor_and_alias() {
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041|Log]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1);
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041|Log]]");
     }
@@ -1331,7 +1369,7 @@ See [broken](old-name.md) here.
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
         };
-        let (repls, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(
             repls.len(),
             1,
@@ -1593,7 +1631,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1625,7 +1663,7 @@ See [broken](old-name.md) here.
             confidence: 1.0,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1661,7 +1699,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
         assert!(
@@ -1695,7 +1733,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1738,7 +1776,7 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1782,7 +1820,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1812,7 +1850,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -1845,7 +1883,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert!(plans.is_empty(), "no replacement should have been produced");
         assert_eq!(unapplied.len(), 1);
@@ -1878,7 +1916,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
@@ -1913,7 +1951,7 @@ See [broken](old-name.md) here.
             confidence: 0.95,
         }];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
@@ -1948,7 +1986,7 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
@@ -2441,7 +2479,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert_eq!(would_modify, vec!["index.md"]);
         assert!(unapplied.is_empty(), "fresh text: nothing stale");
 
@@ -2472,7 +2510,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify_dry, unapplied_dry) =
+        let (would_modify_dry, unapplied_dry, _rejected_dry) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(would_modify_dry.is_empty(), "stale fix modifies nothing");
         assert_eq!(
@@ -2482,7 +2520,7 @@ See [broken](old-name.md) here.
         );
 
         // apply must report the identical unapplied set.
-        let (plans, unapplied_apply, failed) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied_apply, failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty());
         assert!(failed.is_empty());
         assert_eq!(unapplied_apply.len(), unapplied_dry.len());
@@ -2526,7 +2564,7 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied, failed) = apply_fixes(tmp.path(), &fixes, None)
+        let (plans, unapplied, failed, _rejected) = apply_fixes(tmp.path(), &fixes, None)
             .expect("apply_fixes must not abort on a per-file I/O error");
 
         assert_eq!(
@@ -2573,7 +2611,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "a vanished file must modify nothing"
@@ -2605,7 +2643,7 @@ See [broken](old-name.md) here.
             confidence: 0.9,
         }];
 
-        let (would_modify, unapplied) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
+        let (would_modify, unapplied, _rejected) = plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
             "an oversized file must modify nothing"

@@ -129,16 +129,21 @@ pub fn links_fix(
     let matcher = LinkMatcher::from_index(index, threshold);
     let fix_report = plan_fixes(&broken, &matcher);
 
-    // Split fuzzy-match fixes into their own bucket. Fuzzy matches are
-    // low-confidence guesses (a broken `[[foo]]` can match an unrelated
-    // `bar.md`), so they are reported separately and excluded from `--apply`
-    // unless the user opts in via `--apply-fuzzy` / `--min-confidence`. The
-    // non-fuzzy `certain_fixes` are the ones plain `--apply` writes.
-    let (fuzzy_fixes, certain_fixes): (Vec<_>, Vec<_>) = fix_report
-        .fixes
-        .iter()
-        .cloned()
-        .partition(|f| matches!(f.strategy, hyalo_core::link_fix::FixStrategy::FuzzyMatch));
+    // Split low-confidence guesses into their own bucket. Fuzzy matches are
+    // guesses (a broken `[[foo]]` can "match" an unrelated `bar.md`), and so
+    // is a basename fallback, which throws away the directory path the author
+    // actually wrote (iter-200 / M-1). Both are reported separately and
+    // excluded from `--apply` unless the user opts in via `--apply-fuzzy` /
+    // `--min-confidence`. The remaining `certain_fixes` are the ones plain
+    // `--apply` writes.
+    let (fuzzy_fixes, certain_fixes): (Vec<_>, Vec<_>) =
+        fix_report.fixes.iter().cloned().partition(|f| {
+            matches!(
+                f.strategy,
+                hyalo_core::link_fix::FixStrategy::FuzzyMatch
+                    | hyalo_core::link_fix::FixStrategy::BasenameFallback
+            )
+        });
     // Fuzzy fixes the policy accepts (opted-in and above --min-confidence).
     let applicable_fuzzy: Vec<_> = fuzzy_fixes
         .iter()
