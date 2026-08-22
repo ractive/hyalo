@@ -2,7 +2,7 @@
 title: Iteration 200 — links apply-path integrity (release blocker)
 type: iteration
 date: 2026-08-18
-status: in-progress
+status: completed
 branch: iter-200/links-apply-integrity
 tags:
   - iteration
@@ -47,7 +47,7 @@ Code anchors, verified at `931a226`:
   default apply bucket — `[GitHub Actions](/actions)` rewritten to
   `graphql/reference/actions.md` even though `actions/index.md` exists.
 
-## Tasks
+## Tasks [7/7]
 
 - [x] H-1: make site-absolute fixes round-trip. A fix for a link written
       `/a/b` must be emitted in a form that the resolver actually resolves
@@ -141,7 +141,7 @@ in the diff contains a link — no prose was touched.
 **0** wikilinks inside a URL, a markdown destination, or a link label
 (verified by scanning every URL token and every `[label](…)` in the result).
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] Minimal H-1 repro: after `links fix --apply`, the rewritten link
       resolves and a re-run reports 0 fixable — with the caveat that the
