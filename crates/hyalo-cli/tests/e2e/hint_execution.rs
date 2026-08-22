@@ -567,3 +567,82 @@ fn snapshot_diff_detects_a_write() {
         "unexpected diff: {diff}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-9 (iter-204): a custom index path propagates into BOTH follow-up hints
+// ---------------------------------------------------------------------------
+
+/// `create-index -o <custom>` emitted a bare `drop-index` hint, which targets
+/// `<vault>/.hyalo-index` — a different file. Following it left the custom
+/// index on disk (and, in a read-only vault, failed outright).
+///
+/// The seed sweep above cannot cover this: its commands are static argv, while
+/// a custom index path only exists relative to a temp vault. So this test runs
+/// the pairing end-to-end — create at a custom path, harvest the hints, execute
+/// the drop hint verbatim, and check which file actually disappeared.
+#[test]
+fn custom_index_path_drop_hint_targets_that_index() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let vault = tmp.path();
+    let custom = vault.join("my-index");
+    let default_index = vault.join(".hyalo-index");
+
+    // A default index also exists, so a bare `drop-index` hint would "work"
+    // while deleting the wrong file — the failure mode this test pins down.
+    let seed = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--no-hints", "create-index"])
+        .output()
+        .unwrap();
+    assert!(
+        seed.status.success(),
+        "default create-index failed: {seed:?}"
+    );
+    assert!(default_index.exists());
+
+    let output = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--hints"])
+        .args(["create-index", "-o", custom.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let envelope: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("no JSON envelope ({e}): {stdout}"));
+    assert!(custom.exists(), "custom index was not created");
+
+    let drop_hint = envelope["hints"]
+        .as_array()
+        .expect("hints array")
+        .iter()
+        .find_map(|h| {
+            let cmd = h.get("cmd")?.as_str()?;
+            cmd.contains("drop-index").then(|| cmd.to_owned())
+        })
+        .unwrap_or_else(|| panic!("no drop-index hint in {envelope}"));
+    assert!(
+        drop_hint.contains(custom.to_str().unwrap()),
+        "drop hint must name the custom index: {drop_hint}"
+    );
+
+    // Run the hint exactly as printed.
+    let argv: Vec<String> = shell_split(&drop_hint)
+        .into_iter()
+        .skip(1) // leading `hyalo`
+        .collect();
+    let run = hyalo().args(&argv).output().unwrap();
+    assert!(
+        run.status.success(),
+        "the drop hint did not run: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        !custom.exists(),
+        "the custom index should have been deleted"
+    );
+    assert!(
+        default_index.exists(),
+        "the default index must be left alone"
+    );
+}

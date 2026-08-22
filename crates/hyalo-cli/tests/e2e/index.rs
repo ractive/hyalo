@@ -2567,3 +2567,68 @@ fn create_index_text_output_matches_json_fields() {
         "an overwrite must say so in text mode too: {second_out}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// L-7 (iter-204): drop-index diagnoses a missing file as missing
+// ---------------------------------------------------------------------------
+
+/// A nonexistent path *inside* the vault used to be reported as a
+/// boundary-check failure, complete with an `--allow-outside-vault` hint that
+/// could not possibly help.
+#[test]
+fn drop_index_missing_in_vault_path_reports_not_found() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["drop-index", "--path", "nope-index", "--format", "text"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("index file not found"),
+        "must name the real problem: {stderr}"
+    );
+    assert!(
+        stderr.contains("nope-index"),
+        "must name the path: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--allow-outside-vault"),
+        "the boundary hint is irrelevant here: {stderr}"
+    );
+}
+
+/// The boundary guarantee survives: a missing path *outside* the vault is
+/// still refused, not waved through as a harmless miss.
+#[test]
+fn drop_index_missing_out_of_vault_path_still_refused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    let outside = TempDir::new().unwrap();
+    let target = outside.path().join("nope-index");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "drop-index",
+            "--path",
+            target.to_str().unwrap(),
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("outside vault"),
+        "out-of-vault paths must stay refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("--allow-outside-vault"),
+        "and keep the override hint: {stderr}"
+    );
+}

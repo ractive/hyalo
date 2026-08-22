@@ -1884,10 +1884,19 @@ fn hints_for_create_index(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hi
     };
 
     hints.push(Hint::new("Query using the index", hint_cmd));
-    hints.push(Hint::new(
-        "Delete the index when done",
-        build_command_no_glob(ctx, &["drop-index"]),
-    ));
+    // L-9: the drop hint has to name the same file the query hint does.
+    // A bare `drop-index` after `create-index -o <custom>` targets the default
+    // `<vault>/.hyalo-index` — a different file, which is either absent or
+    // someone else's index.
+    let drop_cmd = if is_default {
+        build_command_no_glob(ctx, &["drop-index"])
+    } else {
+        build_command_no_glob(
+            ctx,
+            &["drop-index", "--path", index_path.unwrap_or(".hyalo-index")],
+        )
+    };
+    hints.push(Hint::new("Delete the index when done", drop_cmd));
 
     hints
 }
