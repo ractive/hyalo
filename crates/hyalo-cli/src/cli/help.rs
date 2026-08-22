@@ -54,13 +54,13 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo read -f/--file F [...]                                  Flag form; FILE positional is equivalent
 
   Set (create or overwrite, mutates files):
-    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...] [--dry-run] [--validate]
 
   Remove (delete properties/tags, mutates files):
-    hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+    hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...] [--dry-run]
 
   Append (add to list properties, mutates files):
-    hyalo append -p/--property K=V [-p ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...]
+    hyalo append -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...] [--dry-run] [--validate]
 
   Properties (subcommand group; bare `hyalo properties` = summary):
     hyalo properties summary [-g/--glob G] [-n/--limit N]         Unique property names, types, and file counts (read-only) [alias: list]
@@ -71,7 +71,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)
 
   Summary (vault overview, read-only):
-    hyalo summary [-g/--glob G] [-n/--recent N]
+    hyalo summary [-g/--glob G] [-n/--recent N] [--depth N] [--limit N]
 
   Task (single-task operations):
     hyalo task read       -f/--file F -l/--line N           Read task at a line
@@ -87,8 +87,12 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo links auto [--apply] [--first-only | --no-first-only] [--min-length N] [--exclude-title T ...] [--exclude-target-glob G ...] [--file F | -g/--glob G ...]   Auto-link unlinked title mentions (default: dry-run)
     Persist the exclusions in .hyalo.toml:  [links.auto] exclude_titles / exclude_target_globs / first_only (flags extend the lists; --no-first-only overrides first_only for one run)
 
-  Mv (move/rename file, updates links, mutates files):
-    hyalo mv -f/--file F --to NEW [--dry-run]
+  Mv (move/rename file or batch, updates links, mutates files):
+    hyalo mv FILE DEST [--dry-run] [--on-conflict POLICY] [--allow-ambiguous]   Single file; positional DEST aliases --to
+    hyalo mv -f/--file F --to DEST [...]                          Flag form; DEST is a .md path or an existing directory
+    hyalo mv [-g/--glob G] [-p/--property F] [-t/--tag T] [--type T] --to DIR/ [--apply]   Batch mode (selector intersection); dry-run unless --apply
+    --on-conflict POLICY: what to do when DEST already exists (see `hyalo mv --help`)
+    --allow-ambiguous: rewrite bare [[stem]] links that match several files instead of skipping them
 
   Views (manage saved find queries; bare `hyalo views` = list):
     hyalo views list                                       List all saved views [alias: summary]
@@ -97,8 +101,9 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo find --view <NAME> [additional filters...]       Use a saved view
 
   Lint (validate frontmatter against schemas + lint the markdown body, read-only):
-    hyalo lint [-f/--file F | -g/--glob G] [--files-from PATH] [--rule ID] [--rule-prefix PREFIX]
+    hyalo lint [-f/--file F | -g/--glob G] [--type T] [--files-from PATH] [--rule ID] [--rule-prefix PREFIX]
                [--detailed] [--strict] [--fix | --fix-rule ID] [--dry-run] [-n/--limit N]
+               [--max-per-rule N] [--profile okf|madr|skills|changelog]
 
   Lint-rules (manage the markdown lint rule catalog; bare `hyalo lint-rules` = list):
     hyalo lint-rules list [--enabled-only | --disabled-only] [--rule-prefix PREFIX]   List rules and settings [alias: summary]
@@ -130,16 +135,16 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo config [-d/--dir DIR]
 
   Init (configuration, one-time setup):
-    hyalo init [--claude] [--profile <PROFILE>] [-d/--dir DIR]
+    hyalo init [--claude] [--pi] [--profile <PROFILE>] [-d/--dir DIR]
 
   Deinit (remove hyalo configuration):
     hyalo deinit
 
   Create-index (build snapshot for faster queries):
-    hyalo create-index [-o/--output PATH]   # --path is an alias for --output
+    hyalo create-index [-o/--output PATH] [--allow-outside-vault]   # --path is an alias for --output
 
   Drop-index (delete snapshot index):
-    hyalo drop-index [-p/--path PATH]       # --output is an alias for --path
+    hyalo drop-index [-p/--path PATH] [--allow-outside-vault]       # --output is an alias for --path
 
   Completions (generate shell completions):
     hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell
