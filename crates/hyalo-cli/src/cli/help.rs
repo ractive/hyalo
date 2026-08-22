@@ -160,7 +160,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     --index-file <PATH>       Use a snapshot index at an explicit path
 
   Default output limits:
-    List commands ({LIST_COMMANDS}) return
+    Capped commands ({LIMITED_COMMANDS}) return
     at most 50 results by default. Use --limit 0 for unlimited output.
     The default cap is bypassed when --jq or --count is used (pipelines
     need complete data). An explicit --limit is always honoured.
@@ -400,10 +400,15 @@ OUTPUT SHAPES (JSON, default):
 pub(crate) fn help_long() -> &'static str {
     static RENDERED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     RENDERED.get_or_init(|| {
-        HELP_LONG_TEMPLATE.replace(
-            crate::cli::args::LIST_COMMANDS_PLACEHOLDER,
-            crate::list_commands::list_commands_phrase(),
-        )
+        HELP_LONG_TEMPLATE
+            .replace(
+                crate::cli::args::LIST_COMMANDS_PLACEHOLDER,
+                crate::list_commands::list_commands_phrase(),
+            )
+            .replace(
+                crate::cli::args::LIMITED_COMMANDS_PLACEHOLDER,
+                crate::list_commands::limited_commands_phrase(),
+            )
     })
 }
 

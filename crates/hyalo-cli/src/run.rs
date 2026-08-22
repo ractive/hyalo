@@ -130,13 +130,13 @@ fn effective_index_path_for(
         | Commands::Read { index_flags, .. }
         | Commands::Lint { index_flags, .. }
         | Commands::New { index_flags, .. } => Some(index_flags),
-        Commands::Tags { action } => match action {
+        Commands::Tags { action, .. } => match action {
             Some(
                 TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
             ) => Some(index_flags),
             None => None,
         },
-        Commands::Properties { action } => match action {
+        Commands::Properties { action, .. } => match action {
             Some(
                 PropertiesAction::Summary { index_flags, .. }
                 | PropertiesAction::Rename { index_flags, .. },
@@ -1114,25 +1114,43 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.glob.clone_from(glob);
                 Some(ctx)
             }
+            // The summary flags live on the explicit subcommand OR, for the bare
+            // group form, on the group itself (M-8) — read whichever holds them.
             Commands::Properties {
-                action: Some(crate::cli::args::PropertiesAction::Summary { glob, limit, .. }),
-            } => {
+                glob: bare_glob,
+                limit: bare_limit,
+                action,
+            } if !matches!(
+                action,
+                Some(crate::cli::args::PropertiesAction::Rename { .. })
+            ) =>
+            {
+                let (glob, limit) = match action {
+                    Some(crate::cli::args::PropertiesAction::Summary { glob, limit, .. }) => {
+                        (glob, limit)
+                    }
+                    _ => (bare_glob, bare_limit),
+                };
                 let mut ctx = HintContext::from_common(HintSource::PropertiesSummary, &common);
                 ctx.glob.clone_from(glob);
                 ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
             Commands::Tags {
-                action: Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }),
-            } => {
+                glob: bare_glob,
+                limit: bare_limit,
+                action,
+            } if !matches!(action, Some(crate::cli::args::TagsAction::Rename { .. })) => {
+                let (glob, limit) = match action {
+                    Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }) => {
+                        (glob, limit)
+                    }
+                    _ => (bare_glob, bare_limit),
+                };
                 let mut ctx = HintContext::from_common(HintSource::TagsSummary, &common);
                 ctx.glob.clone_from(glob);
                 ctx.has_limit = limit.is_some();
                 Some(ctx)
-            }
-            Commands::Tags { action: None } => {
-                // Bare `hyalo tags` defaults to summary with no glob.
-                Some(HintContext::from_common(HintSource::TagsSummary, &common))
             }
             Commands::Find {
                 pattern,

@@ -765,10 +765,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             }
         }
-        Commands::Properties { action } => {
+        Commands::Properties {
+            glob: bare_glob,
+            limit: bare_limit,
+            action,
+        } => {
+            // M-8: bare `hyalo properties` IS `properties summary`, so it takes
+            // the summary flags COMMAND REFERENCE documents for it rather than
+            // rejecting them at parse time.
             let action = action.unwrap_or(PropertiesAction::Summary {
-                glob: vec![],
-                limit: None,
+                glob: bare_glob,
+                limit: bare_limit,
                 index_flags: IndexFlags::default(),
             });
             match action {
@@ -849,10 +856,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 ),
             }
         }
-        Commands::Tags { action } => {
+        Commands::Tags {
+            glob: bare_glob,
+            limit: bare_limit,
+            action,
+        } => {
+            // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
             let action = action.unwrap_or(TagsAction::Summary {
-                glob: vec![],
-                limit: None,
+                glob: bare_glob,
+                limit: bare_limit,
                 index_flags: IndexFlags::default(),
             });
             match action {

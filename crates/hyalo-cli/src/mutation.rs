@@ -69,12 +69,12 @@ impl Commands {
 
             // Groups whose `action` is optional default to their read-only
             // aggregate (`summary` / `list`) when omitted.
-            Self::Properties { action } => match action {
+            Self::Properties { action, .. } => match action {
                 None | Some(PropertiesAction::Summary { .. }) => false,
                 Some(PropertiesAction::Rename { dry_run, .. }) => !dry_run,
             },
 
-            Self::Tags { action } => match action {
+            Self::Tags { action, .. } => match action {
                 None | Some(TagsAction::Summary { .. }) => false,
                 Some(TagsAction::Rename { dry_run, .. }) => !dry_run,
             },

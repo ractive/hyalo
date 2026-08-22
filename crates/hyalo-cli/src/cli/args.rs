@@ -12,6 +12,12 @@ use crate::output::Format;
 /// Shared with [`crate::cli::help`] so both templates use the same marker.
 pub(crate) const LIST_COMMANDS_PLACEHOLDER: &str = "{LIST_COMMANDS}";
 
+/// Token substituted with [`crate::list_commands::limited_commands_phrase`].
+///
+/// Distinct from [`LIST_COMMANDS_PLACEHOLDER`]: "emits a total" and "caps at
+/// `default_limit` and takes `--limit`" are different sets (M-8).
+pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
+
 /// Shared `--file` doc string used on every command that accepts `--file`,
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
@@ -579,6 +585,15 @@ pub(crate) enum Commands {
         \u{00a0} hyalo properties summary --glob 'research/**/*.md'\n\
         \u{00a0} hyalo properties rename --from old-key --to new-key")]
     Properties {
+        /// Glob pattern(s) to filter which files to scan, relative to --dir
+        /// (repeatable); prefix '!' to negate. Bare-group form of
+        /// `properties summary --glob`.
+        #[arg(short, long)]
+        glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited). Bare-group
+        /// form of `properties summary --limit`.
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
         #[command(subcommand)]
         action: Option<PropertiesAction>,
     },
@@ -592,6 +607,15 @@ pub(crate) enum Commands {
         \u{00a0} hyalo tags summary --glob 'research/**/*.md'\n\
         \u{00a0} hyalo tags rename --from old-tag --to new-tag")]
     Tags {
+        /// Glob pattern(s) to filter which files to scan, relative to --dir
+        /// (repeatable); prefix '!' to negate. Bare-group form of
+        /// `tags summary --glob`.
+        #[arg(short, long)]
+        glob: Vec<String>,
+        /// Maximum number of results to return (0 = unlimited). Bare-group
+        /// form of `tags summary --limit`.
+        #[arg(short = 'n', long, value_parser = parse_limit)]
+        limit: Option<usize>,
         #[command(subcommand)]
         action: Option<TagsAction>,
     },

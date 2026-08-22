@@ -314,13 +314,15 @@ fn list_commands_phrase_is_identical_in_every_help_section() {
     let help = squash(&String::from_utf8_lossy(&output.stdout));
     let occurrences = help.matches(&phrase).count();
 
-    // Four call sites render the list: the top-level OUTPUT paragraph, the
-    // --count flag's long help, the "Default output limits" block, and the
-    // OUTPUT SHAPES note. All four read from LIST_COMMANDS, so all four must
-    // agree with the runtime error verbatim.
+    // Three call sites render the *total-emitting* list: the top-level OUTPUT
+    // paragraph, the --count flag's long help, and the OUTPUT SHAPES note. All
+    // three read from LIST_COMMANDS, so all three must agree with the runtime
+    // error verbatim. The "Default output limits" block deliberately renders a
+    // different, smaller set (LIMITED_COMMANDS) — see
+    // `every_capped_command_accepts_limit` (M-8).
     assert_eq!(
-        occurrences, 4,
-        "expected the list-command phrase \"{phrase}\" in all 4 help sections, found {occurrences}"
+        occurrences, 3,
+        "expected the list-command phrase \"{phrase}\" in all 3 help sections, found {occurrences}"
     );
 }
 
@@ -398,6 +400,123 @@ fn known_non_list_commands_reject_count() {
         assert!(
             stderr.contains("--count is only supported for list commands"),
             "`hyalo {label} --count` gave an unexpected error: {stderr}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M-8 (iter-204): the "Default output limits" claim names only capped commands
+// ---------------------------------------------------------------------------
+
+/// The capped-command phrase the binary itself prints in `--help`.
+///
+/// Parsed rather than restated, for the same reason
+/// [`declared_list_commands`] is: restating it is the drift being prevented.
+fn declared_capped_commands() -> Vec<String> {
+    let output = hyalo_no_hints().arg("--help").output().unwrap();
+    let help = squash(&String::from_utf8_lossy(&output.stdout));
+    let start = help
+        .find("Capped commands (")
+        .unwrap_or_else(|| panic!("no capped-command block in --help: {help}"))
+        + "Capped commands (".len();
+    let rest = &help[start..];
+    let end = rest.find(')').expect("unterminated capped-command list");
+    rest[..end]
+        .split(", ")
+        .map(str::trim)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every command the limit block names must actually take `--limit`. Three of
+/// the eight it used to name (`types list`, `views list`, `lint-rules list`)
+/// exited 2 on the flag the paragraph promised them.
+#[test]
+fn every_capped_command_accepts_limit() {
+    let tmp = setup_vault();
+    let dir = tmp.path().to_str().unwrap().to_owned();
+    let capped = declared_capped_commands();
+    assert!(
+        capped.len() >= 4,
+        "parsed a suspiciously short capped list: {capped:?}"
+    );
+
+    for cmd in &capped {
+        let mut argv: Vec<&str> = cmd.split(' ').collect();
+        if argv.first() == Some(&"backlinks") {
+            argv.push("a.md");
+        }
+        let output = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args(&argv)
+            .args(["--limit", "1"])
+            .output()
+            .unwrap();
+        assert_ne!(
+            output.status.code(),
+            Some(2),
+            "`hyalo {cmd} --limit 1` was rejected: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The capped set is a strict subset of the `--count` set: a command can emit
+/// a `total` without being capped, but not the reverse.
+#[test]
+fn capped_commands_are_a_subset_of_list_commands() {
+    let list = declared_list_commands();
+    for cmd in declared_capped_commands() {
+        assert!(
+            list.contains(&cmd),
+            "{cmd} is documented as capped but emits no total"
+        );
+    }
+}
+
+/// M-8 residue: bare `hyalo tags` / `hyalo properties` are documented as
+/// aliases of their `summary` subcommand, so they must take its flags.
+#[test]
+fn bare_group_commands_accept_summary_flags() {
+    let tmp = setup_vault();
+    let dir = tmp.path().to_str().unwrap().to_owned();
+
+    for group in ["tags", "properties"] {
+        for flags in [
+            vec!["--limit", "0"],
+            vec!["--limit", "1"],
+            vec!["--glob", "*.md"],
+        ] {
+            let output = hyalo_no_hints()
+                .args(["--dir", &dir])
+                .arg(group)
+                .args(&flags)
+                .args(["--format", "json"])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "`hyalo {group} {}` failed: {}",
+                flags.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // And the bare form must behave exactly like the explicit summary.
+        let bare = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args([group, "--limit", "1", "--format", "json"])
+            .output()
+            .unwrap();
+        let explicit = hyalo_no_hints()
+            .args(["--dir", &dir])
+            .args([group, "summary", "--limit", "1", "--format", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&bare.stdout),
+            String::from_utf8_lossy(&explicit.stdout),
+            "bare `{group}` must match `{group} summary`"
         );
     }
 }
