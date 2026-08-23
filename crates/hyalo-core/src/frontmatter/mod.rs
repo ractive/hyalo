@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod parse;
+mod splice;
 mod types;
 
 use anyhow::Context as _;

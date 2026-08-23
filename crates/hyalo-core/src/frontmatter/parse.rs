@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use super::splice::{FallbackReason, SpliceOutcome, splice_frontmatter};
 use super::{FrontmatterError, MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
 /// Convenience macro: return a [`FrontmatterError`] wrapped in `anyhow::Error`.
@@ -367,11 +368,19 @@ fn write_frontmatter_impl(
         );
     }
 
-    // --- Step 1: find the byte offset where the body starts and detect indent style ---
+    // --- Step 1: find the byte offset where the body starts, detect indent
+    // style, and capture the original YAML text for the minimal-diff splice ---
     let span = find_body_offset(&mut file)?;
 
-    // Detect list indent style from the existing frontmatter before overwriting
-    let compact_list_indent = if span.body_offset > 0 {
+    let mut compact_list_indent = false;
+    // The frontmatter's original YAML text (delimiters excluded), kept so that
+    // `splice_frontmatter` can re-emit untouched keys byte-for-byte (iter-214).
+    let mut original_yaml: Option<String> = None;
+    // Set when the original block exists but cannot be spliced; the user is
+    // warned before the whole block is re-serialized.
+    let mut splice_blocked: Option<FallbackReason> = None;
+
+    if span.body_offset > 0 {
         file.seek(SeekFrom::Start(0))
             .with_context(|| format!("failed to seek in {}", path.display()))?;
         // body_offset is the byte position within the file; on 32-bit targets a
@@ -381,6 +390,7 @@ fn write_frontmatter_impl(
         let mut fm_bytes = vec![0u8; span.body_offset as usize];
         file.read_exact(&mut fm_bytes)
             .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
+        let is_utf8 = std::str::from_utf8(&fm_bytes).is_ok();
         let fm_str = String::from_utf8_lossy(&fm_bytes);
         // Extract just the YAML content between the --- delimiters, using the
         // exact opening prefix `find_body_offset` recognized (BOM + line ending).
@@ -389,13 +399,23 @@ fn write_frontmatter_impl(
             if span.has_bom { BOM } else { "" },
             span.line_ending.as_str()
         );
-        let yaml_content = fm_str
+        let after_open = fm_str
             .strip_prefix(opening_prefix.as_str())
             .unwrap_or(&fm_str);
-        detect_list_indent_style(yaml_content)
-    } else {
-        false
-    };
+        let yaml_content = strip_closing_delimiter(after_open);
+        compact_list_indent = detect_list_indent_style(yaml_content.unwrap_or(after_open));
+
+        match yaml_content {
+            // Invalid UTF-8 in the frontmatter: `fm_str` is lossy, so splicing
+            // it would write replacement characters. Re-serialize instead.
+            _ if !is_utf8 => splice_blocked = Some(FallbackReason::NotUtf8),
+            // An empty block (`---\n---`) has nothing to preserve — take the
+            // full-serialization path silently.
+            Some(yaml) if yaml.trim().is_empty() => {}
+            Some(yaml) => original_yaml = Some(yaml.to_owned()),
+            None => splice_blocked = Some(FallbackReason::NotSpanMappable),
+        }
+    }
 
     // --- Step 2: read the body bytes from that offset ---
     file.seek(SeekFrom::Start(span.body_offset))
@@ -415,11 +435,34 @@ fn write_frontmatter_impl(
         out.extend_from_slice(BOM.as_bytes());
     }
     if !props.is_empty() {
-        let mut yaml = serde_saphyr::to_string_with_options(
-            props,
-            hyalo_serializer_options(compact_list_indent),
-        )
-        .context("failed to serialize YAML")?;
+        // Minimal-diff write (iter-214): re-emit every key whose value did not
+        // change byte-for-byte and serialize only what actually changed. Falls
+        // back to a full re-serialization — with a warning — when the original
+        // block cannot be mapped to per-key line spans.
+        let spliced = match original_yaml.as_deref() {
+            Some(orig) => match splice_frontmatter(orig, props, compact_list_indent) {
+                SpliceOutcome::Spliced(yaml) => Some(yaml),
+                SpliceOutcome::Fallback(reason) => {
+                    warn_full_frontmatter_rewrite(path, reason);
+                    None
+                }
+            },
+            None => {
+                if let Some(reason) = splice_blocked {
+                    warn_full_frontmatter_rewrite(path, reason);
+                }
+                None
+            }
+        };
+
+        let mut yaml = match spliced {
+            Some(yaml) => yaml,
+            None => serde_saphyr::to_string_with_options(
+                props,
+                hyalo_serializer_options(compact_list_indent),
+            )
+            .context("failed to serialize YAML")?,
+        };
         if !yaml.ends_with('\n') {
             yaml.push('\n');
         }
@@ -519,6 +562,33 @@ pub fn check_frontmatter_size_budget(
         });
     }
     Ok(())
+}
+
+/// Strip the trailing closing `---` line from a frontmatter block's text.
+///
+/// `s` is everything after the opening delimiter line up to (and including)
+/// the closing delimiter line, i.e. exactly what [`find_body_offset`] framed.
+/// Returns the YAML content between the delimiters, or `None` when the last
+/// line is not a closing delimiter (which means our framing assumption is
+/// wrong and the block must not be spliced).
+fn strip_closing_delimiter(s: &str) -> Option<&str> {
+    let without_eol = s
+        .strip_suffix('\n')
+        .map_or(s, |t| t.strip_suffix('\r').unwrap_or(t));
+    let last_start = without_eol.rfind('\n').map_or(0, |i| i + 1);
+    is_closing_delimiter(&without_eol[last_start..]).then(|| &s[..last_start])
+}
+
+/// Warn that a frontmatter write could not be limited to the changed keys.
+///
+/// iter-214 DEC-060: a full-block rewrite is allowed as a fallback, but never
+/// silently — the user must be able to tell reformatting churn from a bug.
+fn warn_full_frontmatter_rewrite(path: &Path, reason: FallbackReason) {
+    crate::warn::warn(format!(
+        "{}: rewriting the entire frontmatter block because {}; formatting of untouched keys may change",
+        path.display(),
+        reason.as_str()
+    ));
 }
 
 /// Byte offset and framing of the frontmatter block found by [`find_body_offset`].
