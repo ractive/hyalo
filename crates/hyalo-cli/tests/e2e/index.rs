@@ -1802,10 +1802,18 @@ Target content
         files.contains(&"real.md"),
         "real.md should be found: {files:?}"
     );
-    // The symlink resolves inside the vault, so it should be included
+    // The symlink resolves inside the vault, so its content is enumerated —
+    // but exactly once, and under the *real* file's path. iter-207 (BUG-7)
+    // made the non-symlink spelling the canonical representative: keeping the
+    // alias instead dropped `sub/target.md` from the fuzzy candidate set and
+    // reported fixes against a name that is not the file.
     assert!(
-        files.iter().any(|f| f.contains("link")),
-        "symlinked file inside vault should be included: {files:?}"
+        files.contains(&"sub/target.md"),
+        "the real file, not the alias, represents the symlinked content: {files:?}"
+    );
+    assert!(
+        !files.contains(&"link.md"),
+        "the alias spelling must not be enumerated alongside its target: {files:?}"
     );
 }
 

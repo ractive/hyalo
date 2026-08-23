@@ -1017,6 +1017,69 @@ mod tests {
         assert!(overlaps_zone(&zones, inside, inside + 3));
     }
 
+    // --- iter-207: Liquid and raw-HTML inert zones (BUG-2 / BUG-3) ---
+
+    #[test]
+    fn inert_zone_covers_liquid_tags_and_output() {
+        assert!(needle_is_inert(
+            "Use {% data variables.product.prodname_net %} here",
+            "net"
+        ));
+        assert!(needle_is_inert("Path: {{ site.net.baseurl }}/x", "net"));
+        // Prose either side of the expression stays linkable.
+        assert!(!needle_is_inert("net before {% x %}", "net"));
+        let line = "{% x %} net after";
+        let start = line.rfind("net").unwrap();
+        assert!(!overlaps_zone(&inert_link_zones(line), start, start + 3));
+    }
+
+    #[test]
+    fn inert_zone_treats_unterminated_liquid_as_inert_to_end_of_line() {
+        assert!(needle_is_inert("Start {% ifversion net", "net"));
+        assert!(needle_is_inert("Start {{ net", "net"));
+        // A lone brace is not a template marker.
+        assert!(!needle_is_inert("A { net } set", "net"));
+    }
+
+    #[test]
+    fn inert_zone_covers_html_tags_and_attribute_values() {
+        assert!(needle_is_inert(r#"<img src="net.png" alt="x">"#, "net.png"));
+        assert!(needle_is_inert(r#"<a name="net">x</a>"#, "net"));
+        assert!(needle_is_inert("<!-- net comment -->", "net"));
+        assert!(needle_is_inert("<?php echo net; ?>", "net"));
+        // A `>` inside a quoted attribute must not end the tag early.
+        assert!(needle_is_inert(r#"<img alt="a > b" src="net.png">"#, "net.png"));
+    }
+
+    #[test]
+    fn inert_zone_leaves_text_between_html_tags_linkable() {
+        let line = "<div>net prose</div>";
+        let start = line.find("net").unwrap();
+        assert!(!overlaps_zone(&inert_link_zones(line), start, start + 3));
+    }
+
+    #[test]
+    fn inert_zone_does_not_treat_a_comparison_as_an_html_tag() {
+        let line = "if a < b then net wins";
+        let start = line.find("net").unwrap();
+        assert!(!overlaps_zone(&inert_link_zones(line), start, start + 3));
+        assert!(!needle_is_inert("5 <10 net", "net"));
+    }
+
+    #[test]
+    fn inert_zone_treats_unterminated_html_tag_as_inert_to_end_of_line() {
+        assert!(needle_is_inert(r#"<img src="net.png" alt="wraps"#, "net.png"));
+    }
+
+    #[test]
+    fn inert_zone_still_recognizes_autolinks_before_html_tags() {
+        // `<https://…>` must stay an autolink zone, not be eaten as a tag.
+        let zones = inert_link_zones("Auto: <https://example.net/p> done");
+        assert_eq!(zones.len(), 1);
+        let line = "Auto: <https://example.net/p> done";
+        assert_eq!(&line[zones[0].0..zones[0].1], "<https://example.net/p>");
+    }
+
     #[test]
     fn inert_zone_ranges_are_ascending_and_disjoint() {
         let line = "[a](x.md) plain https://e.example/z and [[w]] end";
