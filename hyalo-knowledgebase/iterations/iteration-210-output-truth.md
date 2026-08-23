@@ -2,7 +2,7 @@
 title: Iteration 210 — output truth (lint/links JSON counters, hints, error parity)
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-210/output-truth
 tags:
   - iteration
@@ -65,7 +65,7 @@ lands after the release, document byte semantics instead and defer the
 switch. Decide by release status at implementation time and record the
 decision.
 
-## Tasks
+## Tasks [10/10]
 
 - [x] BUG-6: make lint JSON `total`, per-rule counts, and `rules_fired`
       describe the full run (matching `warnings`/`errors`), and compute
@@ -105,7 +105,7 @@ decision.
       `[types.note]` config error suggest `hyalo types set` as the fix
       path.
 
-## Acceptance criteria
+## Acceptance criteria [7/7]
 
 - [x] On a 61-file vault with 1 violating file: `total` equals the
       whole-run violation count, `files_truncated` is `false`, and

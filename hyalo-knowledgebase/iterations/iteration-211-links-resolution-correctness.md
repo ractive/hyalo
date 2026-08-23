@@ -57,6 +57,13 @@ From [[dogfood-results/dogfood-v0210-pre2-integrity-wave]]:
 
 ## Tasks
 
+- [ ] Carry-over from iter-210 (PR #242 test plan): the counter-truth,
+      hint-execution and bucket-sum fixes were only verified against
+      fixture vaults — no GitHub Docs scratch copy was reachable in that
+      review environment. Re-run a dogfood pass against the real corpus
+      (`hyalo lint`, `hyalo links fix`, the executed-hint gate) to confirm
+      BUG-6/BUG-13/UX-4 hold outside fixtures before this iteration's own
+      GitHub-Docs-dependent tasks below build on top of them.
 - [ ] BUG-8: slugify headings (GitHub-style: lowercase, spaces→`-`,
       strip punctuation, dedupe suffixes `-1`, `-2`) and check anchors
       against the slug set; keep accepting the raw-text forms for
