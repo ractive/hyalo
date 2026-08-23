@@ -367,25 +367,56 @@ pub fn resolve_file_ci(
         });
     }
 
-    if !std::path::Path::new(&normalized)
+    // A trailing slash is directory syntax. It must be trimmed before any hint
+    // is built, or the glob hint comes out as `sub//*` — a pattern that matches
+    // nothing, so copy-pasting it produces a clean-looking exit 0 on a
+    // directory that was never linted (iter-210 / BUG-13).
+    let bare = normalized.trim_end_matches('/');
+    if !std::path::Path::new(bare)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
     {
         // If the path refers to a directory inside the vault, suggest --glob
         // instead of the misleading "{name}.md" hint.
-        if dir.join(&normalized).is_dir() {
-            let glob_hint = format!("--glob '{normalized}/*'");
+        if !bare.is_empty() && dir.join(bare).is_dir() {
+            let glob_hint = format!("--glob '{bare}/*'");
             return Err(FileResolveError::IsDirectory {
                 path: normalized,
                 hint: glob_hint,
             });
         }
 
-        let hint = format!("{normalized}.md");
-        return Err(FileResolveError::MissingExtension {
-            path: normalized,
-            hint,
-        });
+        // Only suggest `{path}.md` when that file actually exists (iter-210 /
+        // BUG-13). Suggesting a candidate blindly turned `nosuchdir/` into
+        // "did you mean nosuchdir/.md?" — a path that can never exist. When
+        // there is no such file, fall through to the ordinary not-found path
+        // below, which still gets a chance to offer a fuzzy sibling.
+        let candidate = format!("{bare}.md");
+        if !bare.is_empty()
+            && (dir.join(&candidate).is_file()
+                || (case_insensitive && resolve_case_insensitive(dir, &candidate).is_some()))
+        {
+            return Err(FileResolveError::MissingExtension {
+                path: normalized,
+                hint: candidate,
+            });
+        }
+
+        // Nothing plausible to suggest. A non-`.md` path is never resolvable as
+        // a note, so report not-found here rather than falling through to the
+        // generic lookup below (which would happily accept an on-disk
+        // `notes.txt`). A trailing slash skips the fuzzy sibling search too:
+        // `sub/` is directory syntax, and matching it against notes in the
+        // parent directory produces nonsense suggestions.
+        if !normalized.ends_with('/')
+            && let Some(suggestion) = fuzzy_suggestion_for(dir, bare)
+        {
+            return Err(FileResolveError::NotFoundSuggestion {
+                path: normalized,
+                suggestion,
+            });
+        }
+        return Err(FileResolveError::NotFound { path: normalized });
     }
 
     let mut full = dir.join(&normalized);
@@ -404,15 +435,7 @@ pub fn resolve_file_ci(
     }
     if !full.is_file() {
         // Try fuzzy-matching against .md siblings in the same parent directory.
-        if let Some(sibling_name) = fuzzy_match_sibling(&full) {
-            // Reconstruct the suggestion as a vault-relative path so nested
-            // directories produce e.g. "sub/readme.md", not just "readme.md".
-            let suggestion = match Path::new(&normalized).parent() {
-                Some(p) if p != Path::new("") => {
-                    format!("{}/{sibling_name}", p.display())
-                }
-                _ => sibling_name,
-            };
+        if let Some(suggestion) = fuzzy_suggestion_for(dir, &normalized) {
             return Err(FileResolveError::NotFoundSuggestion {
                 path: normalized,
                 suggestion,
@@ -504,6 +527,25 @@ fn resolve_case_insensitive(dir: &Path, rel: &str) -> Option<(PathBuf, String)> 
     }
 
     Some((current, real_components.join("/")))
+}
+
+/// Vault-relative "did you mean" suggestion for a path that did not resolve.
+///
+/// Looks for the closest `.md` sibling of `rel` (a vault-relative,
+/// forward-slash path) and rebuilds the answer as a vault-relative path, so a
+/// miss inside a subdirectory suggests `sub/readme.md` rather than a bare
+/// `readme.md` the caller cannot paste back.
+///
+/// Shared by the missing-extension and the plain not-found paths so both offer
+/// the same suggestion quality (iter-210 / BUG-13).
+fn fuzzy_suggestion_for(dir: &Path, rel: &str) -> Option<String> {
+    let sibling_name = fuzzy_match_sibling(&dir.join(rel))?;
+    Some(match Path::new(rel).parent() {
+        Some(parent) if parent != Path::new("") => {
+            format!("{}/{sibling_name}", parent.display())
+        }
+        _ => sibling_name,
+    })
 }
 
 /// Find the closest `.md` sibling by Levenshtein distance.
@@ -2946,12 +2988,71 @@ mod tests {
         assert!(err.to_string().contains("directory"));
     }
 
+    /// iter-210 / BUG-13: the `did you mean X.md?` hint is only offered when
+    /// `X.md` actually exists. With nothing on disk there is no candidate, so
+    /// the error is a plain not-found rather than a suggestion the user cannot
+    /// act on.
     #[test]
-    fn resolve_file_non_directory_without_ext_still_hints_md() {
+    fn resolve_file_without_ext_and_no_candidate_is_plain_not_found() {
         let tmp = tempfile::tempdir().unwrap();
-        // "notes" doesn't exist as a dir or file — should get MissingExtension
+        // "notes" doesn't exist as a dir, as a file, or as "notes.md".
         let err = resolve_file(tmp.path(), "notes").unwrap_err();
-        assert!(matches!(err, FileResolveError::MissingExtension { .. }));
+        assert!(
+            matches!(err, FileResolveError::NotFound { .. }),
+            "expected NotFound, got {err:?}"
+        );
+        assert!(!err.to_string().contains("did you mean"));
+    }
+
+    /// iter-210 / BUG-13: a trailing slash is directory syntax. The glob hint
+    /// must not double the separator — `--glob 'sub//*'` matches nothing, so
+    /// pasting it reports a clean vault for a directory that was never scanned.
+    #[test]
+    fn resolve_file_trailing_slash_directory_hint_has_single_separator() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+
+        let err = resolve_file(tmp.path(), "sub/").unwrap_err();
+        match err {
+            FileResolveError::IsDirectory { ref hint, .. } => {
+                assert_eq!(hint, "--glob 'sub/*'", "got {hint}");
+            }
+            other => panic!("expected IsDirectory, got {other:?}"),
+        }
+    }
+
+    /// iter-210 / BUG-13: `nosuchdir/` used to be answered with
+    /// "did you mean nosuchdir/.md?" — a path that can never exist.
+    #[test]
+    fn resolve_file_missing_directory_does_not_suggest_dot_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("readme.md"), "").unwrap();
+
+        let err = resolve_file(tmp.path(), "nosuchdir/").unwrap_err();
+        assert!(
+            matches!(err, FileResolveError::NotFound { .. }),
+            "expected NotFound, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(!msg.contains(".md"), "no bogus candidate should appear: {msg}");
+    }
+
+    /// A non-`.md` path that exists on disk is still not a note: resolution
+    /// must not start accepting `notes.txt` just because the missing-extension
+    /// hint became conditional.
+    #[test]
+    fn resolve_file_non_md_existing_file_is_not_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("notes.txt"), "").unwrap();
+
+        let err = resolve_file(tmp.path(), "notes.txt").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FileResolveError::NotFound { .. } | FileResolveError::NotFoundSuggestion { .. }
+            ),
+            "expected a not-found variant, got {err:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
