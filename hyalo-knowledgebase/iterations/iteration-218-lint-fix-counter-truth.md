@@ -2,7 +2,7 @@
 title: "Iteration 218 — lint --fix counter truth and column-semantics stragglers"
 type: iteration
 date: 2026-08-23
-status: planned
+status: in-progress
 branch: iter-218/lint-fix-counter-truth
 tags: [iteration, lint, cli, output-truth]
 related:
