@@ -1081,14 +1081,15 @@ pub(crate) fn resolve_effective(
     // (which `load_config_for_dir` sets to wherever the file was actually
     // found) rather than re-deriving it from `cli_dir`, and canonicalize so
     // this note prints absolute like the ancestor-adoption note does.
-    let target_config_dir = dunce::canonicalize(&target.config_dir).unwrap_or_else(|_| target.config_dir.clone());
+    let target_config_dir =
+        dunce::canonicalize(&target.config_dir).unwrap_or_else(|_| target.config_dir.clone());
     let target_config_path = config_file_in(&target_config_dir);
     // Canonicalize the shadowed CWD config path too so a self-reference (see
     // `shadowed_config_path`'s doc comment) is caught by equality, not just
     // by coincidentally matching relative-path text.
-    let shadowed_config_path = cwd_config_path.as_deref().map(|p| {
-        dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
-    });
+    let shadowed_config_path = cwd_config_path
+        .as_deref()
+        .map(|p| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()));
     EffectiveConfig {
         config: target,
         dir: cli_dir.to_path_buf(),
@@ -1411,8 +1412,7 @@ mod tests {
         // false and this hits the "different vault" branch, but the file
         // `load_config_for_dir` finds there is the identical physical file
         // `cwd_config` was already loaded from.
-        let effective =
-            resolve_effective(load_config_from(project.path()), Some(project.path()));
+        let effective = resolve_effective(load_config_from(project.path()), Some(project.path()));
         assert!(effective.cwd_config_shadowed);
 
         let note = dir_override_note(&effective).expect("the switch must be announced");

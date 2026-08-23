@@ -1483,9 +1483,9 @@ fn run_inner() -> Result<(), AppError> {
             // dogfood pre3) despite `run` being a full `find` query and
             // `show` inspecting one specific, actionable rule.
             Commands::Views { action } => match action {
-                None | Some(crate::cli::args::ViewsAction::List) => Some(
-                    HintContext::from_common(HintSource::ViewsList, &common),
-                ),
+                None | Some(crate::cli::args::ViewsAction::List) => {
+                    Some(HintContext::from_common(HintSource::ViewsList, &common))
+                }
                 // `views run <name>` is `find --view <name>` under another
                 // name — dispatch.rs merges the saved view with this same
                 // CLI overlay and calls the identical `find_commands::find`.
@@ -1547,14 +1547,15 @@ fn run_inner() -> Result<(), AppError> {
                     ctx.view_name = Some(name.clone());
                     Some(ctx)
                 }
-                Some(crate::cli::args::ViewsAction::Set { .. } | crate::cli::args::ViewsAction::Remove { .. }) => {
-                    None
-                }
+                Some(
+                    crate::cli::args::ViewsAction::Set { .. }
+                    | crate::cli::args::ViewsAction::Remove { .. },
+                ) => None,
             },
             Commands::LintRules { action } => match action {
-                None | Some(crate::cli::args::LintRulesAction::List { .. }) => Some(
-                    HintContext::from_common(HintSource::LintRulesList, &common),
-                ),
+                None | Some(crate::cli::args::LintRulesAction::List { .. }) => {
+                    Some(HintContext::from_common(HintSource::LintRulesList, &common))
+                }
                 // `lint-rules show <ID>` inspects one specific rule; the
                 // natural next step is either lint scoped to it or tweaking
                 // its configuration (NEW-18, dogfood pre3).

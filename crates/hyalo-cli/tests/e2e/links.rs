@@ -1444,8 +1444,16 @@ fn case_insensitive_links_fix_apply_rewrites_casing() {
 #[test]
 fn bare_stem_relocation_reports_in_its_own_bucket() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "sub/target.md", "---\ntitle: Target\n---\nBody.\n");
-    write_md(tmp.path(), "src.md", "---\ntitle: Src\n---\n[a](target.md)\n");
+    write_md(
+        tmp.path(),
+        "sub/target.md",
+        "---\ntitle: Target\n---\nBody.\n",
+    );
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\n[a](target.md)\n",
+    );
 
     let out = hyalo_no_hints()
         .args([
@@ -1515,7 +1523,11 @@ fn bare_stem_relocation_reports_in_its_own_bucket() {
 #[test]
 fn links_fix_text_notes_broken_anchors_when_targets_are_clean() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "target.md", "---\ntitle: Target\n---\n## Real\n");
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target\n---\n## Real\n",
+    );
     write_md(
         tmp.path(),
         "source.md",
@@ -6036,7 +6048,11 @@ fn fuzzy_fixes_carry_a_column() {
         "---\ntitle: Correct Name\n---\n",
     );
     let line = "Some intro text here. See [[correct-nam]] for details.\n";
-    write_md(tmp.path(), "index.md", &format!("---\ntitle: Index\n---\n{line}"));
+    write_md(
+        tmp.path(),
+        "index.md",
+        &format!("---\ntitle: Index\n---\n{line}"),
+    );
 
     let json = links_fix_json(tmp.path(), &["--dry-run"]);
     let fuzzy = json["fuzzy_fixes"]

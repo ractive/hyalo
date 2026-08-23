@@ -2728,8 +2728,7 @@ See [broken](old-name.md) here.
         );
 
         // Under-stripped: `docs` is not a real top-level vault entry.
-        let (absolute, plausible) =
-            site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
         assert_eq!(absolute, 2, "two site-absolute links, one relative");
         assert_eq!(
             plausible, 0,
@@ -2762,8 +2761,7 @@ See [broken](old-name.md) here.
             )],
             &[],
         );
-        let (absolute, plausible) =
-            site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
         assert_eq!(
             absolute, 0,
             "a vault with no site-absolute links must not be flagged"

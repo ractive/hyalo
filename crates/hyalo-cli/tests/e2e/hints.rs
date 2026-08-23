@@ -1063,8 +1063,7 @@ fn read_without_frontmatter_hints_the_flag() {
         .output()
         .unwrap();
     assert!(without.status.success());
-    let json: serde_json::Value =
-        serde_json::from_slice(&without.stdout).expect("valid JSON");
+    let json: serde_json::Value = serde_json::from_slice(&without.stdout).expect("valid JSON");
     let hints_str = serde_json::to_string(&json["hints"]).unwrap();
     assert!(
         hints_str.contains("--frontmatter"),
