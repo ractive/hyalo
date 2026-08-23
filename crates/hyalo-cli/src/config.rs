@@ -574,10 +574,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             return ResolvedDefaults::defaults_for(dir);
         }
         Err(e) => {
-            // The file exists but cannot be read — a config-integrity problem,
-            // so the warning is not suppressible by `-q` (iter-201, M-2).
+            // The file exists but cannot be read — a config-integrity problem.
+            // The diagnostic is *recorded*, not printed here: which config is
+            // finally in effect is only known after `--dir` resolution, and
+            // printing at load time announced a file a `--dir` override had
+            // already switched away from (iter-213, UX-5). It is emitted by
+            // `emit_config_diagnostics`, still `-q`-proof (iter-201, M-2).
             let diagnostic = format!("could not read .hyalo.toml: {e}");
-            crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, None);
         }
     };
@@ -590,7 +593,6 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
                 diagnostic.push_str("\n  fix: ");
                 diagnostic.push_str(fix);
             }
-            crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
         }
     };
@@ -1113,6 +1115,20 @@ pub(crate) fn resolve_site_prefix(
         }
     };
     (derived, SitePrefixSource::Derived)
+}
+
+/// Print the config-integrity diagnostic for the configuration that actually
+/// governs this run, if any.
+///
+/// Called once, *after* `--dir` resolution. Before iter-213 the diagnostic was
+/// printed the moment the CWD config failed to parse, which meant
+/// `hyalo lint --dir other-vault` led with a warning about a file it had just
+/// established does not apply — the stale warning even printed *before* the
+/// "does not apply" note that contradicted it (dogfood UX-5).
+pub(crate) fn emit_config_diagnostics(effective: &EffectiveConfig) {
+    if let Some(diagnostic) = effective.config.malformed.as_deref() {
+        crate::warn::warn_always(diagnostic);
+    }
 }
 
 pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {

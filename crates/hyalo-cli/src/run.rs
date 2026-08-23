@@ -162,7 +162,7 @@ fn effective_index_path_for(
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
-        | Commands::Config
+        | Commands::Config { .. }
         | Commands::Types { .. }
         | Commands::Okf { .. }
         | Commands::Madr { .. }
@@ -623,7 +623,7 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Init { .. }
                 | Commands::Deinit
                 | Commands::Completion { .. }
-                | Commands::Config
+                | Commands::Config { .. }
         )
     {
         let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
@@ -674,7 +674,8 @@ fn run_inner() -> Result<(), AppError> {
     }
     // `config` inspects CWD directly and does not need normal pipeline setup.
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
-    if let Commands::Config = &mut cli.command {
+    if let Commands::Config { raw } = &mut cli.command {
+        let raw = *raw;
         // Determine output format (respect --format if given; otherwise default to Text
         // since this command is read-only introspection, not a pipeline command).
         let format = cli.format.unwrap_or_else(|| {
@@ -693,11 +694,13 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
+        crate::config::emit_config_diagnostics(&effective);
         let report = crate::commands::config::collect_config_report(
             &cwd,
             effective,
             dir_override.is_some(),
             cli.site_prefix.as_deref(),
+            raw,
         )
         .map_err(AppError::Internal)?;
 
@@ -789,6 +792,10 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(note) = crate::config::dir_override_note(&effective) {
         crate::warn::note(note);
     }
+    // Only now is it known which `.hyalo.toml` governs the run, so only now can
+    // an unusable one be reported without naming a file `--dir` already
+    // discarded (iter-213, UX-5).
+    crate::config::emit_config_diagnostics(&effective);
     let crate::config::EffectiveConfig {
         config,
         dir,
@@ -1455,7 +1462,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
-            | Commands::Config
+            | Commands::Config { .. }
             | Commands::Madr { .. }
             | Commands::Changelog { .. } => None,
         }

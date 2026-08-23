@@ -40,7 +40,7 @@ impl Commands {
             | Self::Read { .. }
             | Self::Summary { .. }
             | Self::Backlinks { .. }
-            | Self::Config
+            | Self::Config { .. }
             | Self::Completion { .. }
             | Self::Init { .. }
             | Self::Deinit => false,

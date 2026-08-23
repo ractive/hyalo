@@ -1547,20 +1547,32 @@ Repeatable (AND).\n\
         name = "config",
         display_order = 899,
         long_about = "Print the effective configuration for the current working directory.\n\n\
-            Shows which .hyalo.toml is active (or none), its raw contents, and the effective\n\
-            values: config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
+            Shows which .hyalo.toml is active (or none) and the effective values:\n\
+            config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
+            MALFORMED CONFIG: when a .hyalo.toml exists but could not be parsed, `malformed`\n\
+            is true and `parse_error` carries the diagnostic — every other value shown is a\n\
+            built-in default, not what the file asked for. Detectable from the output alone,\n\
+            without scraping stderr.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo config\n\
+            \u{00a0} hyalo config --raw\n\
             \u{00a0} hyalo config --dir ../other-vault\n\
             \u{00a0} hyalo config --jq '.results.dir'\n\
+            \u{00a0} hyalo config --jq '.results.malformed'\n\
             \u{00a0} hyalo config --format json\n\n\
             OUTPUT: Line-by-line in text format; the standard JSON envelope with --format json —\n\
             the settings live under `results`, and the config's own hints switch is reported as\n\
             `results.hints_enabled` so it does not collide with the envelope's `hints` array.\n\
             --jq filters that envelope like it does for every other command.\n\
+            The raw file text is opt-in via --raw: it is a multi-KB blob that dominated both\n\
+            renderings and buried the resolved values it was printed next to.\n\
             SIDE EFFECTS: None (read-only)."
     )]
-    Config,
+    Config {
+        /// Also print the raw .hyalo.toml text (`results.raw_contents` in JSON)
+        #[arg(long)]
+        raw: bool,
+    },
     /// Generate shell completions for the given shell
     #[command(
         name = "completions",
