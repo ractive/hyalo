@@ -69,6 +69,63 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     )
 }
 
+/// Truncate a multi-line-span lookahead at the end of the current CommonMark
+/// *block* (iter-207, BUG-1).
+///
+/// Code spans are **inline** constructs: they are parsed within a single
+/// leaf block and can never reach across a block boundary. The original L-3
+/// lookahead searched the whole remaining document, so one unmatched backtick
+/// in a paragraph (`` press <kbd>`</kbd> ``) paired up with the *opening*
+/// backtick of a genuine code span several paragraphs later. That
+/// mis-pairing shifted every subsequent span by one delimiter, leaving real
+/// code (`` `git blame` ``) unblanked and open to `links auto --apply`
+/// rewriting it into `` `[[git]] blame` ``.
+///
+/// The boundaries recognised here are the ones that can interrupt a
+/// paragraph in CommonMark and are cheap to detect without a block parser:
+///
+/// - a blank line (paragraph break),
+/// - an ATX heading (`#`…`######` followed by space/end),
+/// - a fenced-code-block delimiter (``` ``` ``` or `~~~`, up to 3 spaces of
+///   indent).
+///
+/// Truncating conservatively can only *shorten* the lookahead, which makes an
+/// unmatched run stay literal — exactly what CommonMark prescribes.
+fn block_lookahead(rest: &str) -> &str {
+    let mut offset = 0usize;
+    for line in rest.split('\n') {
+        if is_block_boundary(line) {
+            return &rest[..offset];
+        }
+        offset += line.len() + 1;
+        if offset > rest.len() {
+            break;
+        }
+    }
+    rest
+}
+
+/// Whether `line` ends the paragraph a code span could have been opened in.
+/// See [`block_lookahead`] for the rationale and the list of boundaries.
+fn is_block_boundary(line: &str) -> bool {
+    let trimmed = line.trim_end_matches(['\r']);
+    if trimmed.trim().is_empty() {
+        return true;
+    }
+    // Up to three spaces of indent still counts as the same block level.
+    let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+    if indent > 3 {
+        return false;
+    }
+    let body = &trimmed[indent..];
+    if body.starts_with("```") || body.starts_with("~~~") {
+        return true;
+    }
+    let hashes = body.len() - body.trim_start_matches('#').len();
+    (1..=6).contains(&hashes) && body[hashes..].starts_with([' ', '\t'])
+        || ((1..=6).contains(&hashes) && body.len() == hashes)
+}
+
 /// Returns `true` if `text` contains a run of *exactly* `n` consecutive
 /// backticks (a run bounded by non-backtick characters or the text edges).
 ///
@@ -132,6 +189,17 @@ pub fn strip_inline_code_stateful<'a>(
     if open.is_none() && !line.contains('`') {
         return Cow::Borrowed(line);
     }
+
+    // A code span is an inline construct: it cannot survive a block boundary
+    // (iter-207, BUG-1). If one is somehow still open when a new block starts,
+    // drop it rather than blanking the rest of the document.
+    if open.is_some() && is_block_boundary(line) {
+        *open = None;
+        return Cow::Borrowed(line);
+    }
+
+    // Only look ahead within the current block for a matching closing run.
+    let rest = block_lookahead(rest);
 
     let bytes = line.as_bytes();
     let len = bytes.len();
