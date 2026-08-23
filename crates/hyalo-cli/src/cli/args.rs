@@ -2075,6 +2075,10 @@ pub(crate) enum LinksAction {
             When config exclusions actually remove candidates, the report adds a \
             config_excluded count so a bare run stays explainable.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
+            OUTPUT: each proposed match carries file, line, col, matched_text and link_target. \
+            `line` and `col` are both 1-based, and `col` counts Unicode scalar values (characters), \
+            not bytes — the same convention as `lint`'s `column`, so a mention after an accented or \
+            CJK character reports the column an editor shows.\n\n\
             COMMON MISTAKES:\n\
             - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
             Use --exclude-target-glob for directories (e.g. 'templates/*'), --exclude-title for words.\n\

@@ -5148,3 +5148,68 @@ fn links_auto_match_col_is_one_based() {
     assert_eq!(m["col"], 5, "col must be 1-based too: {json}");
     assert_eq!(m["matched_text"], "Target Note");
 }
+
+/// iter-210: `col` counts Unicode scalars, not bytes, so it agrees with what an
+/// editor shows and with lint's `column`. It used to be a byte index, which
+/// drifted on any line containing a multibyte character.
+#[test]
+fn links_auto_match_col_counts_characters_not_bytes() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target Note\n---\nBody.\n",
+    );
+    // Line 4 is "Café — Target Note here." — "Target Note" starts at character
+    // index 7 (column 8) but byte offset 11 (é is 2 bytes, — is 3).
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nCafé — Target Note here.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "links auto failed: {output:?}");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let m = &json["results"]["matches"][0];
+    assert_eq!(m["matched_text"], "Target Note", "{json}");
+    assert_eq!(
+        m["col"], 8,
+        "col must count characters (8), not bytes (12): {json}"
+    );
+}
+
+/// The character column must still point at the right byte when the fix is
+/// written: applying the auto-link on a multibyte line produces valid text.
+#[test]
+fn links_auto_apply_is_correct_on_multibyte_lines() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target Note\n---\nBody.\n",
+    );
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nCafé — Target Note here.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--apply", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "links auto --apply failed: {output:?}");
+    let body = std::fs::read_to_string(tmp.path().join("src.md")).unwrap();
+    assert!(
+        body.starts_with("---\ntitle: Src\n---\nCafé — [[")
+            && body.trim_end().ends_with("]] here."),
+        "the rewrite must land on the right bytes: {body:?}"
+    );
+}

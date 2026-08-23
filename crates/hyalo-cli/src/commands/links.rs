@@ -850,6 +850,7 @@ mod tests {
         AutoLinkMatch {
             file: "guide.md".to_owned(),
             line: 1,
+            byte_col: 0,
             col: 0,
             matched_text: matched_text.to_owned(),
             link_target: matched_text.to_ascii_lowercase(),
