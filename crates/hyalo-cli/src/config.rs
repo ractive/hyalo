@@ -1324,6 +1324,99 @@ mod tests {
         assert_eq!(salvage_dir("nope = 1\n"), None);
     }
 
+    // -----------------------------------------------------------------------
+    // iter-213 — ancestor discovery and the index-mismatch summary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ancestor_discovery_adopts_a_config_whose_vault_contains_cwd() {
+        let project = make_project(); // dir = "kb"
+        let vault = project.path().join("kb");
+        fs::create_dir_all(&vault).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&vault),
+            Some(dunce::canonicalize(project.path()).unwrap()),
+            "a config whose vault is CWD governs the run"
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_reaches_a_deeper_subdirectory() {
+        let project = make_project();
+        let nested = project.path().join("kb/iterations");
+        fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&nested),
+            Some(dunce::canonicalize(project.path()).unwrap())
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_skips_a_config_whose_vault_excludes_cwd() {
+        let project = make_project();
+        let sibling = project.path().join("elsewhere");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::create_dir_all(project.path().join("kb")).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&sibling),
+            None,
+            "a config pointing at another tree does not govern this one"
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_stops_at_the_nearest_config() {
+        // outer/.hyalo.toml (dir = ".") would contain everything, but the
+        // nearer inner/.hyalo.toml points elsewhere — nearest wins, so nothing
+        // is adopted rather than the walk continuing to the outer file.
+        let outer = make_temp();
+        fs::write(outer.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        let inner = outer.path().join("inner");
+        fs::create_dir_all(inner.join("vault")).unwrap();
+        fs::write(inner.join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+        let cwd = inner.join("other");
+        fs::create_dir_all(&cwd).unwrap();
+        assert_eq!(discover_ancestor_config(&cwd), None);
+    }
+
+    #[test]
+    fn ancestor_discovery_adopts_an_unparseable_config_so_it_is_surfaced() {
+        // No usable `dir`, so the config directory itself is the vault — which
+        // contains CWD, so the file is adopted and its diagnostic reported.
+        let project = make_temp();
+        fs::write(project.path().join(".hyalo.toml"), "not = = toml\n").unwrap();
+        let cwd = project.path().join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&cwd),
+            Some(dunce::canonicalize(project.path()).unwrap())
+        );
+    }
+
+    #[test]
+    fn index_mismatch_summary_names_only_the_differing_field() {
+        assert_eq!(
+            index_mismatch_summary("/v", "/v", Some("en-us"), None),
+            "site prefix: index 'en-us' vs run (none)",
+            "an identical vault path must not be printed twice"
+        );
+        assert_eq!(
+            index_mismatch_summary("/a", "/b", Some("p"), Some("p")),
+            "vault: index '/a' vs run '/b'"
+        );
+        assert_eq!(
+            index_mismatch_summary("/a", "/b", None, Some("p")),
+            "vault: index '/a' vs run '/b'; site prefix: index (none) vs run 'p'"
+        );
+    }
+
+    #[test]
+    fn index_mismatch_summary_never_renders_a_rust_option() {
+        let summary = index_mismatch_summary("/v", "/v", Some("en-us"), None);
+        assert!(!summary.contains("Some("), "{summary}");
+        assert!(!summary.contains("None"), "{summary}");
+    }
+
     #[test]
     fn missing_config_returns_defaults() {
         let dir = make_temp();

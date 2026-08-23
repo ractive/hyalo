@@ -816,3 +816,140 @@ fn find_unknown_view_no_false_positive_suggestion() {
         "should NOT suggest 'drafts' for a completely different name, stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-213 BUG-14: `views run <name> <PATTERN>` == `find <PATTERN> --view <name>`
+// ---------------------------------------------------------------------------
+
+/// The help has always claimed the two spellings are the same query. Until
+/// iter-213 the positional was rejected outright, so the claim was false.
+#[test]
+fn views_run_positional_pattern_matches_find_view_with_pattern() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "draft-cache.md",
+        "---\ntitle: Draft Cache\nstatus: draft\n---\n\nCache eviction strategy.\n",
+    );
+    write_md(
+        tmp.path(),
+        "draft-other.md",
+        "---\ntitle: Draft Other\nstatus: draft\n---\n\nUnrelated prose.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+
+    let out_views = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "run",
+            "drafts",
+            "cache eviction",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out_views.status.success(),
+        "views run with a positional pattern must be accepted: {}",
+        String::from_utf8_lossy(&out_views.stderr)
+    );
+
+    let out_find = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "cache eviction",
+            "--view",
+            "drafts",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&out_views.stdout),
+        String::from_utf8_lossy(&out_find.stdout),
+        "the two spellings must produce byte-identical output"
+    );
+    let json: Value = serde_json::from_slice(&out_views.stdout).expect("valid JSON");
+    assert_eq!(json["total"], 1, "only the cache note matches: {json}");
+}
+
+/// The positional overrides a pattern stored in the view, matching how a
+/// `find <PATTERN> --view <name>` overlay behaves for every other scalar.
+#[test]
+fn views_run_positional_pattern_overrides_the_saved_one() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "alpha.md",
+        "---\ntitle: Alpha\n---\n\nCache eviction strategy.\n",
+    );
+    write_md(
+        tmp.path(),
+        "beta.md",
+        "---\ntitle: Beta\n---\n\nQuota accounting rules.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "saved", "cache eviction"])
+        .output()
+        .unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "views",
+            "run",
+            "saved",
+            "quota accounting",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .filter_map(|r| r["file"].as_str())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["beta.md"],
+        "the positional pattern must win over the saved one: {json}"
+    );
+}
+
+/// `-e` and the positional are mutually exclusive on `views run`, exactly as
+/// the flag's own help says and as `find` already enforces.
+#[test]
+fn views_run_rejects_pattern_together_with_regexp() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n\nBody.\n");
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "all", "--property", "title"])
+        .output()
+        .unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "all", "body", "-e", "body"])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "PATTERN and -e must conflict on views run"
+    );
+}

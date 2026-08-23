@@ -2640,3 +2640,96 @@ fn drop_index_missing_out_of_vault_path_still_refused() {
         "and keep the override hint: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-213 UX-3 — the mismatch warning names only what differs
+// ---------------------------------------------------------------------------
+
+/// The snapshot header and the run agree on the vault but not on the site
+/// prefix. The old message printed the identical vault path twice and rendered
+/// the prefixes with `{:?}`, so the reader saw `Some("en-us")` and had to diff
+/// two long paths to find the single field that actually differed.
+#[test]
+fn index_prefix_mismatch_names_only_the_prefix() {
+    let vault = setup_vault();
+    let index_path = vault.path().join(".hyalo-index");
+
+    let build = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["create-index", "--site-prefix", "en-us"])
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["find", "--limit", "1", "--site-prefix", ""])
+        .arg(format!("--index-file={}", index_path.display()))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("index does not match this run"),
+        "expected the reworded mismatch warning, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("site prefix: index 'en-us' vs run (none)"),
+        "expected the differing field spelled out, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Some(") && !stderr.contains("None)"),
+        "Rust Option formatting must not leak into user-facing text: {stderr}"
+    );
+    assert!(
+        !stderr.contains("vault: index"),
+        "an identical vault path must not be reported as a difference: {stderr}"
+    );
+    assert!(
+        stderr.contains("falling back to disk scan"),
+        "the consequence must still be stated: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-213 BUG-14 — the documented create-index examples run verbatim
+// ---------------------------------------------------------------------------
+
+/// `hyalo create-index -o /tmp/my-index` was a help EXAMPLE the boundary guard
+/// refuses. Whatever the examples say now must actually work.
+#[test]
+fn create_index_help_examples_run_verbatim() {
+    let vault = setup_vault();
+    let outside = TempDir::new().unwrap();
+    let outside_index = outside.path().join("my-index");
+
+    // Example 1: the default, no output path at all.
+    let default_run = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap(), "create-index"])
+        .output()
+        .unwrap();
+    assert!(
+        default_run.status.success(),
+        "bare create-index must succeed: {}",
+        String::from_utf8_lossy(&default_run.stderr)
+    );
+
+    // Example 2: an out-of-vault path *with* the escape hatch the help now shows.
+    let escaped = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["create-index", "-o"])
+        .arg(&outside_index)
+        .arg("--allow-outside-vault")
+        .output()
+        .unwrap();
+    assert!(
+        escaped.status.success(),
+        "the documented --allow-outside-vault example must succeed: {}",
+        String::from_utf8_lossy(&escaped.stderr)
+    );
+    assert!(outside_index.exists(), "the index must actually be written");
+}

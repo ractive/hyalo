@@ -2179,6 +2179,53 @@ mod tests {
         format_scalar(val, &mut JaqFilterCache::new())
     }
 
+    // -----------------------------------------------------------------------
+    // iter-213 UX-5 — a rule is never shown as both fixed and conflicted
+    // -----------------------------------------------------------------------
+
+    fn fix_output(fixed_rule: Option<&str>, conflict_rule: &str) -> String {
+        let fixed_groups = match fixed_rule {
+            Some(rule) => json!([{"rule": rule, "count": 1, "violations": []}]),
+            None => json!([]),
+        };
+        let value = json!({
+            "dry_run": false,
+            "files_checked": 1,
+            "total_fixed": 1,
+            "total_remaining": 0,
+            "total_conflicts": 1,
+            "files": [{
+                "file": "a.md",
+                "fixed_groups": fixed_groups,
+                "remaining_groups": [],
+                "conflicts": [{"rule": conflict_rule, "reason": "range overlap with MD009"}],
+            }],
+        });
+        format_lint_fix_output_text(value.as_object().expect("object"))
+    }
+
+    #[test]
+    fn fix_text_suppresses_a_conflict_for_a_rule_already_shown_as_fixed() {
+        let out = fix_output(Some("MD047"), "MD047");
+        assert!(
+            !out.contains("conflict  MD047"),
+            "a rule shown as fixed must not also be shown as conflicted: {out}"
+        );
+        assert!(
+            out.contains("MD047"),
+            "the fixed line itself must survive: {out}"
+        );
+    }
+
+    #[test]
+    fn fix_text_keeps_a_conflict_for_a_rule_that_was_not_fixed() {
+        let out = fix_output(Some("MD047"), "MD013");
+        assert!(
+            out.contains("conflict  MD013"),
+            "an unrelated rule's conflict is the whole point of the line: {out}"
+        );
+    }
+
     // --- error formatting ---
 
     #[test]

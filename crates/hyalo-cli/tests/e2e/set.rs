@@ -1636,6 +1636,40 @@ fn set_single_named_unparseable_file_exits_1() {
         stderr.contains("bad.md"),
         "error must name the file: {stderr}"
     );
+    // iter-213 (UX-5): the diagnostic that explains the exit must not be
+    // prefixed `warning:` — that prefix promises the run continued.
+    assert!(
+        stderr.contains("error: bad.md:"),
+        "the fatal parse diagnostic must be labelled error: {stderr}"
+    );
+    assert!(
+        !stderr.contains("warning: skipping bad.md"),
+        "the warning-prefixed spelling must be gone: {stderr}"
+    );
+}
+
+/// A *batch* run genuinely continues past the bad file, so there the
+/// `warning: skipping …` spelling is still the honest one.
+#[test]
+fn batch_run_keeps_the_warning_prefix_for_a_skipped_file() {
+    let tmp = setup_unparseable_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "--glob", "*.md", "--property", "status=done"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "a batch run must not fail on one bad file: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: skipping bad.md"),
+        "a continued run still warns: {stderr}"
+    );
 }
 
 /// Same rule for `remove` and `append`.

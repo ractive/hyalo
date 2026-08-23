@@ -542,3 +542,94 @@ fn out_of_vault_symlink_warning_is_printed_once() {
         "the skip warning must be emitted once per run, got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-213 BUG-14 — config-level `[changelog] path` refusals join the family
+// ---------------------------------------------------------------------------
+
+/// A `[changelog] path` that climbs out of the config directory used to bail
+/// through `anyhow` at exit 2 with a bespoke one-line message, while the same
+/// refusal discovered at write time exited 1 with the two-path form. One class
+/// of refusal, one contract.
+#[test]
+fn changelog_config_path_escape_refuses_with_the_shared_two_path_form() {
+    let root = TempDir::new().unwrap();
+    let vault = root.path().join("docs");
+    fs::create_dir_all(&vault).unwrap();
+    fs::write(
+        root.path().join(".hyalo.toml"),
+        "dir = \"docs\"\n\n[changelog]\npath = \"../CHANGELOG.md\"\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(root.path())
+        .args([
+            "changelog",
+            "add",
+            "--category",
+            "Added",
+            "--message",
+            "escape",
+            "--apply",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a config-level boundary refusal is a user error, not an internal one"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("resolves outside vault boundary"),
+        "expected the shared refusal wording: {combined}"
+    );
+    assert!(
+        combined.contains("../CHANGELOG.md"),
+        "the path the user wrote must be echoed back: {combined}"
+    );
+    assert!(
+        !root.path().parent().unwrap().join("CHANGELOG.md").exists(),
+        "nothing may be written outside the config directory"
+    );
+}
+
+/// An absolute `[changelog] path` is the other half of the same guard.
+#[test]
+fn changelog_config_path_absolute_refuses_at_exit_one() {
+    let root = TempDir::new().unwrap();
+    let vault = root.path().join("docs");
+    fs::create_dir_all(&vault).unwrap();
+    fs::write(
+        root.path().join(".hyalo.toml"),
+        "dir = \"docs\"\n\n[changelog]\npath = \"/tmp/hyalo-iter213-absolute.md\"\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(root.path())
+        .args(["changelog", "release", "1.0.0", "--apply"])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(1), "absolute config path → exit 1");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("resolves outside vault boundary"),
+        "expected the shared refusal wording: {combined}"
+    );
+    assert!(
+        !std::path::Path::new("/tmp/hyalo-iter213-absolute.md").exists(),
+        "nothing may be written to the absolute path"
+    );
+}
