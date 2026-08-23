@@ -581,7 +581,7 @@ fn strip_closing_delimiter(s: &str) -> Option<&str> {
 
 /// Warn that a frontmatter write could not be limited to the changed keys.
 ///
-/// iter-214 DEC-060: a full-block rewrite is allowed as a fallback, but never
+/// iter-214 DEC-081: a full-block rewrite is allowed as a fallback, but never
 /// silently — the user must be able to tell reformatting churn from a bug.
 fn warn_full_frontmatter_rewrite(path: &Path, reason: FallbackReason) {
     crate::warn::warn(format!(

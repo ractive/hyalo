@@ -9,6 +9,25 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Frontmatter writes now touch only the keys they change** (iter-214,
+  dogfood BUG-14). `set`, `remove`, `append`, `tags rename`,
+  `properties rename`, `types apply` and `lint --fix` parsed the whole YAML
+  block and re-serialized all of it, so a one-key change rewrote every line
+  the serializer happened to format differently — 116 of 198 frontmatter lines
+  on a real GitHub Docs `index.md` for a single added property, with long list
+  items refolded into `>-` block scalars and `'` quote style flipped to `"`.
+  Nothing was ever lost (the round trip was semantically exact), but the churn
+  made hyalo unusable in repos where frontmatter is under code review. Writes
+  now re-emit the original bytes of every unchanged key — preserving quote
+  style, block scalars, flow collections, indentation, blank lines and
+  comments — and serialize only what actually changed. Adding one property
+  changes one line. Where a block cannot be mapped to per-key line spans
+  (explicit `? key` syntax, top-level flow collections, invalid UTF-8, mixed
+  line endings) the whole block is still rewritten, but never silently: a
+  `warning:` on stderr names the file and the reason. See DEC-080/DEC-081.
+
 ### Added
 
 - **`hyalo config --raw`, and a machine-readable malformed-config signal**

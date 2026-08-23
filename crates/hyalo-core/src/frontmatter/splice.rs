@@ -37,7 +37,7 @@ use super::parse::{hyalo_options, is_closing_delimiter};
 /// Why a minimal-diff write could not be performed.
 ///
 /// Surfaced to the user as a warning so that unexpected full-block churn is
-/// always explained rather than silent (iter-214 DEC-060).
+/// always explained rather than silent (iter-214 DEC-081).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FallbackReason {
     /// The original frontmatter bytes are not valid UTF-8.
