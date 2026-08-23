@@ -116,15 +116,6 @@ pub fn resolve_file_user_ci(
     discovery::resolve_file_ci(dir, path_arg, case_insensitive)
 }
 
-/// Known noisy suffixes that upstream YAML parser errors (`serde-saphyr`)
-/// append to otherwise-useful messages — internal-API advice ("set
-/// `DuplicateKeyPolicy` in `Options`...") that means nothing to a user
-/// looking at a `HYALO005` lint violation or an OKF generator skip
-/// warning. Stripped by [`terse_root_cause`] before the message reaches the
-/// user; the line/column info and the actual cause (e.g. "duplicate mapping
-/// key: type") are left intact.
-const NOISY_ERROR_SUFFIXES: &[&str] = &[", set DuplicateKeyPolicy in Options if acceptable"];
-
 /// Redundant leading prefixes on the deepest error message. Every caller of
 /// [`terse_root_cause`] already frames the message as a frontmatter parse
 /// failure (`HYALO005` prepends "could not parse frontmatter: ", the OKF
@@ -133,9 +124,16 @@ const NOISY_ERROR_SUFFIXES: &[&str] = &[", set DuplicateKeyPolicy in Options if 
 /// HYALO005 double-prefix). Stripped so the user sees a single prefix.
 const REDUNDANT_ERROR_PREFIXES: &[&str] = &["failed to parse YAML frontmatter: "];
 
-/// Deepest error message in an `anyhow` chain, condensed to its first line and
-/// stripped of known-noisy upstream advisory suffixes (see
-/// [`NOISY_ERROR_SUFFIXES`]).
+/// Deepest error message in an `anyhow` chain, condensed to its first line
+/// and stripped of the redundant leading prefix every caller here already
+/// supplies its own version of (see [`REDUNDANT_ERROR_PREFIXES`]).
+///
+/// Upstream `serde-saphyr` messages that used to carry noisy internal-API
+/// advice (`", set DuplicateKeyPolicy in Options if acceptable"`) are
+/// already rewritten to plain text before they ever reach this function —
+/// `hyalo_core::frontmatter::friendly_parse_error` intercepts those at the
+/// point the `FrontmatterError` is constructed — so there is nothing left
+/// for this function itself to strip beyond the redundant prefix.
 ///
 /// The YAML parser attaches a multi-line source snippet to its error; for a
 /// one-line lint message or generator skip warning we keep only the leading
@@ -149,19 +147,9 @@ const REDUNDANT_ERROR_PREFIXES: &[&str] = &["failed to parse YAML frontmatter: "
 pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
     let root = err.root_cause().to_string();
     let first_line = root.lines().next().unwrap_or(&root).trim();
-    // Strip to a fixed point so one suffix's removal can expose another
-    // (matters once NOISY_ERROR_SUFFIXES grows past a single entry).
     let mut msg = first_line;
     loop {
         let mut stripped_any = false;
-        for suffix in NOISY_ERROR_SUFFIXES {
-            if let Some(stripped) = msg.strip_suffix(suffix) {
-                msg = stripped;
-                stripped_any = true;
-            }
-        }
-        // Drop a redundant leading "failed to parse YAML frontmatter: " so the
-        // caller's own prefix is not doubled (HYALO005 double-prefix).
         for prefix in REDUNDANT_ERROR_PREFIXES {
             if let Some(stripped) = msg.strip_prefix(prefix) {
                 msg = stripped;
@@ -543,6 +531,47 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
     Some(CommandOutcome::UserError(out))
 }
 
+/// Reject a dotted `--property a.b=x` when a top-level key `a` already
+/// exists as a mapping in `props` (iter-219 NEW-16b).
+///
+/// hyalo does not support dotted path syntax for nested properties — `set
+/// --property a.b=x` always creates (or overwrites) a literal top-level key
+/// named `"a.b"`, never a nested field under `a`. That is silently
+/// confusing exactly when `a` already exists as a mapping (e.g. GitHub
+/// Docs-shaped `versions: { fpt: '*', ghec: '*' }` plus `--property
+/// versions.fpt=X`), since the new literal key sits right next to the map
+/// it looks like it should have nested into. Only that specific collision is
+/// rejected; a dotted key with no colliding map is unchanged (still a
+/// literal flat key) — nested-path support itself is out of scope.
+#[must_use]
+pub fn reject_dotted_property_collision(
+    name: &str,
+    props: &indexmap::IndexMap<String, serde_json::Value>,
+    rel_path: &str,
+    format: Format,
+) -> Option<CommandOutcome> {
+    let (prefix, _) = name.split_once('.')?;
+    if !matches!(props.get(prefix), Some(serde_json::Value::Object(_))) {
+        return None;
+    }
+    let out = crate::output::format_error(
+        format,
+        &format!(
+            "{rel_path}: invalid property name '{name}': '{prefix}' already exists as a \
+             mapping in this file's frontmatter"
+        ),
+        None,
+        Some(&format!(
+            "hyalo does not support dotted path syntax for nested properties — --property \
+             sets a literal top-level key only, which would sit beside '{prefix}' rather than \
+             nesting into it; edit the file directly to change a value inside '{prefix}', or \
+             choose a key name that does not collide with it"
+        )),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 /// If exactly one file was specified and there is exactly one result, unwrap to a bare
 /// JSON object. Otherwise return the full array.
 #[must_use]
@@ -674,8 +703,11 @@ mod tests {
     /// A real duplicate-mapping-key YAML error, produced through the same
     /// frontmatter-parsing entry point `HYALO005` and the OKF/MADR skip
     /// warnings use, must not leak the upstream `serde-saphyr` internal-API
-    /// advice ("set DuplicateKeyPolicy in Options if acceptable") — but must
-    /// keep the actual cause and its line/column location.
+    /// advice ("set DuplicateKeyPolicy in Options if acceptable") through
+    /// `terse_root_cause`'s output — regardless of whether the stripping
+    /// happens here or (as of iter-219) upstream in
+    /// `hyalo_core::frontmatter::friendly_parse_error` — and must keep the
+    /// actual cause and its line/column location.
     #[test]
     fn terse_root_cause_strips_duplicate_key_policy_advice() {
         let tmp = tempfile::tempdir().unwrap();
@@ -694,11 +726,11 @@ mod tests {
             "must not leak the internal-API advice suffix: {msg:?}"
         );
         assert!(
-            msg.contains("duplicate mapping key"),
+            msg.contains("duplicate key") && msg.contains("'title'"),
             "must keep the actual cause: {msg:?}"
         );
         assert!(
-            msg.contains("line 2 column 1"),
+            msg.contains("line 2, column 1"),
             "must keep line/column info: {msg:?}"
         );
     }

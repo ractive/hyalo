@@ -200,6 +200,28 @@ pub fn append(
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); parsed_args.len()];
 
+    // --- Dotted-key collision pre-pass (iter-219 M5): reject the whole batch
+    //     before any file is modified, not mid-loop (a mid-loop `return` left
+    //     earlier files in the batch already written, and skipped the
+    //     end-of-loop `save_index_if_dirty` entirely).
+    for (full_path, rel_path) in &files {
+        let props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            Err(e) if frontmatter::is_parse_error(&e) => continue,
+            Err(e) => return Err(e),
+        };
+        if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
+            continue;
+        }
+        for (name, _, _) in &parsed_args {
+            if let Some(outcome) =
+                super::reject_dotted_property_collision(name, &props, rel_path, format)
+            {
+                return Ok(outcome);
+            }
+        }
+    }
+
     // --- Pre-validation pass (BUG-D): validate all proposed writes before any file
     //     is modified. Unlike `set`, `append` validates the *merged post-append*
     //     value so that list constraints (e.g. `type = "list"`) see the resulting
@@ -285,6 +307,9 @@ pub fn append(
 
         let mut file_changed = false;
 
+        // The dotted-key collision guard already ran as a whole-batch
+        // pre-pass above, so no per-file check (and no mid-loop `return`)
+        // is needed here.
         for (i, (name, raw_value, new_val)) in parsed_args.iter().enumerate() {
             match append_value_in_memory(&mut props, name, raw_value, new_val) {
                 Ok(true) => {
@@ -1075,5 +1100,48 @@ author: alice
             matches!(outcome, CommandOutcome::UserError(_)),
             "append that violates merged-value constraint should fail under --validate"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dotted-key collision guard (iter-219 NEW-16b)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn append_rejects_dotted_property_colliding_with_existing_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+versions:
+  fpt: '*'
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = append(
+            tmp.path(),
+            &["versions.fpt=X".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(msg.contains("versions"), "msg: {msg}");
+            }
+            other => panic!("expected UserError, got: {other:?}"),
+        }
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("versions.fpt"), "content:\n{content}");
     }
 }

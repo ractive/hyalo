@@ -223,7 +223,11 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
             Some(ref y) if !y.trim().is_empty() => {
                 serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
                     anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
-                        "failed to parse YAML frontmatter: {e}"
+                        "failed to parse YAML frontmatter: {}",
+                        crate::frontmatter::friendly_parse_error(
+                            &e,
+                            crate::frontmatter::MAX_FRONTMATTER_BYTES
+                        )
                     )))
                 })?
             }
@@ -411,7 +415,11 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             Some(ref y) if !y.trim().is_empty() => {
                 serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
                     anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
-                        "failed to parse YAML frontmatter: {e}"
+                        "failed to parse YAML frontmatter: {}",
+                        crate::frontmatter::friendly_parse_error(
+                            &e,
+                            crate::frontmatter::MAX_FRONTMATTER_BYTES
+                        )
                     )))
                 })?
             }

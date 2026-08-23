@@ -2,7 +2,7 @@
 title: "Iteration 219 — list splice, mixed-EOL honesty, and frontmatter budget truth"
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-219/list-splice-and-write-polish
 tags: [iteration, frontmatter, write-path]
 related:
@@ -54,43 +54,43 @@ From [[dogfood-results/dogfood-v0210-pre3-fix-waves-207-214]]:
 
 ## Tasks
 
-- [ ] Splice within lists: `append` inserts one item's line span into a
+- [x] Splice within lists: `append` inserts one item's line span into a
       block list without re-emitting siblings; `remove <key>=<value>`
       deletes only the matching item's span. Preserve flow style on flow
       lists (append inside the brackets) unless the new item cannot be
       represented inline, in which case fall back with the DEC-081
       warning
-- [ ] Mixed line endings: either preserve per-line endings through the
+- [x] Mixed line endings: either preserve per-line endings through the
       splice, or actually fire the documented fallback warning — no
       silent churn. Decide and record which in the decision log
-- [ ] Raise the scalar-content budget to match the documented 64 KiB (or
+- [x] Raise the scalar-content budget to match the documented 64 KiB (or
       an explicitly chosen limit), and wrap all budget/duplicate-key/
       anchor parser errors in actionable hyalo-voice messages that name
       the file and the limit — no leaked `ScalarBytes {…}` /
       `DuplicateKeyPolicy` internals
-- [ ] Files ending exactly at `---` with no trailing newline stay
+- [x] Files ending exactly at `---` with no trailing newline stay
       byte-identical outside the intended change
-- [ ] Reject a dotted `--property a.b=x` with an error when a top-level
+- [x] Reject a dotted `--property a.b=x` with an error when a top-level
       map `a` exists (pointing at the collision); document that path
       syntax is unsupported
-- [ ] Advisory note when type inference changes a value's YAML type
+- [x] Advisory note when type inference changes a value's YAML type
       (string → number/bool), reusing the existing enum/date advisory
       mechanism
-- [ ] Correct DEC-081's fallback-trigger list to the real set (`? key`
+- [x] Correct DEC-081's fallback-trigger list to the real set (`? key`
       syntax, top-level flow mappings, invalid UTF-8, and whatever
       mixed-EOL decision is made); sync `set`/`remove`/`append` help
-- [ ] e2e: GH Docs-style corpus asserting one-line diffs for
+- [x] e2e: GH Docs-style corpus asserting one-line diffs for
       append/remove on block and flow lists; mixed-EOL file; 60 KiB
       frontmatter parse; no-trailing-newline file; dotted-key rejection
 
 ## Acceptance criteria
 
-- [ ] `append`/`remove <key>=<value>` on the 406-file GH Docs corpus:
+- [x] `append`/`remove <key>=<value>` on the 406-file GH Docs corpus:
       0 files change more than the intended line span (was 361)
-- [ ] Mixed-EOL file: untouched lines keep their endings, or a fallback
+- [x] Mixed-EOL file: untouched lines keep their endings, or a fallback
       warning names mixed line endings — never silent churn
-- [ ] `admin/index.md` + 40 appended redirect entries parses and splices
-- [ ] No parser-internal type names appear in any user-facing error
+- [x] `admin/index.md` + 40 appended redirect entries parses and splices
+- [x] No parser-internal type names appear in any user-facing error
 
 ## Non-goals
 

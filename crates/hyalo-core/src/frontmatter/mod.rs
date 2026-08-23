@@ -10,7 +10,7 @@ pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
     read_frontmatter, skip_frontmatter, write_frontmatter, write_frontmatter_within,
 };
-pub(crate) use parse::{is_closing_delimiter, is_opening_delimiter};
+pub(crate) use parse::{friendly_parse_error, is_closing_delimiter, is_opening_delimiter};
 pub use types::{infer_type, parse_value};
 
 /// Maximum number of content lines in a YAML frontmatter block.
@@ -100,7 +100,7 @@ pub fn as_budget_error(err: &anyhow::Error) -> Option<&FrontmatterBudgetError> {
 mod tests {
     use super::*;
     use parse::{
-        Document, LineEnding, detect_list_indent_style, opening_delimiter,
+        Document, LineEnding, detect_list_indent_style, friendly_parse_error, opening_delimiter,
         read_frontmatter_from_reader,
     };
     use serde_json::Value;
@@ -1265,5 +1265,175 @@ Body.
             .read_exact(&mut prefix)
             .unwrap();
         assert_eq!(prefix, original);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Mixed line endings (iter-219 NEW-7)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn write_frontmatter_mixed_line_endings_uses_announced_full_rewrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mixed.md");
+        // Opening delimiter (and most lines) use LF; `title`'s line uses CRLF.
+        // A byte-preserving splice would keep `title`'s deliberate quoting
+        // verbatim; the full-rewrite fallback this must now take does not.
+        std::fs::write(
+            &path,
+            "---\ntitle: 'Keep me'\r\nstatus: draft\n---\nBody.\n",
+        )
+        .unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("extra".to_owned(), Value::String("new".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !content.contains("'Keep me'"),
+            "expected the full-rewrite fallback (quote style not preserved), got:\n{content}"
+        );
+        assert!(content.contains("extra: new"), "content:\n{content}");
+        assert!(content.contains("Keep me"), "content:\n{content}");
+    }
+
+    #[test]
+    fn write_frontmatter_pure_crlf_still_splices_minimally() {
+        // A file that is *consistently* CRLF throughout must still take the
+        // fast, minimal-diff splice path — only genuinely mixed endings
+        // should force the full-rewrite fallback.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pure_crlf.md");
+        std::fs::write(
+            &path,
+            "---\r\ntitle: 'Keep me'\r\nstatus: draft\r\n---\r\nBody.\r\n",
+        )
+        .unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("extra".to_owned(), Value::String("new".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("'Keep me'"),
+            "consistent CRLF must still splice (quote style preserved), got:\n{content}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // No trailing newline on a body-less closing delimiter (iter-219 NEW-16a)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn write_frontmatter_no_trailing_newline_stays_byte_identical_outside_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("no_trailing.md");
+        // The file's last three bytes are literally `---` — no body, no
+        // trailing newline anywhere after the closing delimiter.
+        std::fs::write(&path, "---\ntitle: Note\n---").unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("status".to_owned(), Value::String("draft".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "---\ntitle: Note\nstatus: draft\n---");
+        assert!(
+            !content.ends_with('\n'),
+            "must not gain a trailing newline it never had: {content:?}"
+        );
+    }
+
+    #[test]
+    fn write_frontmatter_no_trailing_newline_with_body_keeps_separator() {
+        // Sanity check on the guard's other branch: when there *is* a body,
+        // the separator newline after the closing `---` is still required
+        // regardless of what the (nonexistent, in this case) prior close
+        // looked like.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("with_body.md");
+        std::fs::write(&path, "---\ntitle: Note\n---\nBody.\n").unwrap();
+
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("status".to_owned(), Value::String("draft".into()));
+        write_frontmatter(&path, &props).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "---\ntitle: Note\nstatus: draft\n---\nBody.\n");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Friendly parser errors (iter-219 NEW-8)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn friendly_parse_error_hides_budget_breach_internals() {
+        use indexmap::IndexMap;
+
+        // A scalar value beyond the (raised) budget still needs to produce
+        // a clean message — no `ScalarBytes { total_scalar_bytes: .. }`.
+        let huge = "a".repeat(hyalo_options().budget.unwrap().max_total_scalar_bytes + 1);
+        let yaml = format!("x: {huge}\n");
+        let err =
+            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options())
+                .unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
+        assert!(!msg.contains("ScalarBytes"), "leaked internals: {msg}");
+        assert!(!msg.contains('{'), "leaked Debug-struct syntax: {msg}");
+        assert!(msg.contains("too large"), "message: {msg}");
+    }
+
+    #[test]
+    fn friendly_parse_error_hides_duplicate_key_policy_internals() {
+        use indexmap::IndexMap;
+
+        let yaml = "x: 1\nx: 2\n";
+        let err =
+            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, hyalo_options())
+                .unwrap_err();
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
+        assert!(
+            !msg.contains("DuplicateKeyPolicy"),
+            "leaked internal type name: {msg}"
+        );
+        assert!(msg.contains("duplicate key"), "message: {msg}");
+    }
+
+    #[test]
+    fn scalar_budget_matches_documented_frontmatter_limit() {
+        // NEW-8: the parser's scalar-content budget must not be tighter than
+        // the documented 64 KiB frontmatter limit.
+        assert_eq!(
+            hyalo_options().budget.unwrap().max_total_scalar_bytes,
+            MAX_FRONTMATTER_BYTES
+        );
+    }
+
+    #[test]
+    fn frontmatter_close_to_64kib_parses_without_leaked_errors() {
+        use indexmap::IndexMap;
+
+        // GitHub Docs-shaped repro: a large redirect_from list well under the
+        // documented 64 KiB ceiling must actually parse (it used to trip the
+        // undocumented 8 KiB scalar budget at a fraction of that size).
+        let mut yaml = String::from("redirect_from:\n");
+        // ~60 entries * ~100 bytes ≈ 6 KiB well within budget; pad one long
+        // entry to push total scalar bytes close to, but under, 64 KiB.
+        for i in 0..40 {
+            writeln!(yaml, "  - /path/to/redirect/entry-{i}").unwrap();
+        }
+        let padding = "a".repeat(60 * 1024);
+        writeln!(yaml, "notes: {padding}").unwrap();
+
+        let result =
+            serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options());
+        assert!(
+            result.is_ok(),
+            "~60 KiB frontmatter must parse under the documented 64 KiB budget: {:?}",
+            result
+                .err()
+                .map(|e| friendly_parse_error(&e, MAX_FRONTMATTER_BYTES))
+        );
     }
 }

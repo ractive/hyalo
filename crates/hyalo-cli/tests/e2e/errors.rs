@@ -743,7 +743,16 @@ Body
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let json: serde_json::Value = serde_json::from_str(&stderr)
+    // stderr may also carry a `warning: ... rewriting the entire frontmatter
+    // block ...` line ahead of the JSON error — appending a value this huge
+    // to `aliases: []` can legitimately hit the flow-list-not-modellable
+    // fallback (iter-219 M1) before the budget check even runs. Parse from
+    // the first `{` so an unrelated leading warning line doesn't break this
+    // test's ability to find the JSON error it actually cares about.
+    let json_start = stderr
+        .find('{')
+        .unwrap_or_else(|| panic!("expected JSON error on stderr, got: {stderr}"));
+    let json: serde_json::Value = serde_json::from_str(&stderr[json_start..])
         .unwrap_or_else(|e| panic!("expected JSON error on stderr, got: {stderr}\nerr: {e}"));
     assert_eq!(json["error"], "frontmatter would exceed size budget");
 }
