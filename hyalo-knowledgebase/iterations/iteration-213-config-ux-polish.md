@@ -57,55 +57,55 @@ and BUG-14:
 
 ## Tasks
 
-- [ ] UX-1: when no cwd config exists, walk ancestors for `.hyalo.toml`
+- [x] UX-1: when no cwd config exists, walk ancestors for `.hyalo.toml`
       whose configured vault contains cwd; either adopt it (preferred —
       record as a DEC, note the behavior change) or emit a loud
       stderr warning naming the found config and the `--dir`/`cd`
       remedies. Either way, the silent case must be impossible.
-- [ ] UX-2: add `malformed: true` + the parse error to `hyalo config`
+- [x] UX-2: add `malformed: true` + the parse error to `hyalo config`
       output (text and JSON) when the config failed to parse; move
       `raw_contents` behind `--raw` (or similar opt-in).
-- [ ] BUG-14: route `[changelog] path` config-level refusals through the
+- [x] BUG-14: route `[changelog] path` config-level refusals through the
       shared boundary-refusal formatter (exit 1, two-path wording).
-- [ ] BUG-14: give `views run` a positional PATTERN with the same
+- [x] BUG-14: give `views run` a positional PATTERN with the same
       semantics as `find` (BM25, mutually exclusive with `-e`), making
       the help claim true; fix the `-e` help text.
-- [ ] BUG-14: make `config_excluded` count suppressed candidates, or
+- [x] BUG-14: make `config_excluded` count suppressed candidates, or
       rename to `config_excluded_titles` and add the candidate count —
       the stated purpose ("a bare run stays explainable") must hold.
-- [ ] BUG-14: fix the `create-index` help EXAMPLE (add
+- [x] BUG-14: fix the `create-index` help EXAMPLE (add
       `--allow-outside-vault` or use an in-vault path) and reword the
       `--index-file` help to state the boundary rule; document the
       read-only-corpus indexing workflow in the command help.
-- [ ] UX-3: reword the index-mismatch warning to state only the
+- [x] UX-3: reword the index-mismatch warning to state only the
       differing field, without `Some(…)` leakage.
-- [ ] UX-5 batch: `error:` prefix on fatal single-file parse failures;
+- [x] UX-5 batch: `error:` prefix on fatal single-file parse failures;
       suppress the duplicate fixed/conflict display line; add the
       truncation footer to `tags --limit`; suppress the stale
       malformed-config warning once `--dir` has switched vaults; unify
       hint flag placement.
-- [ ] (from superseded iter-207a) Update `md047_fix`'s doc comment in
+- [x] (from superseded iter-207a) Update `md047_fix`'s doc comment in
       `crates/hyalo-mdlint/src/engine.rs` (and
       [[docs/upstream-mdbook-lint-reports]] if any "not filed" language
       remains) to cross-reference the filed upstream issue
       joshrotenberg/mdbook-lint#495.
-- [ ] Docs/help/CHANGELOG sync for every behavior change above; extend
+- [x] Docs/help/CHANGELOG sync for every behavior change above; extend
       the executed-hint and command-reference xtask gates where they
       apply.
 
 ## Acceptance criteria
 
-- [ ] Running any command from a vault subdirectory either uses the
+- [x] Running any command from a vault subdirectory either uses the
       ancestor config or prints a warning naming it — never silent
       defaults
-- [ ] A JSON consumer can detect a malformed config from `hyalo config`
+- [x] A JSON consumer can detect a malformed config from `hyalo config`
       output alone
-- [ ] All boundary refusals (runtime and config-level) use exit 1 and
+- [x] All boundary refusals (runtime and config-level) use exit 1 and
       the two-path form
-- [ ] `hyalo views run <view> <pattern>` returns the same results as
+- [x] `hyalo views run <view> <pattern>` returns the same results as
       `hyalo find <pattern> --view <view>`
-- [ ] The `create-index` help example runs verbatim successfully
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] The `create-index` help example runs verbatim successfully
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

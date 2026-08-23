@@ -132,7 +132,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo okf log <TEXT> [--apply]                         Prepend a dated entry to a scope-selectable log.md
 
   Config (print the effective configuration, read-only):
-    hyalo config [-d/--dir DIR]
+    hyalo config [--raw] [-d/--dir DIR]                    # --raw also prints the .hyalo.toml text
 
   Init (configuration, one-time setup):
     hyalo init [--claude] [--pi] [--profile <PROFILE>] [-d/--dir DIR]
