@@ -2,7 +2,7 @@
 title: "Iteration 220 — pre3 dogfood small batch (config, hints, buckets, gates)"
 type: iteration
 date: 2026-08-23
-status: planned
+status: in-progress
 branch: iter-220/dogfood-small-batch
 tags: [iteration, ux, cli, config, links, lint]
 related:
@@ -81,6 +81,16 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [ ] NEW-16: heading task-counts render once — when a hand-written
       `[n/m]` disagrees with the computed count, show the computed one
       (optionally: new lint rule flagging the stale hand-written count)
+- [ ] CHG-1 (found during iter-217): `hyalo changelog add --category
+      Fixed --message "<multi-line>"` mis-places the entry when
+      `[Unreleased]` has no existing subsection of that category — it
+      lands the entry under an already-released section's matching
+      heading instead of creating the subsection under `[Unreleased]`,
+      and continuation lines are un-indented. Repro on this repo's own
+      CHANGELOG.md (no `### Fixed` under `[Unreleased]`):
+      `hyalo changelog add --category Fixed --message "$(printf 'l1\nl2')"
+      --dry-run`. Create the missing subsection under `[Unreleased]` and
+      indent continuation lines
 - [ ] Docs sync in same PR: helps touched above, CHANGELOG
 
 ## Acceptance criteria
@@ -94,6 +104,9 @@ excluded: broken-links line numbers + Liquid heading slugs
       `--glob` warns
 - [ ] `views run` hint parity with `find --view` (iter-213 AC completed)
 - [ ] No command prints a self-contradictory config note
+- [ ] `changelog add` creates the `[Unreleased]` subsection when absent
+      instead of appending to a released section; continuation lines are
+      indented
 
 ## Non-goals
 
