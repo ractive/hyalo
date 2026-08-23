@@ -1865,16 +1865,28 @@ pub(crate) enum ViewsAction {
     ///
     /// Example: `hyalo views run open-tasks`
     ///          `hyalo views run drafts --tag project`
+    ///          `hyalo views run drafts "search terms"`
     #[command(
         external_subcommand = false,
         long_about = "Run a saved view as if you called `hyalo find --view <NAME>`.\n\n\
             Extra find flags passed after the view name extend or override the saved filters.\n\n\
+            The optional second positional argument is a BM25 PATTERN with exactly the\n\
+            semantics `find` gives it — ranked full-text search, mutually exclusive with -e.\n\
+            It overrides a pattern saved in the view.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo views run drafts\n\
+            \u{00a0} hyalo views run drafts \"search terms\"\n\
+            \u{00a0} hyalo views run drafts --tag project\n\n\
             SIDE EFFECTS: None (read-only find)."
     )]
     Run {
         /// View name to run
         #[arg(value_name = "NAME")]
         name: String,
+        /// BM25 ranked full-text search pattern, same semantics as `find <PATTERN>`.
+        /// Overrides a pattern saved in the view. Mutually exclusive with -e/--regexp
+        #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
+        pattern: Option<String>,
         /// Additional find filters to merge on top of the view
         #[command(flatten)]
         filters: FindFilters,

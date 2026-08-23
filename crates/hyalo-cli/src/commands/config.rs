@@ -312,7 +312,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         Some(diagnostic) => format!(
             "malformed: true\n  {}\n  note: every value below is a built-in default, \
              not what the file asked for\n",
-            diagnostic.replace('\n', "\n  ")
+            diagnostic.trim_end().replace('\n', "\n  ")
         ),
         None => String::new(),
     };

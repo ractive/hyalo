@@ -2209,9 +2209,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
                 ViewsAction::Run {
                     name,
+                    pattern: cli_pattern,
                     mut filters,
                     index_flags: _, // consumed in run.rs before dispatch
                 } => {
+                    // A positional PATTERN is part of the *overlay*, so it
+                    // overrides the view's saved pattern exactly as a
+                    // `--tag` typed alongside `find --view` overrides
+                    // nothing and extends instead (iter-213, BUG-14): the
+                    // help promised `views run <view> <pattern>` was the
+                    // same query as `find <pattern> --view <view>`, and
+                    // until now the positional was rejected outright.
+                    filters.pattern = cli_pattern;
                     // Load the named view and merge the CLI overlay on top.
                     let views = crate::commands::views::load_views(ctx.config_dir);
                     match views.get(&name) {
@@ -2562,11 +2571,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let changelog_file = crate::commands::changelog::resolve_changelog_file(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                )?;
+                let changelog_file =
+                    match crate::commands::changelog::resolve_changelog_target(
+                        ctx.dir,
+                        ctx.config_dir,
+                        ctx.changelog_path,
+                        effective_format,
+                    ) {
+                        crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                        crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+                    };
                 let boundary_root = crate::commands::changelog::changelog_boundary_root(
                     ctx.dir,
                     ctx.config_dir,
@@ -2593,11 +2607,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let changelog_file = crate::commands::changelog::resolve_changelog_file(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                )?;
+                let changelog_file =
+                    match crate::commands::changelog::resolve_changelog_target(
+                        ctx.dir,
+                        ctx.config_dir,
+                        ctx.changelog_path,
+                        effective_format,
+                    ) {
+                        crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                        crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+                    };
                 let boundary_root = crate::commands::changelog::changelog_boundary_root(
                     ctx.dir,
                     ctx.config_dir,
