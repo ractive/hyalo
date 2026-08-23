@@ -490,7 +490,8 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         Err(e) => {
             let mut diagnostic = format!("malformed .hyalo.toml: {e}");
             if let Some(fix) = unknown_field_fix_path(&e.to_string()) {
-                diagnostic.push_str(&format!("\n  fix: {fix}"));
+                diagnostic.push_str("\n  fix: ");
+                diagnostic.push_str(fix);
             }
             crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));

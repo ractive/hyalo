@@ -1328,3 +1328,58 @@ classifier in `Hint::new` cannot be bypassed. Its risk — misclassification —
 is covered two ways: `mutation::tests` runs a command corpus through both the
 string classifier and the typed `Commands::writes()` and asserts they agree, and
 the e2e gate independently proves the read-only marker by executing the hints.
+
+## DEC-072: `links` text puts the fuzzy listing last, and caps every bucket at 20 (2026-08-23)
+
+**Decision:** The `links fix` text report is ordered: counts (now including a
+`Fuzzy matches` line), then the fixes that would be — or were — written, then
+the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous,
+templated), and *finally* the fuzzy proposals. Each bucket listing is capped at
+20 entries with an `… and N more (use --format json for the full list)` footer.
+JSON is never capped.
+
+**Why:** dogfood UX-3/UX-4 against GitHub Docs. Fuzzy is the largest listing by
+an order of magnitude — thousands of low-confidence guesses that plain `--apply`
+will not even write — and it sat directly above the buckets that actually need a
+human. The two lists have opposite value density: unfixable and out-of-vault are
+short and require judgement, fuzzy is long and is skimmed at most. Ordering by
+"how likely is the reader to act on this" puts the short lists where a terminal
+still shows them.
+
+**Why a cap rather than a `--verbose` split:** the counts are what make the
+report honest, and they are never capped. Capping only the *listings* keeps a
+single default output that both reconciles arithmetically and fits on a screen,
+without adding a flag whose absence produces a misleading report. A script that
+wants everything already has `--format json`, which this iteration also made
+worth using (per-fix detail is pinned by e2e).
+
+## DEC-073: `links auto` reports `col` in Unicode scalars, decided by release status (2026-08-23)
+
+**Decision:** `links auto` JSON `col` counts Unicode scalar values, 1-based —
+the same convention as `lint`'s `column`. The byte offset the rewriter needs is
+retained as a non-serialized `byte_col` field on `AutoLinkMatch`.
+
+**Why now rather than "document the bytes":** iteration 210's plan made this
+conditional on release status — switch if the iteration lands before v0.21.0 is
+cut, document byte semantics if after. The workspace was still at 0.20.0 with
+v0.21.0 on hold for this integrity wave, so the switch rides along with
+iter-204's already-documented breaking change instead of costing a second one.
+A byte column that is silently *called* a column is the kind of output-truth
+defect this whole iteration exists to remove; documenting it would have locked
+the wrong semantics in for a release cycle.
+
+## DEC-074: repeated `--index-file` hint paths are shortened, never elided (2026-08-23)
+
+**Decision:** A snapshot-index path in a hint renders in its
+working-directory-relative form when that is shorter than the absolute path, and
+absolute otherwise. The flag is *not* factored out of the repeated hints into a
+one-line preamble.
+
+**Why:** dogfood UX-5 asked for de-duplication of a path repeated four or five
+times in one hint block. Every derived `find` hint must carry `--index-file` or
+it silently rescans the vault and answers a different question, so eliding it
+from the repeats would produce hints that run but lie — the exact failure class
+iteration 210 is closing, and a direct violation of its own acceptance criterion
+that every emitted hint execute correctly verbatim. Shortening removes most of
+the bulk (an index almost always lives inside the project it indexes) while
+keeping each line independently copy-pasteable.

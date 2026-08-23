@@ -5353,7 +5353,8 @@ fn links_text_caps_long_bucket_listings() {
     let tmp = TempDir::new().unwrap();
     let mut body = String::from("---\ntitle: Src\n---\n");
     for i in 0..30 {
-        body.push_str(&format!("Line {i}: [[totally-absent-target-{i:03}-zzz]]\n"));
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "Line {i}: [[totally-absent-target-{i:03}-zzz]]");
     }
     write_md(tmp.path(), "src.md", &body);
 
@@ -5382,8 +5383,6 @@ fn links_text_caps_long_bucket_listings() {
 /// and `--apply` must report the same detail.
 #[test]
 fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
-    let tmp = setup_bucket_vault();
-
     fn assert_detail(arr: &serde_json::Value, label: &str, require_non_empty: bool) {
         let items = arr
             .as_array()
@@ -5410,6 +5409,8 @@ fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
             );
         }
     }
+
+    let tmp = setup_bucket_vault();
 
     let dry = links_fix_json(tmp.path(), &["--expand-short-form", "--dry-run"]);
     assert_detail(&dry["fixes"], "fixes", true);

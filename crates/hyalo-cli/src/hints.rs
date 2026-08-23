@@ -4277,7 +4277,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// iter-210 / UX-5: the snapshot path is the longest token a hint carries
     /// and it is repeated on every derived query. Inside the working directory
     /// it renders relative — shorter, and still runnable verbatim.

@@ -3243,10 +3243,11 @@ fn lint_json_files_truncated_tracks_list_truncation() {
     let tmp = setup_counter_vault(0, 60);
 
     let capped = lint_json(tmp.path(), &["--limit", "10"]);
-    let listed = capped["results"]["files"].as_array().map_or(0, Vec::len);
+    let listed = u64::try_from(capped["results"]["files"].as_array().map_or(0, Vec::len))
+        .expect("listed file count fits in u64");
     let with_violations = capped["results"]["files_with_violations"]
         .as_u64()
-        .unwrap_or_default() as usize;
+        .unwrap_or_default();
     assert_eq!(listed, 10, "display list is capped at 10: {capped}");
     assert_eq!(
         capped["results"]["files_truncated"],

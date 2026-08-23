@@ -517,6 +517,10 @@ pub(crate) enum Commands {
             POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
             Subsequent positional arguments are treated as FILE targets. \
             To filter by file without a body search, use --file instead of a positional argument.\n\
+            A FILE target that names nothing is a user error at exit 1 — the same `file not found` \
+            envelope `read` and `lint` emit, with the same `did you mean` / `--glob '<dir>/*'` \
+            hints — so a typo can never be mistaken for a query that legitimately matched nothing. \
+            A path already present in an `--index-file` snapshot is accepted without touching disk.\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo find 'error handling'\n\
@@ -1222,9 +1226,13 @@ Repeatable (AND).\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
-            `files_with_violations`, and `files_truncated`. The `errors`/`warnings` counters\n\
-            and the exit code always reflect the WHOLE vault, never just the displayed slice —\n\
-            a file cap can never mask an error.\n\
+            `files_with_violations`, and `files_truncated`. EVERY counter in that payload —\n\
+            `total`, `rules_fired`, `errors`, `warnings`, `files_with_violations`,\n\
+            `files_checked` — and the exit code describe the WHOLE vault, never just the\n\
+            displayed slice: a file cap can never mask an error, and `total` reconciles\n\
+            against `errors + warnings`. `files_truncated` is about the displayed `files[]`\n\
+            list — true only when there were more violating files than the cap, not merely\n\
+            when the vault is bigger than it.\n\
             LIMIT: --limit/-n N caps the displayed files[]; `--limit 0` means UNLIMITED (lift\n\
             the cap entirely, matching `--count --limit 0`) — it never empties the list.\n\n\
             SKIP VISIBILITY: with `--files-from`, dropped input paths (missing / non-markdown)\n\
@@ -1248,7 +1256,10 @@ Repeatable (AND).\n\
             FILTER FLAGS:\n\
             \u{00a0} --rule <ID>             restrict to a single rule\n\
             \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
-            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\n\
+            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\
+            --rule and --rule-prefix are both case-insensitive and both validated: an id or a\n\
+            prefix that selects no rule is a user error at exit 1, never a silent full-vault\n\
+            lint that reads as green. `hyalo lint-rules list` shows what exists.\n\n\
             CONFORMANCE PROFILES: --profile <NAME> overlays an embedded ruleset for this\n\
             invocation without touching `.hyalo.toml` — useful for CI or third-party bundles.\n\
             `--profile okf` encodes the Open Knowledge Format §9 conformance rules: it requires\n\

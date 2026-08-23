@@ -684,10 +684,10 @@ fn error_envelope(argv: &[&str], vault: &Path) -> serde_json::Value {
     );
     // User errors are written to stderr, possibly after a `note:` line.
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let json = stderr
-        .find('{')
-        .map(|i| &stderr[i..])
-        .unwrap_or_else(|| panic!("`hyalo {}` emitted no JSON: {stderr}", argv.join(" ")));
+    let Some(start) = stderr.find('{') else {
+        panic!("`hyalo {}` emitted no JSON: {stderr}", argv.join(" "));
+    };
+    let json = &stderr[start..];
     serde_json::from_str(json)
         .unwrap_or_else(|e| panic!("`hyalo {}` emitted no JSON ({e}): {stderr}", argv.join(" ")))
 }
