@@ -107,7 +107,13 @@ fn block_lookahead(rest: &str) -> &str {
 
 /// Whether `line` ends the paragraph a code span could have been opened in.
 /// See [`block_lookahead`] for the rationale and the list of boundaries.
-fn is_block_boundary(line: &str) -> bool {
+///
+/// `pub(crate)` (iter-217): reused by `auto_link`'s document-scoped
+/// link/HTML-tag zone scan to group body lines into the same paragraph-like
+/// units — a wikilink, markdown link, or raw HTML tag can wrap across a line
+/// break, but never across a blank line, heading, or fence, exactly like an
+/// inline code span cannot (iter-207, BUG-1).
+pub(crate) fn is_block_boundary(line: &str) -> bool {
     let trimmed = line.trim_end_matches(['\r']);
     if trimmed.trim().is_empty() {
         return true;

@@ -32,7 +32,15 @@ Prefer `hyalo` CLI for operations on files in this directory:
   or unusually frequent (>= 25 matches and >= 2.5% of the run, which also catches non-English
   titles) — a stderr `note:` names it with its match count and share, and suggests
   `--exclude-title` for every offender; act on it or silence it with
-  `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`
+  `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`.
+  Inert everywhere, including across a wrapped line: frontmatter, code/HTML-comment spans,
+  existing `[[wikilinks]]`/`[markdown](links)`, ANY well-formed `[...]` bracket span (not just
+  real links — covers CommonMark reference links, and also undefined bracketed mentions like
+  style-guide placeholders or PR area tags, since inserting `[[target]]` touching or inside an
+  unrelated bracket produces nested bracket soup hyalo's own resolver misreads), bare URLs,
+  Liquid/Jinja expressions, and raw HTML tags. When the matched text differs from
+  the emitted target — including only by case — `--apply` writes `[[target|matched text]]`
+  instead of silently rewriting the prose to the bare target.
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
 - **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton with `TBD` placeholders; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild)

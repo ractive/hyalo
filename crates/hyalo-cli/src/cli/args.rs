@@ -2164,7 +2164,26 @@ pub(crate) enum LinksAction {
             destination is internal or external — bare URLs and <autolinks> in prose, headings,\n\
             comment fences (%%), Liquid/Jinja expressions ({% ... %} and {{ ... }}),\n\
             raw HTML tags including attribute values (<img src=\"...\">, <a name=\"...\">, HTML\n\
-            comments) — text BETWEEN tags stays linkable — and self-links.\n\n\
+            comments) — text BETWEEN tags stays linkable — and ANY well-formed `[...]` bracket\n\
+            span, not only real links. This covers CommonMark reference links (`[label][ref]`,\n\
+            collapsed `[ref][]`, shortcut `[ref]`, `![ref][ref]` images, and the `[ref]: url\n\
+            \"title\"` definition line itself) but goes wider: an undefined bracketed mention —\n\
+            GitHub-Docs-style style-guide placeholders (`[ACCOUNT ROLE]`), vscode-docs-style PR\n\
+            area tags (`[typescript-language-features]`) — is inert too, because writing\n\
+            `[[target]]` touching or inside an unrelated bracket produces nested bracket soup\n\
+            (`[[[typescript]]-language-features]`) that hyalo's own resolver then misreads as a\n\
+            malformed link. A missed candidate inside decorative brackets costs nothing; that\n\
+            corruption does not. Self-links are excluded too.\n\n\
+            DOCUMENT-SCOPED ZONES: a wikilink, markdown link, or raw HTML tag that wraps across\n\
+            a line boundary is inert across its whole span, not just the physical line the\n\
+            match happens to sit on — e.g. `[[target\\n|alias text]]` or a tag's attributes\n\
+            continuing onto the next line. Like inline code spans, these constructs never\n\
+            reach across a blank line, heading, or fence: an unclosed `[[` at the end of a\n\
+            paragraph does not swallow the next paragraph.\n\n\
+            ALIAS EMISSION: when the matched surface text differs from the emitted target —\n\
+            including by case alone (`Pulls` vs `pulls`) — the replacement is\n\
+            `[[target|matched_text]]`, preserving what the page renders. A plain `[[target]]`\n\
+            is only written when the matched text is byte-identical to the target.\n\n\
             Filtering options:\n\
             --first-only          Only emit the first mention of each target per source file. An\n\
             \u{00a0}                      existing [[wikilink]] (or aliased [[target|label]]) to a target\n\
@@ -2210,8 +2229,11 @@ pub(crate) enum LinksAction {
             COMMON MISTAKES:\n\
             - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
             Use --exclude-target-glob for directories (e.g. 'templates/*'), --exclude-title for words.\n\
-            - Ambiguous titles (same title from 2+ files) are automatically skipped. Use --exclude-title \
-            to suppress specific titles, or rename one of the source files.\n\
+            - Ambiguous titles (same title from 2+ files) are automatically skipped. Ambiguity is checked \
+            in the namespace actually emitted, not just the title: two files with distinct titles but \
+            the same filename stem (e.g. two `pulls.md` in different directories) are skipped too, since \
+            writing the shared stem would be a link hyalo's own resolver would then call ambiguous. \
+            Use --exclude-title to suppress specific titles, or rename one of the source files.\n\
             - Short titles match too aggressively. Use --min-length (default 3) to skip common short words.\n\
             - Without --first-only, every mention is linked. This can over-link — use --first-only for prose. \
             If the vault persists first_only = true, --no-first-only gets the all-mentions behaviour back \

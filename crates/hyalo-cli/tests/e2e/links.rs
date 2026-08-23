@@ -1627,15 +1627,18 @@ We held a Sprint Review last week.
 
     let meetings_content = fs::read_to_string(tmp.path().join("meetings.md"))
         .expect("meetings.md should be readable after apply");
+    // "Sprint Review" (the matched surface text) differs from the emitted
+    // target "sprint-review" — iter-217 NEW-3 emits an alias rather than
+    // silently rewriting rendered prose to the bare stem.
     assert!(
-        meetings_content.contains("[[sprint-review]]"),
-        "meetings.md should contain [[sprint-review]] after apply, got:\n{meetings_content}"
+        meetings_content.contains("[[sprint-review|Sprint Review]]"),
+        "meetings.md should contain [[sprint-review|Sprint Review]] after apply, got:\n{meetings_content}"
     );
     // The bare mention on that line should have been replaced — it must not
-    // appear as plain text followed by a non-bracket character.
+    // appear as plain text outside the wikilink.
     let bare_mention_still_present = meetings_content
         .lines()
-        .any(|l| l.contains("Sprint Review") && !l.contains("[[sprint-review]]"));
+        .any(|l| l.contains("Sprint Review") && !l.contains("[[sprint-review|Sprint Review]]"));
     assert!(
         !bare_mention_still_present,
         "bare 'Sprint Review' (outside brackets) should be gone after apply, got:\n{meetings_content}"
@@ -4101,12 +4104,268 @@ fn links_auto_config_exclusions_survive_apply() {
 
     let guide = fs::read_to_string(tmp.path().join("guide.md")).expect("guide.md should exist");
     assert!(
-        !guide.contains("[[permissions]]"),
+        !guide.contains("[[permissions]]") && !guide.contains("[[permissions|"),
         "config-excluded title must not be written on --apply: {guide}"
     );
+    // "Daily" (matched surface text) differs by case from the emitted target
+    // "daily" — iter-217 NEW-3 emits an alias rather than rewriting the text.
     assert!(
-        guide.contains("[[daily]]"),
+        guide.contains("[[daily|Daily]]"),
         "non-excluded titles should still be linked: {guide}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-217: document-scoped link zones, reference-link inert zones, alias
+// emission, and emitted-namespace ambiguity.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_apply_leaves_all_reference_link_forms_byte_identical() {
+    // NEW-1: full, collapsed, shortcut, and image reference forms, plus the
+    // definition line itself, must never be rewritten.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "gamma.md",
+        md!(r"
+---
+title: Gamma
+---
+The gamma page.
+"),
+    );
+    let body = md!(concat!(
+        "---\n",
+        "title: Notes\n",
+        "---\n",
+        "Full: [click here][Gamma]\n",
+        "Collapsed: [Gamma][]\n",
+        "Shortcut: [Gamma]\n",
+        "Image: ![Gamma][Gamma]\n",
+        "\n",
+        "[Gamma]: https://example.com/gamma \"Gamma page\"\n",
+    ));
+    write_md(tmp.path(), "notes.md", body);
+
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    assert!(
+        matches.is_empty(),
+        "no reference-link form should be a candidate: {matches:?}"
+    );
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    assert_eq!(notes, body, "the file must be byte-identical after --apply");
+}
+
+#[test]
+fn auto_apply_leaves_wrapped_wikilink_and_markdown_link_byte_identical() {
+    // NEW-2: a wikilink/markdown-link construct that wraps across a line
+    // boundary must be treated as inert across its whole span, not just the
+    // physical line the scanner happens to be on.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "release-pipeline-unification.md",
+        md!(r"
+---
+title: Release Pipeline Unification
+---
+Docs.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+Docs.
+"),
+    );
+    let body = md!(concat!(
+        "---\n",
+        "title: Notes\n",
+        "---\n",
+        "See [[research/release-pipeline-unification|reusable\n",
+        "release process]] docs.\n",
+        "\n",
+        "See [docs](\n",
+        "target.md\n",
+        ") for details.\n",
+        "\n",
+        "See target for the same thing.\n",
+    ));
+    write_md(tmp.path(), "notes.md", body);
+
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    // Only the same-line baseline mention ("See target for the same thing")
+    // may still match — everything inside the wrapped constructs must not.
+    assert_eq!(
+        matches.len(),
+        1,
+        "only the same-line baseline should match: {matches:?}"
+    );
+    assert_eq!(matches[0]["link_target"], "target");
+    assert_eq!(matches[0]["line"], 11);
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    let expected = body.replace(
+        "See target for the same thing.\n",
+        "See [[target]] for the same thing.\n",
+    );
+    assert_eq!(
+        notes, expected,
+        "only the baseline mention may be rewritten; the wrapped constructs must stay untouched"
+    );
+}
+
+#[test]
+fn auto_apply_leaves_multiline_html_tag_byte_identical() {
+    // NEW-10: a tag's attributes wrapped onto a continuation line are still
+    // part of the tag, not prose.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "intellisense.md",
+        md!(r"
+---
+title: IntelliSense
+---
+Docs.
+"),
+    );
+    let body = md!(concat!(
+        "---\n",
+        "title: Notes\n",
+        "---\n",
+        "<video\n",
+        "  title=\"Demo of navigation and IntelliSense features\">\n",
+        "</video>\n",
+    ));
+    write_md(tmp.path(), "notes.md", body);
+
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    assert!(
+        matches.is_empty(),
+        "attributes wrapped onto a tag's continuation line must stay inert: {matches:?}"
+    );
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    assert_eq!(notes, body);
+}
+
+#[test]
+fn auto_apply_emits_alias_when_matched_text_differs_from_target() {
+    // NEW-3: substituting the bare stem for matched prose text changes what
+    // the page renders — an alias must be emitted instead whenever the
+    // matched surface text differs from the emitted target, including by
+    // case alone.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "pulls.md",
+        md!(r"
+---
+title: Pulls
+---
+Docs.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+See PULLS for details.
+"),
+    );
+
+    run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    assert!(
+        notes.contains("[[pulls|PULLS]]"),
+        "a case-differing match must be preserved as an alias: {notes}"
+    );
+    assert!(
+        !notes.contains("[[pulls]]"),
+        "the surface text must not be silently discarded: {notes}"
+    );
+}
+
+#[test]
+fn auto_apply_never_emits_a_stem_that_hyalos_own_resolver_calls_ambiguous() {
+    // NEW-4: `graphql/reference/pulls.md` and `rest/pulls/pulls.md` share
+    // the filename `pulls.md` (distinct directories, distinct titles) —
+    // emitting the shared stem `[[pulls]]` for either title would be an
+    // ambiguous link. `links auto --apply` must never write it, and
+    // `hyalo links` must report the same ambiguous/broken counts before and
+    // after the apply.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "graphql/reference/pulls.md",
+        md!(r"
+---
+title: Pull requests
+---
+Docs.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "rest/pulls/pulls.md",
+        md!(r"
+---
+title: REST API endpoints for pull requests
+---
+Docs.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes.md",
+        md!(r"
+---
+title: Notes
+---
+See Pull requests and REST API endpoints for pull requests docs.
+"),
+    );
+
+    let before = run_links_auto_in_vault(tmp.path(), &[]);
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    assert!(
+        matches.is_empty(),
+        "an ambiguous-stem title must never be auto-linked: {matches:?}"
+    );
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    assert!(
+        !notes.contains("[[pulls"),
+        "no [[pulls…]] link may be written for either ambiguous title: {notes}"
+    );
+
+    let after = run_links_auto_in_vault(tmp.path(), &[]);
+    assert_eq!(
+        before["ambiguous_titles"], after["ambiguous_titles"],
+        "the ambiguity picture must be unchanged by --apply (nothing was written)"
     );
 }
 

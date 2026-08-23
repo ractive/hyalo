@@ -1003,12 +1003,31 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
                     i = end;
                     continue;
                 }
+                let close = find_label_close_bracket(&line[i..]);
                 // `[label](destination)` — internal *or* external.
-                if let Some(close) = find_label_close_bracket(&line[i..])
+                if let Some(close) = close
                     && bytes.get(i + close + 1) == Some(&b'(')
                     && let Some(dest) = parse_destination(&line[i + close + 2..])
                 {
                     let end = i + close + 2 + dest.end;
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                // Any other well-formed `[...]` span (iter-217): GitHub-Docs-
+                // and vscode-docs-style bracket conventions — style-guide
+                // placeholders (`[ACCOUNT ROLE]`), PR area tags
+                // (`[typescript-language-features]`), undefined CommonMark
+                // shortcut references — are not links, but injecting
+                // `[[target]]` immediately inside or across one of them
+                // produces nested bracket soup (`[[[typescript]]-language-…`)
+                // that hyalo's own wikilink parser then misreads as a
+                // malformed link. Real corpora: without this, GH Docs and
+                // vscode-docs `broken` counts both increased after
+                // `--apply`. Whatever is inside stays un-auto-linked; a
+                // missed candidate costs nothing, corrupted brackets do.
+                if let Some(close) = close {
+                    let end = i + close + 1;
                     zones.push((i, end));
                     i = end;
                     continue;
@@ -1062,6 +1081,122 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
 pub fn overlaps_zone(zones: &[(usize, usize)], start: usize, end: usize) -> bool {
     zones.iter().any(|&(zs, ze)| start < ze && end > zs)
 }
+
+// ---------------------------------------------------------------------------
+// CommonMark reference-link inert zones (iter-217, NEW-1)
+// ---------------------------------------------------------------------------
+
+/// Normalize a CommonMark link label for matching a reference usage against
+/// its definition: trim, collapse runs of whitespace to a single space, and
+/// case-fold. This is a practical approximation of the spec's Unicode
+/// case-fold + whitespace-collapse rule — good enough for matching
+/// hand-written and generated documentation, and erring toward *not*
+/// matching (label text stays linkable prose) rather than a spurious match
+/// costs nothing more than a missed inert-zone, never a corruption.
+#[must_use]
+pub(crate) fn normalize_label(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Parse `line` as a CommonMark link reference definition
+/// (`[label]: destination "title"`), returning the normalized label when it
+/// is one.
+///
+/// Single-line only: the destination and optional title must appear on the
+/// same line as the label. A definition whose destination or title
+/// continues onto a following line is not recognised (out of scope for
+/// iter-217 — uncommon in practice and the corpora exercised here always
+/// write definitions on one line). Up to three leading spaces of indent are
+/// tolerated, matching CommonMark's block-indent allowance. Trailing
+/// garbage after a well-formed title (or after the destination, if there is
+/// no title) means this is not a clean definition line — return `None`
+/// rather than guess, so real prose containing a bracket is not blanked.
+#[must_use]
+pub(crate) fn parse_reference_definition_label(line: &str) -> Option<String> {
+    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+    if indent > 3 {
+        return None;
+    }
+    let rest = &line[indent..];
+    let bytes = rest.as_bytes();
+    if bytes.first() != Some(&b'[') {
+        return None;
+    }
+    let close = find_label_close_bracket(&rest[1..])?;
+    let label_raw = &rest[1..=close];
+    if label_raw.trim().is_empty() {
+        return None;
+    }
+    let after_close = 1 + close + 1; // byte offset right after ']'
+    if bytes.get(after_close) != Some(&b':') {
+        return None;
+    }
+
+    let mut i = after_close + 1;
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        // No destination on this line — a multi-line definition, out of scope.
+        return None;
+    }
+
+    // Destination: angle-bracket form or a bare run up to the next whitespace.
+    if bytes[i] == b'<' {
+        let close_angle = rest[i + 1..].find('>')?;
+        i += 1 + close_angle + 1;
+    } else {
+        let dest_start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i == dest_start {
+            return None;
+        }
+    }
+
+    while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+        i += 1;
+    }
+
+    // Optional title: `"…"`, `'…'`, or `(…)`.
+    if i < bytes.len() {
+        match bytes[i] {
+            q @ (b'"' | b'\'') => {
+                let quote = q as char;
+                let close_rel = rest[i + 1..].find(quote)?;
+                i += 1 + close_rel + 1;
+            }
+            b'(' => {
+                let close_rel = rest[i + 1..].find(')')?;
+                i += 1 + close_rel + 1;
+            }
+            _ => return None, // trailing content that isn't a title: not a clean definition
+        }
+        while matches!(bytes.get(i), Some(b' ' | b'\t')) {
+            i += 1;
+        }
+    }
+
+    if i != bytes.len() {
+        return None; // trailing garbage after the title
+    }
+
+    Some(normalize_label(label_raw))
+}
+
+// Reference-link *usages* (`[label][ref]`, `[ref][]`, shortcut `[ref]`,
+// `![ref][ref]`) do not need their own zone detection: `inert_link_zones`'s
+// generic `[...]` fallback (above, in its own `match` arm) already treats
+// every well-formed bracket span as inert regardless of whether a matching
+// definition exists, which is a superset of "inert when reference-defined".
+// See that function's doc comment for why the broader rule replaced a
+// definition-gated one. `parse_reference_definition_label` above still
+// pulls its own weight: it is what makes a definition line's destination
+// and title — the part *outside* the `[label]` brackets — inert too.
 
 /// Split a target string into its base target and optional `#fragment`.
 ///
