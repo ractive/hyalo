@@ -607,6 +607,36 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
     parts.join(" ")
 }
 
+/// Render a snapshot-index path for a hint command, preferring the shortest
+/// spelling that still runs verbatim from the user's working directory.
+///
+/// A snapshot path is the longest single token any hint carries, and a `find`
+/// listing repeats the *same* one on every derived query — four or five copies
+/// of one absolute path in a five-line block (iter-208a / UX-5). Eliding it
+/// from the repeats is not an option: hints have to stay copy-pasteable, and a
+/// `find` hint that quietly loses `--index-file` rescans the vault and answers
+/// a different question. Shortening the path to its working-directory-relative
+/// form keeps every hint runnable while removing most of the bulk, since an
+/// index almost always lives inside the project it indexes.
+#[must_use]
+pub fn shorten_index_path_for_hint(path: &std::path::Path) -> String {
+    let absolute = path.display().to_string();
+    let Ok(cwd) = std::env::current_dir() else {
+        return absolute;
+    };
+    match path.strip_prefix(&cwd) {
+        Ok(rel) if !rel.as_os_str().is_empty() => {
+            let relative = rel.to_string_lossy().replace('\\', "/");
+            if relative.len() < absolute.len() {
+                relative
+            } else {
+                absolute
+            }
+        }
+        _ => absolute,
+    }
+}
+
 /// Push `--index-file <path>` when the query ran against an explicit non-default
 /// snapshot index. Derived `find` hints must query the same index or they would
 /// silently rescan the vault (BUG-7 audit: `--index-file` was a dropped flag).
@@ -2374,7 +2404,10 @@ fn hints_for_views_list(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint
         // command, so the suggestion carries a concrete (and runnable) one.
         hints.push(Hint::new(
             "Save a query as a view",
-            build_command_no_glob(ctx, &["views", "set", "drafts", "--property", "status=draft"]),
+            build_command_no_glob(
+                ctx,
+                &["views", "set", "drafts", "--property", "status=draft"],
+            ),
         ));
         hints.push(Hint::new(
             "Survey the vault to decide which query is worth saving",
@@ -2406,7 +2439,9 @@ fn hints_for_lint_rules_list(ctx: &HintContext, data: &serde_json::Value) -> Vec
                 .unwrap_or(false)
         })
         .and_then(rule_id);
-    let focus = overridden.clone().or_else(|| rules.first().and_then(rule_id));
+    let focus = overridden
+        .clone()
+        .or_else(|| rules.first().and_then(rule_id));
 
     if let Some(ref id) = focus {
         hints.push(Hint::new(
@@ -4239,6 +4274,32 @@ mod tests {
             narrow.description.contains("(6 files)"),
             "count should be shown when not truncated: {:?}",
             narrow.description
+        );
+    }
+
+    #[test]
+    /// iter-210 / UX-5: the snapshot path is the longest token a hint carries
+    /// and it is repeated on every derived query. Inside the working directory
+    /// it renders relative — shorter, and still runnable verbatim.
+    #[test]
+    fn index_path_renders_relative_to_the_working_directory() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let inside = cwd.join("sub").join(".hyalo-index");
+        assert_eq!(shorten_index_path_for_hint(&inside), "sub/.hyalo-index");
+    }
+
+    /// A path outside the working directory has no shorter runnable spelling,
+    /// so it stays absolute rather than turning into a `../..` chain.
+    #[test]
+    fn index_path_outside_the_working_directory_stays_absolute() {
+        let outside = std::path::Path::new(if cfg!(windows) {
+            r"C:\definitely\elsewhere\.hyalo-index"
+        } else {
+            "/definitely/elsewhere/.hyalo-index"
+        });
+        assert_eq!(
+            shorten_index_path_for_hint(outside),
+            outside.display().to_string()
         );
     }
 

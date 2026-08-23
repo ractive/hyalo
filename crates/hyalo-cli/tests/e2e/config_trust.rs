@@ -493,3 +493,80 @@ fn malformed_config_reports_once_not_twice() {
         "no suppression notice means no double parse; stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-210 (UX-5): a malformed key names the command that fixes it
+// ---------------------------------------------------------------------------
+
+/// `[types.note]` is the recurring mis-spelling of `[schema.types.note]`. The
+/// raw serde error lists `schema` among the accepted top-level fields, which
+/// tells the reader they were wrong without telling them what to run.
+#[test]
+fn unknown_types_key_suggests_hyalo_types_set() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[types.note]\nrequired = [\"title\"]\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap(), "lint"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stderr.contains("malformed .hyalo.toml"),
+        "the malformed-config warning must survive: {stderr}"
+    );
+    assert!(
+        stderr.contains("[schema.types.<name>]"),
+        "the fix must name the real table: {stderr}"
+    );
+    assert!(
+        stderr.contains("hyalo types set"),
+        "the fix must name the command that creates it: {stderr}"
+    );
+}
+
+/// The same treatment for a mis-placed lint rule override.
+#[test]
+fn unknown_rules_key_suggests_hyalo_lint_rules_set() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[rules.MD013]\nenabled = false\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap(), "lint"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stderr.contains("hyalo lint-rules set"),
+        "expected the lint-rules fix path: {stderr}"
+    );
+}
+
+/// A malformed file with no known fix path must not grow a bogus one.
+#[test]
+fn unrecognised_malformed_config_gets_no_invented_fix() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "this is not = = toml\n").unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap(), "lint"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.contains("malformed .hyalo.toml"), "{stderr}");
+    assert!(
+        !stderr.contains("  fix: "),
+        "no fix path should be invented: {stderr}"
+    );
+}

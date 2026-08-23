@@ -3034,7 +3034,10 @@ mod tests {
             "expected NotFound, got {err:?}"
         );
         let msg = err.to_string();
-        assert!(!msg.contains(".md"), "no bogus candidate should appear: {msg}");
+        assert!(
+            !msg.contains(".md"),
+            "no bogus candidate should appear: {msg}"
+        );
     }
 
     /// A non-`.md` path that exists on disk is still not a note: resolution

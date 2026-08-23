@@ -5205,7 +5205,10 @@ fn links_auto_apply_is_correct_on_multibyte_lines() {
         .args(["links", "auto", "--apply", "--format", "json"])
         .output()
         .unwrap();
-    assert!(output.status.success(), "links auto --apply failed: {output:?}");
+    assert!(
+        output.status.success(),
+        "links auto --apply failed: {output:?}"
+    );
     let body = std::fs::read_to_string(tmp.path().join("src.md")).unwrap();
     assert!(
         body.starts_with("---\ntitle: Src\n---\nCafé — [[")

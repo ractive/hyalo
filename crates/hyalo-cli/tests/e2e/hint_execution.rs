@@ -825,8 +825,12 @@ fn harvest_in(vault: &Path, seed: &[&str]) -> Vec<Harvested> {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let envelope: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("`hyalo {}` emitted no envelope ({e}): {stdout}", seed.join(" ")));
+    let envelope: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "`hyalo {}` emitted no envelope ({e}): {stdout}",
+            seed.join(" ")
+        )
+    });
     envelope["hints"]
         .as_array()
         .map(|arr| {
@@ -909,7 +913,11 @@ fn views_list_hints_target_an_existing_view() {
         empty.iter().map(|h| &h.cmd).collect::<Vec<_>>()
     );
     assert!(
-        empty.iter().find(|h| h.cmd.contains("views set")).unwrap().writes,
+        empty
+            .iter()
+            .find(|h| h.cmd.contains("views set"))
+            .unwrap()
+            .writes,
         "`views set` writes .hyalo.toml and must be marked"
     );
 
@@ -945,7 +953,9 @@ fn lint_rules_list_hints_focus_the_overridden_rule() {
 
     let hints = harvest_in(tmp.path(), &["lint-rules", "list"]);
     assert!(
-        hints.iter().any(|h| h.cmd.contains("lint-rules show MD022")),
+        hints
+            .iter()
+            .any(|h| h.cmd.contains("lint-rules show MD022")),
         "expected a show hint for the overridden rule, got {:?}",
         hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
     );
@@ -969,7 +979,11 @@ fn links_on_a_clean_vault_still_offers_drill_downs() {
         "a.md",
         "---\ntitle: A\n---\n\nLinks to [[b]].\n",
     );
-    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n\nNothing broken.\n");
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\ntitle: B\n---\n\nNothing broken.\n",
+    );
 
     let hints = harvest_in(tmp.path(), &["links", "fix", "--dry-run"]);
     assert!(

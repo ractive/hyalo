@@ -3184,7 +3184,11 @@ fn lint_json_counters_describe_whole_run_on_large_clean_vault() {
 
     let val = lint_json(tmp.path(), &[]);
     let results = &val["results"];
-    let num = |k: &str| results[k].as_u64().unwrap_or_else(|| panic!("missing {k}: {val}"));
+    let num = |k: &str| {
+        results[k]
+            .as_u64()
+            .unwrap_or_else(|| panic!("missing {k}: {val}"))
+    };
 
     assert_eq!(num("files_checked"), 61, "all 61 files are examined: {val}");
     assert_eq!(
