@@ -577,9 +577,48 @@ fn case_mismatched_wikilink_is_counted_once() {
         1,
         "duplicate entry in the backlink list: {json}"
     );
-    // The written spelling is preserved so callers can still see what the
-    // author typed.
-    assert_eq!(json["results"]["backlinks"][0]["target"], "NOTE");
+    // NEW-18 (dogfood pre3): `target` reports the query's own canonical
+    // resolved path consistently across every entry, not each occurrence's
+    // own written spelling — `hyalo backlinks note.md` is asking about
+    // `note.md` specifically, and every entry necessarily points at it.
+    assert_eq!(json["results"]["backlinks"][0]["target"], "note.md");
+}
+
+/// NEW-18 (dogfood pre3): three occurrences of the same real target,
+/// spelled three different ways (`../target.md`, `/target.md`, `../target`
+/// with no extension), must all report the identical, consistently
+/// normalized `target` — before this fix, `.md` presence tracked whatever
+/// the author happened to type while the path around it was already fully
+/// resolved, so entries pointing at the same file disagreed on spelling.
+#[test]
+fn backlinks_target_spelling_is_consistent_across_occurrences() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "---\ntitle: Target\n---\n");
+    write_md(
+        tmp.path(),
+        "sub/source.md",
+        "---\ntitle: Source\n---\n[a](../target.md)\n[b](/target.md)\n[c](../target)\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["backlinks", "target.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let targets: Vec<&str> = json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["target"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        targets,
+        vec!["target.md", "target.md", "target.md"],
+        "all three spellings must normalize to the same target: {json}"
+    );
 }
 
 /// The de-duplication must not lose the edge: `mv` still rewrites the

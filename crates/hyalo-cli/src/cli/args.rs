@@ -713,6 +713,9 @@ pub(crate) enum Commands {
             then returns every file that contains a [[wikilink]] or [markdown](link) \
             pointing to the target file.\n\n\
             OUTPUT: JSON object with file, backlinks array (source, line, target, label), and total count.\n\
+            `target` is the queried file's own canonical resolved path, reported identically on\n\
+            every entry — not each occurrence's own written spelling, which could differ by `.md`\n\
+            presence or relative-path form even though every entry points at the same file (NEW-18).\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo backlinks decision-log.md\n\
@@ -1225,7 +1228,10 @@ Repeatable (AND).\n\
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
             counts the proposals it suppresses — those have a candidate but are never written, \
             so `fuzzy - fuzzy_below_floor` is what --apply-fuzzy would apply. Each entry in \
-            fuzzy_fixes also carries rule (kebab-case strategy) and below_floor.\n\
+            fuzzy_fixes also carries rule (kebab-case strategy), below_floor, and — when the \
+            on-disk line still matches — col: the 1-based byte column of old_target on that line \
+            (NEW-18), omitted when the file/line is unreadable or the target no longer appears \
+            there (a stale proposal against text that already changed).\n\
             TEXT LAYOUT: the counts come first, then the fixes that would be (or were) written, \
             then the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous, \
             templated) capped at 20 entries each, and finally the fuzzy proposals — the longest \

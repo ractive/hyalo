@@ -108,6 +108,9 @@ pub enum HintSource {
     /// `hyalo lint-rules list` (iter-210). Same dead end — the catalog told
     /// you a rule exists but not how to inspect, disable or lint with it.
     LintRulesList,
+    /// `hyalo lint-rules show <ID>` (NEW-18, dogfood pre3). Was also a dead
+    /// end despite inspecting one specific, actionable rule.
+    LintRulesShow,
 }
 
 /// Which snapshot index a `find` query used, for re-emission in derived hints.
@@ -345,6 +348,7 @@ pub fn generate_hints_with_counters(
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::ViewsList => hints_for_views_list(ctx, data),
         HintSource::LintRulesList => hints_for_lint_rules_list(ctx, data),
+        HintSource::LintRulesShow => hints_for_lint_rules_show(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
         HintSource::OkfIndex => hints_for_okf_index(ctx, data),
         HintSource::OkfLog => hints_for_okf_log(ctx),
@@ -1711,6 +1715,16 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
                         ),
                     ));
                 }
+            } else {
+                // NEW-18 (dogfood pre3): a bulk read (`--all` / `--section`)
+                // whose tasks are all already done had nothing to toggle and
+                // fell straight through to an empty hint list — a listing
+                // command that answered "nothing here" was still a
+                // navigation dead end instead of pointing anywhere else.
+                hints.push(Hint::new(
+                    "Find files with open tasks",
+                    build_command_no_glob(ctx, &["find", "--task", "todo"]),
+                ));
             }
         }
         // For "all" and "section:" selectors, return early — the bulk hints are sufficient.
@@ -2565,6 +2579,56 @@ fn hints_for_lint_rules_list(ctx: &HintContext, data: &serde_json::Value) -> Vec
                 "Run the markdown lint rules against the vault",
                 build_command_no_glob(ctx, &["lint"]),
             )),
+        }
+    }
+
+    hints
+}
+
+/// Drill-downs for `hyalo lint-rules show <ID>` (NEW-18, dogfood pre3).
+///
+/// Was a hint dead end despite inspecting one specific, actionable rule — the
+/// natural next steps are running lint scoped to just that rule, and either
+/// toggling it or dropping an existing override.
+fn hints_for_lint_rules_show(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let id = data
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .or(ctx.lint_rule.as_deref());
+    let Some(id) = id else {
+        return hints;
+    };
+
+    hints.push(Hint::new(
+        format!("Run just {id} against the vault"),
+        build_command_no_glob(ctx, &["lint", "--rule", id]),
+    ));
+
+    let has_override = data.get("override").is_some_and(|o| !o.is_null());
+    if has_override {
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Drop the {id} override and go back to the default"),
+                build_command_no_glob(ctx, &["lint-rules", "remove", id]),
+            ));
+        }
+    } else if hints.len() < MAX_HINTS {
+        let effective_enabled = data
+            .get("effective_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        if effective_enabled {
+            hints.push(Hint::new(
+                format!("Turn {id} off for this vault"),
+                build_command_no_glob(ctx, &["lint-rules", "set", id, "--enabled", "false"]),
+            ));
+        } else {
+            hints.push(Hint::new(
+                format!("Turn {id} on for this vault"),
+                build_command_no_glob(ctx, &["lint-rules", "set", id, "--enabled", "true"]),
+            ));
         }
     }
 

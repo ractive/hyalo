@@ -1477,18 +1477,97 @@ fn run_inner() -> Result<(), AppError> {
                 Some(ctx)
             }
             // iter-210 (dogfood UX-4): `views list` and `lint-rules list` used
-            // to emit no hints at all — a listing with nothing to click. Only
-            // the *list* subcommands get them; `set`/`remove`/`show` already
-            // end somewhere concrete.
-            Commands::Views { action } => {
-                matches!(action, None | Some(crate::cli::args::ViewsAction::List))
-                    .then(|| HintContext::from_common(HintSource::ViewsList, &common))
-            }
-            Commands::LintRules { action } => matches!(
-                action,
-                None | Some(crate::cli::args::LintRulesAction::List { .. })
-            )
-            .then(|| HintContext::from_common(HintSource::LintRulesList, &common)),
+            // to emit no hints at all — a listing with nothing to click.
+            // `set`/`remove` already end somewhere concrete; `run` and `show`
+            // used to fall through to the catch-all `None` below (NEW-18,
+            // dogfood pre3) despite `run` being a full `find` query and
+            // `show` inspecting one specific, actionable rule.
+            Commands::Views { action } => match action {
+                None | Some(crate::cli::args::ViewsAction::List) => Some(
+                    HintContext::from_common(HintSource::ViewsList, &common),
+                ),
+                // `views run <name>` is `find --view <name>` under another
+                // name — dispatch.rs merges the saved view with this same
+                // CLI overlay and calls the identical `find_commands::find`.
+                // Reproduce that merge here too (read-only — dispatch.rs's
+                // own resolution is untouched, so there is no risk of
+                // double-merging list filters): otherwise the hint context
+                // would only ever see the overlay, not the view's own saved
+                // filters, and every derived hint would silently drop them
+                // (NEW-18, dogfood pre3; mirrors the `Commands::Find { view:
+                // Some(_), .. }` early-merge above, lines ~976-987).
+                Some(crate::cli::args::ViewsAction::Run {
+                    name,
+                    pattern,
+                    filters: overlay,
+                    ..
+                }) => {
+                    let views = crate::commands::views::load_views(&config_dir);
+                    let mut merged = views.get(name).cloned().unwrap_or_default();
+                    let mut overlay = overlay.clone();
+                    overlay.pattern.clone_from(pattern);
+                    merged.merge_from(&overlay);
+                    let FindFilters {
+                        glob,
+                        regexp,
+                        properties,
+                        tag,
+                        task,
+                        file,
+                        fields,
+                        sort,
+                        reverse,
+                        limit,
+                        sections,
+                        broken_links,
+                        orphan,
+                        dead_end,
+                        title,
+                        pattern: merged_pattern,
+                        ..
+                    } = merged;
+                    let mut ctx = HintContext::from_common(HintSource::Find, &common);
+                    ctx.glob = glob;
+                    ctx.fields = fields;
+                    ctx.sort = sort;
+                    ctx.reverse = reverse;
+                    ctx.has_limit = limit.is_some();
+                    ctx.has_body_search = merged_pattern.is_some();
+                    ctx.body_pattern = merged_pattern;
+                    ctx.has_regex_search = regexp.is_some();
+                    ctx.property_filters = properties;
+                    ctx.tag_filters = tag;
+                    ctx.task_filter = task;
+                    ctx.file_targets = file;
+                    ctx.section_filters = sections;
+                    ctx.broken_links_filter = broken_links;
+                    ctx.orphan_filter = orphan;
+                    ctx.dead_end_filter = dead_end;
+                    ctx.title_filter = title;
+                    ctx.view_name = Some(name.clone());
+                    Some(ctx)
+                }
+                Some(crate::cli::args::ViewsAction::Set { .. } | crate::cli::args::ViewsAction::Remove { .. }) => {
+                    None
+                }
+            },
+            Commands::LintRules { action } => match action {
+                None | Some(crate::cli::args::LintRulesAction::List { .. }) => Some(
+                    HintContext::from_common(HintSource::LintRulesList, &common),
+                ),
+                // `lint-rules show <ID>` inspects one specific rule; the
+                // natural next step is either lint scoped to it or tweaking
+                // its configuration (NEW-18, dogfood pre3).
+                Some(crate::cli::args::LintRulesAction::Show { rule_id }) => {
+                    let mut ctx = HintContext::from_common(HintSource::LintRulesShow, &common);
+                    ctx.lint_rule = Some(rule_id.clone());
+                    Some(ctx)
+                }
+                Some(
+                    crate::cli::args::LintRulesAction::Set { .. }
+                    | crate::cli::args::LintRulesAction::Remove { .. },
+                ) => None,
+            },
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }

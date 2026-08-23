@@ -93,6 +93,29 @@ fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::V
         .collect()
 }
 
+/// 1-based byte column of `needle`'s first occurrence on `line` (1-based) of
+/// `dir/source`, or `None` when the file/line is unreadable or the target no
+/// longer appears there.
+///
+/// NEW-18 (dogfood pre3): `fuzzy_fixes` entries carried `line` but no `col`
+/// (iter-210 task text asked for it) — a proposal on a long line still made
+/// the reader scan the whole thing to find what was actually being guessed
+/// at. `FixPlan` itself stays column-free (it is built by the detection
+/// pipeline, long before any file is re-read, and threading a column through
+/// every strategy would touch the scanner/extraction layer for every fix
+/// bucket, not just this one advisory field on the smallest — fuzzy —
+/// bucket); this seeks only the one line a proposal is already reporting,
+/// streaming rather than reading the whole file.
+fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<usize> {
+    use std::io::BufRead as _;
+    if needle.is_empty() || line == 0 {
+        return None;
+    }
+    let file = std::fs::File::open(dir.join(source)).ok()?;
+    let text = std::io::BufReader::new(file).lines().nth(line - 1)?.ok()?;
+    text.find(needle).map(|byte_offset| byte_offset + 1)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -273,6 +296,12 @@ pub fn links_fix(
                 "below_floor".to_owned(),
                 serde_json::json!(f.confidence < fuzzy.floor()),
             );
+            // NEW-18 (dogfood pre3): only when it can be found — a stale
+            // proposal whose on-disk text has already changed (or a read
+            // failure) simply omits `col` rather than reporting a wrong one.
+            if let Some(col) = find_column(dir, &f.source, f.line, &f.old_target) {
+                obj.insert("col".to_owned(), serde_json::json!(col));
+            }
         }
     }
 

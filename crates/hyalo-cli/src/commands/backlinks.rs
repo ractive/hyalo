@@ -65,13 +65,24 @@ pub fn backlinks(
 
     let total = entries.len() as u64;
     let take_n = limit.filter(|n| *n > 0).unwrap_or(usize::MAX);
+    // NEW-18 (dogfood pre3): `target` used to report each occurrence's own
+    // written text (`e.link.target`) as normalized by `LinkGraph::build` —
+    // which resolves relative path components (`../target.md` → `target.md`)
+    // but leaves the `.md` suffix exactly as the author happened to type it
+    // (present, absent, or a bare stem), so two entries pointing at the same
+    // file could report different spellings. Every entry here necessarily
+    // points at `rel` (that is what was queried), so report it uniformly —
+    // the consistently-normalized form this finding's second option allows,
+    // cheaper and lower-risk than threading the raw pre-normalization text
+    // through `Link`/`BacklinkEntry` (a snapshot-serialized struct used far
+    // beyond this one command) to recover the true authored spelling.
     let items: Vec<BacklinkItem> = entries
         .iter()
         .take(take_n)
         .map(|e| BacklinkItem {
             source: e.source.to_string_lossy().replace('\\', "/"),
             line: e.line,
-            target: e.link.target.clone(),
+            target: rel.clone(),
             label: e.link.label.clone(),
         })
         .collect();

@@ -65,11 +65,11 @@ excluded: broken-links line numbers + Liquid heading slugs
       `--dir <foreign-tree>` depends on the caller's cwd via ancestor
       discovery; at minimum the "no .hyalo.toml — built-in defaults" note
       must not fire when running from inside the tree would find one
-- [ ] NEW-18: `views run` emits the same hints as the equivalent
+- [x] NEW-18: `views run` emits the same hints as the equivalent
       `find --view`; `lint-rules show` and `task list` stop being hint
       dead ends
-- [ ] NEW-18: `fuzzy_fixes` entries carry `col` alongside `line`
-- [ ] NEW-18: `backlinks` JSON reports the authored target spelling (or a
+- [x] NEW-18: `fuzzy_fixes` entries carry `col` alongside `line`
+- [x] NEW-18: `backlinks` JSON reports the authored target spelling (or a
       consistently normalized one) — today slashes are stripped but `.md`
       is not
 - [x] UX-3: ancestor-adoption stderr note respects `-q` (or fires once
@@ -102,7 +102,7 @@ excluded: broken-links line numbers + Liquid heading slugs
       documented command/flag
 - [x] `lint` on the own KB shows the ignored-file count; ignored-only
       `--glob` warns
-- [ ] `views run` hint parity with `find --view` (iter-213 AC completed)
+- [x] `views run` hint parity with `find --view` (iter-213 AC completed)
 - [x] No command prints a self-contradictory config note
 - [x] `changelog add` creates the `[Unreleased]` subsection when absent
       instead of appending to a released section; continuation lines are

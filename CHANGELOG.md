@@ -150,6 +150,19 @@ and this project adheres to
   issues" — a `--glob` matching a mix of ignored and kept files stays
   quiet (only the summary-line count), so a large partial sweep isn't
   buried in per-file noise.
+- **four hint dead ends closed, and `fuzzy_fixes`/`backlinks` gained fields
+  their JSON was missing** (iter-220, dogfood NEW-18). `views run <name>`
+  now gets full hint parity with `find --view <name>` — previously zero
+  hints where `find --view` emitted several. `lint-rules show <ID>` gets
+  scoped-lint and toggle/revert hints instead of none. `task read --all`
+  / `--section` on a file whose tasks are all already done now points at
+  `find --task todo` instead of dead-ending. `fuzzy_fixes` entries carry
+  `col` (1-based byte column of `old_target` on its line, omitted when
+  stale) alongside `line` — asked for in iter-210's own task text but
+  never delivered. `backlinks` JSON now reports `target` as the queried
+  file's own canonical resolved path, identically on every entry, instead
+  of each occurrence's own written spelling (which could disagree in
+  `.md` presence or relative-path form for the exact same target file).
 
 ### Changed
 

@@ -6023,6 +6023,36 @@ fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
     assert_detail(&applied["applied_fixes"], "applied_fixes", true);
 }
 
+/// NEW-18 (dogfood pre3): `fuzzy_fixes` entries carry `col` alongside `line`
+/// (iter-210 task text asked for it) — the 1-based byte column of the
+/// proposal's `old_target` on that line, so a long line doesn't force a scan
+/// to find what is actually being guessed at.
+#[test]
+fn fuzzy_fixes_carry_a_column() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "correct-name.md",
+        "---\ntitle: Correct Name\n---\n",
+    );
+    let line = "Some intro text here. See [[correct-nam]] for details.\n";
+    write_md(tmp.path(), "index.md", &format!("---\ntitle: Index\n---\n{line}"));
+
+    let json = links_fix_json(tmp.path(), &["--dry-run"]);
+    let fuzzy = json["fuzzy_fixes"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| panic!("expected at least one fuzzy fix: {json}"));
+    let entry = &fuzzy[0];
+    assert_eq!(entry["line"].as_u64(), Some(4));
+    let expected_col = line.find("correct-nam").unwrap() + 1;
+    assert_eq!(
+        entry["col"].as_u64(),
+        Some(expected_col as u64),
+        "col must point at old_target's own position on the line: {entry}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // iter-212: fuzzy confidence trust — scoring, default floor, honest labels
 // ---------------------------------------------------------------------------
