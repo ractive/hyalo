@@ -1535,7 +1535,7 @@ fn run_inner() -> Result<(), AppError> {
                         crate::config::index_mismatch_summary(
                             hdr_vault,
                             &vault_dir_str,
-                            hdr_prefix.as_deref(),
+                            hdr_prefix,
                             site_prefix,
                         ),
                     ));

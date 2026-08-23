@@ -140,16 +140,17 @@ hyalo find --property status=in-progress --fields tasks \
 
 **Run `hyalo --help` and `hyalo <command> --help` to learn the full API.**
 
-## Always run hyalo from the project root
+## Paths are vault-relative, wherever you run from
 
-Hyalo reads `dir` from `.hyalo.toml` at the project root, so it already knows where the
-knowledgebase lives. You never need to `cd` anywhere or use absolute paths — and doing so
-is actively wrong.
+Hyalo reads `dir` from `.hyalo.toml` and resolves every file path against it. The config is
+found in the current directory, or in the nearest parent directory whose configured vault
+contains you — so running from the project root and running from inside the vault both work,
+and both take the same vault-relative paths.
 
-- **ALWAYS run hyalo from the project root** (the directory that contains `.hyalo.toml`).
-  Never `cd` into the configured `dir` first.
 - **ALWAYS pass `--file` paths relative to the configured `dir`** (e.g.
   `iterations/iteration-17.md`). Never pass an absolute path.
+- **Prefer the project root** (the directory that contains `.hyalo.toml`). It is the only
+  place where the vault and the working directory cannot disagree.
 
 Worked example:
 
@@ -157,16 +158,17 @@ Worked example:
 # ✅ Right (from project root — hyalo resolves the path against `dir`)
 hyalo set iterations/iteration-17.md --property status=in-progress
 
-# ❌ Wrong (cd into the configured dir — hyalo gets confused about the vault root)
+# ✅ Also right (from inside the vault — the parent .hyalo.toml is adopted, paths unchanged)
 cd hyalo-knowledgebase && hyalo set iterations/iteration-17.md --property status=in-progress
 
 # ❌ Wrong (absolute path — bypasses the configured `dir` entirely)
 hyalo set --file /Users/me/proj/hyalo-knowledgebase/iterations/iteration-17.md --property status=in-progress
 ```
 
-Hyalo emits a stderr warning when it detects either anti-pattern (running from inside the
-configured `dir`, or being passed an absolute `--file` path). **Treat that warning as a
-correction signal**: stop, move back to the project root, and rewrite the path as a
+From a directory *deeper* than the vault root, hyalo prints a stderr note naming the config it
+adopted and the vault it resolved to — the vault is wider than where you are standing. Pass
+`--dir .` if you meant to scope the run to the current directory. An absolute `--file` path
+still draws a correction warning: **treat it as a signal** to rewrite the path as a
 vault-relative one before continuing.
 
 ## Setup (run once per project)
@@ -307,8 +309,12 @@ default in interactive terminals).
 - **views list** — show all saved views and their filters (`views summary` is an alias)
 - **views set** — save a find query as a named view (`hyalo views set todo --task todo`)
 - **views remove** — delete a saved view
+- **views run** — run a saved view (`hyalo views run <name> [PATTERN] [extra filters]`), identical
+  to `hyalo find [PATTERN] --view <name>`
 - **config** — print the effective configuration (which `.hyalo.toml` is active, resolved dir,
-  format, hints, site prefix). Wrapped in the standard envelope, so `hyalo config --jq
+  format, hints, site prefix). Add `--raw` for the file's text. `results.malformed` /
+  `results.parse_error` report a config that exists but does not parse — every other value shown
+  is then a built-in default. Wrapped in the standard envelope, so `hyalo config --jq
   '.results.dir'` works like any other command
 
 ## Schema & Lint
@@ -445,6 +451,8 @@ hyalo views set orphans --orphan                             # files with no inb
 hyalo views set dead-ends --dead-end                         # files with inbound but no outbound links
 hyalo find --view stale-iterations                    # reuse later
 hyalo find --view stale-iterations --limit 5          # compose with overrides
+hyalo views run stale-iterations --limit 5            # same query, view-first spelling
+hyalo views run perf-research "cache eviction"        # positional PATTERN overrides the saved one
 ```
 
 hyalo suggests saving non-trivial queries as views in its hint output — follow those hints.
@@ -454,6 +462,7 @@ hyalo suggests saving non-trivial queries as views in its hint output — follow
 - `hyalo views set <name> [filters...]` — create or update a view
 - `hyalo views remove <name>` — delete a view
 - `hyalo find --view <name> [extra filters...]` — use a view, optionally with overrides
+- `hyalo views run <name> [PATTERN] [extra filters...]` — the same query, spelled view-first
 
 ## Output format
 

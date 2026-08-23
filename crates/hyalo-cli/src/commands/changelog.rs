@@ -113,25 +113,24 @@ pub(crate) fn resolve_changelog_target(
     config_path: Option<&str>,
     format: Format,
 ) -> ChangelogTarget {
-    match resolve_changelog_file(dir, config_dir, config_path) {
-        Ok(path) => ChangelogTarget::Path(path),
-        Err(_) => {
-            let raw = config_path.unwrap_or_default();
-            // Where the config would have written, lexically — the second path
-            // of the two-path form. `..` is normalized away so the message
-            // names a real location rather than `…/kb/../../etc/passwd`.
-            let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
-            ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
-                format,
-                &hyalo_core::fs_util::outside_vault_message("[changelog] path", Some(&resolved)),
-                Some(raw),
-                Some(
-                    "set [changelog] path to a location inside the config directory, \
-                     relative to it (e.g. \"CHANGELOG.md\" or \"docs/CHANGELOG.md\")",
-                ),
-                None,
-            )))
-        }
+    if let Ok(path) = resolve_changelog_file(dir, config_dir, config_path) {
+        ChangelogTarget::Path(path)
+    } else {
+        let raw = config_path.unwrap_or_default();
+        // Where the config would have written, lexically — the second path of
+        // the two-path form. `..` is normalized away so the message names a
+        // real location rather than `…/kb/../../etc/passwd`.
+        let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
+        ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
+            format,
+            &hyalo_core::fs_util::outside_vault_message("[changelog] path", Some(&resolved)),
+            Some(raw),
+            Some(
+                "set [changelog] path to a location inside the config directory, \
+                 relative to it (e.g. \"CHANGELOG.md\" or \"docs/CHANGELOG.md\")",
+            ),
+            None,
+        )))
     }
 }
 

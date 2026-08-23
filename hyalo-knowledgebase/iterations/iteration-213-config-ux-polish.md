@@ -2,7 +2,7 @@
 title: Iteration 213 — config & UX polish batch
 type: iteration
 date: 2026-08-23
-status: planned
+status: in-progress
 branch: iter-213/config-ux-polish
 tags:
   - iteration

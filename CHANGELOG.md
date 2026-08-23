@@ -11,6 +11,21 @@ and this project adheres to
 
 ### Added
 
+- **`hyalo config --raw`, and a machine-readable malformed-config signal**
+  (iter-213, dogfood UX-2). `hyalo config` exited 0 with a full set of
+  built-in defaults when `.hyalo.toml` failed to parse, and said so only on
+  stderr — a JSON consumer had no way to tell a configured vault from a
+  broken one. `results.malformed` (always present) and `results.parse_error`
+  now carry that state in the output itself, and the text rendering leads with
+  it. The raw file text moved behind `--raw`: at several kilobytes on one JSON
+  line it dominated `results` and buried the resolved values it sat next to.
+
+- **`hyalo views run <view> <pattern>`** (iter-213, dogfood BUG-14). The
+  subcommand's help promised equivalence with `find <pattern> --view <view>`
+  while rejecting the positional outright. It now takes an optional BM25
+  `PATTERN` with the same semantics — mutually exclusive with `-e`, and
+  overriding a pattern saved in the view.
+
 - **`views list`, `lint-rules list` and a clean `links` run now emit
   drill-down hints** (iter-210, dogfood UX-4). All three used to return an
   empty `hints` array, which made them navigation dead ends: the listing named
@@ -124,6 +139,44 @@ and this project adheres to
   dependency.
 
 ### Changed
+
+- **`.hyalo.toml` is discovered from parent directories** (iter-213, dogfood
+  UX-1). **Behaviour change.** The config was read from the working directory
+  and nowhere else, so `cd docs && hyalo lint` silently re-rooted on built-in
+  defaults: no schema, no `[lint] ignore`, no views, no `site_prefix` — the
+  most common config accident, with no diagnostic, while the `--dir` spelling
+  of the same mistake had warned loudly since iter-201. hyalo now walks up to
+  the nearest ancestor `.hyalo.toml` and adopts it when its configured vault
+  contains the working directory (nearest config wins; one that points
+  elsewhere is not adopted). From a deeper subdirectory, where the vault is
+  wider than the directory you are standing in, a stderr note says so and
+  points at `--dir .`. The old "do not cd into the vault" scolding is gone
+  with the problem that motivated it.
+
+- **`links auto` reports excluded titles and excluded mentions separately**
+  (iter-213, dogfood BUG-14). `config_excluded` counted *titles* while reading
+  like a candidate count, so excluding one common title reported `1` next to
+  hundreds of vanished proposals. It is now `config_excluded_titles` plus
+  `config_excluded_mentions`, and the text summary states both.
+
+- **Config-level `[changelog] path` refusals match the runtime ones**
+  (iter-213, dogfood BUG-14). An absolute or escaping `[changelog] path` bailed
+  with exit 2 and a single-line message, while the same refusal at write time
+  exited 1 with the two-path form. Both are now exit 1 with the shared
+  `<subject> resolves outside vault boundary: <resolved>` wording and the raw
+  config value in the error's `path` field.
+
+- **The config-integrity warning waits for `--dir` resolution** (iter-213,
+  dogfood UX-5). An unusable `.hyalo.toml` was reported the moment it failed to
+  parse, so `--dir other-vault` led with a warning about a file it then
+  announced does not apply — the stale warning printed *before* the note
+  contradicting it. It is now emitted once, for whichever config actually
+  governs the run.
+
+- **Hint commands put global flags last** (iter-213, dogfood UX-5). Several
+  hint builders injected `--dir`/`--format` mid-command and appended
+  `--glob`/file targets after them, so the same flags landed in different
+  positions across the hints under one result set.
 
 - **`--apply-fuzzy` now gates on a confidence floor, and the confidence means
   something** (iter-212, dogfood BUG-11, DEC-078). **Behaviour change for
@@ -373,6 +426,37 @@ and this project adheres to
   `lint_files_extended` are untouched and still live.
 
 ### Fixed
+
+- **The `create-index` help example runs verbatim** (iter-213, dogfood
+  BUG-14). `hyalo create-index -o /tmp/my-index` was a documented example that
+  the vault-boundary guard refuses, and the `--index-file` help ("absolute
+  paths are used as-is") contradicted that guard. The examples now pass
+  `--allow-outside-vault` where they need it, the boundary rule is stated on
+  both flags, and the help documents the read-only-corpus workflow: build the
+  snapshot outside the vault, then name it with `--index-file` on every query.
+
+- **The index-mismatch warning names only what differs** (iter-213, dogfood
+  UX-3). It printed the vault path twice even when the paths were identical
+  and rendered prefixes through `{:?}`, so the reader got `Some("en-us")` and
+  had to diff two long paths to find the one field that actually differed. It
+  now reads `index does not match this run (site prefix: index 'en-us' vs run
+  (none))`.
+
+- **A fatal single-file parse failure is labelled `error`, not `warning`**
+  (iter-213, dogfood UX-5). A write command naming exactly one unparseable
+  file exits 1, but its diagnostic still carried the `warning:` prefix that
+  means "the run continued".
+
+- **`tags --limit` says how much it truncated** (iter-213, dogfood UX-5). The
+  tag summary's own text renderer returned early and skipped the
+  `showing N of M` footer that `properties --limit` prints.
+
+- **`lint --fix` no longer prints a rule as both fixed and conflicted**
+  (iter-213, dogfood UX-5). A rule with several violations in one file can
+  have some fixes applied and one lose a range overlap; the two display lines
+  read as a contradiction. The conflict line is suppressed when the rule
+  already appears as fixed — the JSON keeps both, since `conflicts` is how a
+  consumer learns a fix was skipped.
 
 - **Heading anchors match the slug a renderer actually generates** (iter-211,
   dogfood BUG-8, DEC-075). `find --broken-links` compared a `#fragment`

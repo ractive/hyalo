@@ -8,8 +8,11 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
   the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor
-  `links fix --apply-fuzzy` applies).
+  `links fix --apply-fuzzy` applies). `--raw` adds the file's text; `results.malformed` /
+  `results.parse_error` flag a config that exists but does not parse.
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
+- **Config discovery**: `.hyalo.toml` is read from the current directory, or from the nearest
+  parent whose configured vault contains it — running from inside the vault keeps the config.
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every

@@ -1565,3 +1565,46 @@ directory-nearer one wins. Fuzzy proposals rose 4,659 → 5,506 and `unfixable`
 fell 1,377 → 530, but applied rewrites fell 4,659 → 2,253 because the floor
 does the real filtering. Reporting more candidates while writing fewer is the
 intended shape.
+
+## DEC-079: `.hyalo.toml` is discovered from ancestors, not just the working directory (2026-08-23)
+
+**Decision:** when the working directory has no `.hyalo.toml`, hyalo walks up to
+the **nearest** ancestor that has one and adopts it — but only when that
+config's resolved vault contains the working directory. A nearer config that
+points somewhere else is not adopted, and the walk does not continue past it.
+
+**Why:** the config was read from CWD and nowhere else, so `cd
+hyalo-knowledgebase && hyalo lint` re-rooted on built-in defaults: no schema, no
+`[lint] ignore`, no views, no `site_prefix`, `dir = "."`. Nothing was printed.
+The `--dir` spelling of the same mistake has warned loudly since iter-201
+(DEC-070), and the `cd` spelling is the one people actually make — it is what an
+agent does the moment it wants a shorter path. Adoption is the fix rather than a
+warning, because the invocation is not wrong: the user is standing inside the
+vault their config describes, and every file path they can name is still
+vault-relative.
+
+**Nearest wins, containment gates:** walking past a non-matching config to a
+further ancestor would make "which file applies" depend on the contents of files
+in between — two vaults side by side under one repo could each capture the
+other's subdirectories. Stopping at the first `.hyalo.toml` and requiring
+containment keeps the answer decidable from the directory chain alone. An
+ancestor config that cannot be parsed is still adopted (its vault is taken to be
+its own directory), because the alternative is to skip it silently — which is
+the failure mode this decision exists to remove.
+
+**Announced only when it widens scope:** in the common case (`cd <vault>`) the
+adopted vault *is* the working directory, so nothing about the run changes
+except that the settings apply, and hyalo says nothing. From a deeper
+subdirectory the vault is genuinely wider than where the user is standing, so a
+stderr note names the config and points at `--dir .`.
+
+**Retired:** the "hyalo is configured with dir = X — do not cd into X" warning
+(iter-128). It taught users to avoid a workflow that now works. The
+absolute-`--file` half of that warning stays: passing `/abs/path/to/note.md`
+still resolves, still warns, and is still worth discouraging.
+
+**Side effect, accepted:** `views set`, `types set` and `lint-rules set` run
+from inside the vault now write to the ancestor `.hyalo.toml` instead of
+creating a new one in the working directory. That is the desired outcome —
+nested configs are shadowed and already warned about — but it does mean a run
+that previously created a config file now edits one.
