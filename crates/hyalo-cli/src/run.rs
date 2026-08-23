@@ -876,17 +876,14 @@ fn run_inner() -> Result<(), AppError> {
         )));
     }
 
-    // LLM-driven shells (Claude Code etc.) often `cd` into the configured
-    // vault dir and pass paths relative to that subdir. The current command
-    // works, but the next call from a sibling dir blows up. If CWD is inside
-    // the configured vault, warn once. Skipped when --dir was passed
-    // explicitly: the user has named the vault directly, so the ancestor
-    // walk would just produce false positives from unrelated `.hyalo.toml`
-    // files. Init/Deinit/Completion early-return above this point.
-    if !dir_from_cli {
-        crate::warn::warn_if_cwd_in_vault();
-    }
-
+    // iter-213 (UX-1): running from inside the configured vault used to draw a
+    // "do not cd into the vault" scolding, because `.hyalo.toml` was read from
+    // the working directory and nowhere else, so the run really did lose the
+    // config. `config::load_config` now adopts the governing ancestor config
+    // instead (announcing itself when the vault is wider than CWD), which makes
+    // the invocation correct rather than merely tolerated — so the scolding is
+    // gone. The absolute-`--file` half of the misuse warning stays: that one
+    // still fires from `commands::resolve_file_user`.
     // Derive site_prefix with tri-state precedence:
     //
     //   1. CLI --site-prefix flag  (present → use it; empty string = explicit disable)

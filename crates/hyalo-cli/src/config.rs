@@ -389,15 +389,97 @@ fn salvage_dir(contents: &str) -> Option<PathBuf> {
     Some(PathBuf::from(dir))
 }
 
-/// Load configuration from `.hyalo.toml` in the current working directory.
+/// Best-effort read of the vault a candidate `.hyalo.toml` points at.
+///
+/// Deliberately lenient: this runs while *probing* ancestors, before hyalo has
+/// committed to a config, so a parse failure must not print anything. An
+/// unreadable or unparseable file yields the config directory itself, which is
+/// the widest plausible vault — adopting it is what makes the malformed file
+/// visible (via the strict load that follows) instead of silently skipped.
+fn candidate_vault(config_dir: &Path) -> PathBuf {
+    let sub = std::fs::read_to_string(config_dir.join(".hyalo.toml"))
+        .ok()
+        .and_then(|contents| salvage_dir(&contents))
+        .unwrap_or_else(|| PathBuf::from("."));
+    config_dir.join(sub)
+}
+
+/// Find the `.hyalo.toml` in an ancestor of `cwd` that governs `cwd`.
+///
+/// UX-1 (iter-213): before this, `.hyalo.toml` was read from the working
+/// directory and nowhere else, so `cd docs && hyalo lint` re-rooted on built-in
+/// defaults — no schema, no `[lint] ignore`, no views — and said nothing.
+/// The `--dir` spelling of the same mistake had warned loudly since iter-201;
+/// the far more common `cd` spelling was silent.
+///
+/// **Nearest config wins**: the walk stops at the first ancestor that has a
+/// `.hyalo.toml`, and adopts it only when its configured vault contains `cwd`.
+/// A nearer config that points somewhere else genuinely does not govern this
+/// run, and walking past it to a further ancestor would make which file applies
+/// depend on the contents of files in between.
+fn discover_ancestor_config(cwd: &Path) -> Option<PathBuf> {
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let ancestor = canonical_cwd
+        .ancestors()
+        .skip(1)
+        .find(|a| a.join(".hyalo.toml").is_file())?;
+    let vault = dunce::canonicalize(candidate_vault(ancestor)).ok()?;
+    canonical_cwd
+        .starts_with(&vault)
+        .then(|| ancestor.to_path_buf())
+}
+
+/// Tell the user when an adopted ancestor config widens the run beyond `cwd`.
+///
+/// Adoption is silent in the common case — `cd <vault> && hyalo …`, where the
+/// configured vault *is* the working directory, so nothing about the run
+/// changes except that the settings now apply. From a deeper subdirectory the
+/// vault is genuinely wider than the directory the user is standing in, and
+/// that is worth one line on stderr.
+fn announce_ancestor_config(cwd: &Path, config_dir: &Path, config: &ResolvedDefaults) {
+    let vault = config_dir.join(&config.dir);
+    let same = match (dunce::canonicalize(&vault), dunce::canonicalize(cwd)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    crate::warn::note(format!(
+        "using {} from a parent directory: the vault is {}, not the current directory \
+         — pass --dir . to scope this run to the current directory",
+        config_dir.join(".hyalo.toml").display(),
+        vault.display()
+    ));
+}
+
+/// Load configuration for the current working directory.
+///
+/// Resolution order:
+/// 1. `.hyalo.toml` in the working directory.
+/// 2. Otherwise the nearest ancestor `.hyalo.toml` whose configured vault
+///    contains the working directory (see [`discover_ancestor_config`]).
+/// 3. Otherwise built-in defaults.
 ///
 /// Missing file → silent, returns hardcoded defaults.
-/// I/O error (not NotFound) → prints a warning, returns defaults.
-/// Malformed TOML or unknown fields → prints a warning, returns defaults.
+/// I/O error (not NotFound) → records a diagnostic, returns defaults.
+/// Malformed TOML or unknown fields → records a diagnostic, returns defaults.
 /// Valid config → merges with defaults (config values take precedence).
 pub(crate) fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
-        Ok(cwd) => load_config_from(&cwd),
+        Ok(cwd) => {
+            if cwd.join(".hyalo.toml").is_file() {
+                return load_config_from(&cwd);
+            }
+            match discover_ancestor_config(&cwd) {
+                Some(ancestor) => {
+                    let config = load_config_from(&ancestor);
+                    announce_ancestor_config(&cwd, &ancestor, &config);
+                    config
+                }
+                None => load_config_from(&cwd),
+            }
+        }
         Err(e) => {
             crate::warn::warn(format!(
                 "could not determine current directory to locate .hyalo.toml: {e}"
