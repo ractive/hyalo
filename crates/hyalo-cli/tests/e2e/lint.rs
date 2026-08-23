@@ -3034,9 +3034,10 @@ fn lint_rule_id_match_is_case_insensitive() {
 }
 
 /// `--rule-prefix` is case-insensitive too, and a prefix that matches nothing
-/// warns on stderr instead of looking like a clean run.
+/// is a user error (iter-210 BUG-5) — it used to warn and then lint with *every*
+/// rule at exit 0.
 #[test]
-fn lint_rule_prefix_case_insensitive_and_warns_when_empty() {
+fn lint_rule_prefix_case_insensitive_and_errors_when_empty() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "src.md", "---\ntitle: S\n---\nSee [[gone]].\n");
 
@@ -3063,9 +3064,196 @@ fn lint_rule_prefix_case_insensitive_and_warns_when_empty() {
         .args(["lint", "--rule-prefix", "ZZZ"])
         .output()
         .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an unmatched --rule-prefix must exit 1 like an unmatched --rule"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("matches no rule"),
-        "empty prefix selection must warn: {stderr}"
+        stderr.contains("no rule matches prefix: ZZZ"),
+        "the error must name the prefix: {stderr}"
+    );
+    assert!(
+        stderr.contains("hyalo lint-rules list"),
+        "the error must carry the discovery hint: {stderr}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).trim().is_empty(),
+        "nothing may be linted when the prefix matches no rule: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// BUG-5 regression: the unmatched-prefix error uses the same JSON envelope
+/// (`error` + `hint`) as the unmatched `--rule` id error.
+#[test]
+fn lint_rule_prefix_unmatched_json_envelope_matches_rule() {
+    let tmp = setup_vault_with_schema();
+
+    let envelope = |args: &[&str]| {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let val: serde_json::Value = serde_json::from_str(stderr.trim())
+            .unwrap_or_else(|e| panic!("not JSON: {stderr} ({e})"));
+        (out.status.code(), val)
+    };
+
+    let (rule_code, rule_val) = envelope(&["lint", "--rule", "NOPE1", "--format", "json"]);
+    let (prefix_code, prefix_val) =
+        envelope(&["lint", "--rule-prefix", "NOPE1", "--format", "json"]);
+
+    assert_eq!(rule_code, prefix_code, "exit codes must match");
+    assert_eq!(
+        rule_val.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+        prefix_val.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+        "both errors must use the same envelope keys"
+    );
+    assert!(
+        prefix_val["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("NOPE1"),
+        "envelope must name the prefix: {prefix_val}"
+    );
+    assert_eq!(
+        rule_val["hint"], prefix_val["hint"],
+        "both errors must carry the same discovery hint"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// BUG-6 (iter-210): lint JSON counters describe the whole run
+// ---------------------------------------------------------------------------
+
+/// Build a vault with `clean` clean files plus `dirty` files that each violate
+/// at least two rules. Large enough to cross the default 50-file display cap.
+fn setup_counter_vault(clean: usize, dirty: usize) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.note]
+required = ["title"]
+"#,
+    );
+    for i in 0..clean {
+        write_md(
+            tmp.path(),
+            &format!("clean-{i:03}.md"),
+            &format!("---\ntitle: Clean {i}\ntype: note\n---\n\nBody text.\n"),
+        );
+    }
+    for i in 0..dirty {
+        // Missing the required `title` (SCHEMA) + trailing whitespace (MD009)
+        // + multiple spaces after the hash (MD019): at least three rules fire.
+        write_md(
+            tmp.path(),
+            &format!("dirty-{i:03}.md"),
+            "---\ntype: note\n---\n\n#  Bad Heading\n\nTrailing spaces here.   \n",
+        );
+    }
+    tmp
+}
+
+fn lint_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["lint", "--format", "json"];
+    args.extend_from_slice(extra);
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(&args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint {extra:?} did not emit JSON: {stdout} ({e})"))
+}
+
+/// On a 61-file vault with a single violating file, `total` must equal the
+/// whole-run violation count (`errors + warnings`) and `files_truncated` must
+/// be `false` — it used to be derived from `files_checked > limit`, so any
+/// vault over 50 files claimed truncation it had not performed.
+#[test]
+fn lint_json_counters_describe_whole_run_on_large_clean_vault() {
+    let tmp = setup_counter_vault(60, 1);
+
+    let val = lint_json(tmp.path(), &[]);
+    let results = &val["results"];
+    let num = |k: &str| results[k].as_u64().unwrap_or_else(|| panic!("missing {k}: {val}"));
+
+    assert_eq!(num("files_checked"), 61, "all 61 files are examined: {val}");
+    assert_eq!(
+        num("files_with_violations"),
+        1,
+        "only the dirty file violates: {val}"
+    );
+    assert_eq!(
+        num("total"),
+        num("errors") + num("warnings"),
+        "`total` must describe the same run as errors+warnings: {val}"
+    );
+    assert_eq!(
+        results["files_truncated"],
+        serde_json::Value::Bool(false),
+        "nothing was truncated — 1 listed file < 50-file cap: {val}"
+    );
+    assert!(
+        num("rules_fired") >= 2,
+        "the dirty file trips several rules: {val}"
+    );
+}
+
+/// `rules_fired` must cover every rule that fired in the run, not just the
+/// rules visible in the (display-capped) `files[]` array.
+#[test]
+fn lint_json_rules_fired_is_limit_independent() {
+    let tmp = setup_counter_vault(0, 60);
+
+    let unlimited = lint_json(tmp.path(), &["--limit", "0"]);
+    let capped = lint_json(tmp.path(), &["--limit", "1"]);
+
+    assert_eq!(
+        unlimited["results"]["rules_fired"], capped["results"]["rules_fired"],
+        "rules_fired must not shrink with --limit: {unlimited} vs {capped}"
+    );
+    assert_eq!(
+        unlimited["results"]["total"], capped["results"]["total"],
+        "total must not shrink with --limit: {unlimited} vs {capped}"
+    );
+    assert_eq!(
+        capped["results"]["files"].as_array().map(Vec::len),
+        Some(1),
+        "the display list itself is still capped: {capped}"
+    );
+}
+
+/// `files_truncated` reflects *actual* list truncation: true only when there
+/// are more violating files than the display cap admits.
+#[test]
+fn lint_json_files_truncated_tracks_list_truncation() {
+    let tmp = setup_counter_vault(0, 60);
+
+    let capped = lint_json(tmp.path(), &["--limit", "10"]);
+    let listed = capped["results"]["files"].as_array().map_or(0, Vec::len);
+    let with_violations = capped["results"]["files_with_violations"]
+        .as_u64()
+        .unwrap_or_default() as usize;
+    assert_eq!(listed, 10, "display list is capped at 10: {capped}");
+    assert_eq!(
+        capped["results"]["files_truncated"],
+        serde_json::Value::Bool(listed < with_violations),
+        "files_truncated must equal (listed < files_with_violations): {capped}"
+    );
+
+    let unlimited = lint_json(tmp.path(), &["--limit", "0"]);
+    assert_eq!(
+        unlimited["results"]["files_truncated"],
+        serde_json::Value::Bool(false),
+        "`--limit 0` lists everything, so nothing is truncated: {unlimited}"
     );
 }

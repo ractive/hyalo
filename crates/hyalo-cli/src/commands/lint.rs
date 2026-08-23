@@ -1666,10 +1666,6 @@ pub fn lint_files_extended(
     let (authoritative_errors, authoritative_warnings) =
         count_errors_warnings(&all_results, is_fix_mode);
 
-    // Cap the display list (0 == unlimited is normalized to `usize::MAX` by the
-    // caller, so truncation here is a no-op for `--limit 0`).
-    all_results.truncate(opts.max_files);
-
     // Whole-run violation total and distinct firing rules, computed over EVERY
     // result *before* the display cap, exactly like the error/warning totals
     // above. Deriving them from the capped display loops (pre-iter-210) made
@@ -1685,6 +1681,10 @@ pub fn lint_files_extended(
         }
         seen.len()
     };
+
+    // Cap the display list (0 == unlimited is normalized to `usize::MAX` by the
+    // caller, so truncation here is a no-op for `--limit 0`).
+    all_results.truncate(opts.max_files);
 
     let val = if is_fix_mode {
         // -------------------------------------------------------------------

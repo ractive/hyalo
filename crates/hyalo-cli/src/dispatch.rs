@@ -1965,16 +1965,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 },
                 None => None,
             };
-            // M-10: `--rule-prefix` legitimately selects a family, so an empty
-            // selection is not fatal — but it must not look like a clean run.
-            // Warn on stderr; the prefix match itself is case-insensitive.
+            // iter-210 BUG-5: a prefix that selects no rule is as much a typo
+            // as an unknown `--rule` id, and it used to be *worse* than one:
+            // the empty filter fell through to "no filtering", so `--rule-prefix
+            // nope` warned and then ran every MD rule anyway at exit 0. Fail it
+            // with the same error shape as `--rule`. The match is
+            // case-insensitive, so a matching family is unaffected.
             if let Some(prefix) = rule_prefix.as_deref()
                 && md_engine.rules_matching_prefix_ci(prefix).is_empty()
             {
-                eprintln!(
-                    "warning: --rule-prefix {prefix} matches no rule; nothing will be linted \
-                     (run `hyalo lint-rules list` to see available rules)"
-                );
+                return Ok(crate::output::CommandOutcome::UserError(
+                    crate::output::format_error(
+                        ctx.user_format,
+                        &format!("no rule matches prefix: {prefix}"),
+                        None,
+                        Some("run `hyalo lint-rules list` to see available rules"),
+                        None,
+                    ),
+                ));
             }
 
             // `--format github` emits one annotation per violation, so every
