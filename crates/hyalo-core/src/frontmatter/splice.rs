@@ -29,8 +29,9 @@
 
 use indexmap::IndexMap;
 use serde_json::Value;
-use serde_saphyr::SerializerOptions;
+use serde_saphyr::{Options, SerializerOptions};
 
+use super::MAX_FRONTMATTER_BYTES;
 use super::parse::{hyalo_options, is_closing_delimiter};
 
 /// Why a minimal-diff write could not be performed.
@@ -200,7 +201,7 @@ pub(super) fn splice_frontmatter(
 
     // Final gate: the spliced text must parse back to exactly what the caller
     // asked to write. This is what makes every heuristic above safe.
-    match parse_map(&out) {
+    match parse_map_with(&out, verify_options()) {
         Ok(round_tripped) if map_eq(&round_tripped, props) => SpliceOutcome::Spliced(out),
         _ => SpliceOutcome::Fallback(FallbackReason::VerificationFailed),
     }
@@ -208,12 +209,39 @@ pub(super) fn splice_frontmatter(
 
 /// Parse YAML text into an ordered property map using hyalo's shared parser
 /// options (strict booleans, no anchors/aliases, duplicate keys rejected).
+///
+/// Used for the *baseline* parse of the on-disk block, so that the splicer
+/// sees exactly what the read path saw.
 fn parse_map(yaml: &str) -> Result<IndexMap<String, Value>, ()> {
+    parse_map_with(yaml, hyalo_options())
+}
+
+/// Parse YAML text for the post-splice verification pass.
+///
+/// Same hardening as [`hyalo_options`] where it matters (no aliases, no
+/// anchors, one document, duplicate keys rejected) but with node and scalar
+/// budgets scaled to the frontmatter size limit rather than to the much
+/// tighter read-path defaults. A caller is allowed to *write* a value larger
+/// than the read-path scalar budget — the size-budget pre-flight in
+/// `write_frontmatter_impl` is what rejects those — and verification must not
+/// mistake that for a splicing failure and warn about churn that did not
+/// happen.
+fn verify_options() -> Options {
+    let base = hyalo_options();
+    let budget = base.budget.map(|b| serde_saphyr::Budget {
+        max_events: 200_000,
+        max_nodes: 100_000,
+        max_total_scalar_bytes: MAX_FRONTMATTER_BYTES * 2,
+        ..b
+    });
+    Options { budget, ..base }
+}
+
+fn parse_map_with(yaml: &str, options: Options) -> Result<IndexMap<String, Value>, ()> {
     if yaml.trim().is_empty() {
         return Ok(IndexMap::new());
     }
-    serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, hyalo_options())
-        .map_err(|_| ())
+    serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, options).map_err(|_| ())
 }
 
 /// Order-sensitive map equality (`IndexMap`'s `PartialEq` ignores order).
@@ -584,9 +612,17 @@ mod tests {
 
     #[test]
     fn top_level_sequence_falls_back() {
+        // A top-level sequence is not a property map at all, so it is rejected
+        // by the baseline parse before segmentation even runs.
         let yaml = "- a\n- b\n";
         let p = props(&[("a", json!(1))]);
-        assert_eq!(fallback(yaml, &p), FallbackReason::NotSpanMappable);
+        assert_eq!(fallback(yaml, &p), FallbackReason::Unparseable);
+    }
+
+    #[test]
+    fn compact_sequence_before_any_key_is_not_span_mappable() {
+        // Segmentation-level guard for the same shape, reached directly.
+        assert!(segment("- a\n- b\n").is_none());
     }
 
     #[test]
