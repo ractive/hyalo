@@ -3262,3 +3262,120 @@ fn lint_json_files_truncated_tracks_list_truncation() {
         "`--limit 0` lists everything, so nothing is truncated: {unlimited}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NEW-6 / NEW-6b (iter-218): `lint --fix` totals describe the whole run, and
+// fix-mode's `errors`/`warnings` are renamed so they never mean something
+// different than the same keys on plain `lint`.
+// ---------------------------------------------------------------------------
+
+/// Build a vault with `dirty` files that each get 4 autofixed MD012
+/// (multiple-blank-lines) violations — no conflicts — plus one additional
+/// file whose only violation is a genuine cross-rule conflict: a line ending
+/// in a hard tab trips both MD009 (trailing whitespace) and MD010 (hard
+/// tab), and their fixes overlap the same byte range, so exactly one of them
+/// is reported as `conflicts` and the other as `fixed`.
+///
+/// The conflict file has only 2 violations against 4 for every dirty file,
+/// so the worst-offenders-first sort (`lint.rs`'s `all_results.sort_by_key`)
+/// always places it last — a `--limit` low enough to truncate the display
+/// truncates it out first, making it the ideal canary for whether
+/// `total_conflicts` is computed before or after that truncation.
+fn setup_fix_counter_vault(dirty: usize) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    for i in 0..dirty {
+        write_md(
+            tmp.path(),
+            &format!("dirty-{i:03}.md"),
+            "---\ntitle: T\ntype: note\n---\n\nA\n\n\n\nB\n\n\n\nC\n\n\n\nD\n\n\n\nE\n",
+        );
+    }
+    // Sorts last: only 2 violations (MD009 + MD010 on the same trailing tab,
+    // one of which becomes a conflict), versus 4 for every dirty-*.md file.
+    write_md(
+        tmp.path(),
+        "zzz-conflict.md",
+        "---\ntitle: Conflict\ntype: note\n---\n\nHello\t\nWorld\n",
+    );
+    tmp
+}
+
+fn lint_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["lint", "--fix", "--dry-run", "--format", "json"];
+    args.extend_from_slice(extra);
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(&args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint --fix {extra:?} did not emit JSON: {stdout} ({e})"))
+}
+
+/// `lint --fix --dry-run` totals (`total_fixed`/`total_remaining`/
+/// `total_conflicts`) must be identical at `--limit 1`, `--limit 50`
+/// (default), and `--limit 100000` — `--limit` may only ever shrink the
+/// `files[]` listing, never the summary counters. Before iter-218 these were
+/// accumulated inside the same per-file loop that builds the (display-capped)
+/// `files[]` array, so `--limit 1` silently reported `conflicts: 0` on a
+/// vault that actually had one (dogfood NEW-6: GH Docs showed `conflicts 0`
+/// at the default limit vs 12 at `--limit 100000`).
+#[test]
+fn lint_fix_totals_invariant_across_limit_on_conflict_vault() {
+    let tmp = setup_fix_counter_vault(55);
+
+    let at_1 = lint_fix_json(tmp.path(), &["--limit", "1"]);
+    let at_50 = lint_fix_json(tmp.path(), &["--limit", "50"]);
+    let at_100000 = lint_fix_json(tmp.path(), &["--limit", "100000"]);
+
+    for key in ["total_fixed", "total_remaining", "total_conflicts"] {
+        assert_eq!(
+            at_1["results"][key], at_50["results"][key],
+            "{key} must not depend on --limit (1 vs 50): {at_1} vs {at_50}"
+        );
+        assert_eq!(
+            at_50["results"][key], at_100000["results"][key],
+            "{key} must not depend on --limit (50 vs 100000): {at_50} vs {at_100000}"
+        );
+    }
+    assert_eq!(
+        at_1["results"]["total_conflicts"].as_u64(),
+        Some(1),
+        "the conflict file's MD009/MD010 overlap must be counted even though \
+         --limit 1 excludes it from the displayed files[] list: {at_1}"
+    );
+    // Sanity: the display list itself really is capped at each limit.
+    assert_eq!(
+        at_1["results"]["files"].as_array().map(Vec::len),
+        Some(1),
+        "display list capped at 1: {at_1}"
+    );
+    assert_eq!(
+        at_50["results"]["files"].as_array().map(Vec::len),
+        Some(50),
+        "display list capped at 50: {at_50}"
+    );
+}
+
+/// `lint --fix` JSON reports `remaining_errors`/`remaining_warnings`, not
+/// `errors`/`warnings` — those key names are reserved for plain `lint`'s
+/// whole-run severity counts (NEW-6b). A consumer must not be able to read
+/// `.errors` off both `lint` and `lint --fix` output and silently get
+/// answers to two different questions under one key name.
+#[test]
+fn lint_fix_json_uses_remaining_errors_warnings_keys() {
+    let tmp = setup_fix_counter_vault(2);
+
+    let val = lint_fix_json(tmp.path(), &[]);
+    let results = &val["results"];
+    assert!(
+        results.get("errors").is_none() && results.get("warnings").is_none(),
+        "fix-mode JSON must not carry the ambiguous errors/warnings keys: {val}"
+    );
+    assert!(
+        results["remaining_errors"].is_u64() && results["remaining_warnings"].is_u64(),
+        "fix-mode JSON must carry remaining_errors/remaining_warnings: {val}"
+    );
+}

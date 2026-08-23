@@ -1334,7 +1334,14 @@ Repeatable (AND).\n\
             typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
             are applied in `(start, end, rule_id)` order; overlapping fixes are deferred and\n\
             reported as conflicts. Use --fix-rule <ID> (repeatable) to limit which rules autofix,\n\
-            or --dry-run to preview without writing.\n\n\
+            or --dry-run to preview without writing. JSON under --fix uses `total_fixed`,\n\
+            `total_remaining`, and `total_conflicts` in place of plain lint's `total` —\n\
+            all three, like every counter above, describe the WHOLE run and are identical at\n\
+            any --limit; only the displayed `files[]` list shrinks. `remaining_errors`/\n\
+            `remaining_warnings` replace `errors`/`warnings` in this shape (they count what is\n\
+            left unfixed, not the whole-run count those keys mean on plain lint) so a script\n\
+            reading the same key off both shapes never silently answers two different\n\
+            questions.\n\n\
             EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo lint\n\

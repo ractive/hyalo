@@ -245,6 +245,30 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
         Commands::Find { .. } => {
             CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0)
         }
+        Commands::Lint { fix, dry_run, .. } if *fix => {
+            // Fix-mode shape: `total_fixed`/`total_remaining`/`total_conflicts`
+            // plus `remaining_errors`/`remaining_warnings` (iter-218 NEW-6b) —
+            // distinct from the read-only shape below so a `--files-from`
+            // run that resolves to zero files still reports the shape its
+            // non-empty counterpart would, letting `output.rs`'s
+            // `format_lint_fix_output_text` detection and any JSON consumer
+            // reading `.total_fixed`/`.remaining_errors` see a consistent
+            // key set regardless of whether any file matched.
+            let payload = serde_json::json!({
+                "files": [],
+                "total_fixed": 0,
+                "total_remaining": 0,
+                "total_conflicts": 0,
+                "rules_fired": 0,
+                "files_with_violations": 0,
+                "files_checked": 0,
+                "files_truncated": false,
+                "remaining_errors": 0,
+                "remaining_warnings": 0,
+                "dry_run": *dry_run,
+            });
+            CommandOutcome::success_with_total(payload.to_string(), 0)
+        }
         Commands::Lint { .. } => {
             let payload = serde_json::json!({
                 "files": [],

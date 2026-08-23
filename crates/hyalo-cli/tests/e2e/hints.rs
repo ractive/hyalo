@@ -1273,6 +1273,101 @@ title: ActualNote
 }
 
 // ---------------------------------------------------------------------------
+// links fix --hints: 0 fuzzy candidates clear the confidence floor
+// (iter-218 NEW-11 / NEW-14)
+// ---------------------------------------------------------------------------
+
+/// When every fuzzy candidate is below the confidence floor, `links`/
+/// `links fix` must not emit a hint that promises an apply it will not
+/// perform. Before iter-218, the hint counted every fuzzy candidate
+/// regardless of confidence, so a vault whose fuzzy bucket was entirely
+/// below-floor still got `"Review then apply N lower-confidence fuzzy
+/// fixes" [writes]` — running that command verbatim applied 0 files
+/// (dogfood NEW-14).
+#[test]
+fn links_fix_hints_below_floor_only_fuzzy_does_not_promise_apply() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+# Target
+"),
+    );
+    // "target-x" is similar enough to fuzzy-match "target" but well below
+    // the default 0.8 confidence floor (confirmed empirically: ~0.67).
+    write_md(
+        tmp.path(),
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+See [[target-x]] for more.
+"),
+    );
+
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["links", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
+        panic!(
+            "invalid JSON: {e}\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let results = &parsed["results"];
+    assert_eq!(
+        results["fuzzy"].as_u64(),
+        Some(1),
+        "one fuzzy candidate found: {parsed}"
+    );
+    assert_eq!(
+        results["fuzzy_below_floor"].as_u64(),
+        Some(1),
+        "the one candidate must be below the confidence floor for this test \
+         fixture to exercise the 0-applicable case: {parsed}"
+    );
+
+    let hints = parsed["hints"].as_array().expect("hints array");
+    assert!(
+        !hints.iter().any(|h| h["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--apply-fuzzy"))),
+        "must not suggest --apply-fuzzy when 0 candidates clear the floor: {hints:?}"
+    );
+    let review_hint = hints
+        .iter()
+        .find(|h| {
+            h["description"]
+                .as_str()
+                .is_some_and(|d| d.contains("below the confidence floor"))
+        })
+        .unwrap_or_else(|| panic!("expected a below-floor review hint: {hints:?}"));
+    assert_eq!(
+        review_hint["writes"].as_bool(),
+        Some(false),
+        "the review hint must not claim to write anything: {review_hint}"
+    );
+    assert!(
+        review_hint["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--min-confidence") && !c.contains("--apply")),
+        "the review hint should point at --min-confidence, not an apply: {review_hint}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // create-index --hints
 // ---------------------------------------------------------------------------
 

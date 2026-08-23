@@ -657,12 +657,22 @@ impl HyaloLintEngine {
                     } else {
                         convert_fix(&v, body_content)
                     };
+                    // A handful of upstream rules report `column` as a byte
+                    // offset, not a Unicode scalar one — see
+                    // `BYTE_COLUMN_RULE_IDS` (DEC-073, iter-218 NEW-11).
+                    let column = if BYTE_COLUMN_RULE_IDS.contains(rule_id) {
+                        doc.lines
+                            .get(v.line.saturating_sub(1))
+                            .map_or(v.column, |line| byte_col_to_scalar_col(line, v.column))
+                    } else {
+                        v.column
+                    };
                     diagnostics.push(Diagnostic {
                         rule_id: rule_id.to_string(),
                         rule_name: v.rule_name.clone(),
                         message: v.message.clone(),
                         line: v.line,
-                        column: v.column,
+                        column,
                         severity: sev,
                         fix,
                     });
@@ -716,6 +726,39 @@ impl HyaloLintEngine {
 
         Ok(diagnostics)
     }
+}
+
+/// Rule IDs whose upstream `Violation.column` (the *reported* diagnostic
+/// position, distinct from the `Fix` range `convert_fix` handles above) is
+/// computed from a byte offset rather than a Unicode-scalar one.
+///
+/// Confirmed by reading each rule's source in `mdbook-lint-rulesets` 0.16.0
+/// and reproducing on a multibyte fixture (iter-218, dogfood NEW-11):
+/// MD010 (`line.find('\t')`, a byte offset) and MD042 (comrak AST
+/// `sourcepos.start.column`, byte-based) are both default-on; MD052
+/// (`self.pos - self.line_start`, a byte cursor into `self.input: &[u8]`) is
+/// opt-in but wrong the same way once enabled. Rules that already index a
+/// `Vec<char>` (MD009, MD011, MD034) or only ever report column 1 or an
+/// ASCII-whitespace-prefix length (MD001, MD012, MD018, MD019, MD022, MD023,
+/// MD031, MD040, MD047) are unaffected and must not be added here — passing
+/// an already-scalar column through [`byte_col_to_scalar_col`] would corrupt
+/// it on any line with multibyte content before the flagged position.
+const BYTE_COLUMN_RULE_IDS: &[&str] = &["MD010", "MD042", "MD052"];
+
+/// Convert a rule's 1-based **byte** column to a 1-based Unicode-scalar
+/// column, matching `lint`'s DEC-073 convention.
+///
+/// `line` must be the exact line text the upstream rule measured against
+/// (no terminator) — `Document::lines` splits the same way upstream rules
+/// do, via `str::lines()`. A column that does not land on a char boundary
+/// (out of range, or inside a multibyte sequence — which should not happen
+/// for a byte offset upstream computed honestly, but a corrupted/mismatched
+/// input must not panic) falls back to the original byte column rather than
+/// silently reporting a wrong one.
+fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
+    let byte_offset = byte_col_1based.saturating_sub(1);
+    line.get(..byte_offset)
+        .map_or(byte_col_1based, |prefix| prefix.chars().count() + 1)
 }
 
 /// Convert an upstream `Fix` (line/column [`Position`]s) to a byte-offset
@@ -958,6 +1001,56 @@ mod tests {
         let fix = d.fix.as_ref().expect("MD009 fix should not be dropped");
         let fixed = apply(body, fix);
         assert_eq!(fixed, "日本語のテキスト\n");
+    }
+
+    // --- iter-218 NEW-11: MD010's upstream `Violation.column` is a byte
+    // offset (`line.find('\t')` in mdbook-lint-rulesets), not the
+    // Unicode-scalar column DEC-073 requires. `byte_col_to_scalar_col` in
+    // this file corrects it before the diagnostic is emitted. ---
+
+    #[test]
+    fn md010_reports_unicode_scalar_column_not_byte_offset() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+
+        // "àéî" is 3 Unicode scalars but 6 UTF-8 bytes (2 bytes each), so the
+        // tab's byte offset (6) and scalar offset (3) diverge. Before
+        // iter-218 the reported column was 7 (byte offset + 1); the correct
+        // Unicode-scalar column is 4 (scalar offset + 1).
+        let body = "àéî\tTAB\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD010")
+            .expect("MD010 should fire on the hard tab");
+        assert_eq!(
+            d.column, 4,
+            "expected scalar column 4 (3 chars + 1), not the byte column 7"
+        );
+    }
+
+    #[test]
+    fn md010_reports_unicode_scalar_column_on_emoji_line() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+
+        // A single emoji is one Unicode scalar but 4 UTF-8 bytes, so the
+        // byte-vs-scalar gap is even wider than the 2-byte-per-char case
+        // above. Byte column would be 5 (4 bytes + 1); scalar column is 2.
+        let body = "😀\tTAB\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD010")
+            .expect("MD010 should fire on the hard tab");
+        assert_eq!(
+            d.column, 2,
+            "expected scalar column 2 (1 char + 1), not the byte column 5"
+        );
     }
 
     // --- Char-column rules (MD034, MD011) must not be corrupted by the

@@ -1834,3 +1834,41 @@ outside any bracket and would otherwise be ordinary, linkable prose —
 and `placeholder_style_bracket_text_is_never_corrupted` in `auto_link.rs`
 lock in the corrected behavior; the former replaced a same-named-in-spirit
 test that asserted the opposite under the superseded design.
+
+## DEC-085: `lint --fix` JSON renames `errors`/`warnings` to `remaining_errors`/`remaining_warnings` (2026-08-23)
+
+**Decision:** rename, don't unify. Plain `lint`'s `errors`/`warnings` keep
+meaning whole-run severity counts, unchanged. `lint --fix`'s JSON — which
+used to carry the same key names for a different quantity (violations left
+after fixing) — now carries `remaining_errors`/`remaining_warnings`
+instead. `dispatch.rs`'s `inject_ext_file_result` (which patches injected
+`views`-sourced violations into either shape) now bumps whichever key pair
+the payload it is patching actually carries.
+
+**Why not unify the meaning instead:** the two numbers answer genuinely
+different questions and both are needed. A CI gate wants "did anything I
+couldn't autofix stay broken" (remaining, fix-mode's meaning); an audit
+wants "how much is wrong with this vault, before any fix" (whole-run,
+plain lint's meaning). Making fix-mode also report whole-run counts would
+have made the exit code (already driven by the remaining-after-fix count,
+correctly — a fully-autofixed vault should exit 0) disagree with the
+`errors`/`warnings` in the same payload it drives. Making plain `lint`
+report a "remaining" count makes no sense — nothing was fixed. There was
+no single meaning that served both callers; only a key name pretended
+there was.
+
+**Why this is worth a breaking JSON-shape change instead of leaving it**:
+dogfood NEW-6b — a script reading `.errors` off both `lint` and
+`lint --fix` output got answers to two different questions under one key
+name, with no signal in the JSON that the meaning had shifted. That is
+exactly the class of output-truth defect iter-210/iter-218 exist to
+remove elsewhere in this same command's counters (see NEW-6 above, and
+BUG-6 in iter-210). Landing it in the same iteration as NEW-6 means one
+CHANGELOG entry and one migration note instead of two.
+
+**Blast radius checked:** the only other producer/consumer of the old
+`errors`/`warnings` keys on the fix-mode shape was `dispatch.rs`'s view-
+violation injection path; the text renderer (`format_lint_fix_output_text`)
+never read those keys at all (the footer is built entirely from
+`total_fixed`/`total_remaining`/`total_conflicts`), so no text-output
+change was needed.

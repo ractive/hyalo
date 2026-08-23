@@ -1808,19 +1808,44 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
     }
 
     // Fuzzy-match fixes are excluded from --apply by default. Surface the
-    // opt-in when a dry-run turned up fuzzy candidates that were not applied.
+    // opt-in when a dry-run turned up fuzzy candidates that were not applied
+    // — but only count candidates that actually clear the confidence floor
+    // (NEW-14, iter-218). `fuzzy` is every candidate found, including ones
+    // below the floor that `--apply-fuzzy` would never write; promising to
+    // apply all of `fuzzy` produced a hint like "apply 3253 fixes" that
+    // applied 0 files when every one of them was below-floor.
     let fuzzy = data
         .get("fuzzy")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
+    let fuzzy_below_floor = data
+        .get("fuzzy_below_floor")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let applicable_fuzzy = fuzzy.saturating_sub(fuzzy_below_floor);
     let fuzzy_applied = data
         .get("fuzzy_applied")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    if fuzzy > 0 && !fuzzy_applied {
+    if applicable_fuzzy > 0 && !fuzzy_applied {
         hints.push(Hint::new(
-            format!("Review then apply {fuzzy} lower-confidence fuzzy fixes"),
+            format!("Review then apply {applicable_fuzzy} lower-confidence fuzzy fixes"),
             build_command_with_glob(ctx, &["links", "fix", "--apply", "--apply-fuzzy"]),
+        ));
+    } else if fuzzy > 0 && !fuzzy_applied {
+        // Every candidate is below the floor — `--apply-fuzzy` would apply 0
+        // of them. Point at reviewing with a lower floor instead of a
+        // command that reads as an apply but writes nothing.
+        let floor = data
+            .get("fuzzy_min_confidence")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        hints.push(Hint::new(
+            format!(
+                "{fuzzy} fuzzy candidates found, all below the confidence floor \
+                 {floor} — review with a lower --min-confidence before applying"
+            ),
+            build_command_with_glob(ctx, &["links", "fix", "--min-confidence", "0"]),
         ));
     }
 
@@ -3912,8 +3937,8 @@ mod tests {
             "files_with_violations": 0,
             "files_checked": 3,
             "files_truncated": false,
-            "errors": 0,
-            "warnings": 0,
+            "remaining_errors": 0,
+            "remaining_warnings": 0,
             "dry_run": false,
         });
         let hints = generate_hints(&c, &data, None);

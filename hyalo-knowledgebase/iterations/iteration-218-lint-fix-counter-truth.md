@@ -50,29 +50,29 @@ independently by two agents:
 
 ## Tasks
 
-- [ ] Accumulate `lint --fix` totals (fixed / remaining / conflicts, per
+- [x] Accumulate `lint --fix` totals (fixed / remaining / conflicts, per
       rule and whole-run) over the full run before display truncation, in
       both text footer and JSON; `--limit` affects listing only
-- [ ] Unify or rename `errors`/`warnings` so the same key never switches
+- [x] Unify or rename `errors`/`warnings` so the same key never switches
       between whole-run and remaining-only semantics across modes
-- [ ] MD010 (and any other straggler found by an audit of column-emitting
+- [x] MD010 (and any other straggler found by an audit of column-emitting
       rules) reports 1-based Unicode scalar columns per DEC-073
-- [ ] The links `[writes]` fuzzy hint counts only candidates at/above the
+- [x] The links `[writes]` fuzzy hint counts only candidates at/above the
       effective floor; when 0, the hint suggests `--min-confidence`
       review instead of promising an apply
-- [ ] e2e tests: fix totals invariant across `--limit 1/50/100000` on a
+- [x] e2e tests: fix totals invariant across `--limit 1/50/100000` on a
       fixture with >50 violating files including conflicts; MD010 column
       on multibyte line; hint text at 0-applicable-fuzzy
-- [ ] Docs sync in same PR: `lint --help` counter wording if it changes,
+- [x] Docs sync in same PR: `lint --help` counter wording if it changes,
       CHANGELOG
 
 ## Acceptance criteria
 
-- [ ] `lint --fix --dry-run` totals identical at any `--limit`, equal to
+- [x] `lint --fix --dry-run` totals identical at any `--limit`, equal to
       `--limit 0`, and equal to what a real `--fix` run then writes
-- [ ] `conflicts` is never understated by truncation
-- [ ] MD010 on `àéî\tTAB` reports column 4; emoji line reports column 2
-- [ ] The below-floor hint either names an accurate count or does not
+- [x] `conflicts` is never understated by truncation
+- [x] MD010 on `àéî\tTAB` reports column 4; emoji line reports column 2
+- [x] The below-floor hint either names an accurate count or does not
       claim it will apply anything
 
 ## Non-goals

@@ -11,6 +11,42 @@ and this project adheres to
 
 ### Fixed
 
+- **`lint --fix` totals now describe the whole run, not the display-capped
+  listing** (iter-218, dogfood NEW-6). `total_fixed`, `total_remaining`,
+  and `total_conflicts` — in both the text footer and JSON — were
+  accumulated inside the same per-file loop that builds the (`--limit`-capped)
+  `files[]` array, so a low `--limit` silently under-reported them. On a
+  GitHub Docs corpus, the default limit printed `conflicts 0` while
+  `--limit 100000` showed `conflicts 12` — a user who dry-ran at the
+  default limit saw a clean preview and then hit conflicts on `--apply`.
+  Writes were always complete (the trees produced with and without
+  `--limit 0` were byte-identical); only the report lied. The totals are
+  now accumulated over every result before the display list is truncated,
+  exactly like plain `lint`'s `total`/`errors`/`warnings` already were.
+- **MD010, MD042, and (when enabled) MD052 report Unicode-scalar columns,
+  not byte columns** (iter-218, dogfood NEW-11). Per DEC-073, `lint`
+  columns are 1-based Unicode scalars; these three upstream
+  `mdbook-lint-rulesets` rules compute their reported column from a byte
+  offset (`str::find`, a byte cursor, or comrak's byte-indexed AST
+  `sourcepos`) instead. A line reading `àéî<TAB>` reported column 7 for the
+  tab (the byte offset) instead of column 4 (the scalar offset); an emoji
+  line reported column 5 instead of 2. Every other default-on rule was
+  audited against a multibyte fixture and found already correct (MD009,
+  MD011, MD034 index a `Vec<char>`; the rest report either a constant
+  column 1 or a length measured only over ASCII indentation/hashes, which
+  cannot diverge from bytes). The fix converts the reported column for
+  these three rule IDs after the fact, using the same line text upstream
+  measured against — it does not touch `mdbook-lint-rulesets`.
+- **The `links`/`links fix` `[writes]` fuzzy hint no longer promises an
+  apply it will not perform** (iter-218, dogfood NEW-14). The hint counted
+  every fuzzy candidate found, including ones below the confidence floor
+  that `--apply-fuzzy` never writes — on GitHub Docs it read
+  `# Review then apply 3253 lower-confidence fuzzy fixes [writes]`, and
+  running that command verbatim applied 0 files because none of the 3,253
+  cleared the floor. The hint now counts only candidates at or above the
+  effective floor; when none clear it, the hint instead points at
+  `--min-confidence` to review the below-floor candidates, and no longer
+  claims to write anything.
 - **`links auto --apply` no longer corrupts wrapped wikilinks, wrapped
   markdown links, multi-line HTML tags, or any bracketed text**
   (iter-217, dogfood NEW-1/NEW-2/NEW-10). The zone scan that decides what is
@@ -43,6 +79,17 @@ and this project adheres to
 
 ### Changed
 
+- **`lint --fix` JSON reports `remaining_errors`/`remaining_warnings`
+  instead of `errors`/`warnings`** (iter-218, dogfood NEW-6b — **BREAKING
+  JSON shape change**). Both plain `lint` and `lint --fix` used the same
+  `errors`/`warnings` keys for two different quantities: plain `lint`
+  counts whole-run severity totals, `lint --fix` counted only what was
+  left unfixed after the run. A script reading `.errors` off both command's
+  output got answers to two different questions under one key name. The
+  fix-mode shape now uses `remaining_errors`/`remaining_warnings`, which is
+  what those counts have always actually meant; plain `lint`'s
+  `errors`/`warnings` are unchanged. Update any script or `--jq` filter
+  that reads `.errors`/`.warnings` from `lint --fix` JSON.
 - **`links auto`'s heading skip now uses the same CommonMark ATX-heading
   rule as the rest of the zone scan** (iter-217, review follow-up), instead
   of "the trimmed line starts with `#`". A line like `#nothash` (no space
