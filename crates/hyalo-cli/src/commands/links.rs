@@ -48,6 +48,10 @@ pub struct FuzzyApply {
     /// confidence. Setting it implies `apply_fuzzy`. `None` means "use the
     /// default floor", **not** "accept everything" — pass `Some(0.0)` for that.
     pub min_confidence: Option<f64>,
+    /// `[links] fuzzy_min_confidence` from `.hyalo.toml`. Moves the floor but,
+    /// unlike the flag, never opts *in* to applying fuzzy fixes — a config file
+    /// that tunes the bar must not turn a plain `--apply` into a guessing run.
+    pub config_min_confidence: Option<f64>,
 }
 
 impl FuzzyApply {
@@ -56,9 +60,13 @@ impl FuzzyApply {
         self.apply_fuzzy || self.min_confidence.is_some()
     }
 
-    /// The confidence floor actually in force for this run.
+    /// The confidence floor actually in force for this run:
+    /// `--min-confidence` > `[links] fuzzy_min_confidence` >
+    /// [`DEFAULT_FUZZY_MIN_CONFIDENCE`].
     fn floor(&self) -> f64 {
-        self.min_confidence.unwrap_or(DEFAULT_FUZZY_MIN_CONFIDENCE)
+        self.min_confidence
+            .or(self.config_min_confidence)
+            .unwrap_or(DEFAULT_FUZZY_MIN_CONFIDENCE)
     }
 
     /// Whether a fuzzy fix with the given confidence should be applied.

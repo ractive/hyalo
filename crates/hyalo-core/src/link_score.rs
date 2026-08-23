@@ -29,17 +29,22 @@
 //!   unmatched and scores 0. The floor is what stops Jaro's ~0.5–0.65 noise
 //!   between unrelated English words from masquerading as partial credit,
 //!   while still absorbing typos (`acions` ≈ `actions`).
-//! * **directory similarity** — the same soft token F1 over the flattened
-//!   directory components. Two empty directory lists are a perfect match; one
-//!   empty and one not is a total mismatch, because that is precisely the
-//!   "throw away the location the author wrote" case (`/actions` →
-//!   `graphql/reference/actions.md`).
+//! * **directory similarity** — three quarters shared *leading* components,
+//!   one quarter unordered token overlap. Generic levels (`how-tos`,
+//!   `reference`) are shared by thousands of unrelated GitHub Docs pages, so
+//!   membership alone made `actions/how-tos/x` look like a neighbour of
+//!   `billing/how-tos/y`; the prefix term is what encodes "same section".
+//!   Two empty directory lists are a perfect match; one empty and one not is a
+//!   total mismatch, because that is precisely the "throw away the location the
+//!   author wrote" case (`/actions` → `graphql/reference/actions.md`).
 //!
 //! The weights are deliberately lopsided: an identical basename in a
 //! completely unrelated directory lands on exactly
-//! [`BASENAME_WEIGHT`] (0.7), just under the default apply floor
-//! [`DEFAULT_FUZZY_MIN_CONFIDENCE`], so a cross-tree same-name substitution is
-//! reported but not written unless the user lowers the bar.
+//! [`BASENAME_WEIGHT`] (0.7), below the default apply floor
+//! [`DEFAULT_FUZZY_MIN_CONFIDENCE`] (0.8), so a cross-tree same-name
+//! substitution is reported but not written unless the user lowers the bar.
+//! A relocation one level away inside the same section
+//! (`a/b/c/page` → `a/b/d/page`) lands near 0.89 and is written.
 
 use std::collections::HashSet;
 
@@ -69,7 +74,7 @@ pub const TOKEN_MATCH_FLOOR: f64 = 0.85;
 /// documents. Override with `--min-confidence <0..1>` or
 /// `[links] fuzzy_min_confidence` in `.hyalo.toml`; `--min-confidence 0`
 /// restores the old accept-everything behaviour.
-pub const DEFAULT_FUZZY_MIN_CONFIDENCE: f64 = 0.75;
+pub const DEFAULT_FUZZY_MIN_CONFIDENCE: f64 = 0.8;
 
 /// Split a link target or vault-relative path into its directory components
 /// and its filename stem (lowercased, `.md` stripped).
@@ -157,11 +162,44 @@ pub fn basename_similarity(a_stem: &str, b_stem: &str) -> f64 {
     soft_token_f1(&tokenize(a_stem), &tokenize(b_stem))
 }
 
+/// Weight of the shared-leading-components term inside
+/// [`directory_similarity`]; the remainder goes to unordered token overlap.
+///
+/// Measured on the GitHub Docs corpus: without a strong prefix term, generic
+/// path components (`how-tos`, `reference`, `guides`) are shared by thousands
+/// of unrelated documents, so `actions/how-tos/x` scored 0.67 against
+/// `billing/how-tos/y` and every cross-product same-name substitution cleared
+/// the floor. Leading components are the section the author actually named.
+const DIR_PREFIX_WEIGHT: f64 = 0.75;
+
+/// Fraction of the deeper path that the two component lists share as a
+/// *leading* run, compared case-insensitively.
+fn common_prefix_ratio(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
+    let shared = a_dirs
+        .iter()
+        .zip(b_dirs.iter())
+        .take_while(|(x, y)| x.eq_ignore_ascii_case(y))
+        .count();
+    let deepest = a_dirs.len().max(b_dirs.len());
+    if deepest == 0 {
+        return 1.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        shared as f64 / deepest as f64
+    }
+}
+
 /// Similarity of two directory-component lists in `[0.0, 1.0]`.
 ///
-/// Components are flattened into a single token stream before comparison, so
-/// `code-security/how-tos` and `how-tos/code-security` score the same — order
-/// within a path is far less meaningful than membership.
+/// Two terms, prefix-dominant:
+///
+/// * **shared leading components** ([`DIR_PREFIX_WEIGHT`]) — `a/b/c` and
+///   `a/b/d` share two of three levels. This is the term that separates a
+///   relocation *within* a section from a substitution *across* sections.
+/// * **unordered token overlap** — the same soft token F1 used for basenames,
+///   over the flattened components. It keeps a reorganisation that inserts or
+///   reorders a level from collapsing to zero.
 #[must_use]
 pub fn directory_similarity(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
     if a_dirs.is_empty() && b_dirs.is_empty() {
@@ -182,7 +220,9 @@ pub fn directory_similarity(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
         }
         out
     };
-    soft_token_f1(&flatten(a_dirs), &flatten(b_dirs))
+    let overlap = soft_token_f1(&flatten(a_dirs), &flatten(b_dirs));
+    let prefix = common_prefix_ratio(a_dirs, b_dirs);
+    DIR_PREFIX_WEIGHT.mul_add(prefix, (1.0 - DIR_PREFIX_WEIGHT) * overlap)
 }
 
 /// Confidence that `candidate` (a vault-relative path) is the document the
@@ -253,10 +293,20 @@ mod tests {
         assert!(approx(directory_similarity(&[], &["a"]), 0.0));
         assert!(approx(directory_similarity(&["a"], &[]), 0.0));
         assert!(approx(directory_similarity(&["a", "b"], &["a", "b"]), 1.0));
-        // Membership, not order.
-        assert!(approx(directory_similarity(&["a", "b"], &["b", "a"]), 1.0));
-        let half = directory_similarity(&["actions", "reference"], &["graphql", "reference"]);
-        assert!(approx(half, 0.5), "got {half}");
+        // Order matters for the prefix term but not for the overlap term, so a
+        // pure reordering keeps partial credit without scoring as identical.
+        let reordered = directory_similarity(&["a", "b"], &["b", "a"]);
+        assert!(reordered > 0.0 && reordered < 1.0, "got {reordered}");
+        // A shared *trailing* component is worth far less than a shared
+        // leading one: `reference` is generic, the section name is not.
+        let cross_section =
+            directory_similarity(&["actions", "reference"], &["graphql", "reference"]);
+        let same_section = directory_similarity(&["actions", "reference"], &["actions", "guides"]);
+        assert!(
+            same_section > cross_section,
+            "same_section={same_section} cross_section={cross_section}"
+        );
+        assert!(cross_section < 0.2, "got {cross_section}");
     }
 
     #[test]
