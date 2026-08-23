@@ -30,7 +30,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 
 ## Tasks
 
-- [ ] NEW-9: warn when the effective `site_prefix` (derived or configured)
+- [x] NEW-9: warn when the effective `site_prefix` (derived or configured)
       stripped 0 of N site-absolute links in a `links` run, naming the
       prefix and suggesting `--site-prefix` / config (MDN: `en-us` derived
       vs `/en-US/docs/…` spelled links → 49,772 false broken and a 110 s
@@ -39,7 +39,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [ ] NEW-12: `find --fields links` inventory is complete — a same-file
       fragment link appears whether or not its anchor resolves; the
       broken/ok verdict is a field, not a presence filter
-- [ ] NEW-13: stop counting path relocations under `case_mismatches` /
+- [x] NEW-13: stop counting path relocations under `case_mismatches` /
       "Case mismatches" — give `[shortest-path]` relocations their own
       bucket and section in text and JSON
 - [ ] NEW-15: `summary` and `find --broken-links` agree on what "broken"
@@ -56,12 +56,12 @@ excluded: broken-links line numbers + Liquid heading slugs
       (`68 files checked (318 ignored by [lint] ignore)`), and a `--glob`
       whose matches are all ignored prints the same exclusion warning the
       named-file form already prints — no silent `0 files checked` green
-- [ ] NEW-17: fix the self-contradictory `--dir .` note at a config root
+- [x] NEW-17: fix the self-contradictory `--dir .` note at a config root
       (`./.hyalo.toml does not apply, ./.hyalo.toml is in effect`), print
       `config_path` absolute there like everywhere else, and make the
       malformed-config "every value below is a built-in default" note
       acknowledge the salvaged `dir` when one was salvaged
-- [ ] NEW-17: document (or normalize) that the effective config for
+- [x] NEW-17: document (or normalize) that the effective config for
       `--dir <foreign-tree>` depends on the caller's cwd via ancestor
       discovery; at minimum the "no .hyalo.toml — built-in defaults" note
       must not fire when running from inside the tree would find one
@@ -72,7 +72,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [ ] NEW-18: `backlinks` JSON reports the authored target spelling (or a
       consistently normalized one) — today slashes are stripped but `.md`
       is not
-- [ ] UX-3: ancestor-adoption stderr note respects `-q` (or fires once
+- [x] UX-3: ancestor-adoption stderr note respects `-q` (or fires once
       per run); drop the stderr `warning:` duplicate of the
       malformed-config diagnostic now that `config` output leads with it
 - [ ] UX-4: `hyalo read --format json` without `--frontmatter` hints that
@@ -81,7 +81,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [ ] NEW-16: heading task-counts render once — when a hand-written
       `[n/m]` disagrees with the computed count, show the computed one
       (optionally: new lint rule flagging the stale hand-written count)
-- [ ] CHG-1 (found during iter-217): `hyalo changelog add --category
+- [x] CHG-1 (found during iter-217): `hyalo changelog add --category
       Fixed --message "<multi-line>"` mis-places the entry when
       `[Unreleased]` has no existing subsection of that category — it
       lands the entry under an already-released section's matching
