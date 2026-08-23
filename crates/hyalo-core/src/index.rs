@@ -47,6 +47,16 @@ pub struct IndexEntry {
     pub tasks: Vec<FindTaskInfo>,
     /// Outbound links with 1-based line numbers.
     pub links: Vec<(usize, Link)>,
+    /// Same-file heading anchors (`[b](#frag)`, `[[#frag]]`) with 1-based line
+    /// numbers; the fragment text only, without the leading `#`.
+    ///
+    /// Separate from [`links`](Self::links) because these have no target file:
+    /// they name a heading in *this* document. `find --broken-links` validates
+    /// them against this entry's own [`sections`](Self::sections)
+    /// (iter-211 / BUG-8). Defaulted + skipped when empty so snapshots written
+    /// by older hyalo versions keep loading.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub self_anchors: Vec<(usize, String)>,
     /// Pre-tokenized BM25 tokens (body + title, stemmed). Populated by `create-index`
     /// when `scan_body` is `true`. `None` when the index was created before BM25
     /// support or with `scan_body = false`.
@@ -1112,11 +1122,13 @@ pub(crate) fn scan_one_file(
             .iter()
             .map(|(line, link)| (*line, link.clone()))
             .collect();
-        (sections, tasks, links_clone, Some(fl))
+        let self_anchors = fl.self_anchors.clone();
+        (sections, tasks, (links_clone, self_anchors), Some(fl))
     } else {
         scanner::scan_file_multi(full_path, &mut [&mut fm, &mut body_collector])?;
-        (Vec::new(), Vec::new(), Vec::new(), None)
+        (Vec::new(), Vec::new(), (Vec::new(), Vec::new()), None)
     };
+    let (links, self_anchors) = links;
 
     let props = fm.into_props();
     let tags = extract_tags(&props);
@@ -1161,6 +1173,7 @@ pub(crate) fn scan_one_file(
         sections,
         tasks,
         links,
+        self_anchors,
         bm25_tokens,
         bm25_language,
     };
@@ -1835,6 +1848,7 @@ Content.
                 sections: vec![],
                 tasks: vec![],
                 links: vec![],
+                self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
             }],
@@ -1922,6 +1936,7 @@ Content.
                 sections: vec![],
                 tasks: vec![],
                 links: vec![],
+                self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
             }],
@@ -1973,6 +1988,7 @@ Content.
                 sections: vec![],
                 tasks: vec![],
                 links: vec![],
+                self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
             }],

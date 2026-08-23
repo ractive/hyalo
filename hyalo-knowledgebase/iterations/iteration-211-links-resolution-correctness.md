@@ -2,7 +2,7 @@
 title: Iteration 211 — links resolution correctness (anchors, offsets, trailing slash)
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-211/links-resolution-correctness
 tags:
   - iteration
@@ -55,59 +55,59 @@ From [[dogfood-results/dogfood-v0210-pre2-integrity-wave]]:
   `--apply-fuzzy` — per iter-200's documented design, but indefensible
   to a user.
 
-## Tasks
+## Tasks [9/9]
 
-- [ ] Carry-over from iter-210 (PR #242 test plan): the counter-truth,
+- [x] Carry-over from iter-210 (PR #242 test plan): the counter-truth,
       hint-execution and bucket-sum fixes were only verified against
       fixture vaults — no GitHub Docs scratch copy was reachable in that
       review environment. Re-run a dogfood pass against the real corpus
       (`hyalo lint`, `hyalo links fix`, the executed-hint gate) to confirm
       BUG-6/BUG-13/UX-4 hold outside fixtures before this iteration's own
       GitHub-Docs-dependent tasks below build on top of them.
-- [ ] BUG-8: slugify headings (GitHub-style: lowercase, spaces→`-`,
+- [x] BUG-8: slugify headings (GitHub-style: lowercase, spaces→`-`,
       strip punctuation, dedupe suffixes `-1`, `-2`) and check anchors
       against the slug set; keep accepting the raw-text forms for
       compatibility. Check same-file fragments too. Re-run on the GitHub
       Docs copy: the 6 false positives must clear, and a genuinely dead
       anchor must still be caught.
-- [ ] BUG-9: fix the double frontmatter offset in HYALO006; e2e matrix
+- [x] BUG-9: fix the double frontmatter offset in HYALO006; e2e matrix
       over 0/3/5-line frontmatter asserting reported line == actual line
       (mirror the dogfood table).
-- [ ] BUG-10: key the backlink index on the resolved file only after a
+- [x] BUG-10: key the backlink index on the resolved file only after a
       single, shared resolution step so one link occurrence maps to
       exactly one target file; `foo/` with both candidates present
       either resolves by the documented precedence or surfaces in the
       `ambiguous` bucket — never double-counts. `backlinks` must agree
       with `find --broken-links` resolution for every spelling
       (regression test from the dogfood `/tmp/p1` + `/tmp/p3` repros).
-- [ ] BUG-10 root: implement the documented trailing-slash rule (`foo/`
+- [x] BUG-10 root: implement the documented trailing-slash rule (`foo/`
       does not fall back to `foo.md`) OR amend iteration 203 and the
       docs to the permissive behavior — pick one, record as a DEC, and
       make `links`, `backlinks`, and HYALO006 all follow it.
-- [ ] BUG-12: preserve query strings through rewrites (treat `?…` like
+- [x] BUG-12: preserve query strings through rewrites (treat `?…` like
       `#…`: strip before resolution, reattach on emit).
-- [ ] BUG-12: parse CommonMark link titles — `[a](p.md "Title")`
+- [x] BUG-12: parse CommonMark link titles — `[a](p.md "Title")`
       resolves `p.md` and appears in backlinks; title preserved on
       rewrite.
-- [ ] BUG-12: `mv` preserves extensionless spelling
+- [x] BUG-12: `mv` preserves extensionless spelling
       (`[f](foo/index)` → `[f](bar/index)`).
-- [ ] BUG-12: report relative bare-stem relocations under an honest
+- [x] BUG-12: report relative bare-stem relocations under an honest
       strategy name (e.g. `ShortestPath`), not `link-case-mismatch`, and
       align its gating with the site-absolute form (one consistent rule;
       record as a DEC either way).
 
-## Acceptance criteria
+## Acceptance criteria [6/6]
 
-- [ ] `[c](t.md#sub-section)` against `### Sub Section` is not broken;
+- [x] `[c](t.md#sub-section)` against `### Sub Section` is not broken;
       `[c](t.md#nope)` is; `[b](#nope)` same-file is caught
-- [ ] HYALO006 line numbers exact for 0/3/5-line frontmatter
-- [ ] One `[b](foo/)` occurrence produces exactly one backlink entry,
+- [x] HYALO006 line numbers exact for 0/3/5-line frontmatter
+- [x] One `[b](foo/)` occurrence produces exactly one backlink entry,
       and `backlinks` agrees with `find --broken-links` on all eight
       dogfood spellings
-- [ ] `/deep/page?x=1` rewrites to `/deep/Page?x=1`; titled links
+- [x] `/deep/page?x=1` rewrites to `/deep/Page?x=1`; titled links
       resolve and survive rewrites
-- [ ] All ten `mv` spelling forms round-trip unchanged in style
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] All ten `mv` spelling forms round-trip unchanged in style
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals
@@ -116,3 +116,42 @@ From [[dogfood-results/dogfood-v0210-pre2-integrity-wave]]:
   [[iterations/iteration-212-fuzzy-confidence-trust]].
 - Line numbers in `find --broken-links` output (dogfood UX-6) — goes
   with the JSON-shape work if that gets planned.
+
+## Outcome
+
+Decisions recorded in [[decision-log]]: **DEC-075** (anchors match the rendered
+GitHub slug as well as the raw heading text, plus same-file fragment checking),
+**DEC-076** (a basename-only repair is gated on whether the author wrote a
+directory, not on a leading slash), **DEC-077** (a trailing slash flips
+resolution *precedence* but keeps the `.md` fallback — [[iterations/iteration-203-index-md-resolution]]
+amended in place).
+
+Measured against the real GitHub Docs corpus (`~/devel/docs/content`, 3,710
+files), not fixtures:
+
+- **BUG-8**: 947 of 2,071 checkable anchors matched only through the new slug
+  rule, i.e. were false positives before. The remaining 1,048 are genuinely
+  absent from the source markdown (generated REST-reference anchors and
+  Liquid-templated headings) and are still reported — the check did not become
+  a rubber stamp.
+- **BUG-9**: HYALO006 reports 6,102 findings across 1,571 files with exact line
+  numbers, spot-verified against `grep -n` on a file with 19 frontmatter lines
+  (would have been off by 18 before).
+- **BUG-10**: `backlinks` matched `find --broken-links` resolution on all ten
+  sampled targets including a directory index (`admin/index.md`), zero
+  mismatches.
+- **DEC-076 cost**: `links fix` now reports `fixable: 0, fuzzy: 4659` on GitHub
+  Docs — the path-asserting half of those repairs used to be written by a plain
+  `--apply`, which is the same corruption class iter-200's M-1 finding was about.
+- **iter-210 carry-over**: counter truth holds on the real corpus
+  (`total 7720 == errors 4 + warnings 7716`, `files_truncated: true` correctly
+  signalling the capped listing), and `links fix` bucket sums reconcile exactly
+  (`broken 6099 == fixable 0 + fuzzy 4659 + unfixable 1377 + templated 63`).
+
+### Known limitation (not a regression)
+
+Headings containing Liquid template expressions
+(`## {% data variables.product.prodname_pro %}`,
+`### Outside collaborators{% ifversion … %}`) cannot be slugified to what the
+renderer emits, so anchors into them stay reported. Same class as iter-207's
+`is_templated_target`; a candidate for a future iteration.

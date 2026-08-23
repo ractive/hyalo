@@ -125,6 +125,25 @@ and this project adheres to
 
 ### Changed
 
+- **A basename-only link repair is gated on whether the author wrote a
+  directory, not on a leading slash** (iter-211, dogfood BUG-12, DEC-076).
+  iteration 200 put `[x](/guides/actions)` → `reference/actions.md` behind
+  `--apply-fuzzy` because discarding the written path is a guess — but left the
+  byte-identical `[x](guides/actions)` as a plain-`--apply` fix. Same guess, two
+  gates. The rule is now spelling-independent: any written directory component
+  makes the repair a `BasenameFallback` that needs `--apply-fuzzy`, while a
+  target written with no directory at all (`[[actions]]`, `[x](actions.md)`)
+  resolves by the documented Obsidian short-form rule and stays a certain fix.
+  On GitHub Docs this moves 4,659 repairs out of plain `--apply`. Relatedly, a
+  link whose exact path fails but whose bare stem resolves elsewhere is no
+  longer reported as `link-case-mismatch` at confidence 1.0 — a relocation
+  dressed as a casing fix — but as `ShortestPath` at 0.95, and `links fix` text
+  output now prints each fix's own rule code instead of a hard-coded label.
+
+- **`FixStrategy::ShortFormStemMismatch` removed** (iter-211). The variant was
+  `#[doc(hidden)]`, documented as reserved, and emitted by no code path since
+  short-form stem casing was folded into `LinkCaseMismatch`.
+
 - **`hyalo lint --rule-prefix <p>` fails when the prefix matches no rule**
   (iter-210, dogfood BUG-5). It used to print a warning and then lint
   *everything*: the empty rule filter fell through to "no filtering", so
@@ -317,6 +336,59 @@ and this project adheres to
   `lint_files_extended` are untouched and still live.
 
 ### Fixed
+
+- **Heading anchors match the slug a renderer actually generates** (iter-211,
+  dogfood BUG-8, DEC-075). `find --broken-links` compared a `#fragment`
+  against the *raw* heading text only, so `[c](t.md#sub-section)` — the form
+  GitHub, GitLab, MDN, Docusaurus and mdBook all emit for `### Sub Section` —
+  was reported broken while `#Sub Section`, which no renderer produces, passed.
+  Fragments now also match the GitHub slug (lowercased Unicode-aware,
+  punctuation stripped, spaces to `-`, `-1`/`-2` suffixes for repeats); the
+  Obsidian raw-text rule is unchanged and still accepted. On the GitHub Docs
+  corpus 947 of 2,071 checkable anchors were false positives and now pass, while
+  the 1,048 anchors that are genuinely absent from the source are still caught.
+  Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked too — they carry
+  no target path, so they were dropped at parse time and had never been
+  validated at all. Rebuild the index (`hyalo create-index`) to pick up the new
+  `self_anchors` data on the `--index` path.
+
+- **HYALO006 line numbers no longer count the frontmatter twice** (iter-211,
+  dogfood BUG-9). The broken-link rule scans the whole file, so its findings
+  were already file-absolute, and the body-rule offset was then added on top: a
+  link on line 5 of a file with 3 frontmatter lines was reported at line 8. The
+  markdown rules and `backlinks` were right about the same file all along, which
+  made the disagreement look like a corpus quirk. Exactness is now pinned by an
+  e2e matrix over 0-, 3- and 5-line frontmatter.
+
+- **One link occurrence is one backlink** (iter-211, dogfood BUG-10,
+  DEC-077). With both `foo.md` and `foo/index.md` present, a single
+  `[b](foo/)` was indexed under two keys and counted as a backlink of *both*
+  files, while `links` simultaneously reported `ambiguous: 0`. Conversely
+  `[b](/baz/)` resolved to `baz.md` in `find --broken-links` but was keyed as
+  `baz/`, which `backlinks baz.md` can never probe, so the edge was invisible.
+  Three fixes: a trailing slash survives relative-target normalization (so
+  `[a](foo/)` and `[b](/foo/)` resolve alike), graph keys are stripped of the
+  slash after the spelling has been recorded, and each occurrence registers
+  exactly one key — the resolved one when resolution succeeded. `backlinks` and
+  `find --broken-links` now agree on all eight dogfood spellings, verified
+  corpus-wide against GitHub Docs.
+
+- **Query strings and CommonMark link titles survive resolution and rewrites**
+  (iter-211, dogfood BUG-12). `[x](/deep/page?x=1)` came back from `mv` as
+  `[x](/deep/Page)` — the query was glued to the target so the rewrite span
+  swallowed it; it is now split off like a `#fragment` and the span stops before
+  the `?`. `[a](p.md "Title")` parsed the title as part of the destination, so
+  the link resolved to nothing: reported broken, missing from `backlinks`, and
+  unrewritable. Titles are now recognised (all three CommonMark forms, including
+  one containing `)`), and the long-standing tolerance for unencoded spaces in
+  destinations is kept.
+
+- **`mv` preserves an extensionless spelling** (iter-211, dogfood BUG-12).
+  `[f](foo/index)` came back as `[f](bar/index.md)` and `[[sub/b.md]]` as
+  `[[archive/b]]` — a `.md` invented in one direction and dropped in the other.
+  The suffix is a spelling choice orthogonal to the path shape, so it is now
+  mirrored from the original for every form. All ten spellings the dogfood
+  enumerated round-trip unchanged in style.
 
 - **`lint` JSON counters describe the whole run, not the truncated file list**
   (iter-210, dogfood BUG-6, found independently by two testers). `results.total`

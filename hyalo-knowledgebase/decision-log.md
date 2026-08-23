@@ -1383,3 +1383,108 @@ iteration 210 is closing, and a direct violation of its own acceptance criterion
 that every emitted hint execute correctly verbatim. Shortening removes most of
 the bulk (an index almost always lives inside the project it indexes) while
 keeping each line independently copy-pasteable.
+
+## DEC-075: anchors match the rendered GitHub slug as well as the raw heading text (2026-08-23)
+
+**Decision:** A link fragment resolves against a target file's headings when
+*either* DEC-060's raw-text rule holds (trimmed, percent-decoded,
+ASCII-case-insensitive equality) *or* the GitHub-style slug of the fragment
+equals the GitHub slug of a heading. Slugs are lowercased Unicode-aware, keep
+alphanumerics plus `-` and `_`, drop all other punctuation, map each whitespace
+character to `-`, and carry the renderer's `-1`, `-2`, … duplicate suffixes in
+document order. Both sides are slugified, which makes the comparison idempotent.
+
+**Why:** DEC-060 alone accepted only the spelling *no renderer ever emits*.
+Every mainstream markdown renderer turns `### Sub Section` into `#sub-section`,
+so `[c](t.md#sub-section)` — the form authors actually write — was reported
+broken while `#Sub Section` passed. Measured on the GitHub Docs corpus
+(`~/devel/docs/content`, 3,710 files): **947 of 2,071 checkable anchors matched
+only through the slug rule**, i.e. were false positives before this change. The
+remaining 1,048 are genuinely absent from the source markdown (generated REST
+reference anchors and Liquid-templated headings), and are still caught — the
+check did not become a rubber stamp.
+
+**Why the union rather than a replacement:** Obsidian resolves `[[Foo#tasks]]`
+against `## Tasks`, and hyalo's own knowledgebase is an Obsidian vault. Keeping
+both conventions costs one extra comparison and serves both audiences; the check
+exists to catch dead anchors, and a false positive costs a user far more than a
+missed exotic spelling.
+
+**Also decided:** same-file fragments (`[b](#nope)`, `[[#nope]]`) are validated
+against the containing file's own headings. They carry no target path, so they
+were dropped at parse time and never checked at all. They are collected into a
+separate `IndexEntry.self_anchors` list rather than being forced into the link
+list — they are not graph edges, and making them edges would silently change
+every `--orphan` / `--dead-end` verdict. Only the *broken* ones surface in
+`find --broken-links` output.
+
+## DEC-076: a basename-only rescue is gated on whether the author wrote a directory (2026-08-23)
+
+**Decision:** When a broken link matches a vault file by its last path segment
+alone, the verdict depends on what the author wrote, not on the leading
+character:
+
+- **No directory component** (`[[actions]]`, `[x](actions.md)`) → the target
+  asserts no location, so resolving it by stem is the documented Obsidian
+  short-form rule. Strategy `ShortestPath`, confidence 0.95, written by plain
+  `--apply`.
+- **Any directory component** (`[x](guides/actions)`, `[x](/guides/actions)`,
+  `[[sub/actions]]`) → the author asserted a location and matching by basename
+  discards it. Strategy `BasenameFallback`, reduced confidence, written only
+  under `--apply-fuzzy` / `--min-confidence`.
+
+**Why:** iter-200 gated only the *site-absolute* spelling, so
+`[x](guides/actions)` was rewritten to `reference/actions.md` by a plain
+`--apply` while the byte-identical `/guides/actions` required an opt-in. Same
+guess, two gates, and no way to explain the difference to a user — the
+2026-08-23 dogfood called it indefensible. A leading `/` is a *syntax* fact; the
+presence of a directory is the *semantic* one, and it is the only thing that
+distinguishes a location claim from a bare name.
+
+**Cost, measured:** on GitHub Docs `links fix` now reports `fixable: 0,
+fuzzy: 4659` where the path-asserting half of those 4,659 used to be written by
+a plain `--apply`. That is the same corruption class iter-200's M-1 finding was
+about, applied consistently.
+
+**Also decided:** the read-side stem rescue is labelled honestly. A link whose
+exact path fails but whose bare stem resolves elsewhere used to be reported as
+`link-case-mismatch` with `confidence: 1.0` — a *relocation* dressed as a casing
+fix, printed next to an old and new target differing by a whole directory. It is
+now `LinkResolution::StemRelocation` → `FixStrategy::ShortestPath` at 0.95, and
+`links fix` text output prints each fix's own rule code instead of a hard-coded
+`[link-case-mismatch]`.
+
+## DEC-077: a trailing slash prefers the directory index but still falls back to the file (2026-08-23)
+
+**Decision:** `foo/` resolves to `foo/index.md` when that exists and to `foo.md`
+otherwise — the permissive rule already implemented in
+`discovery::resolve_target`. Iteration 203's plan text ("`foo/` is unambiguously
+a directory reference", implying no `.md` fallback) is superseded: the trailing
+slash changes the *precedence*, not the candidate set. `foo` prefers `foo.md`
+then `foo/index.md`; `foo/` prefers `foo/index.md` then `foo.md`.
+
+**Why permissive rather than strict:** every pretty-URL static site generator
+(Jekyll, Hugo, Docusaurus, Next.js) serves the page authored in `baz.md` at the
+URL `/baz/`. Making `/baz/` broken whenever `baz/index.md` is absent would
+manufacture false positives on exactly the corpora the directory-index work of
+iteration 203 exists to support, for no integrity gain — the fallback can only
+ever resolve to a file that exists.
+
+**What actually had to change** was not the rule but its *uniform application*.
+Three surfaces disagreed:
+
+1. `normalize_link_target` ran relative targets through
+   `normalize_path_components`, which drops a trailing slash — so `[a](foo/)`
+   resolved to `foo.md` while `[b](/foo/)`, which skips normalization, resolved
+   to `foo/index.md`. The slash is now re-attached after normalization.
+2. The link graph keyed `/baz/` under the literal key `baz/`, which
+   `backlinks baz.md` (which probes `baz.md` and `baz`) can never hit. Trailing
+   slashes are now stripped from graph keys after the spelling has been recorded.
+3. The graph registered **both** the written key and the resolved key for one
+   occurrence, so a single `[b](foo/)` was a backlink of `foo.md` *and*
+   `foo/index.md` while `links` reported `ambiguous: 0`. One occurrence now
+   produces exactly one key — the resolved one when resolution succeeded, the
+   written one otherwise. This generalizes the narrower L-1 rule it replaces.
+
+`find --broken-links`, `backlinks`, `links fix` and HYALO006 now agree on all
+eight dogfood spellings, verified corpus-wide against GitHub Docs.

@@ -39,6 +39,14 @@ UX-4). Anchors at `931a226`:
   attempts fail: `<target>/index.md` (case-handled like everything else).
   A trailing-slash target (`/foo/`) skips the `.md`-append attempt
   entirely — it is unambiguously a directory reference.
+  **Superseded by [[decision-log]] DEC-077 (iteration 211):** the trailing
+  slash flips the *precedence* (`foo/index.md` first, `foo.md` second) but
+  does not remove the `.md` candidate. Pretty-URL site generators serve
+  `baz.md` at `/baz/`, so dropping the fallback would manufacture false
+  positives on exactly the corpora this iteration targets. What iteration
+  211 did fix is that the rule was not applied *uniformly*: relative
+  trailing-slash targets lost the slash during normalization and the link
+  graph keyed them under a key `backlinks` could never probe.
 - Site-absolute interaction: `/foo` under `--site-prefix`/auto-derived
   prefix resolves relative to the vault/prefix root, then the same
   directory fallback applies. `hyalo config` currently prints

@@ -67,6 +67,18 @@ pub struct Link {
     /// broken-anchor validation in `find --broken-links`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<String>,
+    /// The `?query` string that followed the target, WITHOUT the leading `?`.
+    /// `None` when the link had no query string; always `None` for wikilinks.
+    ///
+    /// iter-211 / BUG-12: a query string is a URL component, not part of the
+    /// path — `resolve_target` has always stripped it before resolution, but
+    /// it used to remain glued to `target`, so the rewrite span covered it and
+    /// `[x](/deep/page?x=1)` came back out of `mv` as `[x](/deep/Page)` with
+    /// the query silently dropped. It is now split off exactly like
+    /// [`fragment`](Self::fragment): the rewrite span stops before the `?`, so
+    /// the written query bytes survive every rewrite untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
 }
 
 /// The kind of link syntax used in the source text.
@@ -90,7 +102,9 @@ pub(crate) struct LinkSpan {
     /// `link.target` was derived from, before the `#fragment` was stripped).
     pub target_start: usize,
     /// Byte offset one past the last byte of the target text (stops at `#`,
-    /// `|`, `]]`, or `)` depending on what follows the target).
+    /// `?`, `|`, `]]`, or `)` depending on what follows the target). Stopping
+    /// before `#`/`?` is what keeps fragments and query strings byte-identical
+    /// across a rewrite.
     pub target_end: usize,
     /// Byte offset of the opening `!`, `[`, depending on link kind/embed.
     pub full_start: usize,
@@ -129,6 +143,36 @@ pub(crate) fn extract_links_from_text_with_original(
     original: &str,
     out: &mut Vec<Link>,
 ) {
+    extract_links_and_anchors(cleaned, original, out, None);
+}
+
+/// Like [`extract_links_from_text_with_original`], but also collects
+/// **same-file anchors** — `[label](#frag)` and `[[#frag]]`, links that name a
+/// heading in the *current* file and carry no target path.
+///
+/// Those are dropped by the ordinary extraction paths (a `Link` must have a
+/// target), which meant `find --broken-links` never checked them at all:
+/// `[b](#nope)` in a file with no `## Nope` heading was invisible
+/// (iter-211 / BUG-8). They are returned as bare fragment strings (no leading
+/// `#`) so the caller can validate them against the file's own headings.
+///
+/// Block references (`^block-id`) are collected too; the anchor matcher skips
+/// them, keeping the "never reported broken" contract in one place.
+pub(crate) fn extract_links_and_self_anchors(
+    cleaned: &str,
+    original: &str,
+    out: &mut Vec<Link>,
+    anchors: &mut Vec<String>,
+) {
+    extract_links_and_anchors(cleaned, original, out, Some(anchors));
+}
+
+fn extract_links_and_anchors(
+    cleaned: &str,
+    original: &str,
+    out: &mut Vec<Link>,
+    mut anchors: Option<&mut Vec<String>>,
+) {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -159,6 +203,18 @@ pub(crate) fn extract_links_from_text_with_original(
             i = end;
             continue;
         }
+        // `[[#Heading]]` — a same-file anchor, not a file reference.
+        if let Some(anchors) = anchors.as_deref_mut()
+            && bytes[i] == b'['
+            && i + 1 < len
+            && bytes[i + 1] == b'['
+            && !is_escaped(bytes, i)
+            && let Some((frag, end)) = try_parse_self_anchor_wikilink_at(cleaned, i)
+        {
+            anchors.push(frag);
+            i = end;
+            continue;
+        }
 
         // Check for markdown link: [text](target)
         // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
@@ -172,9 +228,60 @@ pub(crate) fn extract_links_from_text_with_original(
             i = end;
             continue;
         }
+        // `[label](#Heading)` — a same-file anchor, not a file reference.
+        if let Some(anchors) = anchors.as_deref_mut()
+            && bytes[i] == b'['
+            && (i == 0 || bytes[i - 1] != b'!')
+            && !is_escaped(bytes, i)
+            && let Some((frag, end)) = try_parse_self_anchor_markdown_at(cleaned, i)
+        {
+            anchors.push(frag);
+            i = end;
+            continue;
+        }
 
         i += 1;
     }
+}
+
+/// Parse `[label](#fragment)` at `start`, returning the fragment (without the
+/// leading `#`) and the byte offset just past the closing `)`.
+///
+/// Returns `None` for anything that is not a fragment-only markdown link —
+/// including `[a](p.md#frag)`, which is a real file reference and is handled
+/// by [`try_parse_markdown_link_at`].
+fn try_parse_self_anchor_markdown_at(text: &str, start: usize) -> Option<(String, usize)> {
+    let rest = &text[start..];
+    let close_bracket = find_label_close_bracket(rest)?;
+    let after_bracket = start + close_bracket + 1;
+    if text.as_bytes().get(after_bracket).copied() != Some(b'(') {
+        return None;
+    }
+    let paren_start = after_bracket + 1;
+    let dest = parse_destination(&text[paren_start..])?;
+    let frag = dest.target_raw.strip_prefix('#')?;
+    if frag.is_empty() {
+        return None;
+    }
+    Some((frag.to_owned(), paren_start + dest.end))
+}
+
+/// Parse `[[#fragment]]` (optionally `[[#fragment|alias]]`) at `start`,
+/// returning the fragment without the leading `#`.
+fn try_parse_self_anchor_wikilink_at(text: &str, start: usize) -> Option<(String, usize)> {
+    let content_start = start + 2;
+    let rest = &text[content_start..];
+    let close = rest.find("]]")?;
+    let inner = &rest[..close];
+    if inner.is_empty() || inner.contains('\n') {
+        return None;
+    }
+    let target_part = inner.split('|').next().unwrap_or(inner);
+    let frag = target_part.strip_prefix('#')?;
+    if frag.is_empty() {
+        return None;
+    }
+    Some((frag.to_owned(), content_start + close + 2))
 }
 
 /// Whether the byte at `pos` is backslash-escaped, i.e. preceded by an odd
@@ -300,8 +407,33 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
     } else {
         // Bare destination: up to the first `)`.
         let close_paren = rest.find(')')?;
+        let raw = &rest[..close_paren];
+        // iter-211 / BUG-12: a bare CommonMark destination cannot contain
+        // whitespace — anything after the first space/tab is an optional
+        // title (`[a](p.md "Title")`). Without this split the title became
+        // part of the target, so `p.md "Title"` resolved to nothing: the link
+        // was reported broken and never appeared in `backlinks`.
+        //
+        // The split is applied only when what follows really parses as a
+        // title immediately before the closing `)`. That keeps the
+        // long-standing tolerance for unencoded spaces in destinations
+        // (`[x](my dest.md)`), which is not valid CommonMark but is common in
+        // hand-written vaults. A leading space (`[a]( p.md )`) is likewise
+        // left alone rather than producing an empty target.
+        if let Some(ws) = raw.find([' ', '\t'])
+            && ws > 0
+            && let Some(cp) = find_close_paren_after_destination(&rest[ws..])
+        {
+            // `find_close_paren_after_destination` also skips a title that
+            // itself contains `)`, so the span end can legitimately land past
+            // the `close_paren` found above.
+            return Some(ParsedDestination {
+                target_raw: &raw[..ws],
+                end: ws + cp + 1,
+            });
+        }
         Some(ParsedDestination {
-            target_raw: &rest[..close_paren],
+            target_raw: raw,
             end: close_paren + 1,
         })
     }
@@ -475,7 +607,9 @@ fn try_parse_markdown_link_span_at(
     } else {
         paren_start
     };
-    let target_end_in_raw = target_raw.find('#').unwrap_or(target_raw.len());
+    // Stop the rewritable span at whichever URL suffix comes first, so both
+    // `#fragment` and `?query` bytes are preserved verbatim (iter-211/BUG-12).
+    let target_end_in_raw = target_raw.find(['#', '?']).unwrap_or(target_raw.len());
 
     let full_end = paren_start + dest.end;
 
@@ -548,6 +682,9 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         label,
         kind: LinkKind::Wikilink,
         fragment,
+        // Wikilinks are vault paths, not URLs — they never carry a query
+        // string, and a literal `?` in a note name stays part of the target.
+        query: None,
     })
 }
 
@@ -631,6 +768,11 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
     // carried on the Link (L-21) without the leading `#`, preserving its
     // written form (it may be percent-encoded).
     let (target, fragment) = split_target_and_fragment(target_raw);
+    // …then split the `?query` off whatever is left of the path (iter-211 /
+    // BUG-12). Order matters: `page?x=1#frag` keeps `x=1` as the query, while
+    // `page#frag?x` leaves the `?x` inside the fragment, exactly as a browser
+    // would read it.
+    let (target, query) = split_target_and_query(target);
 
     // Fragment-only links like [text](#heading) are same-file heading links, not file links
     if target.is_empty() {
@@ -646,6 +788,7 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
         },
         kind: LinkKind::Markdown,
         fragment,
+        query,
     })
 }
 
@@ -935,9 +1078,166 @@ fn split_target_and_fragment(target: &str) -> (&str, Option<String>) {
     }
 }
 
+/// Split a `?query` off the end of a (fragment-free) markdown destination.
+///
+/// The query is returned WITHOUT the leading `?`. Only the FIRST `?` delimits
+/// it; everything after stays in the query string. An empty query (`page?`)
+/// yields `None` while still trimming the `?` from the path, so resolution
+/// sees the same path either way.
+///
+/// iter-211 / BUG-12 — see [`Link::query`].
+fn split_target_and_query(target: &str) -> (&str, Option<String>) {
+    match target.split_once('?') {
+        Some((base, q)) if !q.is_empty() => (base, Some(q.to_string())),
+        Some((base, _)) => (base, None),
+        None => (target, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- iter-211 / BUG-12: query strings and CommonMark titles ---
+
+    fn one_link(text: &str) -> Link {
+        let mut out = Vec::new();
+        extract_links_from_text(text, &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "expected exactly one link in {text:?}: {out:?}"
+        );
+        out.pop().expect("one link")
+    }
+
+    #[test]
+    fn query_string_is_split_off_the_target() {
+        let link = one_link("see [x](/deep/page?x=1) here");
+        assert_eq!(link.target, "/deep/page");
+        assert_eq!(link.query.as_deref(), Some("x=1"));
+        assert_eq!(link.fragment, None);
+    }
+
+    #[test]
+    fn query_and_fragment_split_independently() {
+        let link = one_link("see [x](/deep/page?a=1&b=2#frag) here");
+        assert_eq!(link.target, "/deep/page");
+        assert_eq!(link.fragment.as_deref(), Some("frag"));
+        assert_eq!(link.query.as_deref(), Some("a=1&b=2"));
+    }
+
+    #[test]
+    fn a_question_mark_inside_a_fragment_stays_in_the_fragment() {
+        // Browsers read `#` first, so `page#frag?x` has no query at all.
+        let link = one_link("see [x](page.md#frag?x) here");
+        assert_eq!(link.target, "page.md");
+        assert_eq!(link.fragment.as_deref(), Some("frag?x"));
+        assert_eq!(link.query, None);
+    }
+
+    #[test]
+    fn empty_query_is_dropped_but_trimmed_from_the_path() {
+        let link = one_link("see [x](page.md?) here");
+        assert_eq!(link.target, "page.md");
+        assert_eq!(link.query, None);
+    }
+
+    #[test]
+    fn query_span_stops_before_the_question_mark() {
+        let spans = extract_link_spans("see [x](/deep/page?x=1) here");
+        assert_eq!(spans.len(), 1);
+        let s = &spans[0];
+        assert_eq!(
+            &"see [x](/deep/page?x=1) here"[s.target_start..s.target_end],
+            "/deep/page"
+        );
+    }
+
+    #[test]
+    fn commonmark_title_is_not_part_of_the_target() {
+        let link = one_link(r#"see [a](p.md "The Title") here"#);
+        assert_eq!(link.target, "p.md");
+        assert_eq!(link.label.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn commonmark_title_forms_all_parse() {
+        assert_eq!(one_link(r#"[a](p.md "d")"#).target, "p.md");
+        assert_eq!(one_link("[a](p.md 'd')").target, "p.md");
+        assert_eq!(one_link("[a](p.md (d))").target, "p.md");
+    }
+
+    #[test]
+    fn a_title_containing_a_paren_does_not_truncate_the_span() {
+        let text = r#"[a](p.md "has ) paren") tail"#;
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        let s = &spans[0];
+        assert_eq!(&text[s.target_start..s.target_end], "p.md");
+        assert_eq!(
+            &text[s.full_start..s.full_end],
+            r#"[a](p.md "has ) paren")"#
+        );
+    }
+
+    #[test]
+    fn an_unencoded_space_without_a_title_keeps_the_whole_destination() {
+        // Not valid CommonMark, but common in hand-written vaults — the title
+        // split must not silently truncate these to `my`.
+        let link = one_link("[x](my dest.md)");
+        assert_eq!(link.target, "my dest.md");
+    }
+
+    #[test]
+    fn a_leading_space_in_a_destination_is_left_alone() {
+        let link = one_link("[x]( p.md )");
+        assert_eq!(link.target, " p.md ");
+    }
+
+    // --- iter-211 / BUG-8: same-file anchors ---
+
+    fn anchors_of(text: &str) -> Vec<String> {
+        let mut links = Vec::new();
+        let mut anchors = Vec::new();
+        extract_links_and_self_anchors(text, text, &mut links, &mut anchors);
+        anchors
+    }
+
+    #[test]
+    fn same_file_markdown_anchor_is_collected() {
+        assert_eq!(anchors_of("see [b](#nope) here"), vec!["nope".to_owned()]);
+    }
+
+    #[test]
+    fn same_file_wikilink_anchor_is_collected() {
+        assert_eq!(anchors_of("see [[#Nope]] here"), vec!["Nope".to_owned()]);
+        assert_eq!(
+            anchors_of("see [[#Nope|alias]] here"),
+            vec!["Nope".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_targeted_fragment_is_not_a_same_file_anchor() {
+        assert!(anchors_of("see [b](p.md#frag) here").is_empty());
+        assert!(anchors_of("see [[p#frag]] here").is_empty());
+    }
+
+    #[test]
+    fn same_file_anchors_do_not_become_links() {
+        let mut links = Vec::new();
+        let mut anchors = Vec::new();
+        extract_links_and_self_anchors(
+            "[b](#nope) and [[#other]] and [real](p.md)",
+            "[b](#nope) and [[#other]] and [real](p.md)",
+            &mut links,
+            &mut anchors,
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "p.md");
+        assert_eq!(anchors, vec!["nope".to_owned(), "other".to_owned()]);
+    }
 
     // --- inert link zones (iter-200) ---
 

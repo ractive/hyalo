@@ -967,7 +967,22 @@ fn normalize_link_target<'a>(
             if target.starts_with('/') {
                 std::borrow::Cow::Borrowed(target)
             } else if target.contains('/') || target.contains('\\') {
-                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), target))
+                let mut norm = normalize_target(Path::new(source_rel), target);
+                // iter-211 / BUG-10: `normalize_path_components` drops a
+                // trailing slash, erasing the one signal that makes `foo/` an
+                // *explicit* directory reference. Without this, the relative
+                // spelling `[a](foo/)` resolved to `foo.md` while the
+                // site-absolute `[b](/foo/)` — which never goes through
+                // normalization — resolved to `foo/index.md`, so one file was
+                // a backlink of the other's target. Re-attach it and let
+                // `resolve_target` apply the documented precedence once.
+                if (target.ends_with('/') || target.ends_with('\\'))
+                    && !norm.is_empty()
+                    && !norm.ends_with('/')
+                {
+                    norm.push('/');
+                }
+                std::borrow::Cow::Owned(norm)
             } else {
                 // Bare basename: try source-relative first so same-folder links
                 // resolve correctly, then fall back to the raw target.
@@ -1073,7 +1088,13 @@ pub fn resolve_link_from_source(
 ///   casing differs from the canonical form (case-insensitive filesystem
 ///   papered over a mismatch); caller should record as a case-mismatch.
 /// - `CaseMismatch(canonical)` — exact resolution failed but the case index
-///   found a unique canonical path; caller should record as a case-mismatch.
+///   found a unique canonical path that differs from the written target only
+///   in ASCII case; caller should record as a case-mismatch.
+/// - `StemRelocation(canonical)` — exact resolution failed and the rescue came
+///   from the bare-stem fallback, so the canonical path is in a *different
+///   place*, not merely cased differently (iter-211 / BUG-12). Reporting these
+///   as `CaseMismatch` printed `[link-case-mismatch]` next to an old and new
+///   target that differ by a whole directory.
 /// - `ShortFormValid` — a short-form wikilink whose stem resolves to exactly
 ///   one file in the vault with matching casing; nothing to fix.
 /// - `ShortFormStemMismatch(correct_stem)` — a short-form wikilink whose stem
@@ -1086,6 +1107,7 @@ pub fn resolve_link_from_source(
 pub(crate) enum LinkResolution {
     Resolved(Option<String>),
     CaseMismatch(String),
+    StemRelocation(String),
     ShortFormValid,
     ShortFormStemMismatch(String),
     ShortFormAmbiguous,
@@ -1219,17 +1241,40 @@ fn classify_link(
 
     // Exact resolution failed. If we have a case index, try the
     // case-insensitive fallback. `resolve_target` already handles the `.md`
-    // extension fallback internally, so any successful indexed resolution
-    // here means the link is a case-mismatch (possibly combined with a
-    // stem/full extension style difference).
+    // extension and directory-index fallbacks internally, and — for bare,
+    // non-site-absolute targets — an Obsidian stem lookup anywhere in the
+    // vault. The first three are casing/spelling differences on the *same*
+    // path; the last one is a relocation, and iter-211 / BUG-12 keeps them
+    // apart so the caller can label and gate them honestly.
     if let Some(idx) = case_index
         && let Some(canonical_path) =
             resolve_target(canonical_dir, resolved_target, site_prefix, Some(idx))
     {
-        return LinkResolution::CaseMismatch(canonical_path.replace('\\', "/"));
+        let canonical = canonical_path.replace('\\', "/");
+        if is_case_only_variant(resolved_target, &canonical) {
+            return LinkResolution::CaseMismatch(canonical);
+        }
+        return LinkResolution::StemRelocation(canonical);
     }
 
     LinkResolution::Broken
+}
+
+/// Whether `canonical` is the same path as `written` up to ASCII case and the
+/// spelling fallbacks `resolve_target` applies on the *same* path (`.md`
+/// suffix, `/index.md` directory index, trailing slash).
+///
+/// Used to tell a genuine case-mismatch apart from a bare-stem relocation
+/// (iter-211 / BUG-12): `Foo.MD` → `foo.md` is a casing fix, `foo.md` →
+/// `sub/foo.md` is a move.
+fn is_case_only_variant(written: &str, canonical: &str) -> bool {
+    let w = written.trim_end_matches('/');
+    if w.is_empty() {
+        return false;
+    }
+    canonical.eq_ignore_ascii_case(w)
+        || canonical.eq_ignore_ascii_case(&format!("{w}.md"))
+        || canonical.eq_ignore_ascii_case(&format!("{w}/{DIRECTORY_INDEX_FILE}"))
 }
 
 /// Resolve a link's target to a vault-relative path and classify it — the

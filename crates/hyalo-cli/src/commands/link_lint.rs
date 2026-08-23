@@ -99,8 +99,13 @@ impl FileVisitor for LinkCollector {
 /// whose target does not resolve to a known vault file.
 ///
 /// `rel_path` is the vault-relative path of the file being linted (used to
-/// resolve source-relative markdown links). Line numbers are body-relative and
-/// translated to file-absolute by the caller.
+/// resolve source-relative markdown links).
+///
+/// `content` is the **whole file** (frontmatter included), so the line numbers
+/// the scanner hands the visitor — and therefore the ones on the returned
+/// findings — are already **file-absolute**. Callers must not add a
+/// frontmatter offset on top (iter-211 / BUG-9: doing so reported a link on
+/// line 5 of a 3-line-frontmatter file at line 8).
 #[must_use]
 pub fn check_broken_links(
     ctx: &LinkLintContext,

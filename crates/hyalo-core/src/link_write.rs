@@ -186,7 +186,22 @@ impl LinkWriter {
                 // Detect the user's original written form from the raw target text.
                 let raw_target = &line[span.target_start..span.target_end];
                 let form = detect_wikilink_form(raw_target);
-                Self::emit_wikilink_with_form(form, new_vault_rel, new_stem, source_rel)
+                let mut emitted =
+                    Self::emit_wikilink_with_form(form, new_vault_rel, new_stem, source_rel);
+                // iter-211 / BUG-12: `detect_wikilink_form` classifies any
+                // target containing `/` as `PathRelative`, even when the author
+                // wrote `[[foo/index.md]]` — so the `.md` was silently dropped
+                // on rewrite, breaking iter-203's spelling guarantee on the
+                // tenth form. The suffix is a spelling choice orthogonal to the
+                // path shape, so re-apply it whenever the original carried one.
+                let raw_had_md = raw_target.len() > 3
+                    && raw_target.as_bytes()[raw_target.len() - 3..].eq_ignore_ascii_case(b".md");
+                let emitted_has_md = emitted.len() > 3
+                    && emitted.as_bytes()[emitted.len() - 3..].eq_ignore_ascii_case(b".md");
+                if raw_had_md && !emitted_has_md {
+                    emitted.push_str(".md");
+                }
+                emitted
             }
         }
     }
@@ -255,11 +270,18 @@ impl LinkWriter {
         source_rel: &str,
         site_prefix: Option<&str>,
     ) -> String {
+        // Mirror presence/absence of the `.md` suffix from the original
+        // spelling. iter-211 / BUG-12: this used to be applied only on the
+        // site-absolute branch, so an extensionless *relative* link
+        // (`[f](foo/index)`) came back from `mv` as `[f](bar/index.md)` —
+        // a suffix the author never wrote, breaking iter-203's spelling
+        // guarantee on one of its ten forms.
+        let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
+        let styled_target = if had_md { new_vault_rel } else { new_stem };
+
         if span.link.target.starts_with('/') {
             // Preserve absolute-path style (vault-absolute).
-            // Mirror presence/absence of `.md` suffix from the original.
-            let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
-            let target = if had_md { new_vault_rel } else { new_stem };
+            let target = styled_target;
             // L-11: only re-emit the site prefix when the original spelling
             // carried it. The prefix is often *auto-derived* from the vault
             // directory name, and blindly prepending it turns a working
@@ -274,7 +296,7 @@ impl LinkWriter {
                 _ => format!("/{target}"),
             }
         } else {
-            relative_path_between(source_rel, new_vault_rel)
+            relative_path_between(source_rel, styled_target)
         }
     }
 }

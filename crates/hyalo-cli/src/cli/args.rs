@@ -378,9 +378,13 @@ pub(crate) struct FindFilters {
     #[arg(short = 'n', long, value_parser = parse_limit)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
-    /// Only return files with at least one unresolved link (auto-includes links field).
+    /// Only return files with at least one unresolved link or dead heading anchor
+    /// (auto-includes links field).
     /// Targets that resolve above the vault root are out of scope, not broken: they are
-    /// flagged `out_of_vault` on the link and do not qualify a file here
+    /// flagged `out_of_vault` on the link and do not qualify a file here.
+    /// A `#fragment` matches either the raw heading text or the rendered GitHub slug
+    /// (`#sub-section` for `### Sub Section`); same-file fragments (`[b](#nope)`) are
+    /// checked against the file's own headings and reported with an empty target
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
@@ -1976,16 +1980,23 @@ pub(crate) enum LinksAction {
             Matching strategies (in priority order):\n\
             1. Case-insensitive exact match\n\
             2. Extension mismatch (.md present/absent)\n\
-            3. Unique stem match anywhere in the vault (shortest-path); for a\n\
-               site-absolute target (/a/b) this is only a basename guess and is\n\
-               reported as the separate basename-fallback strategy\n\
+            3. Unique stem match anywhere in the vault (shortest-path); when the\n\
+               target was written WITH a directory (/a/b or a/b) this is only a\n\
+               basename guess and is reported as the separate\n\
+               basename-fallback strategy\n\
             4. Jaro-Winkler fuzzy match above --threshold\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
             LOW-CONFIDENCE MATCHES ARE GATED: a broken [[foo]] can \"match\" an unrelated bar.md,\n\
-            and a site-absolute /actions can \"match\" any actions.md anywhere in the vault. Both\n\
-            fuzzy and basename-fallback fixes are reported in their own bucket and are NOT written\n\
-            by plain --apply. Opt in with --apply-fuzzy, optionally gating on --min-confidence\n\
-            <0.0-1.0> (which implies --apply-fuzzy). Strategies 1-3 otherwise always apply.\n\n\
+            and /actions or guides/actions can \"match\" any actions.md anywhere in the vault.\n\
+            Both fuzzy and basename-fallback fixes are reported in their own bucket and are NOT\n\
+            written by plain --apply. Opt in with --apply-fuzzy, optionally gating on\n\
+            --min-confidence <0.0-1.0> (which implies --apply-fuzzy).\n\n\
+            THE BASENAME GATE KEYS ON THE WRITTEN DIRECTORY, NOT THE LEADING SLASH: a target\n\
+            written with any directory component (/guides/actions, guides/actions,\n\
+            [[sub/actions]]) asserts a location, so throwing it away and matching on the last\n\
+            segment is a guess and needs --apply-fuzzy. A target written with no directory at\n\
+            all ([[actions]], [x](actions.md)) asserts no location: resolving it by stem is the\n\
+            documented short-form rule and plain --apply writes it.\n\n\
             FIXES ALWAYS ROUND-TRIP: a repair is written in the form the link was written in —\n\
             site-absolute stays site-absolute, a relative destination is computed from the source\n\
             file's own directory — and any fix whose emitted target would still not resolve is\n\
@@ -2016,11 +2027,11 @@ pub(crate) enum LinksAction {
         ///
         /// Jaro-Winkler fuzzy matches are guesses: a broken [[foo]] can
         /// "match" an unrelated bar.md at 0.9 similarity. So is a
-        /// basename fallback, where a site-absolute target such as /actions
-        /// matches some actions.md elsewhere in the vault. Both are reported
-        /// in a separate bucket and are NOT written by plain --apply. Pass
-        /// --apply-fuzzy to opt in, optionally narrowing with
-        /// --min-confidence.
+        /// basename fallback, where a target that wrote a directory
+        /// (/actions or guides/actions) matches some actions.md elsewhere in
+        /// the vault. Both are reported in a separate bucket and are NOT
+        /// written by plain --apply. Pass --apply-fuzzy to opt in, optionally
+        /// narrowing with --min-confidence.
         #[arg(long)]
         apply_fuzzy: bool,
         /// Only apply fuzzy fixes whose confidence is at least this value

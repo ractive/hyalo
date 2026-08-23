@@ -487,6 +487,15 @@ pub(crate) struct FileLinks {
     pub(crate) source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
     pub(crate) links: Vec<(usize, Link)>,
+    /// Same-file heading anchors (`[b](#frag)`, `[[#frag]]`) with 1-based line
+    /// numbers, fragment text only (no leading `#`).
+    ///
+    /// These are not graph edges — they point at the source file itself — so
+    /// the link graph ignores them. They ride along on `FileLinks` because
+    /// they are produced by the same single-pass body scan, and are copied
+    /// onto [`crate::index::IndexEntry::self_anchors`] so `find --broken-links`
+    /// can validate them (iter-211 / BUG-8).
+    pub(crate) self_anchors: Vec<(usize, String)>,
 }
 
 /// Strip a trailing `.md` extension from `s`, matching any ASCII casing
@@ -594,6 +603,17 @@ fn insert_file_links(
                 link.target = normalize_target(&file_links.source, &link.target);
             }
         }
+        // iter-211 / BUG-10: a trailing slash is a directory *spelling*, never
+        // part of the key. `normalize_target` already drops it for relative
+        // targets, but `strip_site_prefix` keeps it, so `[b](/baz/)` was
+        // indexed under `baz/` — a key `backlinks baz.md` (which probes `baz.md`
+        // and `baz`) can never hit, even though `find --broken-links` happily
+        // resolved the same link to `baz.md`. Strip it uniformly, after
+        // `raw_trailing_slash` has captured the author's spelling for the
+        // directory-index rule below.
+        while link.target.len() > 1 && link.target.ends_with('/') {
+            link.target.pop();
+        }
 
         // Compute an extra storage key for bare-basename wikilinks that
         // unambiguously resolve to a known vault file, so
@@ -631,28 +651,26 @@ fn insert_file_links(
             line,
             link: link.clone(),
         };
-        let extra_key = resolved_key.or(dir_index_key);
-        // L-1: when the written target differs from the canonical key only in
-        // ASCII case (`[[NOTE]]` resolving to `note.md`), both keys fall into
-        // the same lowercased bucket and `backlinks_ci` returns the one edge
-        // twice — `hyalo backlinks note.md` reported 2 for a single link while
-        // `find --fields links` and `summary` correctly reported 1. Register
-        // the canonical spelling alone in that case: `backlinks_ci` still finds
-        // it, `mv` still rewrites it (the entry carries the original written
-        // link), and the case-sensitive `backlinks` no longer answers to a
-        // spelling no file on disk has.
-        let written_is_case_variant = extra_key
-            .as_deref()
-            .is_some_and(|k| k != link.target && k.eq_ignore_ascii_case(&link.target));
-        if !written_is_case_variant {
-            index
-                .entry(link.target.clone())
-                .or_default()
-                .push(entry.clone());
-        }
-        if let Some(key) = extra_key {
-            index.entry(key).or_default().push(entry);
-        }
+        // iter-211 / BUG-10 — **one link occurrence, one index key.**
+        //
+        // Resolution above already picked the single file this occurrence
+        // points at, mirroring `discovery::resolve_target`'s precedence. The
+        // graph therefore stores the *resolved* key when there is one and the
+        // written key otherwise — never both. Registering both is what made
+        // a single `[b](foo/)` show up as a backlink of `foo.md` *and*
+        // `foo/index.md` when both files existed, while `links` reported
+        // `ambiguous: 0`.
+        //
+        // This generalizes the narrower L-1 rule it replaces (which suppressed
+        // the written key only when it was an ASCII-case variant of the
+        // canonical one, e.g. `[[NOTE]]` → `note.md`). Nothing is lost:
+        // `backlinks` / `backlinks_ci` probe both the `.md` and stem forms of
+        // the canonical path, and `mv` rewrites from the `BacklinkEntry`,
+        // which still carries the original written link text.
+        let key = resolved_key
+            .or(dir_index_key)
+            .unwrap_or_else(|| link.target.clone());
+        index.entry(key).or_default().push(entry);
     }
 }
 
@@ -665,7 +683,9 @@ pub const DEFAULT_FRONTMATTER_LINK_PROPERTIES: &[&str] =
 pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
+    self_anchors: Vec<(usize, String)>,
     scratch: Vec<Link>,
+    anchor_scratch: Vec<String>,
     /// Frontmatter property names to scan for [[wikilink]] patterns.
     frontmatter_props: Vec<String>,
 }
@@ -676,7 +696,9 @@ impl LinkGraphVisitor {
         Self {
             source,
             links: Vec::new(),
+            self_anchors: Vec::new(),
             scratch: Vec::new(),
+            anchor_scratch: Vec::new(),
             frontmatter_props,
         }
     }
@@ -686,6 +708,7 @@ impl LinkGraphVisitor {
         FileLinks {
             source: self.source,
             links: self.links,
+            self_anchors: self.self_anchors,
         }
     }
 
@@ -740,9 +763,18 @@ impl FileVisitor for LinkGraphVisitor {
         // inside backtick spans are not indexed as real links.
         // Pass `raw` as original so backtick-wrapped link labels are preserved.
         self.scratch.clear();
-        extract_links_from_text_with_original(cleaned, raw, &mut self.scratch);
+        self.anchor_scratch.clear();
+        crate::links::extract_links_and_self_anchors(
+            cleaned,
+            raw,
+            &mut self.scratch,
+            &mut self.anchor_scratch,
+        );
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
+        }
+        for frag in self.anchor_scratch.drain(..) {
+            self.self_anchors.push((line_num, frag));
         }
         ScanAction::Continue
     }
@@ -1690,6 +1722,7 @@ mod tests {
         graph.insert_links(
             FileLinks {
                 source: PathBuf::from("note.md"),
+                self_anchors: Vec::new(),
                 links: vec![(
                     1,
                     Link {
@@ -1697,6 +1730,7 @@ mod tests {
                         label: None,
                         kind: LinkKind::Wikilink,
                         fragment: None,
+                        query: None,
                     },
                 )],
             },
@@ -1738,6 +1772,7 @@ mod tests {
         graph.insert_links(
             FileLinks {
                 source: PathBuf::from("note.md"),
+                self_anchors: Vec::new(),
                 links: vec![(
                     1,
                     Link {
@@ -1745,6 +1780,7 @@ mod tests {
                         label: None,
                         kind: LinkKind::Wikilink,
                         fragment: None,
+                        query: None,
                     },
                 )],
             },
@@ -1816,6 +1852,7 @@ mod tests {
         graph.insert_links(
             FileLinks {
                 source: PathBuf::from("a.md"),
+                self_anchors: Vec::new(),
                 links: vec![(
                     1,
                     Link {
@@ -1823,6 +1860,7 @@ mod tests {
                         label: None,
                         kind: LinkKind::Wikilink,
                         fragment: None,
+                        query: None,
                     },
                 )],
             },

@@ -850,6 +850,34 @@ pub fn find(
                             out_of_vault,
                         }
                     })
+                    // iter-211 / BUG-8: same-file anchors (`[b](#nope)`,
+                    // `[[#nope]]`) have no target file, so they are indexed
+                    // separately from `entry.links` and were never checked at
+                    // all. Surface the *broken* ones as links that resolve to
+                    // this very file, so `--broken-links` catches them and the
+                    // per-link output shows where they point. Valid same-file
+                    // anchors are deliberately not emitted: they would inflate
+                    // every file's outbound-link list and silently change the
+                    // `--orphan` / `--dead-end` verdicts.
+                    .chain(
+                        entry
+                            .self_anchors
+                            .iter()
+                            .filter(|(_, fragment)| {
+                                !hyalo_core::anchor::fragment_matches_headings(
+                                    fragment,
+                                    &entry.sections,
+                                )
+                            })
+                            .map(|(_, fragment)| LinkInfo {
+                                target: String::new(),
+                                path: Some(entry.rel_path.clone()),
+                                label: None,
+                                fragment: Some(fragment.clone()),
+                                broken_anchor: true,
+                                out_of_vault: false,
+                            }),
+                    )
                     .collect::<Vec<_>>(),
             )
         } else {

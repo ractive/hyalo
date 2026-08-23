@@ -942,6 +942,7 @@ mod tests {
             sections: Vec::new(),
             tasks: Vec::new(),
             links: Vec::new(),
+            self_anchors: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
         }

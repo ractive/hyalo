@@ -37,6 +37,10 @@ Some content.
 ## my heading
 
 Percent-encoded target.
+
+### Sub Section
+
+DEC-075: reachable as the rendered slug `#sub-section`.
 "),
     );
 
@@ -98,11 +102,14 @@ title: Markdown Variants
 ---
 Bare: [t](Foo.md#Real).
 Percent: [t](Foo.md#my%20heading).
+Slug: [t](Foo.md#sub-section).
 Broken md anchor: [t](Foo.md#missing).
 "),
     );
 
-    // Fragment-only same-file links — must NOT be file links.
+    // Fragment-only same-file links resolve against THIS file's own headings
+    // (iter-211 / BUG-8). They are never file links, so they must not appear
+    // as outbound links — but a *dead* one must still be caught.
     write_md(
         tmp.path(),
         "same_file.md",
@@ -110,8 +117,23 @@ Broken md anchor: [t](Foo.md#missing).
 ---
 title: Same File
 ---
+## Real
 Wiki: [[#Real]].
 Md: [t](#Real).
+Slug: [t](#real).
+"),
+    );
+
+    // A same-file anchor naming a heading that does not exist here.
+    write_md(
+        tmp.path(),
+        "same_file_broken.md",
+        md!(r"
+---
+title: Same File Broken
+---
+## Present
+Md: [b](#nope).
 "),
     );
 
@@ -206,10 +228,39 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
         "[{label}] block ref must never be reported: {files:?}"
     );
 
-    // same_file.md — fragment-only links are not file links → NOT surfaced.
+    // same_file.md — every same-file anchor names a real heading here, in both
+    // the raw-text and slug spellings → NOT surfaced.
     assert!(
         !files.contains(&"same_file.md".to_string()),
-        "[{label}] fragment-only same-file links are not links: {files:?}"
+        "[{label}] valid same-file anchors must not be reported: {files:?}"
+    );
+
+    // same_file_broken.md — `[b](#nope)` names no heading in this file
+    // (iter-211 / BUG-8: these used to be invisible to --broken-links).
+    assert!(
+        files.contains(&"same_file_broken.md".to_string()),
+        "[{label}] dead same-file anchor must be surfaced: {files:?}"
+    );
+    let sf = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["file"].as_str() == Some("same_file_broken.md"))
+        .unwrap()["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["fragment"].as_str() == Some("nope"))
+        .expect("dead same-file anchor present in links");
+    assert_eq!(
+        sf["broken_anchor"].as_bool(),
+        Some(true),
+        "[{label}] same-file anchor must carry broken_anchor"
+    );
+    assert_eq!(
+        sf["path"].as_str(),
+        Some("same_file_broken.md"),
+        "[{label}] same-file anchor resolves to its own file"
     );
 
     // broken_anchor.md — [[Foo#nope]] target resolves, anchor broken.
@@ -263,6 +314,7 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     // Foo.md#missing is broken.
     let mut real_ok = false;
     let mut pct_ok = false;
+    let mut slug_ok = false;
     let mut missing_broken = false;
     for l in md_links {
         let frag = l["fragment"].as_str().unwrap_or("");
@@ -270,6 +322,7 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
         match frag {
             "Real" => real_ok = !broken && l["path"].as_str() == Some("Foo.md"),
             "my%20heading" => pct_ok = !broken && l["path"].as_str() == Some("Foo.md"),
+            "sub-section" => slug_ok = !broken && l["path"].as_str() == Some("Foo.md"),
             "missing" => missing_broken = broken,
             _ => {}
         }
@@ -278,6 +331,10 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     assert!(
         pct_ok,
         "[{label}] percent-encoded #my%20heading must resolve to `my heading`"
+    );
+    assert!(
+        slug_ok,
+        "[{label}] DEC-075: the rendered slug #sub-section must match `### Sub Section`"
     );
     assert!(missing_broken, "[{label}] markdown #missing must be broken");
 }

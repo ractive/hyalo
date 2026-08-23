@@ -2730,7 +2730,15 @@ fn lint_one_file_extended(
                 .entry(RULE_ID_BROKEN_LINK.to_owned())
                 .or_default()
                 .push(InternalViolation {
-                    line: to_file_line(f.line),
+                    // iter-211 / BUG-9: HYALO006 scans the WHOLE file (frontmatter
+                    // included) through `scan_slice_multi`, whose visitor line
+                    // numbers are already file-absolute. The body-rule
+                    // `to_file_line` translation must NOT be applied here — doing
+                    // so added the frontmatter length a second time, so a link on
+                    // line 5 of a file with 3 frontmatter lines was reported at
+                    // line 8. MD rules keep `to_file_line` because they lint the
+                    // post-frontmatter slice.
+                    line: f.line,
                     column: 1,
                     message: f.message,
                     severity: severity.to_owned(),
