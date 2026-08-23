@@ -29,7 +29,7 @@ use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
 use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
-use crate::link_score::{self, candidate_confidence};
+use crate::link_score::{self, candidate_confidence_with_claim};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
@@ -531,6 +531,25 @@ impl LinkMatcher {
             .strip_suffix(".md")
             .unwrap_or(target_filename);
 
+        // DEC-076: a written directory component is a *location claim*. Both
+        // the strategy-3 gate and the iter-212 confidence scorer key on it, so
+        // decide once, on the target exactly as the author wrote it — `/actions`
+        // claims the site root even though stripping the prefix leaves a bare
+        // `actions` behind.
+        let asserts_path = written_target.contains('/') || written_target.contains('\\');
+
+        // Coordinate system for scoring: the candidate list is vault-relative,
+        // so a relative target has to be resolved against its source directory
+        // before its directories mean anything. `../c/target.md` written in
+        // `a/b/page.md` is a claim about `a/c/`, not about a directory literally
+        // named `..`.
+        let score_target: std::borrow::Cow<'_, str> =
+            if asserts_path && !written_target.starts_with('/') {
+                std::borrow::Cow::Owned(normalize_target(Path::new(source), raw_target))
+            } else {
+                std::borrow::Cow::Borrowed(raw_target)
+            };
+
         // --- Strategy 1: Case-insensitive exact match ---
         // `target_lower` is also used for the exact-case alt computation below.
         let target_lower = raw_target.to_ascii_lowercase();
@@ -601,10 +620,9 @@ impl LinkMatcher {
             // documented short-form rule and stays a certain fix; any written
             // directory component is a location claim, and discarding it is a
             // guess that belongs behind the fuzzy gate.
-            // Tested on `written_target`, NOT the prefix-stripped `raw_target`:
-            // `/actions` still names a location (the site root) even though
-            // stripping leaves a bare `actions` behind.
-            let asserts_path = written_target.contains('/') || written_target.contains('\\');
+            // `asserts_path` is decided above on `written_target`, NOT on the
+            // prefix-stripped `raw_target`: `/actions` still names a location
+            // (the site root) even though stripping leaves a bare `actions`.
             let (strategy, confidence) = if asserts_path {
                 // iter-212: the confidence is no longer the flat
                 // BASENAME_FALLBACK_CONFIDENCE. The basename matches exactly
@@ -617,7 +635,11 @@ impl LinkMatcher {
                 // 0.7 floor and therefore below the default apply floor.
                 (
                     FixStrategy::BasenameFallback,
-                    candidate_confidence(raw_target, &self.files[indices[0]]),
+                    candidate_confidence_with_claim(
+                        &score_target,
+                        &self.files[indices[0]],
+                        true,
+                    ),
                 )
             } else {
                 (FixStrategy::ShortestPath, SHORTEST_PATH_CONFIDENCE)
@@ -661,7 +683,7 @@ impl LinkMatcher {
             if strsim::jaro_winkler(target_stem, fstem) < self.threshold {
                 continue;
             }
-            let score = candidate_confidence(raw_target, candidate);
+            let score = candidate_confidence_with_claim(&score_target, candidate, asserts_path);
             if score > best_score {
                 second_score = best_score;
                 best_score = score;

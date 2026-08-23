@@ -228,15 +228,41 @@ pub fn directory_similarity(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
 /// Confidence that `candidate` (a vault-relative path) is the document the
 /// broken `target` meant, in `[0.0, 1.0]`.
 ///
-/// `target` should already have any site prefix stripped so both sides are
-/// expressed in the same coordinate system.
+/// `target` must already be expressed in the same coordinate system as
+/// `candidate`: site prefix stripped, `../` resolved against the source
+/// directory. Whether the author asserted a location at all is inferred from
+/// `target` containing a separator — call
+/// [`candidate_confidence_with_claim`] directly when the written form and the
+/// comparison form disagree (a site-absolute `/actions` normalises to a bare
+/// `actions` but still claims the site root).
 #[must_use]
 pub fn candidate_confidence(target: &str, candidate: &str) -> f64 {
+    let asserts_location = target.contains('/') || target.contains('\\');
+    candidate_confidence_with_claim(target, candidate, asserts_location)
+}
+
+/// [`candidate_confidence`] with an explicit answer to "did the author assert
+/// a location?".
+///
+/// When `asserts_location` is `false` the directory feature is *neutral*
+/// rather than zero and the basename carries the whole score. A bare
+/// `[[targt]]` claims no location (DEC-076 short-form semantics), so there is
+/// nothing for a candidate's directory to contradict — docking it for living
+/// in a subdirectory would be scoring it against a claim that was never made.
+#[must_use]
+pub fn candidate_confidence_with_claim(
+    target: &str,
+    candidate: &str,
+    asserts_location: bool,
+) -> f64 {
     let (target_dirs, target_stem) = split_path(target);
     let (cand_dirs, cand_stem) = split_path(candidate);
-    let base = basename_similarity(target_stem, cand_stem);
+    let base = basename_similarity(target_stem, cand_stem).clamp(0.0, 1.0);
+    if !asserts_location {
+        return base;
+    }
     let dirs = directory_similarity(&target_dirs, &cand_dirs);
-    (BASENAME_WEIGHT * base + DIR_WEIGHT * dirs).clamp(0.0, 1.0)
+    BASENAME_WEIGHT.mul_add(base, DIR_WEIGHT * dirs).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -310,8 +336,10 @@ mod tests {
     }
 
     #[test]
-    fn cross_tree_same_name_sits_just_below_the_floor() {
-        let c = candidate_confidence("actions", "graphql/reference/actions.md");
+    fn cross_tree_same_name_sits_below_the_floor() {
+        // `/actions` normalises to a bare `actions` but still claims the site
+        // root, so the claim is passed in explicitly (iter-200 / M-1).
+        let c = candidate_confidence_with_claim("actions", "graphql/reference/actions.md", true);
         assert!(approx(c, BASENAME_WEIGHT), "got {c}");
         assert!(
             c < DEFAULT_FUZZY_MIN_CONFIDENCE,
@@ -319,8 +347,23 @@ mod tests {
         );
     }
 
-    /// The three proposals from the v0.21.0-pre2 dogfood report must reorder:
-    /// the only correct one has to score highest.
+    #[test]
+    fn a_bare_stem_is_not_docked_for_the_candidates_directory() {
+        // `[[targt]]` asserts no location: the only evidence is the basename,
+        // so a typo fix must keep its full score even though the candidate
+        // lives in a subdirectory.
+        let c = candidate_confidence("targt", "notes/target.md");
+        assert!(c > 0.96, "expected the ~0.966 typo offer to survive, got {c}");
+        // The same text written as a location claim is a different question.
+        let claimed = candidate_confidence_with_claim("targt", "notes/target.md", true);
+        assert!(claimed < c, "claimed={claimed} bare={c}");
+    }
+
+    /// The three proposals from the v0.21.0-pre2 dogfood report (BUG-11) must
+    /// reorder: the only correct one has to score highest. Paths are verbatim
+    /// from the GitHub Docs corpus the report was measured on; the old
+    /// Jaro-Winkler-on-stems confidences were 0.9 / 0.889 / 0.6 respectively —
+    /// exactly backwards.
     #[test]
     fn dogfood_examples_reorder() {
         let wrong_a = candidate_confidence(
@@ -329,11 +372,11 @@ mod tests {
         );
         let wrong_b = candidate_confidence(
             "billing/reference/actions-minute-multipliers",
-            "code-security/code-scanning/actions-built-in-queries.md",
+            "code-security/reference/code-scanning/codeql/codeql-queries/actions-built-in-queries.md",
         );
         let correct = candidate_confidence(
-            "code-security/how-tos/scan-code-for-vulnerabilities/configuring-larger-runners-for-default-setup",
-            "code-security/how-tos/find-and-fix-issues/configuring-larger-runners-for-default-setup.md",
+            "code-security/how-tos/scan-code-for-vulnerabilities/manage-your-configuration/configuring-larger-runners-for-default-setup",
+            "code-security/how-tos/find-and-fix-code-vulnerabilities/manage-your-configuration/configuring-larger-runners-for-default-setup.md",
         );
         assert!(
             correct > wrong_a && correct > wrong_b,
