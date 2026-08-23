@@ -439,14 +439,15 @@ fn write_frontmatter_impl(
         // change byte-for-byte and serialize only what actually changed. Falls
         // back to a full re-serialization — with a warning — when the original
         // block cannot be mapped to per-key line spans.
-        let spliced = match original_yaml.as_deref() {
-            Some(orig) => match splice_frontmatter(orig, props, compact_list_indent) {
-                SpliceOutcome::Spliced(yaml) => Some(yaml),
-                SpliceOutcome::Fallback(reason) => {
-                    warn_full_frontmatter_rewrite(path, reason);
-                    None
-                }
-            },
+        let spliced = match original_yaml
+            .as_deref()
+            .map(|orig| splice_frontmatter(orig, props, compact_list_indent))
+        {
+            Some(SpliceOutcome::Spliced(yaml)) => Some(yaml),
+            Some(SpliceOutcome::Fallback(reason)) => {
+                warn_full_frontmatter_rewrite(path, reason);
+                None
+            }
             None => {
                 if let Some(reason) = splice_blocked {
                     warn_full_frontmatter_rewrite(path, reason);

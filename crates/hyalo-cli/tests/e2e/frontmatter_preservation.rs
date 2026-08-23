@@ -160,7 +160,10 @@ fn append_to_a_list_rewrites_only_that_list() {
     gh_docs_file(&tmp);
     let before = fs::read_to_string(tmp.path().join("index.md")).unwrap();
 
-    let (ok, stderr) = run(&tmp, &["append", "index.md", "--property", "topics=Actions"]);
+    let (ok, stderr) = run(
+        &tmp,
+        &["append", "index.md", "--property", "topics=Actions"],
+    );
     assert!(ok, "append failed: {stderr}");
 
     let after = fs::read_to_string(tmp.path().join("index.md")).unwrap();
@@ -281,7 +284,8 @@ tags:
 #[test]
 fn crlf_files_stay_crlf_and_keep_untouched_lines() {
     let tmp = TempDir::new().unwrap();
-    let content = "---\r\ntitle: 'CRLF note'\r\nstatus: planned\r\ntags:\r\n  - a\r\n---\r\n\r\nBody\r\n";
+    let content =
+        "---\r\ntitle: 'CRLF note'\r\nstatus: planned\r\ntags:\r\n  - a\r\n---\r\n\r\nBody\r\n";
     write_md(tmp.path(), "crlf.md", content);
 
     let (ok, stderr) = run(&tmp, &["set", "crlf.md", "--property", "status=done"]);

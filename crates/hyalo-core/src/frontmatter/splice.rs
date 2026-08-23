@@ -293,7 +293,10 @@ fn classify_line(line: &str) -> LineRole {
         return LineRole::Unsupported;
     }
     let first = line.as_bytes()[0];
-    if matches!(first, b'-' | b'?' | b'{' | b'[' | b'&' | b'*' | b'!' | b'|' | b'>' | b':') {
+    if matches!(
+        first,
+        b'-' | b'?' | b'{' | b'[' | b'&' | b'*' | b'!' | b'|' | b'>' | b':'
+    ) {
         return LineRole::Unsupported;
     }
     let rest = match first {
@@ -371,11 +374,10 @@ fn segment(yaml: &str) -> Option<(&str, Vec<Segment<'_>>, &str)> {
             }
             match classify_line(stripped) {
                 LineRole::Key => key_starts.push(offset),
-                LineRole::Trivia => {}
                 // A compact sequence item before any key means the document is
                 // a top-level sequence, not a mapping.
                 LineRole::Continuation if key_starts.is_empty() => return None,
-                LineRole::Continuation => {}
+                LineRole::Trivia | LineRole::Continuation => {}
                 LineRole::Unsupported => return None,
             }
         }
@@ -486,8 +488,7 @@ mod tests {
     fn changed_lines(before: &str, after: &str) -> usize {
         let b: Vec<&str> = before.lines().collect();
         let a: Vec<&str> = after.lines().collect();
-        a.iter().filter(|l| !b.contains(l)).count()
-            + b.iter().filter(|l| !a.contains(l)).count()
+        a.iter().filter(|l| !b.contains(l)).count() + b.iter().filter(|l| !a.contains(l)).count()
     }
 
     #[test]
