@@ -1541,6 +1541,42 @@ See [broken](old-name.md) here.
         assert_eq!(report.unfixable.len(), 1);
     }
 
+    // --- iter-207 BUG-4: templated destinations are never rewritten ---
+
+    #[test]
+    fn is_templated_target_recognizes_the_three_marker_forms() {
+        assert!(is_templated_target("{% ifversion ghes %}/admin{% endif %}/guides"));
+        assert!(is_templated_target("{{ site.baseurl }}/guides"));
+        assert!(is_templated_target("${BASE}/guides"));
+        assert!(!is_templated_target("guides/index.md"));
+        // A bare brace is a legal (if odd) filename character, not a template.
+        assert!(!is_templated_target("weird{name}.md"));
+    }
+
+    /// The literal text of a Liquid conditional fuzzy-matches a real file well
+    /// above the 0.95 threshold, so `links fix --apply` used to rewrite it and
+    /// silently drop the version conditional. The round-trip guard cannot see
+    /// this: the rewritten target genuinely resolves.
+    #[test]
+    fn plan_fixes_routes_templated_targets_to_their_own_bucket() {
+        let matcher = LinkMatcher::new(make_files(&["guides.md"]), 0.7);
+        let broken_links = vec![
+            broken("src.md", 1, "{% ifversion ghes %}/admin{% endif %}/guides"),
+            broken("src.md", 2, "{{ site.baseurl }}/guides"),
+            broken("src.md", 3, "${BASE}/guides"),
+            broken("src.md", 4, "guidez"),
+        ];
+        let report = plan_fixes(&broken_links, &matcher);
+        assert_eq!(report.templated.len(), 3, "{:?}", report.templated);
+        assert!(
+            report.templated.iter().all(|b| b.target.contains("guides")),
+            "templated links keep their original target text"
+        );
+        assert_eq!(report.fixes.len(), 1, "the real typo is still fixable");
+        assert_eq!(report.fixes[0].old_target, "guidez");
+        assert!(report.unfixable.is_empty());
+    }
+
     // --- detect_broken_links_from_index: basic ---
     // (Ported from the retired FileLinks-based `detect_broken_links` in
     //  iter-189 task 4; assertions preserved verbatim.)
