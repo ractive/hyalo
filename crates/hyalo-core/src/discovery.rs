@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
@@ -253,9 +253,16 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
     // non-symlink entry's canonical form is just the canonical vault root
     // joined with its vault-relative path, because the walker never descends
     // through directory symlinks.
+    // Which spelling represents the file matters (iter-207, BUG-7): keeping
+    // whichever the sort saw first meant an alphabetically-earlier symlink
+    // (`alias-target.md -> target.md`) shadowed the real file, so `links fix`
+    // lost `target.md` from the fuzzy candidate set (a `[fuzzy 0.966]` offer
+    // became `Unfixable: 1`) and reported fixes against the alias name.
+    // The real file always wins; a symlink only represents the group when
+    // every spelling of it is a symlink.
     let canonical_dir = canonicalize_vault_dir(dir)?;
-    let mut seen: HashSet<PathBuf> = HashSet::with_capacity(files.len());
-    let mut kept: Vec<PathBuf> = Vec::with_capacity(files.len());
+    let mut seen: HashMap<PathBuf, usize> = HashMap::with_capacity(files.len());
+    let mut kept: Vec<(PathBuf, bool)> = Vec::with_capacity(files.len());
     for path in files {
         let is_symlink = path
             .symlink_metadata()
@@ -278,10 +285,21 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
                 Err(_) => path.clone(),
             }
         };
-        if seen.insert(canonical) {
-            kept.push(path);
+        match seen.get(&canonical) {
+            None => {
+                seen.insert(canonical, kept.len());
+                kept.push((path, is_symlink));
+            }
+            // A real file replaces the symlink that got there first.
+            Some(&idx) if kept[idx].1 && !is_symlink => kept[idx] = (path, is_symlink),
+            Some(_) => {}
         }
     }
+
+    // Replacing a representative can disturb the sorted order established
+    // above; restore it so callers keep their deterministic enumeration.
+    let mut kept: Vec<PathBuf> = kept.into_iter().map(|(p, _)| p).collect();
+    kept.sort();
 
     Ok(kept)
 }
