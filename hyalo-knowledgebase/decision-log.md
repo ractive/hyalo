@@ -1866,9 +1866,14 @@ remove elsewhere in this same command's counters (see NEW-6 above, and
 BUG-6 in iter-210). Landing it in the same iteration as NEW-6 means one
 CHANGELOG entry and one migration note instead of two.
 
-**Blast radius checked:** the only other producer/consumer of the old
-`errors`/`warnings` keys on the fix-mode shape was `dispatch.rs`'s view-
-violation injection path; the text renderer (`format_lint_fix_output_text`)
-never read those keys at all (the footer is built entirely from
-`total_fixed`/`total_remaining`/`total_conflicts`), so no text-output
-change was needed.
+**Blast radius checked:** the other producers/consumers of the old
+`errors`/`warnings` keys on the fix-mode shape were `dispatch.rs`'s view-
+violation injection path and `run.rs`'s `empty_result_for_command` (the
+`--files-from`-resolves-to-zero-files shortcut, which hand-built the
+fix-mode JSON shape rather than reusing `ExtLintFixOutput` — review finding
+#5 on the first review round switched it to serializing
+`ExtLintFixOutput::default()` so this rename, and any future one, cannot
+drift out of sync there again). The text renderer
+(`format_lint_fix_output_text`) never read those keys at all (the footer is
+built entirely from `total_fixed`/`total_remaining`/`total_conflicts`), so
+no text-output change was needed.

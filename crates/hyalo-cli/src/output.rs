@@ -1466,6 +1466,42 @@ fn format_lint_fix_output_text(map: &serde_json::Map<String, serde_json::Value>)
         }
     }
 
+    // `files_truncated` gates a "(showing N of M files with issues)" line,
+    // mirroring `format_lint_output_text`'s. Without it, the summary line
+    // below — whose fixed/remaining/conflicts counts describe the WHOLE run
+    // since iter-218 (NEW-6) — read as if the file listing above it were
+    // complete too, when `--limit` had silently capped it (review finding
+    // #2).
+    let files_truncated = map
+        .get("files_truncated")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if files_truncated {
+        let files_with_violations = map
+            .get("files_with_violations")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let shown_files = files.map_or(0, |arr| {
+            arr.iter()
+                .filter(|f| {
+                    f.get("fixed_groups")
+                        .and_then(|g| g.as_array())
+                        .is_some_and(|a| !a.is_empty())
+                        || f.get("remaining_groups")
+                            .and_then(|g| g.as_array())
+                            .is_some_and(|a| !a.is_empty())
+                        || f.get("conflicts")
+                            .and_then(|c| c.as_array())
+                            .is_some_and(|a| !a.is_empty())
+                })
+                .count()
+        });
+        let _ = writeln!(
+            s,
+            "… (showing {shown_files} of {files_with_violations} files with issues)"
+        );
+    }
+
     // Summary line.
     let files_checked = map
         .get("files_checked")

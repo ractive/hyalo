@@ -253,20 +253,22 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
             // non-empty counterpart would, letting `output.rs`'s
             // `format_lint_fix_output_text` detection and any JSON consumer
             // reading `.total_fixed`/`.remaining_errors` see a consistent
-            // key set regardless of whether any file matched.
-            let payload = serde_json::json!({
-                "files": [],
-                "total_fixed": 0,
-                "total_remaining": 0,
-                "total_conflicts": 0,
-                "rules_fired": 0,
-                "files_with_violations": 0,
-                "files_checked": 0,
-                "files_truncated": false,
-                "remaining_errors": 0,
-                "remaining_warnings": 0,
-                "dry_run": *dry_run,
-            });
+            // key set regardless of whether any file matched. Serializing
+            // `ExtLintFixOutput::default()` (review finding #5) instead of a
+            // hand-written `json!` literal means this can never drift out of
+            // sync with the real struct's field set, and its own
+            // `#[serde(skip_serializing_if)]` on `dry_run` applies here too
+            // (finding #6) — the key is present only when `*dry_run` is true,
+            // exactly like the non-empty path.
+            let empty = crate::commands::lint::ExtLintFixOutput {
+                dry_run: *dry_run,
+                ..Default::default()
+            };
+            // `ExtLintFixOutput` has no maps or floats, so this cannot
+            // actually fail; the fallback keeps the "no unwrap/expect
+            // outside tests" rule rather than assuming infallibility.
+            let payload = serde_json::to_value(&empty)
+                .unwrap_or_else(|_| serde_json::json!({"files": [], "dry_run": *dry_run}));
             CommandOutcome::success_with_total(payload.to_string(), 0)
         }
         Commands::Lint { .. } => {

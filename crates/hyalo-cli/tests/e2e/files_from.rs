@@ -286,6 +286,80 @@ fn lint_files_from_empty_exits_zero() {
     assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 0);
 }
 
+/// `lint --fix --files-from` resolving to zero files must emit the
+/// fix-mode shape (`total_fixed`/`total_remaining`/`total_conflicts`,
+/// `remaining_errors`/`remaining_warnings`), not the read-only shape —
+/// otherwise a JSON consumer or the text renderer's shape-detection sees a
+/// different payload depending on whether any file happened to match
+/// (iter-218 review finding #5). `dry_run` must be present (and `true`)
+/// only under `--dry-run`, matching the non-empty path's
+/// `#[serde(skip_serializing_if)]` behavior (finding #6).
+#[test]
+fn lint_fix_files_from_empty_emits_fix_mode_shape() {
+    let tmp = setup_vault();
+    let list = write_list_file(&["nonexistent.md"]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args([
+        "lint",
+        "--fix",
+        "--files-from",
+        list.path().to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = &envelope["results"];
+    for key in [
+        "total_fixed",
+        "total_remaining",
+        "total_conflicts",
+        "remaining_errors",
+        "remaining_warnings",
+    ] {
+        assert_eq!(
+            results[key].as_u64(),
+            Some(0),
+            "expected fix-mode key {key} present and 0: {envelope}"
+        );
+    }
+    assert!(
+        results.get("total").is_none() && results.get("errors").is_none(),
+        "must not carry the read-only shape's keys: {envelope}"
+    );
+    assert!(
+        results.get("dry_run").is_none(),
+        "dry_run must be absent (not `false`) without --dry-run: {envelope}"
+    );
+
+    let mut dry_run_cmd = hyalo_no_hints();
+    dry_run_cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    dry_run_cmd.args([
+        "lint",
+        "--fix",
+        "--dry-run",
+        "--files-from",
+        list.path().to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    let dry_out = dry_run_cmd.output().unwrap();
+    assert!(dry_out.status.success());
+    let dry_envelope: serde_json::Value = serde_json::from_slice(&dry_out.stdout).unwrap();
+    assert_eq!(
+        dry_envelope["results"]["dry_run"].as_bool(),
+        Some(true),
+        "dry_run must be present and true under --dry-run: {dry_envelope}"
+    );
+}
+
 #[test]
 fn lint_files_from_mutual_exclusion_with_type_fails() {
     let tmp = setup_vault();

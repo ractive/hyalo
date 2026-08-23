@@ -660,9 +660,18 @@ impl HyaloLintEngine {
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
                     // `BYTE_COLUMN_RULE_IDS` (DEC-073, iter-218 NEW-11).
+                    //
+                    // `checked_sub` (not `saturating_sub`, review finding
+                    // #7): `v.line` is 1-based, so a well-formed diagnostic
+                    // never reports 0. If one somehow does, `saturating_sub`
+                    // would silently convert the column against line 1's
+                    // bytes — the wrong line — instead of the nonexistent
+                    // "line 0". `checked_sub` makes that case look up
+                    // nothing, so `map_or` falls back to the raw column.
                     let column = if BYTE_COLUMN_RULE_IDS.contains(rule_id) {
-                        doc.lines
-                            .get(v.line.saturating_sub(1))
+                        v.line
+                            .checked_sub(1)
+                            .and_then(|i| doc.lines.get(i))
                             .map_or(v.column, |line| byte_col_to_scalar_col(line, v.column))
                     } else {
                         v.column
@@ -743,6 +752,18 @@ impl HyaloLintEngine {
 /// MD031, MD040, MD047) are unaffected and must not be added here — passing
 /// an already-scalar column through [`byte_col_to_scalar_col`] would corrupt
 /// it on any line with multibyte content before the flagged position.
+///
+/// Not filed upstream (unlike the CRLF gap `md047_fix` compensates for) — the
+/// three rules here each compute the byte offset a different way, so there is
+/// no single upstream fix to track. Re-check this table on every
+/// `mdbook-lint-rulesets` version bump: if a rule listed here switches to a
+/// `Vec<char>`/scalar computation upstream (as MD011/MD034 already do) and
+/// stays in this list, its column gets converted twice and silently comes
+/// out wrong again — the opposite failure mode from the one this table
+/// fixes, and just as invisible without a test. The
+/// `md010_reports_byte_column_before_conversion` test below pins the
+/// pre-conversion assumption for MD010 so a silent upstream fix breaks the
+/// test instead of double-converting unnoticed.
 const BYTE_COLUMN_RULE_IDS: &[&str] = &["MD010", "MD042", "MD052"];
 
 /// Convert a rule's 1-based **byte** column to a 1-based Unicode-scalar
@@ -1050,6 +1071,95 @@ mod tests {
         assert_eq!(
             d.column, 2,
             "expected scalar column 2 (1 char + 1), not the byte column 5"
+        );
+    }
+
+    #[test]
+    fn md042_reports_unicode_scalar_column_not_byte_offset() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+
+        // MD042 (no-empty-links, default-on) computes its column from
+        // comrak's byte-indexed AST `sourcepos`. Nested inside a blockquote
+        // so the fixture also proves the conversion uses the *raw* line text
+        // (block marker included) rather than content stripped of it —
+        // comrak's sourcepos is relative to the raw line, and so is
+        // `Document::lines`, so they must agree.
+        let body = "> àéî []()\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD042")
+            .expect("MD042 should fire on the empty link");
+        // "> àéî " is 6 Unicode scalars (`>`, space, à, é, î, space) — 9 UTF-8
+        // bytes. Scalar column is 7; byte column would be 10.
+        assert_eq!(
+            d.column, 7,
+            "expected scalar column 7 (6 chars + 1), not the byte column 10"
+        );
+    }
+
+    #[test]
+    fn md052_reports_unicode_scalar_column_not_byte_offset_when_enabled() {
+        // MD052 (undefined reference link) is opt-in — enable it via the
+        // same `[lint.rules]` override path `.hyalo.toml` uses.
+        use crate::config::RuleOverride;
+        let mut config = LintConfig::default();
+        config
+            .rules
+            .insert("MD052".to_owned(), RuleOverride::Enabled(true));
+        let engine = HyaloLintEngine::create().unwrap();
+
+        // MD052 computes its column from a byte cursor
+        // (`self.pos - self.line_start`) into its own `&[u8]` input.
+        let body = "àéî [ref][undefined]\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &[])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD052")
+            .expect("MD052 should fire on the undefined reference label");
+        // "àéî " is 4 Unicode scalars, 7 UTF-8 bytes. Scalar column is 5;
+        // byte column would be 8.
+        assert_eq!(
+            d.column, 5,
+            "expected scalar column 5 (4 chars + 1), not the byte column 8"
+        );
+    }
+
+    /// Pins the *pre-conversion* assumption `BYTE_COLUMN_RULE_IDS` documents:
+    /// MD010's raw upstream `Violation.column` is a byte offset. Calls the
+    /// upstream `mdbook_lint_rulesets::standard::md010::MD010` rule directly
+    /// — bypassing `lint_body`'s conversion entirely — so a future
+    /// `mdbook-lint-rulesets` release that switches MD010 to a scalar
+    /// computation (as MD011/MD034 already do) fails this test loudly
+    /// instead of silently getting double-converted by
+    /// `byte_col_to_scalar_col` and coming out wrong again (review finding
+    /// #3).
+    #[test]
+    fn md010_reports_byte_column_before_conversion() {
+        use mdbook_lint_core::rule::Rule as _;
+        use mdbook_lint_rulesets::standard::md010::MD010;
+
+        let body = "àéî\tTAB\n";
+        let doc = Document::new(body.to_owned(), PathBuf::from("test.md")).unwrap();
+        let violations = MD010::default().check(&doc).unwrap();
+        let v = violations
+            .iter()
+            .find(|v| v.rule_id == "MD010")
+            .expect("MD010 should fire on the hard tab");
+        // "àéî" is 6 UTF-8 bytes (2 per char); the tab's 1-based byte column
+        // is 7. If this ever becomes 4 (the scalar column), MD010 has moved
+        // off byte offsets upstream and must come out of
+        // `BYTE_COLUMN_RULE_IDS`.
+        assert_eq!(
+            v.column, 7,
+            "MD010's raw upstream column is expected to still be byte-indexed; \
+             if this fails because it's now 4, remove MD010 from \
+             BYTE_COLUMN_RULE_IDS instead of updating this assertion"
         );
     }
 

@@ -1491,7 +1491,14 @@ pub struct ExtLintOutput {
 }
 
 /// Full extended lint output in fix-mode.
-#[derive(Debug, serde::Serialize)]
+///
+/// `Default` backs the empty-result shape `run.rs` emits when
+/// `--files-from` resolves to zero files (review finding #5) — serializing
+/// `Self::default()` (with only `dry_run` overridden) keeps that shape from
+/// drifting out of sync with the real field set as fields are added or
+/// removed here, and its `#[serde(skip_serializing_if)]` on `dry_run`
+/// applies the same way it does on the non-empty path.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ExtLintFixOutput {
     pub files: Vec<ExtFileLintFixResult>,
     pub total_fixed: usize,
@@ -2174,11 +2181,16 @@ fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usize) {
 /// Count the error- and warning-severity violations across every result,
 /// independent of the `max_files` display cap.
 ///
-/// In read-only mode this is simply every violation. In fix mode it counts the
+/// In read-only mode this is simply every violation, reported as
+/// [`ExtLintOutput::errors`]/`::warnings`. In fix mode it counts the
 /// violations that *remain* after fixing — SCHEMA remainders come from
-/// `post_fix_schema_remaining`, body remainders from `!v.fixed` — so the
-/// reported `errors`/`warnings` (and the exit code they drive) reflect the true
-/// post-fix state of the whole vault, not just the first `max_files` shown.
+/// `post_fix_schema_remaining`, body remainders from `!v.fixed` — reported as
+/// [`ExtLintFixOutput::remaining_errors`]/`::remaining_warnings` (renamed
+/// from `errors`/`warnings` in iter-218 NEW-6b, since this mode's count means
+/// something different from the read-only mode's despite the pre-rename JSON
+/// using the same key for both). Either way, the exit code they drive
+/// reflects the true whole-vault state, not just the first `max_files`
+/// shown.
 fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (usize, usize) {
     let mut errors = 0usize;
     let mut warnings = 0usize;

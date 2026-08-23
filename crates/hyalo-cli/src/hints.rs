@@ -1083,6 +1083,24 @@ fn slugify(s: &str) -> String {
     out.trim_matches('-').to_owned()
 }
 
+/// Format a confidence floor (0.0-1.0) as a `--min-confidence` CLI argument.
+///
+/// Rounds to 3 decimal places and trims trailing zeros/the decimal point, so
+/// `0.8` stays `"0.8"` rather than growing float-repr noise like
+/// `"0.8000000000000001"`, and `0.5` doesn't print as `"0.500"`.
+fn format_confidence(v: f64) -> String {
+    let mut s = format!("{v:.3}");
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    s
+}
+
 /// Derive a short, human-readable name from the active filters.
 fn auto_view_name(ctx: &HintContext) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -1828,9 +1846,32 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if applicable_fuzzy > 0 && !fuzzy_applied {
+        // `applicable_fuzzy` is counted against THIS run's effective floor
+        // (`fuzzy_min_confidence`), which may differ from
+        // `DEFAULT_FUZZY_MIN_CONFIDENCE` — either because this run passed
+        // `--min-confidence` or because `.hyalo.toml` sets
+        // `[links] fuzzy_min_confidence`. The hinted command must carry the
+        // same floor, or a dry run at a lower floor promises a count the
+        // hinted apply (which would silently fall back to the default 0.8)
+        // does not deliver (review finding #1). Appending it whenever the
+        // floor is non-default is simpler than tracking whether it came
+        // from the flag or the config file, and is harmless when it came
+        // from the config (the flag just repeats what the config would
+        // have applied anyway).
+        let floor = data
+            .get("fuzzy_min_confidence")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE);
+        let mut cmd_parts = vec!["links", "fix", "--apply", "--apply-fuzzy"];
+        let floor_arg;
+        if (floor - hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE).abs() > f64::EPSILON {
+            floor_arg = format_confidence(floor);
+            cmd_parts.push("--min-confidence");
+            cmd_parts.push(&floor_arg);
+        }
         hints.push(Hint::new(
             format!("Review then apply {applicable_fuzzy} lower-confidence fuzzy fixes"),
-            build_command_with_glob(ctx, &["links", "fix", "--apply", "--apply-fuzzy"]),
+            build_command_with_glob(ctx, &cmd_parts),
         ));
     } else if fuzzy > 0 && !fuzzy_applied {
         // Every candidate is below the floor — `--apply-fuzzy` would apply 0
