@@ -1667,11 +1667,22 @@ performs the write — by re-serializing the whole block — and emits a
 `warning:` on stderr naming the file and the reason. It does **not** refuse.
 
 **Why not refuse:** the fallback triggers on YAML hyalo can read but this
-splicer deliberately does not model — explicit `? key` syntax, top-level flow
-collections, directives, invalid UTF-8, mixed line endings. Refusing would turn
-a *cosmetic* limitation into a hard failure on files that `set` has always
-handled correctly, and would leave the user with no in-tool way to change a
+splicer deliberately does not model. Refusing would turn a *cosmetic*
+limitation into a hard failure on files that `set` has always handled
+correctly, and would leave the user with no in-tool way to change a
 property. The prior behavior (full rewrite) is still correct; it is only noisy.
+
+**Corrected fallback-trigger list (iter-219):** the real set that reaches
+this fallback is explicit `? key` syntax, top-level flow mappings/sequences,
+invalid UTF-8, and mixed line endings (DEC-087). The original list above
+also named "directives" and, implicitly, anchors/aliases — both are wrong:
+a `%directive` or `&anchor`/`*alias` inside the frontmatter block either
+fails the *baseline* parse outright (`Unparseable`, same family as any other
+malformed YAML) or — for anchors/aliases specifically — is rejected before
+splicing is ever reached, by the parser's own `max_anchors: 0` /
+`max_aliases: 0` budget (see DEC-088). Neither reaches this graceful,
+whole-block-reserialize fallback; both hard-error, and `set`/`remove`/
+`append` skip the file as unparseable rather than silently reformatting it.
 
 **Why not silent:** the entire point of DEC-080 is that unexplained diff churn
 destroys trust in the tool. A user who sees 116 changed lines must be able to
@@ -1877,3 +1888,178 @@ drift out of sync there again). The text renderer
 (`format_lint_fix_output_text`) never read those keys at all (the footer is
 built entirely from `total_fixed`/`total_remaining`/`total_conflicts`), so
 no text-output change was needed.
+
+## DEC-086: the splice engine extends inside a key's own span — one appended or removed list item is a line-level edit, not a whole-value re-serialize (2026-08-23)
+
+**Decision:** when a top-level key's *value* changes, and both the old and
+new values are arrays of plain scalars differing by exactly one item
+(append at the end, or removal of one item anywhere), `splice_frontmatter`
+edits only that item's line(s) instead of re-serializing the whole list.
+Block-style lists (`key:\n  - a\n  - b\n`, indented or compact-flush) get
+one inserted or deleted dash line; flow-style lists (`key: [a, b]`) stay
+flow, rebuilding just the bracket interior. Anything else about the change
+— replacement, reorder, multiple items, a non-scalar item anywhere in the
+list — falls through to the existing whole-key re-serialize from DEC-080;
+this is strictly additive to that path, not a replacement for it.
+
+**Why:** DEC-080 fixed cross-key diff churn (`set` on one key no longer
+rewrites every other key), but `append`/`remove <key>=<value>` — which only
+ever change a list by exactly one item — still fell into the *within-key*
+"Changed" branch and re-serialized the whole list's value. On a real
+GitHub Docs corpus, one appended `redirect_from` entry churned more than
+one line in 361 of 406 files (worst case 118 lines, `admin/index.md`) —
+DEC-080's own bar ("touch only what changed") applies just as much inside a
+key's span as across keys, and this was the same defect relocated rather
+than fixed.
+
+**Detected structurally, not by caller intent:** `splice_frontmatter` has no
+way to know whether a value change came from `append`, `remove`, or a
+`set --property tags=[...]` full replacement — all three funnel through the
+same parse → mutate → write cycle and hand the splicer only the before/after
+property maps. So the append-one/remove-one shape is classified purely from
+comparing the two array values (`classify_list_delta`): this is what makes
+the fix apply uniformly to `append`, `remove --property k=v`, and
+`remove --tag t` without any CLI-layer changes — all three already produce
+exactly this "array shrinks/grows by one scalar" shape in memory.
+
+**Verification gate covers this too:** like every other heuristic in this
+module, a list splice that doesn't match reality (wrong line count, tabs,
+an item that turns out to be multi-line) is caught by re-parsing the
+spliced output and comparing it against the requested property map before
+returning `Spliced`; anything that doesn't verify was never at risk of
+reaching disk wrong, only of missing the minimal-diff optimization.
+
+**Flow-list append that can't be inlined still falls back, and still
+warns:** if the new item can't be rendered as a single-line token (e.g. it
+would force a multi-line block scalar), the *whole document* is
+re-serialized via the DEC-081 fallback path, with the same explicit
+warning as any other fallback. This is a wider hammer than strictly
+necessary for a one-key problem, but reuses DEC-081's existing "full
+rewrite, always announced" machinery rather than inventing a second,
+narrower warning channel for a shape expected to be rare in practice (short
+redirect/alias/tag strings, not multi-paragraph values).
+
+## DEC-087: mixed line endings get an honest full-rewrite fallback, not a silent per-line-preserving splice (2026-08-23)
+
+**Decision:** when a frontmatter block's lines don't all share the same
+line-ending style as its opening `---` line, the write path treats this the
+same as any other DEC-081 fallback trigger: skip the minimal-diff splice
+entirely, re-serialize the whole block, and warn on stderr that the
+frontmatter mixed line endings. The block (and thus the file) still ends up
+on one consistent style afterward — that part doesn't change — but it is no
+longer silent.
+
+**The bug this replaces:** `find_body_offset` recorded only the *opening*
+delimiter's line-ending style; the write path re-expanded every line to
+that one style unconditionally. A file with `\r\n` on some lines and `\n`
+on others round-tripped through `set` with those `\r`s dropped (if the
+opening line was `\n`-terminated) or spuriously added to originally-`\n`
+lines (if the opening line was `\r\n`-terminated) — with an empty stderr.
+`splice_frontmatter`'s own mixed-endings guard didn't catch this either: it
+only rejects a *lone* `\r` not paired with `\n` (embedded literal `\r`
+inside a value), which is a different, narrower concern from *which* lines
+use which paired terminator.
+
+**Why the honest-warning option, not per-line preservation:** the
+alternative — tracking each line's original terminator through the splice
+and re-emitting it verbatim — would mean every span boundary, every
+`serialize_one` call, and the whole-document fallback's own re-serialize
+step would all need to carry and restore individual line endings, not just
+one block-wide style. That is real engineering weight for a shape hyalo has
+never claimed to preserve losslessly (mixed EOL within one file is already
+unusual enough that Git itself normally flags it). DEC-081 already has a
+"fall back and say so" contract for exactly this kind of edge case;
+reusing it is far cheaper than building a second preservation mechanism,
+and satisfies the actual complaint (no *silent* churn) without it.
+
+**Detection is free:** `find_body_offset` already reads every line of the
+block to find the closing delimiter; checking each line's terminator
+against the opening line's while it does so costs nothing extra. Only a
+newline-terminated line can mismatch — the file's very last line, if it
+lacks a terminator entirely (see DEC-089), is not treated as a mismatch;
+that is NEW-16a's concern, not this one's.
+
+## DEC-088: the frontmatter parser's scalar-content budget matches the documented 64 KiB limit, and its errors don't leak internals (2026-08-23)
+
+**Decision:** `hyalo_options()`'s `Budget.max_total_scalar_bytes` is set to
+`MAX_FRONTMATTER_BYTES` (64 KiB) instead of the prior 8192. Every
+`serde_saphyr` parse error that reaches a user (four call sites: the two
+production frontmatter-parse paths plus the two scanner fast-paths) is now
+passed through `friendly_parse_error`, which intercepts the two variants
+whose `Display` renders Rust struct/Debug syntax — a budget breach
+(`budget breached: ScalarBytes { total_scalar_bytes: 8205 }`) and a
+duplicate key (`..., set DuplicateKeyPolicy in Options if acceptable`, a
+hint about hyalo's own internal `Options` type) — and replaces them with
+plain, actionable text naming what happened. Every other `serde_saphyr`
+error variant's own `Display` is already clean and passes through
+unmodified.
+
+**Why the budget was wrong:** `MAX_FRONTMATTER_BYTES` (the documented "64
+KiB / 2000 lines" limit in `set`/`remove`/`append --help`, and the
+pre-flight check every write already enforces) is a limit on the *whole
+frontmatter block*. The parser's own internal `max_total_scalar_bytes`
+budget — meant as defense-in-depth against pathological inputs, not a
+user-facing limit at all — was independently set to 8192 bytes, a fraction
+of the documented ceiling. A real GitHub Docs `admin/index.md` at 7,961
+bytes of frontmatter was about 40 redirect entries from becoming unreadable
+by hyalo, well inside its own documented budget. Scalar content is a
+subset of total block bytes, which every caller already caps at
+`MAX_FRONTMATTER_BYTES` before the parser budget is even consulted, so
+raising this to match can never make the *effective* ceiling looser than
+what was already documented and enforced elsewhere.
+
+**Why interception, not a new error type:** `serde_saphyr::Error` is
+`#[non_exhaustive]` and its message formatting is a library concern hyalo
+doesn't control. Rather than growing a parallel error hierarchy,
+`friendly_parse_error` unwraps `Error::WithSnippet` to the underlying
+variant and pattern-matches the two offending shapes (`Error::Budget`,
+`Error::DuplicateMappingKey`) directly — not by string-matching the
+rendered message, which would be fragile against upstream wording changes
+— falling through to the crate's own `Display` for every other variant
+that doesn't have this problem.
+
+## DEC-089: NEW-16 write-path residue — no invented trailing newline, a narrow dotted-key guard, and a retype advisory (2026-08-23)
+
+**No invented trailing newline (NEW-16a):** a file whose last three bytes
+are literally `---` — no body, no trailing newline anywhere after the
+closing delimiter — must round-trip that way. `find_body_offset` now
+records whether the closing `---` line itself was newline-terminated; the
+write path only appends the delimiter's line-ending after the closing
+`---` when there is a body to separate from, or the original already had
+one there. Creating brand-new frontmatter (no prior close to inspect)
+always gets the separator, matching existing behavior for that case.
+
+**Dotted-key collision guard, not path syntax (NEW-16b):** `hyalo` has
+never supported dotted paths in `--property`; `set --property a.b=x`
+always writes (or overwrites) a literal top-level key named `"a.b"`. That
+is silently wrong specifically when `a` already exists as a mapping — the
+GitHub Docs repro is `--property versions.fpt=X` against a file with an
+existing `versions:` map, which used to create a `versions.fpt` key
+sitting right next to the map it looked like it should have nested into.
+`set`/`append` now reject that one collision with an error naming the
+file and the colliding key, before writing anything. A dotted key with no
+colliding map is unchanged — still a literal flat key — because adding
+real nested-path support is explicitly out of scope for this iteration;
+only the confusing collision is guarded against, not the general case.
+`remove` is not guarded: removing a nonexistent literal dotted key is
+already a harmless no-op (reported as skipped), not a data-corruption risk.
+
+**Retype advisory reuses the existing advisory mechanism, scoped to avoid
+noise (NEW-16c):** `set`'s CLI argument is always a bare string, so type
+inference has no way to know a property was deliberately quoted to stay
+text — `code: '42'` (string) silently becoming `code: 42` (number) via
+`set --property code=42` is inherent to how the CLI parses values, not a
+bug to fix. What was missing was visibility: `advisory_note` (already used
+for the date and enum/pattern advisories, DEC nnn/iter-181) gained a third
+branch that fires when the *first mutated file's* pre-existing value for
+that property was a string and the newly inferred value is a number or
+boolean (`advisory_note` already carries the BUG-B date advisory and the
+iter-181 enum/pattern advisory; this is a third branch in the same
+function, not a new mechanism). Scoped to "was previously a string, now
+isn't" rather than "is a number/boolean at all" specifically to avoid
+noise on properties that are numeric by design (`priority=3` on a file
+where `priority` never existed, or was already numeric, does not fire this
+advisory) — the surprising case is specifically the type *changing* under
+an existing value, mirroring how the date advisory only fires when a
+date-typed property's *new* value fails to look like a date, not on every
+write to that property.

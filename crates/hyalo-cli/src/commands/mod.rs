@@ -543,6 +543,45 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
     Some(CommandOutcome::UserError(out))
 }
 
+/// Reject a dotted `--property a.b=x` when a top-level key `a` already
+/// exists as a mapping in `props` (iter-219 NEW-16b).
+///
+/// hyalo does not support dotted path syntax for nested properties — `set
+/// --property a.b=x` always creates (or overwrites) a literal top-level key
+/// named `"a.b"`, never a nested field under `a`. That is silently
+/// confusing exactly when `a` already exists as a mapping (e.g. GitHub
+/// Docs-shaped `versions: { fpt: '*', ghec: '*' }` plus `--property
+/// versions.fpt=X`), since the new literal key sits right next to the map
+/// it looks like it should have nested into. Only that specific collision is
+/// rejected; a dotted key with no colliding map is unchanged (still a
+/// literal flat key) — nested-path support itself is out of scope.
+#[must_use]
+pub fn reject_dotted_property_collision(
+    name: &str,
+    props: &indexmap::IndexMap<String, serde_json::Value>,
+    rel_path: &str,
+    format: Format,
+) -> Option<CommandOutcome> {
+    let (prefix, _) = name.split_once('.')?;
+    if !matches!(props.get(prefix), Some(serde_json::Value::Object(_))) {
+        return None;
+    }
+    let out = crate::output::format_error(
+        format,
+        &format!(
+            "{rel_path}: invalid property name '{name}': '{prefix}' already exists as a \
+             mapping in this file's frontmatter"
+        ),
+        None,
+        Some(
+            "hyalo does not support dotted path syntax for nested properties — \
+             --property sets a literal top-level key only",
+        ),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 /// If exactly one file was specified and there is exactly one result, unwrap to a bare
 /// JSON object. Otherwise return the full array.
 #[must_use]
@@ -694,7 +733,7 @@ mod tests {
             "must not leak the internal-API advice suffix: {msg:?}"
         );
         assert!(
-            msg.contains("duplicate mapping key"),
+            msg.contains("duplicate key") && msg.contains("'title'"),
             "must keep the actual cause: {msg:?}"
         );
         assert!(

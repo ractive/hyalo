@@ -11,6 +11,45 @@ and this project adheres to
 
 ### Fixed
 
+- **`append`/`remove <key>=<value>` touch only the appended or removed list
+  item, not the whole list** (iter-219, dogfood NEW-5). Extends iter-214's
+  minimal-diff guarantee inside a key's own span: appending one item to a
+  block-style list now inserts one dash line; removing one item drops one
+  dash line; flow-style lists (`tags: [a, b]`) stay flow. On a GitHub Docs
+  corpus, one appended `redirect_from` entry used to change more than one
+  line in 361 of 406 files (worst case 118 lines); it is now 0. Detected
+  structurally (old/new list values differ by exactly one scalar item), so
+  it applies uniformly to `append`, `remove --property k=v`, and
+  `remove --tag t` with no CLI-layer changes. A replacement, reorder, or
+  non-scalar item still falls back to the existing whole-key re-serialize.
+  See DEC-086.
+- **Mixed line endings in a frontmatter block no longer silently drop or
+  add `\r`s** (iter-219, dogfood NEW-7). A block that mixed `\r\n` and `\n`
+  per line used to be re-expanded to a single style based only on the
+  *opening* delimiter's ending, with no warning — untouched lines could
+  lose their `\r` (or gain one they never had) on any unrelated `set`. This
+  now routes through the same "full rewrite, explicit warning" fallback as
+  every other unsupported shape (DEC-081); the file still ends up on one
+  consistent line ending, but the warning names why. See DEC-087.
+- **Frontmatter parser errors no longer leak Rust struct internals**
+  (iter-219, dogfood NEW-8). A budget breach read `budget breached:
+  ScalarBytes { total_scalar_bytes: 8205 }`; a duplicate key read `...,
+  set DuplicateKeyPolicy in Options if acceptable` — both are now plain,
+  actionable text naming what happened, with no leaked type names. See
+  DEC-088.
+- **A file whose last bytes are literally `---` (no trailing newline, no
+  body) no longer gains one on write** (iter-219, dogfood NEW-16a).
+- **`set`/`append --property a.b=x` now rejects the write, instead of
+  silently creating a literal `"a.b"` key, when a top-level `a` already
+  exists as a mapping** (iter-219, dogfood NEW-16b). hyalo does not support
+  dotted path syntax for nested properties; only this specific collision is
+  guarded — a dotted key with no colliding map is unchanged (still a
+  literal flat key). See DEC-089.
+- **`set` now notes when type inference silently retypes a previously
+  string-valued property** (iter-219, dogfood NEW-16c), e.g. `code: '42'`
+  (string) becoming `code: 42` (number) via `set --property code=42`. The
+  write still proceeds — this is an advisory, like the existing date and
+  enum/pattern advisories, not a new gate. See DEC-089.
 - **`lint --fix` totals now describe the whole run, not the display-capped
   listing** (iter-218, dogfood NEW-6). `total_fixed`, `total_remaining`,
   and `total_conflicts` — in both the text footer and JSON — were
@@ -79,6 +118,11 @@ and this project adheres to
 
 ### Changed
 
+- **Frontmatter's internal scalar-content budget raised to match the
+  documented 64 KiB limit** (iter-219, dogfood NEW-8), from an undocumented
+  8192-byte parser default. A real GitHub Docs `admin/index.md` (7,961
+  bytes of frontmatter) was about 40 redirect entries from becoming
+  unreadable, well inside its own documented ceiling. See DEC-088.
 - **`lint --fix` JSON reports `remaining_errors`/`remaining_warnings`
   instead of `errors`/`warnings`** (iter-218, dogfood NEW-6b — **BREAKING
   JSON shape change**). Both plain `lint` and `lint --fix` used the same

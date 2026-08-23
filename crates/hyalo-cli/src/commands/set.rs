@@ -107,12 +107,19 @@ fn has_date_shape(value: &str) -> bool {
 /// batch (a `--property type=X` assignment) or the default schema when no type
 /// is set. Per-file `type:` overrides are not probed here — advisories are
 /// best-effort hints, not a substitute for `lint`.
+///
+/// A third, independent advisory (iter-219 NEW-16c) fires when `previous_value`
+/// (the property's value in the first mutated file that already had it set,
+/// before this write) was a string and the newly inferred value is a number
+/// or boolean — the CLI arg is always a bare string, so type inference has no
+/// way to know the property was deliberately quoted to stay text.
 fn advisory_note(
     name: &str,
     raw_value: &str,
     parsed_value: &Value,
     schema: Option<&SchemaConfig>,
     batch_type: Option<&str>,
+    previous_value: Option<&Value>,
 ) -> Option<String> {
     // (1) Date-typed lexicographic-sort advisory.
     if is_date_typed_property(name) && !raw_value.is_empty() && !looks_like_date(raw_value) {
@@ -142,6 +149,21 @@ fn advisory_note(
         {
             return Some(format!(
                 "{violation}; write proceeds — run `hyalo lint` to enforce, or `set --validate` to reject"
+            ));
+        }
+    }
+
+    // (3) Type-inference retype advisory.
+    if let Some(Value::String(_)) = previous_value {
+        let new_kind = match parsed_value {
+            Value::Number(_) => Some("a number"),
+            Value::Bool(_) => Some("a boolean"),
+            _ => None,
+        };
+        if let Some(new_kind) = new_kind {
+            return Some(format!(
+                "value {raw_value:?} was previously stored as a string and is now inferred as \
+                 {new_kind}; pass a schema type to keep it a string"
             ));
         }
     }
@@ -457,6 +479,12 @@ pub fn set(
     });
     let mut batch_type_from_file: Option<String> = None;
 
+    // First observed pre-mutation value for each property (iter-219 NEW-16c),
+    // used by the retype advisory below. Captured from the first file where
+    // the property already existed, mirroring how `batch_type_from_file`
+    // samples a single representative file rather than every file in the batch.
+    let mut first_old_value: Vec<Option<Value>> = vec![None; parsed_props.len()];
+
     // L-2: relative paths skipped because their frontmatter would not parse.
     let mut skipped_unparseable: Vec<String> = Vec::new();
 
@@ -489,6 +517,14 @@ pub fn set(
 
         // Apply all --property mutations
         for (i, (name, _, value)) in parsed_props.iter().enumerate() {
+            if let Some(outcome) =
+                super::reject_dotted_property_collision(name, &props, rel_path, format)
+            {
+                return Ok(outcome);
+            }
+            if first_old_value[i].is_none() {
+                first_old_value[i] = props.get(*name).cloned();
+            }
             let already_same = props.get(*name) == Some(value);
             if already_same {
                 prop_results[i].1.push(rel_path.clone()); // skipped
@@ -552,14 +588,22 @@ pub fn set(
         .as_deref()
         .or(batch_type_from_file.as_deref());
 
-    for ((name, raw_value, parsed_value), (modified, skipped)) in
-        parsed_props.iter().zip(prop_results)
+    for (i, ((name, raw_value, parsed_value), (modified, skipped))) in
+        parsed_props.iter().zip(prop_results).enumerate()
     {
         let total = modified.len() + skipped.len();
         // Advisory note (write still proceeds; lint remains the enforcement gate):
         //   1. BUG-B: a date-typed property receiving a non-date value.
         //   2. iter-181 task 1: an enum/pattern value the schema would reject.
-        let note = advisory_note(name, raw_value, parsed_value, schema, batch_type);
+        //   3. iter-219 NEW-16c: type inference silently retyping a string.
+        let note = advisory_note(
+            name,
+            raw_value,
+            parsed_value,
+            schema,
+            batch_type,
+            first_old_value[i].as_ref(),
+        );
         let result = SetPropertyResult {
             property: (*name).to_owned(),
             value: parsed_value.clone(),
@@ -1419,5 +1463,153 @@ type: post
             matches!(outcome, CommandOutcome::Success { .. }),
             "expected success for valid enum value"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dotted-key collision guard (iter-219 NEW-16b)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn set_rejects_dotted_property_colliding_with_existing_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+versions:
+  fpt: '*'
+  ghec: '*'
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["versions.fpt=X".to_owned()],
+            &[],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+            hyalo_core::case_index::CaseInsensitiveMode::Off,
+        )
+        .unwrap();
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(msg.contains("versions"), "msg: {msg}");
+                assert!(msg.contains("mapping"), "msg: {msg}");
+            }
+            other => panic!("expected UserError, got: {other:?}"),
+        }
+
+        // The file must be untouched — the command aborted before writing.
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("versions.fpt"), "content:\n{content}");
+    }
+
+    #[test]
+    fn set_allows_dotted_property_with_no_colliding_map() {
+        // No `versions` map exists, so the dotted key is just an unusual but
+        // literal top-level key name — allowed (nested-path support itself
+        // is out of scope, only the collision is guarded against).
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["versions.fpt=X".to_owned()],
+            &[],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+            hyalo_core::case_index::CaseInsensitiveMode::Off,
+        )
+        .unwrap();
+        assert!(matches!(outcome, CommandOutcome::Success { .. }));
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(content.contains("versions.fpt"), "content:\n{content}");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Type-inference retype advisory (iter-219 NEW-16c)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn set_notes_when_a_previously_string_value_is_retyped_as_a_number() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ncode: '42'\n---\n").unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["code=42".to_owned()],
+            &[],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+            hyalo_core::case_index::CaseInsensitiveMode::Off,
+        )
+        .unwrap();
+        let CommandOutcome::Success { output: out, .. } = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let note = parsed["note"].as_str().unwrap_or_default();
+        assert!(
+            note.contains("previously stored as a string"),
+            "note: {note:?}"
+        );
+        assert!(note.contains("number"), "note: {note:?}");
+    }
+
+    #[test]
+    fn set_no_retype_advisory_when_property_is_new() {
+        // The property didn't exist before, so there is nothing to "retype" —
+        // this is ordinary type inference, not a surprise.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("note.md"), "---\ntitle: Note\n---\n").unwrap();
+
+        let outcome = set(
+            tmp.path(),
+            &["priority=3".to_owned()],
+            &[],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+            hyalo_core::case_index::CaseInsensitiveMode::Off,
+        )
+        .unwrap();
+        let CommandOutcome::Success { output: out, .. } = outcome else {
+            panic!("expected success")
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.get("note").is_none() || parsed["note"].is_null());
     }
 }

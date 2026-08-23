@@ -155,7 +155,11 @@ fn remove_drops_only_the_removed_key() {
 }
 
 #[test]
-fn append_to_a_list_rewrites_only_that_list() {
+fn append_to_a_block_list_touches_only_the_appended_line() {
+    // iter-219 NEW-5: `append` used to re-serialize the whole touched list —
+    // even the untouched sibling items would be re-emitted, potentially with
+    // a different quote/fold style. This asserts the exact expected text,
+    // not just a coarse line-count heuristic.
     let tmp = TempDir::new().unwrap();
     gh_docs_file(&tmp);
     let before = fs::read_to_string(tmp.path().join("index.md")).unwrap();
@@ -167,11 +171,58 @@ fn append_to_a_list_rewrites_only_that_list() {
     assert!(ok, "append failed: {stderr}");
 
     let after = fs::read_to_string(tmp.path().join("index.md")).unwrap();
-    assert!(after.contains("  - Actions\n"));
-    // Only the appended item is new; the `intro`, `featuredLinks` and
-    // `children` blocks must be untouched.
+    let expected = before.replacen(
+        "topics:\n  - CI\n  - CD\n  - Developer\n",
+        "topics:\n  - CI\n  - CD\n  - Developer\n  - Actions\n",
+        1,
+    );
+    assert_eq!(
+        after, expected,
+        "expected exactly one new line, byte-for-byte"
+    );
     assert_eq!(diff_line_count(&before, &after), 1, "{after}");
-    assert!(after.contains("changelog:\n  label: actions\n  prefix: 'GitHub Actions: '\n"));
+}
+
+#[test]
+fn remove_from_a_block_list_drops_only_that_line() {
+    let tmp = TempDir::new().unwrap();
+    gh_docs_file(&tmp);
+    let before = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+
+    let (ok, stderr) = run(&tmp, &["remove", "index.md", "--property", "topics=CD"]);
+    assert!(ok, "remove failed: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("index.md")).unwrap();
+    let expected = before.replacen(
+        "topics:\n  - CI\n  - CD\n  - Developer\n",
+        "topics:\n  - CI\n  - Developer\n",
+        1,
+    );
+    assert_eq!(
+        after, expected,
+        "expected exactly one dropped line, byte-for-byte"
+    );
+}
+
+#[test]
+fn append_to_a_flow_list_stays_flow() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\ntags: [a, b]\nstatus: draft\n---\n\nBody\n",
+    );
+    let before = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+
+    let (ok, stderr) = run(&tmp, &["append", "note.md", "--property", "tags=c"]);
+    assert!(ok, "append failed: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert_eq!(
+        after,
+        before.replace("tags: [a, b]\n", "tags: [a, b, c]\n"),
+        "flow list must stay flow, byte-for-byte: {after}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +348,75 @@ fn crlf_files_stay_crlf_and_keep_untouched_lines() {
     assert!(!after.contains("\n\n"), "no bare LF expected: {after:?}");
 }
 
+#[test]
+fn mixed_line_endings_warn_instead_of_silently_dropping_cr() {
+    // iter-219 NEW-7: a file whose lines mix `\r\n` and `\n` must not lose
+    // (or gain) `\r`s with no explanation. The block is normalized to one
+    // style — but only via the announced full-rewrite fallback.
+    let tmp = TempDir::new().unwrap();
+    let content = "---\ntitle: 'Mixed'\r\nstatus: planned\n---\n\nBody\n";
+    write_md(tmp.path(), "mixed.md", content);
+
+    let (ok, stderr) = run(&tmp, &["set", "mixed.md", "--property", "status=done"]);
+    assert!(ok, "set failed: {stderr}");
+    assert!(
+        stderr.contains("mixes line endings")
+            || stderr.contains("rewriting the entire frontmatter block"),
+        "mixed endings must be announced, not silent: {stderr}"
+    );
+}
+
+#[test]
+fn no_trailing_newline_body_less_file_stays_byte_identical_outside_change() {
+    // iter-219 NEW-16a: a file whose last three bytes are literally `---`
+    // must not gain a trailing newline it never had.
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "no_trailing.md", "---\ntitle: Note\n---");
+
+    let (ok, stderr) = run(
+        &tmp,
+        &["set", "no_trailing.md", "--property", "status=draft"],
+    );
+    assert!(ok, "set failed: {stderr}");
+    let after = fs::read_to_string(tmp.path().join("no_trailing.md")).unwrap();
+    assert_eq!(after, "---\ntitle: Note\nstatus: draft\n---");
+    assert!(
+        !after.ends_with('\n'),
+        "gained a trailing newline: {after:?}"
+    );
+}
+
+#[test]
+fn frontmatter_close_to_64kib_parses_and_splices() {
+    // iter-219 NEW-8: the parser's internal scalar budget used to be an
+    // undocumented 8 KiB, well under the documented 64 KiB frontmatter
+    // limit. A large-but-compliant redirect_from list must actually work.
+    use std::fmt::Write as _;
+
+    let tmp = TempDir::new().unwrap();
+    let mut fm = String::from("title: Big\nredirect_from:\n");
+    for i in 0..40 {
+        writeln!(fm, "  - /path/to/redirect/entry-{i}").unwrap();
+    }
+    writeln!(fm, "notes: {}", "a".repeat(50 * 1024)).unwrap();
+    write_md(tmp.path(), "big.md", &format!("---\n{fm}---\n\nBody\n"));
+
+    let (ok, stderr) = run(
+        &tmp,
+        &["append", "big.md", "--property", "redirect_from=/new-path"],
+    );
+    assert!(ok, "append failed on ~50 KiB frontmatter: {stderr}");
+    assert!(
+        !stderr.contains("ScalarBytes") && !stderr.contains("budget breached"),
+        "leaked parser internals: {stderr}"
+    );
+    let after = fs::read_to_string(tmp.path().join("big.md")).unwrap();
+    assert!(
+        after.contains("/new-path"),
+        "content missing appended entry"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fallback behaviour: explicit, warned, never silent
 // ---------------------------------------------------------------------------
@@ -410,4 +530,52 @@ fn properties_rename_preserves_surrounding_formatting() {
     let after = fs::read_to_string(tmp.path().join("index.md")).unwrap();
     assert!(after.contains("pageLayout: product-landing\n"), "{after}");
     assert_eq!(diff_line_count(&before, &after), 2, "{after}");
+}
+
+// ---------------------------------------------------------------------------
+// Write-path honesty: dotted-key collision, retype advisory (iter-219 NEW-16)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dotted_property_colliding_with_existing_map_is_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\nversions:\n  fpt: '*'\n---\n\nBody\n",
+    );
+    let before = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "note.md", "--property", "versions.fpt=X"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "dotted-key collision must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("versions"), "stderr: {stderr}");
+    assert!(stderr.contains("mapping"), "stderr: {stderr}");
+
+    let after = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+    assert_eq!(after, before, "file must be untouched after rejection");
+}
+
+#[test]
+fn set_retype_advisory_fires_as_json_note() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ncode: '42'\n---\n\nBody\n");
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["set", "note.md", "--property", "code=42"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let note = parsed["results"]["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("previously stored as a string"),
+        "stdout: {stdout}"
+    );
 }

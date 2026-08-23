@@ -286,6 +286,11 @@ pub fn append(
         let mut file_changed = false;
 
         for (i, (name, raw_value, new_val)) in parsed_args.iter().enumerate() {
+            if let Some(outcome) =
+                super::reject_dotted_property_collision(name, &props, rel_path, format)
+            {
+                return Ok(outcome);
+            }
             match append_value_in_memory(&mut props, name, raw_value, new_val) {
                 Ok(true) => {
                     prop_results[i].0.push(rel_path.clone()); // modified
@@ -1075,5 +1080,48 @@ author: alice
             matches!(outcome, CommandOutcome::UserError(_)),
             "append that violates merged-value constraint should fail under --validate"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dotted-key collision guard (iter-219 NEW-16b)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn append_rejects_dotted_property_colliding_with_existing_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("note.md"),
+            md!(r"
+---
+versions:
+  fpt: '*'
+---
+"),
+        )
+        .unwrap();
+
+        let outcome = append(
+            tmp.path(),
+            &["versions.fpt=X".to_owned()],
+            &["note.md".to_owned()],
+            &[],
+            &[],
+            &[],
+            Format::Json,
+            &mut None,
+            None,
+            false,
+            false,
+            None,
+        )
+        .unwrap();
+        match outcome {
+            CommandOutcome::UserError(msg) => {
+                assert!(msg.contains("versions"), "msg: {msg}");
+            }
+            other => panic!("expected UserError, got: {other:?}"),
+        }
+        let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
+        assert!(!content.contains("versions.fpt"), "content:\n{content}");
     }
 }

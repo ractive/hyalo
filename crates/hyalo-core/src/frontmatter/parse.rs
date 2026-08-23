@@ -34,13 +34,97 @@ pub fn hyalo_options() -> Options {
             max_aliases: 0,
             max_anchors: 0,
             max_nodes: 5_000,
-            max_total_scalar_bytes: 8192,
+            // Matches MAX_FRONTMATTER_BYTES (the documented 64 KiB frontmatter
+            // limit): scalar content is a subset of the whole block, which is
+            // already capped there by the pre-read line/byte guards in every
+            // caller, so this can never be the tighter limit in practice
+            // (iter-219 NEW-8 — it used to be 8192, well below the documented
+            // ceiling, and the resulting parser error leaked raw budget-breach
+            // internals; see `friendly_parse_error`).
+            max_total_scalar_bytes: MAX_FRONTMATTER_BYTES,
             max_documents: 1,
             ..Budget::default()
         }),
         duplicate_keys: DuplicateKeyPolicy::Error,
         strict_booleans: true,
         ..Options::default()
+    }
+}
+
+/// Turn a `serde_saphyr` parse error into a hyalo-voice message with no
+/// leaked parser-internal type names (iter-219 NEW-8).
+///
+/// `serde_saphyr`'s own `Display` is mostly clean, but two variants render
+/// their payload with `{:?}` and leak Rust struct syntax straight to the
+/// user: a budget breach (`budget breached: ScalarBytes { total_scalar_bytes:
+/// 8205 }`) and a duplicate key (`duplicate mapping key: x, set
+/// DuplicateKeyPolicy in Options if acceptable` — a hint about *our* internal
+/// `Options` type, not something the user can act on). Both are intercepted
+/// here; everything else falls through to the crate's own message, which
+/// does not have this problem.
+pub(crate) fn friendly_parse_error(err: &serde_saphyr::Error) -> String {
+    match unwrap_snippet(err) {
+        serde_saphyr::Error::Budget { breach, location } => {
+            format!(
+                "{} (line {} column {})",
+                describe_budget_breach(breach),
+                location.line(),
+                location.column()
+            )
+        }
+        serde_saphyr::Error::DuplicateMappingKey { key, location } => {
+            let what = match key {
+                Some(k) => format!("duplicate key '{k}' in frontmatter"),
+                None => "duplicate key in frontmatter".to_owned(),
+            };
+            format!(
+                "{what} — YAML mappings must have unique keys (line {} column {})",
+                location.line(),
+                location.column()
+            )
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Walk past `Error::WithSnippet` wrappers to the underlying error.
+fn unwrap_snippet(err: &serde_saphyr::Error) -> &serde_saphyr::Error {
+    let mut current = err;
+    while let serde_saphyr::Error::WithSnippet { error, .. } = current {
+        current = error;
+    }
+    current
+}
+
+/// Describe a budget breach without leaking the `BudgetBreach` Debug format.
+fn describe_budget_breach(breach: &serde_saphyr::budget::BudgetBreach) -> String {
+    use serde_saphyr::budget::BudgetBreach;
+    match breach {
+        BudgetBreach::ScalarBytes { total_scalar_bytes } => format!(
+            "frontmatter content is too large ({total_scalar_bytes} bytes of scalar text exceeds \
+             the {MAX_FRONTMATTER_BYTES}-byte limit); trim large values or split them into separate files"
+        ),
+        BudgetBreach::Anchors { .. } | BudgetBreach::Aliases { .. } => {
+            "frontmatter uses YAML anchors/aliases, which hyalo does not support — expand the \
+             anchor into a literal value"
+                .to_owned()
+        }
+        BudgetBreach::Depth { .. } => {
+            "frontmatter nests too deeply for hyalo's parser limits — flatten the structure"
+                .to_owned()
+        }
+        BudgetBreach::Documents { .. } => {
+            "frontmatter contains more than one YAML document (a `---` document separator inside \
+             the block) — hyalo expects exactly one"
+                .to_owned()
+        }
+        BudgetBreach::Nodes { .. } | BudgetBreach::Events { .. } => {
+            "frontmatter is too large or complex for hyalo's parser limits".to_owned()
+        }
+        BudgetBreach::MergeKeys { .. } => {
+            "frontmatter uses too many YAML merge keys (`<<`) for hyalo's parser limits".to_owned()
+        }
+        _ => "frontmatter exceeds hyalo's parser limits".to_owned(),
     }
 }
 
@@ -237,7 +321,8 @@ impl Document {
                 let props: IndexMap<String, Value> =
                     serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
                         anyhow::Error::new(FrontmatterError(format!(
-                            "failed to parse YAML frontmatter: {e}"
+                            "failed to parse YAML frontmatter: {}",
+                            friendly_parse_error(&e)
                         )))
                     })?;
                 (props, compact)
@@ -409,6 +494,16 @@ fn write_frontmatter_impl(
             // Invalid UTF-8 in the frontmatter: `fm_str` is lossy, so splicing
             // it would write replacement characters. Re-serialize instead.
             _ if !is_utf8 => splice_blocked = Some(FallbackReason::NotUtf8),
+            // iter-219 NEW-7: the block mixes line-ending styles per line.
+            // Splicing (and the CRLF re-expansion below) both assume one
+            // consistent style for the whole block, so silently proceeding
+            // would coerce every line to `span.line_ending`'s style without
+            // telling the user their `\r`s just moved or vanished. Take the
+            // full-serialization path with an explicit warning instead —
+            // still a normalization, but an announced one (DEC-081/DEC-086).
+            _ if span.mixed_line_endings => {
+                splice_blocked = Some(FallbackReason::MixedLineEndings);
+            }
             // An empty block (`---\n---`) has nothing to preserve — take the
             // full-serialization path silently.
             Some(yaml) if yaml.trim().is_empty() => {}
@@ -484,7 +579,14 @@ fn write_frontmatter_impl(
         out.extend_from_slice(eol.as_bytes());
         out.extend_from_slice(yaml.as_bytes());
         out.extend_from_slice(b"---");
-        out.extend_from_slice(eol.as_bytes());
+        // iter-219 NEW-16a: a file whose last bytes are literally `---` with
+        // no trailing newline (no body, closing delimiter unterminated)
+        // must round-trip that way — not gain a newline it never had. Any
+        // other shape (there's a body, or the original had a newline here)
+        // keeps the separator as before.
+        if !body_bytes.is_empty() || span.closing_has_trailing_newline {
+            out.extend_from_slice(eol.as_bytes());
+        }
     }
     out.extend_from_slice(&body_bytes);
 
@@ -600,9 +702,36 @@ struct FrontmatterSpan {
     /// Whether the file began with a UTF-8 BOM (only meaningful when
     /// `body_offset > 0`; preserved verbatim on rewrite).
     has_bom: bool,
-    /// Line ending used by the existing frontmatter block (only meaningful
-    /// when `body_offset > 0`).
+    /// Line ending used by the opening `---` line (only meaningful when
+    /// `body_offset > 0`).
     line_ending: LineEnding,
+    /// `true` when at least one line within the block used a different
+    /// terminator than `line_ending` (iter-219 NEW-7). A rewrite always
+    /// normalizes the whole block to one style; when this is set, that
+    /// normalization is a real, user-visible change and must be announced
+    /// via [`FallbackReason::MixedLineEndings`] rather than applied
+    /// silently.
+    mixed_line_endings: bool,
+    /// `true` when the closing `---` line itself ends with a newline.
+    /// `false` only for a file whose last three bytes are literally `---`
+    /// with nothing after them (iter-219 NEW-16a) — rewriting such a file
+    /// must not invent a trailing newline that was never there.
+    closing_has_trailing_newline: bool,
+}
+
+/// `true` when `raw_line` (a line as returned by `BufRead::read_line`,
+/// terminator included) ends with the same line-ending style as `expected`.
+/// A line with no terminator at all (only possible at EOF) is never a
+/// mismatch here — that is a distinct, separately handled concern
+/// ([`FrontmatterSpan::closing_has_trailing_newline`]), not a mixed-ending one.
+fn line_ending_matches(raw_line: &str, expected: LineEnding) -> bool {
+    if !raw_line.ends_with('\n') {
+        return true;
+    }
+    match expected {
+        LineEnding::CrLf => raw_line.ends_with("\r\n"),
+        LineEnding::Lf => !raw_line.ends_with("\r\n"),
+    }
 }
 
 /// Find the byte offset in `file` where the body starts (i.e. the byte immediately
@@ -622,6 +751,8 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
         body_offset: 0,
         has_bom: false,
         line_ending: LineEnding::Lf,
+        mixed_line_endings: false,
+        closing_has_trailing_newline: true,
     };
 
     // Peek at the first line.
@@ -636,6 +767,8 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
 
     let mut content_bytes: usize = 0;
     let mut line_count: usize = 0;
+    let mut mixed_line_endings = false;
+    let closing_has_trailing_newline;
 
     loop {
         line.clear();
@@ -656,9 +789,13 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
                 "unclosed frontmatter: file starts with `---` but no closing `---` was found"
             );
         }
+        if !line_ending_matches(&line, opening.line_ending) {
+            mixed_line_endings = true;
+        }
         let trimmed = line.trim_end_matches(['\n', '\r']);
         if is_closing_delimiter(trimmed) {
             // Consumed up to and including the closing `---\n`
+            closing_has_trailing_newline = line.ends_with('\n');
             break;
         }
         line_count += 1;
@@ -678,6 +815,8 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
         body_offset: pos,
         has_bom: opening.has_bom,
         line_ending: opening.line_ending,
+        mixed_line_endings,
+        closing_has_trailing_newline,
     })
 }
 
@@ -774,7 +913,8 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
 
     serde_saphyr::from_str_with_options(&yaml, hyalo_options()).map_err(|e| {
         anyhow::Error::new(FrontmatterError(format!(
-            "failed to parse YAML frontmatter: {e}"
+            "failed to parse YAML frontmatter: {}",
+            friendly_parse_error(&e)
         )))
     })
 }
