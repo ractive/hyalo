@@ -2,7 +2,7 @@
 title: "Iteration 219 — list splice, mixed-EOL honesty, and frontmatter budget truth"
 type: iteration
 date: 2026-08-23
-status: planned
+status: in-progress
 branch: iter-219/list-splice-and-write-polish
 tags: [iteration, frontmatter, write-path]
 related:
