@@ -3851,8 +3851,14 @@ fn links_auto_config_exclude_titles_applies_without_flags() {
         "config exclude_titles should suppress permissions with no CLI flags: {results}"
     );
     assert_eq!(
-        results["config_excluded"], 1,
+        results["config_excluded_titles"], 1,
         "one candidate title was removed by config: {results}"
+    );
+    // iter-213: the mention count is the number the title count was mistaken
+    // for — how many proposals the exclusion actually took away.
+    assert!(
+        results["config_excluded_mentions"].as_u64().unwrap() > 0,
+        "excluding a mentioned title must report the mentions it suppressed: {results}"
     );
 }
 
@@ -3882,8 +3888,8 @@ fn links_auto_cli_exclude_title_extends_config_list() {
         "the flag must extend (not replace) the config list: {results}"
     );
     assert_eq!(
-        results["config_excluded"], 1,
-        "config_excluded counts only what the config took away: {results}"
+        results["config_excluded_titles"], 1,
+        "config_excluded_titles counts only what the config took away: {results}"
     );
 }
 
@@ -3899,7 +3905,7 @@ fn links_auto_cli_exclude_target_glob_extends_config_list() {
         "config glob and flag glob should both apply: {results}"
     );
     assert_eq!(
-        results["config_excluded"], 1,
+        results["config_excluded_titles"], 1,
         "the glob-excluded template page contributed one candidate title: {results}"
     );
 }
@@ -3916,7 +3922,7 @@ fn links_auto_config_first_only_behaves_like_the_flag() {
         "first_only from config should keep one mention per target: {results}"
     );
     assert!(
-        results.get("config_excluded").is_none(),
+        results.get("config_excluded_titles").is_none(),
         "first_only alone removes no candidate titles: {results}"
     );
 }
@@ -4039,7 +4045,7 @@ fn links_auto_first_only_and_no_first_only_conflict() {
 }
 
 #[test]
-fn links_auto_omits_config_excluded_when_config_removed_nothing() {
+fn links_auto_omits_config_excluded_titles_when_config_removed_nothing() {
     // A config exclusion naming a title no page has removes no candidates, so
     // the key stays out of the envelope (the `links.out_of_vault` precedent).
     let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"nonexistent\"]\n");
@@ -4047,25 +4053,25 @@ fn links_auto_omits_config_excluded_when_config_removed_nothing() {
     let results = run_links_auto_in_vault(tmp.path(), &[]);
 
     assert!(
-        results.get("config_excluded").is_none(),
-        "config_excluded should be omitted when zero: {results}"
+        results.get("config_excluded_titles").is_none(),
+        "config_excluded_titles should be omitted when zero: {results}"
     );
 }
 
 #[test]
-fn links_auto_without_config_omits_config_excluded() {
+fn links_auto_without_config_omits_config_excluded_titles() {
     let tmp = setup_auto_config_vault("");
 
     let results = run_links_auto_in_vault(tmp.path(), &["--exclude-title", "Permissions"]);
 
     assert!(
-        results.get("config_excluded").is_none(),
+        results.get("config_excluded_titles").is_none(),
         "CLI-only exclusions are not config exclusions: {results}"
     );
 }
 
 #[test]
-fn links_auto_text_output_reports_config_excluded() {
+fn links_auto_text_output_reports_config_excluded_titles() {
     let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
 
     let output = hyalo_no_hints()
@@ -4078,7 +4084,7 @@ fn links_auto_text_output_reports_config_excluded() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("Excluded by [links.auto] config: 1 title"),
+        stdout.contains("Excluded by [links.auto] config: 1 title, suppressing "),
         "text output should explain the config exclusions; got: {stdout}"
     );
 }
@@ -4230,7 +4236,7 @@ fn links_auto_common_title_note_disappears_once_the_title_is_excluded() {
 }
 
 #[test]
-fn links_auto_config_excluded_title_also_extinguishes_the_note() {
+fn links_auto_config_excluded_titles_also_extinguishes_the_note() {
     let tmp = setup_auto_config_vault("[links.auto]\nexclude_titles = [\"permissions\"]\n");
 
     let (_stdout, stderr) = run_links_auto_capturing(tmp.path(), &[]);

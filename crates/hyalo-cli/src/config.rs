@@ -436,9 +436,8 @@ fn discover_ancestor_config(cwd: &Path) -> Option<PathBuf> {
 /// changes except that the settings now apply. From a deeper subdirectory the
 /// vault is genuinely wider than the directory the user is standing in, and
 /// that is worth one line on stderr.
-fn announce_ancestor_config(cwd: &Path, config_dir: &Path, config: &ResolvedDefaults) {
-    let vault = config_dir.join(&config.dir);
-    let same = match (dunce::canonicalize(&vault), dunce::canonicalize(cwd)) {
+fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
+    let same = match (dunce::canonicalize(vault), dunce::canonicalize(cwd)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     };
@@ -473,8 +472,16 @@ pub(crate) fn load_config() -> ResolvedDefaults {
             }
             match discover_ancestor_config(&cwd) {
                 Some(ancestor) => {
-                    let config = load_config_from(&ancestor);
-                    announce_ancestor_config(&cwd, &ancestor, &config);
+                    let mut config = load_config_from(&ancestor);
+                    // `dir` is stored relative to the config file, and the
+                    // process is no longer standing there — everything
+                    // downstream resolves the vault against the *working*
+                    // directory. Absolutize it so the two cannot disagree
+                    // (`config_dir` still points at the adopted file, so
+                    // `views set` and friends keep writing to it).
+                    let vault = ancestor.join(&config.dir);
+                    config.dir = dunce::canonicalize(&vault).unwrap_or(vault);
+                    announce_ancestor_config(&cwd, &ancestor, &config.dir);
                     config
                 }
                 None => load_config_from(&cwd),
@@ -1705,6 +1712,12 @@ site_prefix = "docs"
             resolved.malformed.is_some(),
             "an unusable config must be flagged so writers can refuse"
         );
+        // The diagnostic is recorded here and printed by
+        // `emit_config_diagnostics` once `--dir` resolution has settled which
+        // config governs the run (iter-213, UX-5).
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        emit_config_diagnostics(&resolve_effective(resolved, None));
         assert!(crate::warn::any_tracked_starts_with(
             "malformed .hyalo.toml"
         ));

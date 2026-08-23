@@ -78,14 +78,25 @@ fn config_text_output_with_config() {
         stdout.contains("hints: false"),
         "expected hints false from config; got: {stdout}"
     );
-    // Raw contents section
+    // iter-213: the raw file text is opt-in — a bare run must not print it.
     assert!(
-        stdout.contains("--- .hyalo.toml ---"),
-        "expected raw contents separator; got: {stdout}"
+        !stdout.contains("--- .hyalo.toml ---"),
+        "raw contents must be behind --raw; got: {stdout}"
+    );
+
+    let raw_output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--raw", "--format", "text"])
+        .output()
+        .unwrap();
+    let raw_stdout = String::from_utf8_lossy(&raw_output.stdout);
+    assert!(
+        raw_stdout.contains("--- .hyalo.toml ---"),
+        "expected raw contents separator with --raw; got: {raw_stdout}"
     );
     assert!(
-        stdout.contains("dir = \"kb\""),
-        "expected raw TOML content; got: {stdout}"
+        raw_stdout.contains("dir = \"kb\""),
+        "expected raw TOML content with --raw; got: {raw_stdout}"
     );
 }
 
@@ -214,10 +225,20 @@ fn config_json_output_with_config() {
             .contains(".hyalo.toml"),
         "expected config_path to contain .hyalo.toml; got: {json}"
     );
-    // raw_contents should be present and contain the TOML content
+    // iter-213: raw_contents is opt-in and the key stays present as null.
     assert!(
-        results["raw_contents"].as_str().unwrap().contains("vault"),
-        "expected raw_contents to include dir value; got: {json}"
+        results["raw_contents"].is_null(),
+        "raw_contents must be null without --raw; got: {json}"
+    );
+    // A parseable config reports malformed: false with no parse_error.
+    assert_eq!(
+        results["malformed"].as_bool(),
+        Some(false),
+        "expected malformed false on a valid config; got: {json}"
+    );
+    assert!(
+        results["parse_error"].is_null(),
+        "expected no parse_error on a valid config; got: {json}"
     );
 }
 

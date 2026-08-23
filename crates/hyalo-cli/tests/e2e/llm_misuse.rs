@@ -1,8 +1,10 @@
-//! e2e tests for the LLM-misuse warning (iter-128).
+//! e2e tests for the LLM-misuse warning (iter-128) and for the ancestor-config
+//! adoption that replaced half of it (iter-213 / DEC-079).
 //!
-//! When an LLM-driven shell `cd`s into the configured `dir` or passes an
-//! absolute `--file` path, hyalo emits a stderr warning that teaches the LLM
-//! to run from the project root with vault-relative paths.
+//! Passing an absolute `--file` path still draws a stderr warning that teaches
+//! the LLM to use vault-relative paths. `cd`-ing into the configured `dir` no
+//! longer does: the parent `.hyalo.toml` is adopted instead, so the run keeps
+//! the configuration it would have had from the project root.
 
 use super::common::{hyalo_no_hints, write_md};
 use tempfile::TempDir;
@@ -20,8 +22,12 @@ fn make_project() -> TempDir {
     project
 }
 
+/// iter-213 (UX-1, DEC-079): running from inside the vault is no longer a
+/// misuse — the parent `.hyalo.toml` is adopted, so the run keeps the schema,
+/// views and lint config it would have had from the project root. The old
+/// "do not cd into kb" scolding is gone with the problem it described.
 #[test]
-fn warns_when_cwd_is_inside_configured_dir() {
+fn cwd_inside_configured_dir_adopts_the_parent_config_silently() {
     let project = make_project();
     let vault = project.path().join("kb");
 
@@ -33,12 +39,64 @@ fn warns_when_cwd_is_inside_configured_dir() {
 
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
     assert!(
-        stderr.contains("hyalo is configured with dir = \"kb\""),
-        "expected misuse warning in stderr, got: {stderr}"
+        !stderr.contains("Do not cd into"),
+        "the cd-into-vault scolding must be gone, got: {stderr}"
+    );
+    // The vault is exactly CWD here, so there is nothing to announce either.
+    assert!(
+        !stderr.contains("from a parent directory"),
+        "no note is due when the adopted vault is the working directory: {stderr}"
+    );
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("iteration-17.md"),
+        "the adopted config must still point at the vault: {stdout}"
+    );
+}
+
+/// One level deeper the vault is genuinely wider than CWD, so the adoption is
+/// announced and the run still covers the whole vault.
+#[test]
+fn cwd_below_the_vault_root_announces_the_adopted_config() {
+    let project = make_project();
+    let nested = project.path().join("kb/iterations");
+
+    let assert = hyalo_no_hints()
+        .current_dir(&nested)
+        .args(["find", "--limit", "1"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains(".hyalo.toml") && stderr.contains("from a parent directory"),
+        "expected the adopted-config note naming the file, got: {stderr}"
     );
     assert!(
-        stderr.contains("Do not cd into \"kb\""),
-        "expected corrective text in stderr, got: {stderr}"
+        stderr.contains("--dir ."),
+        "the note must name the remedy for scoping to CWD, got: {stderr}"
+    );
+}
+
+/// A sibling directory is not inside the configured vault, so its config does
+/// not govern the run and nothing is adopted.
+#[test]
+fn cwd_beside_the_vault_does_not_adopt_the_config() {
+    let project = make_project();
+    let sibling = project.path().join("elsewhere");
+    std::fs::create_dir_all(&sibling).unwrap();
+    write_md(&sibling, "note.md", "---\ntitle: Elsewhere\n---\nBody.\n");
+
+    let assert = hyalo_no_hints()
+        .current_dir(&sibling)
+        .args(["find", "--limit", "5"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("iteration-17.md"),
+        "a config whose vault does not contain CWD must not be adopted: {stdout}"
     );
 }
 
