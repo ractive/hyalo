@@ -286,6 +286,13 @@ pub fn links_fix(
     );
     unfixable_links.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
+    // iter-207 BUG-4: template-expression destinations (`{% … %}`, `{{ … }}`,
+    // `${…}`) are dynamic, not broken paths. They get their own bucket and are
+    // never offered as fixes — a fuzzy rewrite would silently drop the
+    // conditional and the round-trip guard cannot see the damage.
+    let templated_links = fix_report.templated.clone();
+    let templated_count = templated_links.len();
+
     let output = serde_json::json!({
         "broken": broken.len(),
         // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
@@ -315,6 +322,10 @@ pub fn links_fix(
         // `broken`/`unfixable` — there is nothing in the vault to fix them to.
         "out_of_vault": out_of_vault_count,
         "out_of_vault_links": out_of_vault_links,
+        // iter-207: templated destinations. Reported so they stay visible,
+        // but never rewritten — see `link_fix::is_templated_target`.
+        "templated": templated_count,
+        "templated_links": templated_links,
         // Fuzzy-match fixes are reported in their own bucket. They are excluded
         // from --apply unless --apply-fuzzy / --min-confidence opts in; the
         // `fuzzy_applied` flag tells the caller whether they were written.

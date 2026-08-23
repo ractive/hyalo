@@ -145,6 +145,27 @@ pub struct FixReport {
     pub fixes: Vec<FixPlan>,
     /// Broken links for which no suitable candidate could be found.
     pub unfixable: Vec<BrokenLinkInfo>,
+    /// Broken links whose target is a *template expression*, not a path
+    /// (iter-207, BUG-4). Never matched, never rewritten — see
+    /// [`is_templated_target`].
+    pub templated: Vec<BrokenLinkInfo>,
+}
+
+/// Whether `target` is a template expression rather than a literal path
+/// (iter-207, BUG-4).
+///
+/// Site generators emit link destinations containing conditionals and
+/// variables — `{% ifversion ghes %}/admin{% endif %}/guides`,
+/// `{{ site.baseurl }}/x`, `${BASE}/y`. hyalo cannot know what those render
+/// to, but the *literal* text fuzzy-matches real files well enough to clear
+/// the 0.95 threshold, so `links fix --apply` used to rewrite them and
+/// silently drop the conditional. The round-trip guard cannot catch this: the
+/// rewritten target genuinely resolves, and the corruption is semantic.
+///
+/// Such targets are reported in [`FixReport::templated`] and never fixed.
+#[must_use]
+pub fn is_templated_target(target: &str) -> bool {
+    target.contains("{%") || target.contains("{{") || target.contains("${")
 }
 
 /// What one `--apply` pass did with the fixes it was handed.
@@ -578,9 +599,14 @@ impl LinkMatcher {
 pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport {
     let mut fixes = Vec::new();
     let mut unfixable = Vec::new();
+    let mut templated = Vec::new();
 
     for info in broken {
-        if let Some(result) = matcher.find_match(&info.target, &info.source) {
+        // Template expressions are dynamic destinations, not broken paths
+        // (iter-207, BUG-4): never offer a rewrite for them.
+        if is_templated_target(&info.target) {
+            templated.push(info.clone());
+        } else if let Some(result) = matcher.find_match(&info.target, &info.source) {
             fixes.push(FixPlan {
                 source: info.source.clone(),
                 line: info.line,
@@ -594,7 +620,11 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
         }
     }
 
-    FixReport { fixes, unfixable }
+    FixReport {
+        fixes,
+        unfixable,
+        templated,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1509,6 +1539,44 @@ See [broken](old-name.md) here.
         assert_eq!(report.fixes.len(), 1);
         assert_eq!(report.fixes[0].new_target, "Auth.md");
         assert_eq!(report.unfixable.len(), 1);
+    }
+
+    // --- iter-207 BUG-4: templated destinations are never rewritten ---
+
+    #[test]
+    fn is_templated_target_recognizes_the_three_marker_forms() {
+        assert!(is_templated_target(
+            "{% ifversion ghes %}/admin{% endif %}/guides"
+        ));
+        assert!(is_templated_target("{{ site.baseurl }}/guides"));
+        assert!(is_templated_target("${BASE}/guides"));
+        assert!(!is_templated_target("guides/index.md"));
+        // A bare brace is a legal (if odd) filename character, not a template.
+        assert!(!is_templated_target("weird{name}.md"));
+    }
+
+    /// The literal text of a Liquid conditional fuzzy-matches a real file well
+    /// above the 0.95 threshold, so `links fix --apply` used to rewrite it and
+    /// silently drop the version conditional. The round-trip guard cannot see
+    /// this: the rewritten target genuinely resolves.
+    #[test]
+    fn plan_fixes_routes_templated_targets_to_their_own_bucket() {
+        let matcher = LinkMatcher::new(make_files(&["guides.md"]), 0.7);
+        let broken_links = vec![
+            broken("src.md", 1, "{% ifversion ghes %}/admin{% endif %}/guides"),
+            broken("src.md", 2, "{{ site.baseurl }}/guides"),
+            broken("src.md", 3, "${BASE}/guides"),
+            broken("src.md", 4, "guidez"),
+        ];
+        let report = plan_fixes(&broken_links, &matcher);
+        assert_eq!(report.templated.len(), 3, "{:?}", report.templated);
+        assert!(
+            report.templated.iter().all(|b| b.target.contains("guides")),
+            "templated links keep their original target text"
+        );
+        assert_eq!(report.fixes.len(), 1, "the real typo is still fixable");
+        assert_eq!(report.fixes[0].old_target, "guidez");
+        assert!(report.unfixable.is_empty());
     }
 
     // --- detect_broken_links_from_index: basic ---

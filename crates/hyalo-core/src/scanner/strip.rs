@@ -69,6 +69,63 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
     )
 }
 
+/// Truncate a multi-line-span lookahead at the end of the current CommonMark
+/// *block* (iter-207, BUG-1).
+///
+/// Code spans are **inline** constructs: they are parsed within a single
+/// leaf block and can never reach across a block boundary. The original L-3
+/// lookahead searched the whole remaining document, so one unmatched backtick
+/// in a paragraph (`` press <kbd>`</kbd> ``) paired up with the *opening*
+/// backtick of a genuine code span several paragraphs later. That
+/// mis-pairing shifted every subsequent span by one delimiter, leaving real
+/// code (`` `git blame` ``) unblanked and open to `links auto --apply`
+/// rewriting it into `` `[[git]] blame` ``.
+///
+/// The boundaries recognised here are the ones that can interrupt a
+/// paragraph in CommonMark and are cheap to detect without a block parser:
+///
+/// - a blank line (paragraph break),
+/// - an ATX heading (`#`…`######` followed by space/end),
+/// - a fenced-code-block delimiter (``` ``` ``` or `~~~`, up to 3 spaces of
+///   indent).
+///
+/// Truncating conservatively can only *shorten* the lookahead, which makes an
+/// unmatched run stay literal — exactly what CommonMark prescribes.
+fn block_lookahead(rest: &str) -> &str {
+    let mut offset = 0usize;
+    for line in rest.split('\n') {
+        if is_block_boundary(line) {
+            return &rest[..offset];
+        }
+        offset += line.len() + 1;
+        if offset > rest.len() {
+            break;
+        }
+    }
+    rest
+}
+
+/// Whether `line` ends the paragraph a code span could have been opened in.
+/// See [`block_lookahead`] for the rationale and the list of boundaries.
+fn is_block_boundary(line: &str) -> bool {
+    let trimmed = line.trim_end_matches(['\r']);
+    if trimmed.trim().is_empty() {
+        return true;
+    }
+    // Up to three spaces of indent still counts as the same block level.
+    let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+    if indent > 3 {
+        return false;
+    }
+    let body = &trimmed[indent..];
+    if body.starts_with("```") || body.starts_with("~~~") {
+        return true;
+    }
+    let hashes = body.len() - body.trim_start_matches('#').len();
+    (1..=6).contains(&hashes) && body[hashes..].starts_with([' ', '\t'])
+        || ((1..=6).contains(&hashes) && body.len() == hashes)
+}
+
 /// Returns `true` if `text` contains a run of *exactly* `n` consecutive
 /// backticks (a run bounded by non-backtick characters or the text edges).
 ///
@@ -132,6 +189,17 @@ pub fn strip_inline_code_stateful<'a>(
     if open.is_none() && !line.contains('`') {
         return Cow::Borrowed(line);
     }
+
+    // A code span is an inline construct: it cannot survive a block boundary
+    // (iter-207, BUG-1). If one is somehow still open when a new block starts,
+    // drop it rather than blanking the rest of the document.
+    if open.is_some() && is_block_boundary(line) {
+        *open = None;
+        return Cow::Borrowed(line);
+    }
+
+    // Only look ahead within the current block for a matching closing run.
+    let rest = block_lookahead(rest);
 
     let bytes = line.as_bytes();
     let len = bytes.len();
@@ -476,5 +544,81 @@ mod tests {
         let out3 = strip_html_comments("end --> [[visible]]", &mut open);
         assert!(out3.contains("[[visible]]"), "{out3:?}");
         assert!(!open);
+    }
+
+    // --- iter-207 BUG-1: code spans are block-scoped ---
+
+    #[test]
+    fn block_lookahead_stops_at_paragraph_break() {
+        let rest = "same paragraph ` here\n\nnext paragraph ` there\n";
+        assert_eq!(block_lookahead(rest), "same paragraph ` here\n");
+    }
+
+    #[test]
+    fn block_lookahead_stops_at_heading_and_fence() {
+        assert_eq!(block_lookahead("still text\n# Heading `\n"), "still text\n");
+        assert_eq!(block_lookahead("still text\n```\n`\n"), "still text\n");
+        assert_eq!(block_lookahead("still text\n~~~\n`\n"), "still text\n");
+        // Setext-ish `#` without a following space is not a heading.
+        assert_eq!(block_lookahead("a\n#nothash `\n"), "a\n#nothash `\n");
+        // More than three spaces of indent is an indented code block, not a
+        // block-level interrupt for our purposes.
+        assert_eq!(block_lookahead("a\n     ``` `\n"), "a\n     ``` `\n");
+    }
+
+    #[test]
+    fn block_lookahead_returns_whole_rest_when_no_boundary() {
+        assert_eq!(block_lookahead("only one line `"), "only one line `");
+        assert_eq!(block_lookahead(""), "");
+    }
+
+    /// BUG-1 minimal repro: `` press <kbd>`</kbd> `` used to pair its stray
+    /// backtick with the *opening* backtick of a code span in a later
+    /// paragraph, leaving the real code span unblanked and open to
+    /// `links auto --apply` rewriting `` `git blame` `` into
+    /// `` `[[git]] blame` ``.
+    #[test]
+    fn stateful_stray_backtick_does_not_reach_into_the_next_paragraph() {
+        let mut open = None;
+        let rest = "\nAfter: `git blame` should still be code.\n";
+        let out = strip_inline_code_stateful("Press <kbd>`</kbd> to open.", &mut open, rest);
+        assert_eq!(out.as_ref(), "Press <kbd>`</kbd> to open.");
+        assert_eq!(open, None, "an unmatched backtick must not open a span");
+    }
+
+    #[test]
+    fn stateful_multiline_span_within_one_paragraph_still_opens() {
+        // The L-3 behaviour must survive: a genuine cross-line span inside a
+        // single paragraph still opens and blanks.
+        let mut open = None;
+        let out = strip_inline_code_stateful("text `open [[link]]", &mut open, "closes ` here\n");
+        assert!(!out.contains("[[link]]"), "{out:?}");
+        assert_eq!(open, Some(1));
+    }
+
+    #[test]
+    fn stateful_open_span_is_dropped_at_a_block_boundary() {
+        let mut open = Some(1);
+        let out = strip_inline_code_stateful("", &mut open, "` later\n");
+        assert_eq!(out.as_ref(), "");
+        assert_eq!(open, None, "a code span cannot cross a blank line");
+    }
+
+    /// Real-corpus shapes from the 2026-08-23 dogfood: an `<kbd>`-quoted
+    /// backtick, a lone backtick in prose, and a stray backtick inside a
+    /// table cell must all leave later code spans intact.
+    #[test]
+    fn stateful_real_corpus_stray_backtick_shapes_stay_literal() {
+        for opener in [
+            "Type <kbd>`</kbd> then Enter.",
+            "The ` character starts a code span.",
+            "| key | ` | backtick |",
+        ] {
+            let mut open = None;
+            let rest = "\nRun `README.md` and `settings.json` next.\n";
+            let out = strip_inline_code_stateful(opener, &mut open, rest);
+            assert_eq!(out.as_ref(), opener, "opener must stay literal");
+            assert_eq!(open, None, "no span may open for {opener:?}");
+        }
     }
 }

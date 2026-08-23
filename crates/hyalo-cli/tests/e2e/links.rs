@@ -4755,6 +4755,284 @@ Prose mention of net should be linked.
     );
 }
 
+// ---------------------------------------------------------------------------
+// iter-207: inert-zone completion (dogfood BUG-1 / BUG-2 / BUG-3 / BUG-4)
+// ---------------------------------------------------------------------------
+
+/// Run `links auto --apply` over `tmp` and return the rewritten `page.md`.
+fn auto_apply_page(tmp: &TempDir) -> String {
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().expect("valid UTF-8"),
+            "links",
+            "auto",
+            "--apply",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links auto --apply should run");
+    assert!(
+        output.status.success(),
+        "links auto --apply exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::read_to_string(tmp.path().join("page.md")).expect("readable")
+}
+
+/// Vault with a single linkable page titled `git` plus `page.md` holding `body`.
+fn vault_with_page(title: &str, body: &str) -> TempDir {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        &format!("{title}.md"),
+        &format!("---\ntitle: {title}\n---\n# {title}\n"),
+    );
+    write_md(tmp.path(), "page.md", body);
+    tmp
+}
+
+/// BUG-1 minimal repro: one unmatched backtick (`` press <kbd>`</kbd> ``) used
+/// to pair with the *opening* backtick of a later code span, leaving the real
+/// code unblanked so `` `git blame` `` became `` `[[git]] blame` ``.
+#[test]
+fn links_auto_apply_leaves_code_spans_after_an_unmatched_backtick_alone() {
+    let tmp = vault_with_page(
+        "git",
+        md!(r"
+Before: `git blame` stays code.
+
+Press <kbd>`</kbd> to open a terminal.
+
+After: `git blame` should still be code.
+"),
+    );
+    let written = auto_apply_page(&tmp);
+    assert!(
+        !written.contains("[[git]]"),
+        "no wikilink may be injected into a code span: {written}"
+    );
+    assert_eq!(
+        written.matches("`git blame`").count(),
+        2,
+        "both code spans must survive verbatim: {written}"
+    );
+}
+
+/// The same shapes the dogfood measured on GitHub Docs and vscode-docs: a
+/// stray backtick followed, paragraphs later, by real code spans.
+#[test]
+fn links_auto_apply_survives_real_corpus_stray_backtick_shapes() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    for title in ["README", "settings", "json"] {
+        write_md(
+            tmp.path(),
+            &format!("{title}.md"),
+            &format!("---\ntitle: {title}\n---\n# {title}\n"),
+        );
+    }
+    write_md(
+        tmp.path(),
+        "page.md",
+        md!(r"
+The ` character starts a code span.
+
+| key | ` | note |
+| --- | - | ---- |
+
+Open `README.md` and `settings.json` to continue.
+"),
+    );
+    let written = auto_apply_page(&tmp);
+    assert!(
+        written.contains("`README.md`") && written.contains("`settings.json`"),
+        "code spans must survive verbatim: {written}"
+    );
+    assert!(
+        !written.contains("[["),
+        "no wikilink may be injected at all: {written}"
+    );
+}
+
+/// BUG-2: 3,328 of 11,141 GitHub Docs insertions landed inside `{% … %}` /
+/// `{{ … }}`, destroying variable references.
+#[test]
+fn links_auto_apply_never_writes_inside_liquid_expressions() {
+    let tmp = vault_with_page(
+        "copilot",
+        md!(r"
+Tag: {% data variables.product.prodname_copilot %} end.
+
+Output: {{ site.copilot.baseurl }}/x end.
+
+Unterminated: {% ifversion copilot
+
+A plain copilot mention should be linked.
+"),
+    );
+    let written = auto_apply_page(&tmp);
+    assert!(
+        written.contains("{% data variables.product.prodname_copilot %}"),
+        "a Liquid tag must be untouched: {written}"
+    );
+    assert!(
+        written.contains("{{ site.copilot.baseurl }}"),
+        "a Liquid output expression must be untouched: {written}"
+    );
+    assert!(
+        written.contains("Unterminated: {% ifversion copilot"),
+        "an unterminated Liquid marker makes the rest of the line inert: {written}"
+    );
+    assert!(
+        written.contains("A plain [[copilot]] mention should be linked."),
+        "the real prose mention must still be linked: {written}"
+    );
+}
+
+/// BUG-3: 128 vscode-docs insertions landed inside HTML tags, breaking image
+/// paths, anchor names and class hooks.
+#[test]
+fn links_auto_apply_never_writes_inside_html_tags() {
+    let tmp = vault_with_page(
+        "net",
+        md!(r#"
+Image: <img src="net.png" alt="net diagram">
+
+Anchor: <a name="net" class="net-hook">see</a>
+
+Scheme: <a href="vscode://net/open">open</a>
+
+Between tags: <div>net prose</div> here.
+"#),
+    );
+    let written = auto_apply_page(&tmp);
+    assert!(
+        written.contains(r#"<img src="net.png" alt="net diagram">"#),
+        "tag attributes must be untouched: {written}"
+    );
+    assert!(
+        written.contains(r#"<a name="net" class="net-hook">"#),
+        "anchor names and class hooks must be untouched: {written}"
+    );
+    assert!(
+        written.contains(r#"<a href="vscode://net/open">"#),
+        "a non-http scheme in an attribute must be untouched: {written}"
+    );
+    assert!(
+        written.contains("<div>[[net]] prose</div>"),
+        "text between tags stays linkable: {written}"
+    );
+}
+
+/// BUG-4: `{% ifversion … %}/path{% endif %}/…` fuzzy-matched a real file at
+/// 0.95 and was rewritten, silently dropping the conditional. 25 such offers
+/// on the GitHub Docs corpus; the round-trip guard cannot catch it because the
+/// rewritten target genuinely resolves.
+#[test]
+fn links_fix_never_rewrites_templated_destinations() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(tmp.path(), "guides.md", "# Guides\n");
+    let body = md!(r"
+Conditional: [a]({% ifversion ghes %}/admin{% endif %}/guides)
+Variable: [b]({{ site.baseurl }}/guides)
+Shell: [c](${BASE}/guides)
+Real typo: [d](guidez)
+");
+    write_md(tmp.path(), "src.md", body);
+
+    let report = links_fix_results(tmp.path(), &["--dry-run"]);
+    assert_eq!(
+        report["templated"].as_u64(),
+        Some(3),
+        "all three template forms land in the named bucket: {report}"
+    );
+    let templated = report["templated_links"]
+        .as_array()
+        .expect("templated_links array");
+    assert_eq!(templated.len(), 3, "{report}");
+    assert!(
+        templated
+            .iter()
+            .all(|t| t["target"].as_str().unwrap_or_default().contains("guides")),
+        "templated links keep their original target text: {report}"
+    );
+    assert_eq!(
+        report["unfixable"].as_u64(),
+        Some(0),
+        "templated links are not silently folded into unfixable: {report}"
+    );
+
+    // Neither plain --apply nor --apply-fuzzy may touch them.
+    let before = fs::read_to_string(tmp.path().join("src.md")).expect("readable");
+    let _ = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    let after = fs::read_to_string(tmp.path().join("src.md")).expect("readable");
+    for templated_target in [
+        "{% ifversion ghes %}/admin{% endif %}/guides",
+        "{{ site.baseurl }}/guides",
+        "${BASE}/guides",
+    ] {
+        assert!(
+            after.contains(templated_target),
+            "templated destination {templated_target} was rewritten: {after}"
+        );
+    }
+    assert_ne!(before, after, "the real typo should still have been fixed");
+    assert!(
+        after.contains("[d](guides)") && !after.contains("[d](guidez)"),
+        "{after}"
+    );
+}
+
+/// BUG-7 (iter-202 regression): an in-vault symlink that sorts before its
+/// target used to become the canonical representative, dropping the real file
+/// from the fuzzy candidate set — `[fuzzy 0.966]` turned into `Unfixable: 1`.
+#[cfg(unix)]
+#[test]
+fn links_fix_symlink_does_not_shadow_the_real_file_in_fuzzy_candidates() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "notes/source.md",
+        md!(r"
+---
+title: Source
+---
+See [[targt]] here.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "notes/target.md",
+        md!(r"
+---
+title: Target
+---
+x
+"),
+    );
+    std::os::unix::fs::symlink("target.md", tmp.path().join("notes/alias-target.md"))
+        .expect("symlink creation should succeed");
+
+    let report = links_fix_results(tmp.path(), &["--dry-run"]);
+    assert_eq!(
+        report["unfixable"].as_u64(),
+        Some(0),
+        "the alias must not shadow the real file: {report}"
+    );
+    let fuzzy = report["fuzzy_fixes"].as_array().expect("fuzzy_fixes array");
+    assert_eq!(fuzzy.len(), 1, "{report}");
+    assert_eq!(
+        fuzzy[0]["new_target"].as_str(),
+        Some("notes/target.md"),
+        "the fix must be attributed to the real filename: {report}"
+    );
+    assert!(
+        fuzzy[0]["confidence"].as_f64().unwrap_or_default() > 0.96,
+        "the 0.966 offer must survive: {report}"
+    );
+}
+
 #[test]
 fn links_fix_apply_conformance_broken_count_decreases_and_valid_links_untouched() {
     // Regression gate for the whole apply-path class (iter-200): a corpus

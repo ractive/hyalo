@@ -269,6 +269,51 @@ and this project adheres to
 
 ### Fixed
 
+- **`links auto --apply` no longer injects wikilinks into code spans after an
+  unmatched backtick** (iter-207, dogfood BUG-1). One stray backtick — the
+  common `` press <kbd>`</kbd> `` shape — used to pair with the *opening*
+  backtick of a code span in a later paragraph, shifting every subsequent
+  delimiter by one so real code read as prose: `` `git blame` `` became
+  `` `[[git]] blame` `` and `` `settings.json` `` became
+  `` `[[settings]].[[json]]` ``. Code spans are inline constructs, so the
+  multi-line lookahead now stops at the end of the current block (blank line,
+  heading, or fence) and an unmatched run stays literal, as CommonMark
+  prescribes. Measured on the dogfood corpora: 9 silent corruptions on GitHub
+  Docs, 8 on vscode-docs and 3 in hyalo's own knowledgebase, now 0.
+
+- **`links auto --apply` no longer writes inside Liquid/Jinja expressions**
+  (iter-207, dogfood BUG-2). 3,328 of 11,141 insertions on a GitHub Docs copy
+  (30%) landed inside `{% … %}` or `{{ … }}`, turning
+  `{% data variables.copilot.x %}` into a broken variable reference. Both
+  marker forms are now inert zones for candidate matching; an unterminated
+  marker makes the rest of the line inert rather than corrupting it.
+
+- **`links auto --apply` no longer writes inside raw HTML tags** (iter-207,
+  dogfood BUG-3). 128 insertions on vscode-docs and 5 on GitHub Docs landed in
+  tag spans, breaking `src`/`href` paths, anchor names and class hooks
+  (`<img src="[[net]].png" alt="[[actions]]">`). Tag spans — open and close
+  tags, HTML comments, processing instructions, and quoted attribute values —
+  are now inert. Text *between* tags stays linkable: in `<div>prose</div>`
+  only the two tags are off limits.
+
+- **`links fix` never rewrites a templated destination** (iter-207, dogfood
+  BUG-4). A target containing `{%`, `{{` or `${` is a template expression, not
+  a path. hyalo used to read `{% ifversion ghes %}/admin{% endif %}/guides` as
+  literal text, fuzzy-match the remainder at 0.95 and rewrite it — silently
+  dropping the version conditional. The round-trip guard could not catch this
+  because the rewritten target genuinely resolves; the corruption is semantic.
+  25 such rewrites were offered on the full GitHub Docs corpus, now 0. They
+  are reported in their own `templated` / `templated_links` bucket rather than
+  dropped.
+
+- **An in-vault symlink no longer shadows the real file it points at**
+  (iter-207, dogfood BUG-7, regression from iter-202). Canonical dedup kept
+  whichever spelling sorted first, so `alias-target.md -> target.md` removed
+  `target.md` from enumeration: a link fixable at `[fuzzy 0.966]` reported as
+  `Unfixable: 1`, and fixes that did land were attributed to the alias name.
+  The non-symlink spelling is now the group's representative; the first-in-sort
+  fallback applies only when every spelling is a symlink.
+
 - **Site-prefix stripping is case-insensitive** (iter-204). The prefix that
   decides what a site-absolute `/foo` means is usually auto-derived from the
   vault directory's name, and directory casing rarely matches the casing

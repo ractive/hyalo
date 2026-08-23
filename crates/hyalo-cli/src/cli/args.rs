@@ -1148,6 +1148,10 @@ Repeatable (AND).\n\
             (../../CONTRIBUTING.md) can never resolve to a scanned file, so it is \
             counted under out_of_vault / out_of_vault_links instead of broken and is \
             never offered a fix. Site-absolute targets (/src/foo.md) stay in broken.\n\
+            TEMPLATED: a destination containing {% , {{ or ${ is a template expression, not a \
+            path ({% ifversion ghes %}/admin{% endif %}/guides). hyalo cannot know what it \
+            renders to, so it is counted under templated / templated_links and never rewritten \
+            — a fuzzy match on the literal text would silently drop the conditional.\n\
             SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
@@ -2029,10 +2033,13 @@ pub(crate) enum LinksAction {
             1. Filename stems (without .md)\n\
             2. Frontmatter `title` property\n\
             3. Frontmatter `aliases` property (list of alternate names)\n\n\
-            Exclusion zones: frontmatter, fenced code blocks, inline code,\n\
+            Exclusion zones: frontmatter, fenced code blocks, inline code (CommonMark rules —\n\
+            an unmatched backtick is literal text and a span never crosses a blank line),\n\
             existing [[wikilinks]] and [markdown](links) — label AND destination, whether the\n\
             destination is internal or external — bare URLs and <autolinks> in prose, headings,\n\
-            comment fences (%%), self-links.\n\n\
+            comment fences (%%), Liquid/Jinja expressions ({% ... %} and {{ ... }}),\n\
+            raw HTML tags including attribute values (<img src=\"...\">, <a name=\"...\">, HTML\n\
+            comments) — text BETWEEN tags stays linkable — and self-links.\n\n\
             Filtering options:\n\
             --first-only          Only emit the first mention of each target per source file. An\n\
             \u{00a0}                      existing [[wikilink]] (or aliased [[target|label]]) to a target\n\

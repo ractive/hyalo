@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
@@ -253,9 +253,16 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
     // non-symlink entry's canonical form is just the canonical vault root
     // joined with its vault-relative path, because the walker never descends
     // through directory symlinks.
+    // Which spelling represents the file matters (iter-207, BUG-7): keeping
+    // whichever the sort saw first meant an alphabetically-earlier symlink
+    // (`alias-target.md -> target.md`) shadowed the real file, so `links fix`
+    // lost `target.md` from the fuzzy candidate set (a `[fuzzy 0.966]` offer
+    // became `Unfixable: 1`) and reported fixes against the alias name.
+    // The real file always wins; a symlink only represents the group when
+    // every spelling of it is a symlink.
     let canonical_dir = canonicalize_vault_dir(dir)?;
-    let mut seen: HashSet<PathBuf> = HashSet::with_capacity(files.len());
-    let mut kept: Vec<PathBuf> = Vec::with_capacity(files.len());
+    let mut seen: HashMap<PathBuf, usize> = HashMap::with_capacity(files.len());
+    let mut kept: Vec<(PathBuf, bool)> = Vec::with_capacity(files.len());
     for path in files {
         let is_symlink = path
             .symlink_metadata()
@@ -278,10 +285,21 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
                 Err(_) => path.clone(),
             }
         };
-        if seen.insert(canonical) {
-            kept.push(path);
+        match seen.get(&canonical) {
+            None => {
+                seen.insert(canonical, kept.len());
+                kept.push((path, is_symlink));
+            }
+            // A real file replaces the symlink that got there first.
+            Some(&idx) if kept[idx].1 && !is_symlink => kept[idx] = (path, is_symlink),
+            Some(_) => {}
         }
     }
+
+    // Replacing a representative can disturb the sorted order established
+    // above; restore it so callers keep their deterministic enumeration.
+    let mut kept: Vec<PathBuf> = kept.into_iter().map(|(p, _)| p).collect();
+    kept.sort();
 
     Ok(kept)
 }
@@ -1676,8 +1694,48 @@ mod tests {
         let files = discover_files(tmp.path()).unwrap();
         assert_eq!(files.len(), 1, "one file, two spellings: {files:?}");
         assert!(
-            files[0].ends_with("alias.md"),
-            "the first spelling in sort order wins: {files:?}"
+            files[0].ends_with("real.md"),
+            "the real file represents the group, not the alias: {files:?}"
+        );
+    }
+
+    /// BUG-7 (iter-207): the surviving spelling must be the *real* file even
+    /// when the symlink sorts first. Keeping the alias dropped the target from
+    /// the fuzzy candidate set (`[fuzzy 0.966]` → `Unfixable: 1`) and made
+    /// `links fix` report rewrites against a name that is not the file.
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedup_prefers_real_file_over_alphabetically_earlier_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("target.md"), "# Target").unwrap();
+        std::os::unix::fs::symlink("target.md", tmp.path().join("alias-target.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 1, "one file, two spellings: {files:?}");
+        assert!(
+            files[0].ends_with("target.md") && !files[0].ends_with("alias-target.md"),
+            "the non-symlink spelling wins even though it sorts later: {files:?}"
+        );
+    }
+
+    /// When every spelling is a symlink there is no real file to prefer, so
+    /// the deterministic first-in-sort-order fallback still applies.
+    #[cfg(unix)]
+    #[test]
+    fn discover_dedup_falls_back_to_first_when_all_spellings_are_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The target lives in a hidden directory, so the walker never
+        // enumerates it directly: the group consists of two symlinks only.
+        fs::create_dir_all(tmp.path().join(".store")).unwrap();
+        fs::write(tmp.path().join(".store/real.md"), "# Real").unwrap();
+        std::os::unix::fs::symlink(".store/real.md", tmp.path().join("a-alias.md")).unwrap();
+        std::os::unix::fs::symlink(".store/real.md", tmp.path().join("z-alias.md")).unwrap();
+
+        let files = discover_files(tmp.path()).unwrap();
+        assert_eq!(files.len(), 1, "one file, two aliases: {files:?}");
+        assert!(
+            files[0].ends_with("a-alias.md"),
+            "with no real spelling available the first in sort order wins: {files:?}"
         );
     }
 
@@ -1700,8 +1758,15 @@ mod tests {
                 "dedup must pick the same spelling every run"
             );
         }
-        assert_eq!(first.len(), 2, "aaa.md + other.md: {first:?}");
-        assert!(first[0].ends_with("aaa.md"), "{first:?}");
+        assert_eq!(first.len(), 2, "other.md + zzz/real.md: {first:?}");
+        assert!(
+            first.iter().any(|f| f.ends_with("zzz/real.md")),
+            "the real file represents the aliased group: {first:?}"
+        );
+        assert!(
+            !first.iter().any(|f| f.ends_with("aaa.md")),
+            "the alias must not survive alongside its target: {first:?}"
+        );
     }
 
     /// Two distinct notes that merely *look* similar must both survive — the
