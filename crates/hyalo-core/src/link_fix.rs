@@ -282,6 +282,54 @@ pub fn site_prefix_plausible_resolution_stats(
     (absolute, plausible)
 }
 
+/// Count links whose TARGET resolves to a real vault file but whose
+/// `#fragment` does not name any heading there — a broken *anchor*, distinct
+/// from a broken target ([`detect_broken_links_from_index`] never reports
+/// these; it only checks whether the target file exists).
+///
+/// NEW-15 / UX-2 (dogfood pre3): `summary` and `find --broken-links` used to
+/// disagree on what "broken" counts — `summary` said "0 broken" on a vault
+/// `find --broken-links` reported 3 files for, because `summary`'s notion of
+/// broken never looked at anchors at all. Mirrors `find`'s own
+/// `LinkInfo::broken_anchor` computation so every caller counts the same
+/// thing. Same-file fragments (`[b](#nope)`, indexed separately as
+/// `entry.self_anchors`) are not included — this counts only links that
+/// point *at another file's* heading, matching what `links fix`'s target
+/// resolution already covers.
+pub fn count_broken_anchors(
+    dir: &Path,
+    index: &dyn VaultIndex,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> usize {
+    let Ok(canonical) = canonicalize_vault_dir(dir) else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for entry in index.entries() {
+        for (_, link) in &entry.links {
+            let Some(fragment) = &link.fragment else {
+                continue;
+            };
+            let resolved = crate::discovery::resolve_link_from_source(
+                &canonical,
+                &entry.rel_path,
+                link.kind,
+                &link.target,
+                site_prefix,
+                case_index,
+            );
+            if let Some(target_path) = resolved
+                && let Some(target_entry) = index.get(&target_path)
+                && !crate::anchor::fragment_matches_headings(fragment, &target_entry.sections)
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// Detect broken links from index entries.
 ///
 /// Each [`IndexEntry`](crate::index::IndexEntry) has
@@ -2721,6 +2769,100 @@ See [broken](old-name.md) here.
             "a vault with no site-absolute links must not be flagged"
         );
         assert_eq!(plausible, 0);
+    }
+
+    // --- NEW-15 / UX-2 (dogfood pre3): count_broken_anchors ---
+
+    /// A minimal [`VaultIndex`] over hand-built entries, for tests that need
+    /// real `sections`/`self_anchors` data `mock_index` does not expose.
+    struct HeadingsMockIndex(Vec<crate::index::IndexEntry>);
+    impl VaultIndex for HeadingsMockIndex {
+        fn entries(&self) -> &[crate::index::IndexEntry] {
+            &self.0
+        }
+        fn get(&self, rel_path: &str) -> Option<&crate::index::IndexEntry> {
+            self.0.iter().find(|e| e.rel_path == rel_path)
+        }
+        fn link_graph(&self) -> &crate::link_graph::LinkGraph {
+            unreachable!("not exercised by count_broken_anchors tests")
+        }
+    }
+
+    /// A link whose target resolves but whose `#fragment` names no heading
+    /// there must be counted; a link to a real heading must not.
+    #[test]
+    fn count_broken_anchors_counts_only_dead_fragments_on_resolving_targets() {
+        use crate::links::{Link, LinkKind};
+
+        let link = |target: &str, fragment: &str| Link {
+            target: target.to_string(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: Some(fragment.to_string()),
+            query: None,
+        };
+        let make_entry = |rel_path: &str, links: Vec<(usize, Link)>| crate::index::IndexEntry {
+            rel_path: rel_path.to_string(),
+            modified: String::new(),
+            properties: indexmap::IndexMap::default(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links,
+            self_anchors: Vec::new(),
+            bm25_tokens: None,
+            bm25_language: None,
+        };
+
+        let mut target = make_entry("target.md", Vec::new());
+        target.sections = vec![crate::types::OutlineSection {
+            level: 1,
+            heading: Some("Real".to_string()),
+            line: 1,
+            links: Vec::new(),
+            tasks: None,
+            code_blocks: Vec::new(),
+        }];
+        let source = make_entry(
+            "source.md",
+            vec![
+                (1, link("target.md", "Real")),
+                (2, link("target.md", "nope")),
+            ],
+        );
+
+        let index = HeadingsMockIndex(vec![source, target]);
+        let tmp = vault_with_files(&[("source.md", ""), ("target.md", "")]);
+
+        let count = count_broken_anchors(tmp.path(), &index, None, None);
+        assert_eq!(
+            count, 1,
+            "only the dead fragment (#nope) must count, not the resolving one (#Real)"
+        );
+    }
+
+    #[test]
+    fn count_broken_anchors_ignores_same_file_fragments() {
+        // Same-file fragments live in `entry.self_anchors`, never
+        // `entry.links` — count_broken_anchors only walks `entry.links`, so a
+        // dead same-file anchor (find's own broken_anchor concern) must not
+        // be double-counted here regardless of how many self_anchors exist.
+        let entry = crate::index::IndexEntry {
+            rel_path: "source.md".to_string(),
+            modified: String::new(),
+            properties: indexmap::IndexMap::default(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links: Vec::new(),
+            self_anchors: vec![(1, "nope".to_string())],
+            bm25_tokens: None,
+            bm25_language: None,
+        };
+
+        let index = HeadingsMockIndex(vec![entry]);
+        let tmp = vault_with_files(&[("source.md", "")]);
+        assert_eq!(count_broken_anchors(tmp.path(), &index, None, None), 0);
     }
 
     /// NEW-13 (dogfood pre3): a bare-stem relocation — the exact path fails,

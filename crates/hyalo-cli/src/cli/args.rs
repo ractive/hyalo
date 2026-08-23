@@ -400,6 +400,13 @@ pub(crate) struct FindFilters {
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
+    /// Exit 1 if the query returns any results (0 if empty) — a CI gate for any find query, most
+    /// commonly `find --broken-links --strict` to fail a build on a dead heading anchor. Before
+    /// this, `find --broken-links` always exited 0 even when it reported findings, so a vault
+    /// whose only defect was a dead anchor passed CI silently
+    #[arg(long)]
+    #[serde(skip_serializing_if = "is_false")]
+    pub strict: bool,
     /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks field)
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
@@ -466,6 +473,7 @@ impl FindFilters {
             self.limit = overlay.limit;
         }
         self.broken_links = self.broken_links || overlay.broken_links;
+        self.strict = self.strict || overlay.strict;
         self.orphan = self.orphan || overlay.orphan;
         self.dead_end = self.dead_end || overlay.dead_end;
         if overlay.title.is_some() {
@@ -664,9 +672,12 @@ pub(crate) enum Commands {
             OUTPUT: A 'VaultSummary' object with file counts (total + top-level directories), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
             status grouping (value + count, no file lists), \
-            task counts (total/done), link health (total/broken count), \
+            task counts (total/done), link health (total/broken count, plus a distinct \
+            broken_anchors count — a link whose target resolves but whose #fragment names no \
+            heading there; omitted from JSON when zero, NEW-15), \
             orphan count, dead-end count, and recently modified files.\n\
-            Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X.\n\
+            Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X, \
+            or --broken-links --strict to fail CI on any finding.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.\n\n\
@@ -1205,6 +1216,11 @@ Repeatable (AND).\n\
             relocations is a bare-stem link (no directory in the written target) whose stem \
             resolved to a file in a different directory — a move, not a casing fix, so it is \
             reported apart from case_mismatches (both are written by plain --apply).\n\
+            ANCHORS: broken_anchors (and its stderr-adjacent text note) is populated only when \
+            broken is 0 — a link whose target resolves but whose #fragment names no heading is \
+            not a broken *link* in this command's sense, and the count only runs the extra check \
+            when targets are otherwise clean. `find --broken-links --strict` is the CI gate for \
+            anchors; this command does not fix them (NEW-15 / UX-2).\n\
             CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
             counts the proposals it suppresses — those have a candidate but are never written, \

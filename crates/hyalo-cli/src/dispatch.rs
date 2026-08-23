@@ -539,6 +539,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 reverse,
                 limit,
                 broken_links,
+                strict,
                 orphan,
                 dead_end,
                 title,
@@ -716,7 +717,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         needs_stem_map,
                         resolved.as_snapshot(),
                     );
-                    find_commands::find(
+                    let outcome = find_commands::find(
                         resolved.as_index(),
                         dir,
                         site_prefix,
@@ -740,7 +741,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         language.as_deref(),
                         ctx.config_language,
                         ci.as_ref(),
-                    )
+                    )?;
+                    // UX-2 (dogfood pre3): `--strict` gives any `find` query
+                    // (most commonly `--broken-links`) a CI-gateable exit
+                    // code — before this, `find --broken-links` always
+                    // exited 0 even when it reported findings, so a vault
+                    // whose only defect was a dead heading anchor passed CI
+                    // silently.
+                    if strict
+                        && let CommandOutcome::Success {
+                            total: Some(total), ..
+                        } = &outcome
+                        && *total > 0
+                    {
+                        ctx.exit_code_override = Some(1);
+                    }
+                    Ok(outcome)
                 }
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }

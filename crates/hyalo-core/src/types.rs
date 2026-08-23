@@ -208,6 +208,16 @@ pub struct LinkHealthSummary {
     /// keep the previous output shape.
     #[serde(skip_serializing_if = "is_zero")]
     pub out_of_vault: usize,
+    /// Links whose target resolves but whose `#fragment` names no heading
+    /// there — a dead anchor, distinct from `broken` (a missing target).
+    ///
+    /// NEW-15 (dogfood pre3): `summary` used to say "0 broken" on a vault
+    /// `find --broken-links` reported 3 files for, because this count never
+    /// looked at anchors. Kept as its own field rather than folded into
+    /// `broken` since the two are different failure modes with different
+    /// fixes. Omitted from JSON when zero, same convention as `out_of_vault`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub broken_anchors: usize,
 }
 
 /// Serde helper: skip a `usize` field when it is zero.

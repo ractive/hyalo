@@ -183,6 +183,19 @@ pub fn links_fix(
         (filtered, ignored)
     };
 
+    // NEW-15 / UX-2 (dogfood pre3): `links` never looked at anchors at all,
+    // so a vault whose only defect was a dead heading anchor reported
+    // "Broken links: 0" — a summary an agent will trust. Gated on
+    // `broken.is_empty()`: the note only fires when targets are otherwise
+    // clean (matching the exact condition it exists to catch), which also
+    // means the extra resolution pass never runs on a vault that already has
+    // broken targets — the common case on a large, imperfect corpus.
+    let broken_anchor_count = if broken.is_empty() {
+        hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index)
+    } else {
+        0
+    };
+
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
     let fix_report = plan_fixes(&broken, &matcher);
 
@@ -393,6 +406,12 @@ pub fn links_fix(
 
     let output = serde_json::json!({
         "broken": broken.len(),
+        // NEW-15 / UX-2 (dogfood pre3): counted only when `broken` is empty
+        // (see above) — 0 either means genuinely no dead anchors, or that
+        // targets are broken too and this run didn't check (targets take
+        // priority; fix those first). `find --broken-links` remains the
+        // source of truth for the full picture including this case.
+        "broken_anchors": broken_anchor_count,
         // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
         // plain `--apply` writes. Fuzzy matches are reported exclusively in
         // the `fuzzy`/`fuzzy_fixes` bucket below — counting them here too

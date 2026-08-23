@@ -42,12 +42,12 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [x] NEW-13: stop counting path relocations under `case_mismatches` /
       "Case mismatches" — give `[shortest-path]` relocations their own
       bucket and section in text and JSON
-- [ ] NEW-15: `summary` and `find --broken-links` agree on what "broken"
+- [x] NEW-15: `summary` and `find --broken-links` agree on what "broken"
       counts: either `summary` gains a distinct broken-anchors figure
       (`Links: 853 total, 0 broken, 3 broken anchors`) or the two
       commands' definitions are documented and cross-referenced in both
       helps
-- [ ] UX-2: an exit-code path for broken anchors in CI — fold anchor
+- [x] UX-2: an exit-code path for broken anchors in CI — fold anchor
       checking into a lint rule or give `find --broken-links` a
       `--strict`-style nonzero exit when findings exist; `links` text
       gains a one-line "N broken anchors — see `find --broken-links`"
@@ -95,16 +95,16 @@ excluded: broken-links line numbers + Liquid heading slugs
 
 ## Acceptance criteria
 
-- [ ] MDN with default derived prefix: the 0-stripped warning names
+- [x] MDN with default derived prefix: the 0-stripped warning names
       `en-us` and suggests a fix; `links` output is no longer a silent
       wrong answer
-- [ ] A vault whose only defect is a dead anchor can fail CI through a
+- [x] A vault whose only defect is a dead anchor can fail CI through a
       documented command/flag
 - [ ] `lint` on the own KB shows the ignored-file count; ignored-only
       `--glob` warns
 - [ ] `views run` hint parity with `find --view` (iter-213 AC completed)
-- [ ] No command prints a self-contradictory config note
-- [ ] `changelog add` creates the `[Unreleased]` subsection when absent
+- [x] No command prints a self-contradictory config note
+- [x] `changelog add` creates the `[Unreleased]` subsection when absent
       instead of appending to a released section; continuation lines are
       indented
 

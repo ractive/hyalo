@@ -195,6 +195,65 @@ fn summary_text_includes_links_line() {
     );
 }
 
+/// NEW-15 (dogfood pre3): `summary` used to say "0 broken" on a vault whose
+/// only defect was a dead heading anchor, while `find --broken-links`
+/// reported findings for it — the two commands' notions of "broken"
+/// silently disagreed. `summary` now carries a distinct `broken_anchors`
+/// figure so a dead anchor is visible without cross-checking `find`.
+#[test]
+fn summary_reports_broken_anchors_distinctly_from_broken_links() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target\n---\n## Real\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\n---\nSee [x](target.md#nope).\n",
+    );
+
+    let json_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo summary should run");
+    assert!(json_output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["links"]["broken"].as_u64(),
+        Some(0),
+        "the target resolves — nothing is broken by that definition: {json}"
+    );
+    assert_eq!(
+        json["results"]["links"]["broken_anchors"].as_u64(),
+        Some(1),
+        "the dead #nope anchor must be visible as its own figure: {json}"
+    );
+
+    let text_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo summary --format text should run");
+    let text = String::from_utf8_lossy(&text_output.stdout);
+    assert!(
+        text.contains("1 broken anchor"),
+        "text output must not silently say only '0 broken':\n{text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // find --broken-links
 // ---------------------------------------------------------------------------
@@ -1447,6 +1506,59 @@ fn bare_stem_relocation_reports_in_its_own_bucket() {
         stdout.contains("Relocation fixes:") && stdout.contains("sub/target.md"),
         "text detail must list the relocation:\n{stdout}"
     );
+}
+
+/// UX-2 (dogfood pre3): `links` text gains a one-line note when anchors are
+/// broken but targets are not — before this, `links fix` never looked at
+/// anchors at all, so a vault whose only defect was a dead heading anchor
+/// printed a trustworthy-looking "Broken links: 0".
+#[test]
+fn links_fix_text_notes_broken_anchors_when_targets_are_clean() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "target.md", "---\ntitle: Target\n---\n## Real\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\n---\nSee [x](target.md#nope).\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--dry-run",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Broken links: 0"),
+        "the target resolves — nothing is broken by that definition: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 broken anchor(s) — see `find --broken-links`"),
+        "the dead anchor must be surfaced instead of a silent 0: {stdout}"
+    );
+
+    // JSON carries the same figure.
+    let json_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix (json) should run");
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json["results"]["broken_anchors"].as_u64(), Some(1));
 }
 
 // On macOS (case-insensitive FS) a wrong-cased path resolves via the OS even with CI mode

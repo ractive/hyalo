@@ -801,3 +801,105 @@ fn rebuilt_index_repopulates_fragments() {
     let json = run_broken_links(&tmp, true);
     assert_matrix(&json, "rebuilt-index");
 }
+
+// ---------------------------------------------------------------------------
+// UX-2 (dogfood pre3): `find --broken-links --strict` is a CI gate — a vault
+// whose only defect is a dead heading anchor must fail the build, not just
+// print a warning that a script can ignore.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_links_strict_exits_nonzero_when_findings_exist() {
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--strict", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a vault with a dead anchor must fail under --strict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn broken_links_strict_exits_zero_on_a_clean_vault() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "clean.md",
+        md!(r"
+---
+title: Clean
+---
+# Clean
+Nothing broken here.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--strict", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a clean vault must not fail under --strict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn broken_links_without_strict_stays_zero_exit() {
+    // Precedent: `find --broken-links` alone must keep exiting 0 even when it
+    // reports findings — --strict is opt-in, not a silent behavior change.
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "--broken-links alone (no --strict) must not change its exit code: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn find_strict_gates_any_query_not_just_broken_links() {
+    // --strict is a general find primitive, not special-cased to
+    // --broken-links — any query that returns results fails under --strict.
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "draft.md",
+        md!(r"
+---
+title: Draft
+status: draft
+---
+# Draft
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args([
+            "find",
+            "--property",
+            "status=draft",
+            "--strict",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(output.status.code(), Some(1));
+}

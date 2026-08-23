@@ -129,6 +129,16 @@ and this project adheres to
   `--dead-end` outbound-edge count, since a same-file heading jump is
   not an edge to another file — a file whose only "link" is to its own
   heading still counts as an orphan.
+- **`summary` and `links fix` no longer silently hide broken anchors**
+  (iter-220, dogfood NEW-15). `summary` gains a distinct `links.broken_anchors`
+  figure (omitted from JSON when zero) instead of folding anchors into
+  `links.broken` or ignoring them — a vault whose only defect was a dead
+  heading anchor used to report "Links: N total, 0 broken" while
+  `find --broken-links` reported findings for it. `links fix` gains a
+  one-line note ("N broken anchor(s) — see `find --broken-links`") when
+  anchors are broken but targets are clean; the check only runs in that
+  case, so it never adds a second resolution pass to a vault that already
+  has broken targets.
 
 ### Changed
 
@@ -330,6 +340,12 @@ and this project adheres to
   49,762 broken links with no signal the prefix itself was the problem.
   The warning names the effective prefix and points at `--site-prefix` /
   `.hyalo.toml` / `hyalo config`.
+- **`find --strict` — a general CI-gate flag: exit 1 if a query returns any
+  results, 0 if empty** (iter-220, dogfood UX-2). Composes with any filter
+  combination; the primary motivation is `find --broken-links --strict` to
+  fail a build on a dead heading anchor (before this, `find --broken-links`
+  always exited 0 regardless of findings). See DEC-090 for why this was
+  chosen over a new lint rule.
 
 ### Changed
 

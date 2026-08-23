@@ -355,6 +355,14 @@ pub fn summary(
             broken: report.broken.len() + report.ambiguous.len(),
             // Targets above the vault root are out of scope, not broken.
             out_of_vault: report.out_of_vault.len(),
+            // NEW-15 (dogfood pre3): a distinct figure so `summary` and
+            // `find --broken-links` agree on what "broken" counts.
+            broken_anchors: hyalo_core::link_fix::count_broken_anchors(
+                dir,
+                index,
+                site_prefix,
+                case_index,
+            ),
         }
     };
 
