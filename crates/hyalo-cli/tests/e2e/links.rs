@@ -3173,7 +3173,7 @@ Body also links [[wrong/real-target]].
             "links",
             "fix",
             "--apply",
-            // DEC-073 (iter-211): `wrong/real-target` writes a directory, so
+            // DEC-076 (iter-211): `wrong/real-target` writes a directory, so
             // repairing it by basename is a guess and needs the fuzzy opt-in.
             // This test is about frontmatter+body rewriting, not gating.
             "--apply-fuzzy",
@@ -3524,7 +3524,7 @@ Also \[label](escaped-md-missing.md) is literal too.
 /// non-existent path (broken), but the stem `bar` uniquely matches
 /// `sub/bar.md` → a `BasenameFallback` fix. Using a path-form markdown link
 /// avoids Obsidian short-form resolution, which would otherwise make a bare
-/// `[[bar]]` resolve as valid — and under DEC-073 (iter-211) that written
+/// `[[bar]]` resolve as valid — and under DEC-076 (iter-211) that written
 /// directory is exactly what puts the repair behind `--apply-fuzzy`, which the
 /// failure test therefore passes.
 #[cfg(unix)]
@@ -4583,7 +4583,7 @@ See [AUTOTITLE](/how-tos/old-home/moved-page) for details.
 
 #[test]
 fn links_fix_relative_basename_guess_is_gated_like_the_site_absolute_one() {
-    // DEC-073 (iter-211 / BUG-12): the gate keys on whether the author wrote a
+    // DEC-076 (iter-211 / BUG-12): the gate keys on whether the author wrote a
     // *directory*, not on a leading slash. `../c/target.md` asserts a location
     // just as firmly as `/c/target.md` does, so throwing that location away
     // and substituting `z/target.md` — matched on the basename alone — is the
@@ -4629,7 +4629,7 @@ See [x](../c/target.md) here.
 
 #[test]
 fn links_fix_bare_stem_repair_stays_a_plain_apply_fix() {
-    // The other half of DEC-073: a target with no directory component asserts
+    // The other half of DEC-076: a target with no directory component asserts
     // no location, so resolving it by stem is the documented Obsidian
     // short-form rule — a resolution, not a guess — and plain `--apply`
     // writes it.

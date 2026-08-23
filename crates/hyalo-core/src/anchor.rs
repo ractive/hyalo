@@ -22,7 +22,7 @@
 //! the written link (the rewrite span never covers the fragment) and decoded
 //! only for matching here.
 //!
-//! ## DEC-072 — GitHub slug forms are accepted too (iter-211, BUG-8)
+//! ## DEC-075 — GitHub slug forms are accepted too (iter-211, BUG-8)
 //!
 //! DEC-060 alone made hyalo unusable on any corpus written for a static-site
 //! renderer. Every markdown renderer in wide use (GitHub, GitLab, MDN,
@@ -161,7 +161,7 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     }) {
         return true;
     }
-    // DEC-072: GitHub-rendered slug, with duplicate suffixes.
+    // DEC-075: GitHub-rendered slug, with duplicate suffixes.
     let needle_slug = github_slug(&needle);
     if needle_slug.is_empty() {
         return false;
@@ -231,12 +231,12 @@ mod tests {
         let secs = [sec(Some("Überschrift"))];
         assert!(fragment_matches_headings("Überschrift", &secs));
         // DEC-060's raw-text comparison is ASCII-case-insensitive only, but the
-        // DEC-072 slug path lowercases Unicode the way a renderer does, so the
+        // DEC-075 slug path lowercases Unicode the way a renderer does, so the
         // lowercased spelling now matches (iter-211, BUG-8).
         assert!(fragment_matches_headings("überschrift", &secs));
     }
 
-    // --- DEC-072: GitHub slug forms (iter-211, BUG-8) ---
+    // --- DEC-075: GitHub slug forms (iter-211, BUG-8) ---
 
     #[test]
     fn github_slug_lowercases_and_hyphenates() {

@@ -40,7 +40,7 @@ Percent-encoded target.
 
 ### Sub Section
 
-DEC-072: reachable as the rendered slug `#sub-section`.
+DEC-075: reachable as the rendered slug `#sub-section`.
 "),
     );
 
@@ -334,7 +334,7 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     );
     assert!(
         slug_ok,
-        "[{label}] DEC-072: the rendered slug #sub-section must match `### Sub Section`"
+        "[{label}] DEC-075: the rendered slug #sub-section must match `### Sub Section`"
     );
     assert!(missing_broken, "[{label}] markdown #missing must be broken");
 }

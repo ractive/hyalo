@@ -110,7 +110,7 @@ pub enum FixStrategy {
     /// short-form resolution rule, applied to a link that was already written
     /// short-form.
     ///
-    /// DEC-073: a bare stem asserts no location, so this is a *resolution*,
+    /// DEC-076: a bare stem asserts no location, so this is a *resolution*,
     /// not a guess, and plain `--apply` writes it. The moment the author
     /// writes any directory component the verdict becomes
     /// [`BasenameFallback`] instead, whatever the leading character.
@@ -123,7 +123,7 @@ pub enum FixStrategy {
     ShortestPath,
     /// A target that **wrote a directory** (`/actions`, `guides/actions`)
     /// matched a file only by its last path segment (iter-200 / dogfood M-1,
-    /// widened to relative paths by DEC-073 in iter-211).
+    /// widened to relative paths by DEC-076 in iter-211).
     ///
     /// This is a guess, not a resolution: the location the author asserted is
     /// thrown away and a same-named file from somewhere else is substituted
@@ -299,7 +299,7 @@ pub fn detect_broken_links_from_index(
                     // confidence so `links fix` stops printing
                     // `[link-case-mismatch]` next to two targets that differ
                     // by a directory. Gating is unchanged and consistent with
-                    // DEC-073: the written target carried no directory (that
+                    // DEC-076: the written target carried no directory (that
                     // is the only way the stem fallback fires), so this is the
                     // documented short-form rule, not a guess.
                     case_mismatches.push(FixPlan {
@@ -402,7 +402,7 @@ pub(crate) struct MatchResult {
 
 /// Confidence reported for [`FixStrategy::ShortestPath`] matches — a unique
 /// bare-stem resolution. Below 1.0 because the vault could gain a second file
-/// with the same stem, but well above the fuzzy gate: DEC-073 treats it as a
+/// with the same stem, but well above the fuzzy gate: DEC-076 treats it as a
 /// certain fix.
 pub(crate) const SHORTEST_PATH_CONFIDENCE: f64 = 0.95;
 
@@ -577,7 +577,7 @@ impl LinkMatcher {
             && indices.len() == 1
             && !Self::is_self_link(source, &self.files[indices[0]])
         {
-            // DEC-073 (iter-211 / BUG-12): the discriminator is whether the
+            // DEC-076 (iter-211 / BUG-12): the discriminator is whether the
             // author wrote a *directory*, not whether the path happened to
             // start with `/`. Splitting on the leading slash meant
             // `[x](guides/actions)` was rewritten to `reference/actions.md`
@@ -2034,7 +2034,7 @@ See [broken](old-name.md) here.
 
     #[test]
     fn relative_path_basename_match_is_a_basename_fallback() {
-        // DEC-073 (iter-211): a written directory is a location claim whatever
+        // DEC-076 (iter-211): a written directory is a location claim whatever
         // the leading character, so discarding it is the same guess as for a
         // site-absolute target and lands in the same gated bucket.
         let matcher = LinkMatcher::new(make_files(&["z/target.md"]), 0.85);
@@ -2051,7 +2051,7 @@ See [broken](old-name.md) here.
 
     #[test]
     fn bare_stem_match_stays_shortest_path() {
-        // The other half of DEC-073: no directory written ⇒ the Obsidian
+        // The other half of DEC-076: no directory written ⇒ the Obsidian
         // short-form rule ⇒ a certain fix.
         let matcher = LinkMatcher::new(make_files(&["z/target.md"]), 0.85);
         let result = matcher
