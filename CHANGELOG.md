@@ -43,6 +43,13 @@ and this project adheres to
 
 ### Changed
 
+- **`links auto`'s heading skip now uses the same CommonMark ATX-heading
+  rule as the rest of the zone scan** (iter-217, review follow-up), instead
+  of "the trimmed line starts with `#`". A line like `#nothash` (no space
+  after the `#`) is no longer treated as a heading and is scanned as
+  ordinary body text; a real heading (`## Real Heading`, 1-6 hashes
+  followed by a space or end of line, indent 0-3) is still skipped exactly
+  as before.
 - **`links auto --apply` emits an alias instead of silently rewriting
   rendered prose** (iter-217, dogfood NEW-3). A match whose surface text
   differs from the emitted target — including only by case (`Pulls` vs

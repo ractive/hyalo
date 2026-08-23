@@ -4162,6 +4162,52 @@ The gamma page.
 }
 
 #[test]
+fn auto_apply_leaves_a_crlf_reference_definition_byte_identical() {
+    // Review finding #1: `line` inside `parse_reference_definition_label`
+    // comes from a `\n`-split iterator, so on a CRLF file it still carries
+    // a trailing `\r`. Left untrimmed, the definition line was never
+    // recognised as a definition, so its title text — "Gamma page", sitting
+    // *outside* the `[Gamma]` bracket that the generic bracket zone already
+    // protects on its own — was open to matching and got wikilinked.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "gamma.md",
+        md!(r"
+---
+title: Gamma
+---
+The gamma page.
+"),
+    );
+    let body_lf = md!(concat!(
+        "---\n",
+        "title: Notes\n",
+        "---\n",
+        "Shortcut: [Gamma]\n",
+        "\n",
+        "[Gamma]: https://example.com/gamma \"Gamma page\"\n",
+    ));
+    let body = body_lf.replace('\n', "\r\n");
+    fs::write(tmp.path().join("notes.md"), &body).expect("notes.md should be writable");
+
+    let results = run_links_auto(tmp.path(), &["--apply", "--format", "json"]);
+    let matches = results["matches"]
+        .as_array()
+        .expect("results.matches should be an array");
+    assert!(
+        matches.is_empty(),
+        "a CRLF reference definition line must stay inert in its entirety: {matches:?}"
+    );
+
+    let notes = fs::read_to_string(tmp.path().join("notes.md")).expect("notes.md should exist");
+    assert_eq!(
+        notes, body,
+        "the CRLF file must be byte-identical after --apply, CR bytes included"
+    );
+}
+
+#[test]
 fn auto_apply_leaves_wrapped_wikilink_and_markdown_link_byte_identical() {
     // NEW-2: a wikilink/markdown-link construct that wraps across a line
     // boundary must be treated as inert across its whole span, not just the

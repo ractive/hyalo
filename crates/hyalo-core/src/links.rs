@@ -1,4 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -898,13 +900,37 @@ fn bare_url_end(line: &str, start: usize) -> Option<usize> {
 /// Ranges are returned in ascending, non-overlapping order. `line` should be
 /// the same text the caller matches against (e.g. the inline-code-blanked
 /// form), since offsets are relative to it.
+///
+/// End offset of the physical line containing byte offset `start` within
+/// `line` — the position of the next `\n` at or after `start`, or
+/// `line.len()` if `start` is on the last line.
+///
+/// Used as the "unterminated construct" fallback for Liquid/HTML spans
+/// (iter-217 review #4): `line` may be a whole paragraph block's `\n`-joined
+/// text, not a single physical line, so falling back to `line.len()`
+/// blanked every *following* line in the paragraph too — a real recall
+/// loss for something as ordinary as a stray `<` (`"Compare a <b and
+/// c.\nMention target here."` matched nothing at all). A genuinely
+/// multi-line-wrapped construct is unaffected: its closer is found by the
+/// caller's own search, and this fallback is only reached when no closer
+/// exists anywhere in the rest of the block — at that point "blank to the
+/// end of the block" and "blank to the end of this line" are equally
+/// unable to find the (nonexistent) real closer, so the smaller, safer
+/// scope is strictly better.
+fn end_of_line_from(line: &str, start: usize) -> usize {
+    line[start..]
+        .find('\n')
+        .map_or(line.len(), |rel| start + rel)
+}
+
 /// End offset (exclusive) of a Liquid/Jinja template expression starting at
 /// `start`, which must point at a `{` byte (iter-207, BUG-2).
 ///
 /// Recognizes `{% … %}` (tags) and `{{ … }}` (output expressions). An
-/// unterminated marker makes the rest of the line inert — a template
-/// expression that continues onto the next line is still not prose, and
-/// blanking too much only costs a missed auto-link candidate.
+/// unterminated marker makes the rest of the *physical line* inert (see
+/// [`end_of_line_from`]) — a template expression that continues onto the
+/// next line is still not prose, and blanking too much only costs a missed
+/// auto-link candidate.
 ///
 /// Returns `None` when `start` is a lone `{` (not a template marker).
 fn liquid_span_end(line: &str, start: usize) -> Option<usize> {
@@ -917,7 +943,7 @@ fn liquid_span_end(line: &str, start: usize) -> Option<usize> {
     };
     Some(match line[start + 2..].find(closer) {
         Some(rel) => start + 2 + rel + closer.len(),
-        None => line.len(),
+        None => end_of_line_from(line, start),
     })
 }
 
@@ -930,9 +956,11 @@ fn liquid_span_end(line: &str, start: usize) -> Option<usize> {
 /// values are scanned through, so a `>` inside `alt="a > b"` does not end the
 /// tag early.
 ///
-/// An unterminated tag makes the rest of the line inert (a tag that wraps onto
-/// the next line is still markup). Returns `None` when `<` is ordinary prose
-/// (`a < b`), so comparison operators stay linkable.
+/// An unterminated tag makes the rest of the *physical line* inert (see
+/// [`end_of_line_from`]) — a tag that wraps onto the next line is still
+/// markup, and is handled by the caller's own search finding the closer
+/// there. Returns `None` when `<` is ordinary prose (`a < b`), so
+/// comparison operators stay linkable.
 fn html_span_end(line: &str, start: usize) -> Option<usize> {
     let bytes = line.as_bytes();
     debug_assert_eq!(bytes.get(start), Some(&b'<'));
@@ -941,14 +969,14 @@ fn html_span_end(line: &str, start: usize) -> Option<usize> {
     if line[start..].starts_with("<!--") {
         return Some(match line[start + 4..].find("-->") {
             Some(rel) => start + 4 + rel + 3,
-            None => line.len(),
+            None => end_of_line_from(line, start),
         });
     }
     // `<? … ?>` processing instruction.
     if line[start..].starts_with("<?") {
         return Some(match line[start + 2..].find("?>") {
             Some(rel) => start + 2 + rel + 2,
-            None => line.len(),
+            None => end_of_line_from(line, start),
         });
     }
 
@@ -977,15 +1005,61 @@ fn html_span_end(line: &str, start: usize) -> Option<usize> {
             _ => i += 1,
         }
     }
-    // Unterminated: treat the rest of the line as markup.
-    Some(line.len())
+    // Unterminated: treat the rest of the physical line as markup.
+    Some(end_of_line_from(line, start))
+}
+
+/// Map every `[` byte in `line` to its nesting-balanced matching `]`, if
+/// any (iter-217 review #5/#6), for [`inert_link_zones`]'s generic bracket
+/// fallback.
+///
+/// Brackets are matched by character alone — escaped `\[`/`\]` count too.
+/// That is deliberate and differs from [`find_label_close_bracket`]: this
+/// map answers "does inserting markup near this position touch
+/// bracket-shaped text a user wrote" (so an escaped `\[widget\]` is exactly
+/// as off-limits as an unescaped one), not "is this valid CommonMark link
+/// syntax" — the wikilink and markdown-link-destination checks earlier in
+/// `inert_link_zones` already handle *that* distinction and do respect
+/// escaping. A single stack-based pass, O(n) regardless of how many
+/// brackets never close or how deeply they nest — the naive per-`[`
+/// rescan this replaced was O(n²) on a block with many unclosed openers.
+fn match_brackets(line: &str) -> HashMap<usize, usize> {
+    let bytes = line.as_bytes();
+    if !bytes.contains(&b'[') {
+        return HashMap::new();
+    }
+    let mut stack: Vec<usize> = Vec::new();
+    let mut matches = HashMap::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => stack.push(i),
+            b']' => {
+                if let Some(open) = stack.pop() {
+                    matches.insert(open, i);
+                }
+            }
+            _ => {}
+        }
+    }
+    matches
 }
 
 #[must_use]
 pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
     let bytes = line.as_bytes();
     let mut zones: Vec<(usize, usize)> = Vec::new();
+    let bracket_matches = match_brackets(line);
     let mut i = 0usize;
+    // iter-217 review #2: `find_label_close_bracket`/`.find("]]")` scan to
+    // the end of `line` when nothing closes. Once a search from some
+    // position finds no closer anywhere ahead, no later (further-right)
+    // starting position can find one either — the suffix only shrinks.
+    // These flags let every subsequent `[`/`[[` skip straight past the
+    // rescan, making the wikilink and markdown-link-destination checks
+    // O(n) instead of O(n²) on a block with many never-closing openers
+    // (measured 11.5s -> effectively 0 on a 32k-line single block).
+    let mut no_label_close_ahead = false;
+    let mut no_wikilink_close_ahead = false;
 
     while i < bytes.len() {
         if !line.is_char_boundary(i) {
@@ -995,15 +1069,26 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
         match bytes[i] {
             b'[' => {
                 // `[[wikilink]]` — inert as a whole, alias and all.
-                if bytes.get(i + 1) == Some(&b'[')
-                    && let Some(rel) = line[i + 2..].find("]]")
-                {
-                    let end = i + 2 + rel + 2;
-                    zones.push((i, end));
-                    i = end;
-                    continue;
+                if !no_wikilink_close_ahead && bytes.get(i + 1) == Some(&b'[') {
+                    match line[i + 2..].find("]]") {
+                        Some(rel) => {
+                            let end = i + 2 + rel + 2;
+                            zones.push((i, end));
+                            i = end;
+                            continue;
+                        }
+                        None => no_wikilink_close_ahead = true,
+                    }
                 }
-                let close = find_label_close_bracket(&line[i..]);
+                let close = if no_label_close_ahead {
+                    None
+                } else {
+                    let found = find_label_close_bracket(&line[i..]);
+                    if found.is_none() {
+                        no_label_close_ahead = true;
+                    }
+                    found
+                };
                 // `[label](destination)` — internal *or* external.
                 if let Some(close) = close
                     && bytes.get(i + close + 1) == Some(&b'(')
@@ -1018,16 +1103,20 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
                 // and vscode-docs-style bracket conventions — style-guide
                 // placeholders (`[ACCOUNT ROLE]`), PR area tags
                 // (`[typescript-language-features]`), undefined CommonMark
-                // shortcut references — are not links, but injecting
-                // `[[target]]` immediately inside or across one of them
-                // produces nested bracket soup (`[[[typescript]]-language-…`)
-                // that hyalo's own wikilink parser then misreads as a
-                // malformed link. Real corpora: without this, GH Docs and
-                // vscode-docs `broken` counts both increased after
-                // `--apply`. Whatever is inside stays un-auto-linked; a
-                // missed candidate costs nothing, corrupted brackets do.
-                if let Some(close) = close {
-                    let end = i + close + 1;
+                // shortcut references, even escaped `\[…\]` — are not
+                // links, but injecting `[[target]]` immediately inside or
+                // across one of them produces nested bracket soup
+                // (`[[[typescript]]-language-…`) that hyalo's own wikilink
+                // parser then misreads as a malformed link. Nesting is
+                // balanced (`[outer [inner] more]` closes at the final
+                // `]`, review #5), so nothing between the inner and outer
+                // close is left unprotected either. Real corpora: without
+                // this, GH Docs and vscode-docs `broken` counts both
+                // increased after `--apply`. Whatever is inside stays
+                // un-auto-linked; a missed candidate costs nothing,
+                // corrupted brackets do.
+                if let Some(&close_pos) = bracket_matches.get(&i) {
+                    let end = close_pos + 1;
                     zones.push((i, end));
                     i = end;
                     continue;
@@ -1077,62 +1166,100 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
 }
 
 /// Whether `[start, end)` overlaps any range in `zones`.
+///
+/// Requires `zones` to be sorted ascending by start and non-overlapping —
+/// [`inert_link_zones`]'s own output already satisfies this, but a caller
+/// merging zones from more than one source must restore it first (e.g. via
+/// [`merge_zones`]) before calling this. Given that invariant, `end`s are
+/// ascending too, so a single [`slice::partition_point`] binary search
+/// suffices: find the first zone whose end is past `start`, then check
+/// whether *that* zone also starts before `end` (iter-217 review #3 — the
+/// previous linear scan cost O(zones) per candidate match).
 #[must_use]
 pub fn overlaps_zone(zones: &[(usize, usize)], start: usize, end: usize) -> bool {
-    zones.iter().any(|&(zs, ze)| start < ze && end > zs)
+    let idx = zones.partition_point(|&(_, ze)| ze <= start);
+    zones.get(idx).is_some_and(|&(zs, _)| zs < end)
+}
+
+/// Sort `zones` and coalesce any that touch or overlap, in place, so the
+/// result satisfies [`overlaps_zone`]'s ascending-non-overlapping
+/// precondition (iter-217 review #3).
+///
+/// Needed whenever zones from more than one source are combined — e.g.
+/// [`inert_link_zones`]'s own output (already sorted and non-overlapping)
+/// plus a caller's own whole-line zones inserted afterward, which are only
+/// individually sorted, not sorted *together*, and can also nest inside an
+/// existing zone rather than sit beside it.
+pub fn merge_zones(zones: &mut Vec<(usize, usize)>) {
+    if zones.len() < 2 {
+        return;
+    }
+    zones.sort_unstable_by_key(|&(s, _)| s);
+    let mut write = 0;
+    for read in 1..zones.len() {
+        let (rs, re) = zones[read];
+        if rs <= zones[write].1 {
+            zones[write].1 = zones[write].1.max(re);
+        } else {
+            write += 1;
+            zones[write] = (rs, re);
+        }
+    }
+    zones.truncate(write + 1);
 }
 
 // ---------------------------------------------------------------------------
 // CommonMark reference-link inert zones (iter-217, NEW-1)
 // ---------------------------------------------------------------------------
 
-/// Normalize a CommonMark link label for matching a reference usage against
-/// its definition: trim, collapse runs of whitespace to a single space, and
-/// case-fold. This is a practical approximation of the spec's Unicode
-/// case-fold + whitespace-collapse rule — good enough for matching
-/// hand-written and generated documentation, and erring toward *not*
-/// matching (label text stays linkable prose) rather than a spurious match
-/// costs nothing more than a missed inert-zone, never a corruption.
-#[must_use]
-pub(crate) fn normalize_label(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-/// Parse `line` as a CommonMark link reference definition
-/// (`[label]: destination "title"`), returning the normalized label when it
-/// is one.
+/// Whether `line` is a CommonMark link reference definition
+/// (`[label]: destination "title"`).
 ///
 /// Single-line only: the destination and optional title must appear on the
 /// same line as the label. A definition whose destination or title
 /// continues onto a following line is not recognised (out of scope for
 /// iter-217 — uncommon in practice and the corpora exercised here always
-/// write definitions on one line). Up to three leading spaces of indent are
-/// tolerated, matching CommonMark's block-indent allowance. Trailing
-/// garbage after a well-formed title (or after the destination, if there is
-/// no title) means this is not a clean definition line — return `None`
+/// write definitions on one line). Up to three leading space/tab *bytes*
+/// are tolerated as indent (not CommonMark's column-based block-indent
+/// rule, which treats a tab as advancing to the next multiple of 4 — a tab
+/// costs 1 here, so `\t\t\t\t[ref]: url` is accepted when strict CommonMark
+/// would reject it as an indented code block; review #13, harmless in
+/// practice since real definitions are not tab-indented). Trailing garbage
+/// after a well-formed title (or after the destination, if there is no
+/// title) means this is not a clean definition line — return `false`
 /// rather than guess, so real prose containing a bracket is not blanked.
+///
+/// The caller only needs a yes/no answer (whether to treat the whole line
+/// as inert), so this returns `bool` rather than the parsed label — review
+/// #7, following the removal of the only consumer that needed the label
+/// text itself.
 #[must_use]
-pub(crate) fn parse_reference_definition_label(line: &str) -> Option<String> {
+pub(crate) fn parse_reference_definition_label(line: &str) -> bool {
+    // `line` comes from a `\n`-split iterator, so on a CRLF file it still
+    // carries a trailing `\r` — left in, the final `i != bytes.len()` check
+    // always fails (the trailing-whitespace loops below only skip space/tab,
+    // never `\r`), so no CRLF file's definition lines were ever recognised;
+    // review finding #1.
+    let line = line.trim_end_matches(['\r', '\n']);
     let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
     if indent > 3 {
-        return None;
+        return false;
     }
     let rest = &line[indent..];
     let bytes = rest.as_bytes();
     if bytes.first() != Some(&b'[') {
-        return None;
+        return false;
     }
-    let close = find_label_close_bracket(&rest[1..])?;
+    let Some(close) = find_label_close_bracket(&rest[1..]) else {
+        return false;
+    };
     let label_raw = &rest[1..=close];
     if label_raw.trim().is_empty() {
-        return None;
+        return false;
     }
     let after_close = 1 + close + 1; // byte offset right after ']'
     if bytes.get(after_close) != Some(&b':') {
-        return None;
+        return false;
     }
 
     let mut i = after_close + 1;
@@ -1141,12 +1268,14 @@ pub(crate) fn parse_reference_definition_label(line: &str) -> Option<String> {
     }
     if i >= bytes.len() {
         // No destination on this line — a multi-line definition, out of scope.
-        return None;
+        return false;
     }
 
     // Destination: angle-bracket form or a bare run up to the next whitespace.
     if bytes[i] == b'<' {
-        let close_angle = rest[i + 1..].find('>')?;
+        let Some(close_angle) = rest[i + 1..].find('>') else {
+            return false;
+        };
         i += 1 + close_angle + 1;
     } else {
         let dest_start = i;
@@ -1154,7 +1283,7 @@ pub(crate) fn parse_reference_definition_label(line: &str) -> Option<String> {
             i += 1;
         }
         if i == dest_start {
-            return None;
+            return false;
         }
     }
 
@@ -1167,25 +1296,25 @@ pub(crate) fn parse_reference_definition_label(line: &str) -> Option<String> {
         match bytes[i] {
             q @ (b'"' | b'\'') => {
                 let quote = q as char;
-                let close_rel = rest[i + 1..].find(quote)?;
+                let Some(close_rel) = rest[i + 1..].find(quote) else {
+                    return false;
+                };
                 i += 1 + close_rel + 1;
             }
             b'(' => {
-                let close_rel = rest[i + 1..].find(')')?;
+                let Some(close_rel) = rest[i + 1..].find(')') else {
+                    return false;
+                };
                 i += 1 + close_rel + 1;
             }
-            _ => return None, // trailing content that isn't a title: not a clean definition
+            _ => return false, // trailing content that isn't a title: not a clean definition
         }
         while matches!(bytes.get(i), Some(b' ' | b'\t')) {
             i += 1;
         }
     }
 
-    if i != bytes.len() {
-        return None; // trailing garbage after the title
-    }
-
-    Some(normalize_label(label_raw))
+    i == bytes.len() // false if there is trailing garbage after the title
 }
 
 // Reference-link *usages* (`[label][ref]`, `[ref][]`, shortcut `[ref]`,
@@ -1513,6 +1642,30 @@ mod tests {
     }
 
     #[test]
+    fn unterminated_tag_or_liquid_does_not_blank_the_next_line_in_a_block() {
+        // iter-217 review #4: `inert_link_zones` is now called with a whole
+        // paragraph block's `\n`-joined text, not always a single physical
+        // line. An unterminated `<b` or `{%` used to fall back to
+        // `line.len()` — the end of the *whole block* — silently blanking
+        // every following line's real candidates too. The fallback must be
+        // clamped to the end of the physical line the marker started on.
+        assert!(!needle_is_inert(
+            "Compare a <b and c.\nMention net here.",
+            "net"
+        ));
+        assert!(!needle_is_inert(
+            "Start {% ifversion x\nMention net here.",
+            "net"
+        ));
+        assert!(!needle_is_inert(
+            "<img src=\"x\" alt=\"wraps\nMention net here.",
+            "net"
+        ));
+        // The unterminated marker itself must still be inert on its own line.
+        assert!(needle_is_inert("Compare a <b and net here.\nMore.", "net"));
+    }
+
+    #[test]
     fn inert_zone_still_recognizes_autolinks_before_html_tags() {
         // `<https://…>` must stay an autolink zone, not be eaten as a tag.
         let zones = inert_link_zones("Auto: <https://example.net/p> done");
@@ -1529,6 +1682,153 @@ mod tests {
         for pair in zones.windows(2) {
             assert!(pair[0].1 <= pair[1].0, "zones must be disjoint: {zones:?}");
         }
+    }
+
+    // --- iter-217 review #5/#6: nested and escaped generic bracket spans ---
+
+    #[test]
+    fn generic_bracket_zone_balances_nested_brackets() {
+        // A title-length word between the inner close and the outer close
+        // must stay protected too — the whole `[outer [inner] ...]` run is
+        // one construct, not just up to the first `]`.
+        assert!(needle_is_inert(
+            "See [outer [inner] widget stuff] here.",
+            "widget"
+        ));
+        let line = "See [outer [inner] widget stuff] here.";
+        let zones = inert_link_zones(line);
+        let outer_start = line.find("[outer").unwrap();
+        let outer_end = line.find("stuff]").unwrap() + "stuff]".len();
+        assert!(
+            zones
+                .iter()
+                .any(|&(s, e)| s == outer_start && e == outer_end),
+            "expected one zone spanning the whole outer bracket: {zones:?}"
+        );
+    }
+
+    #[test]
+    fn generic_bracket_zone_covers_escaped_brackets_too() {
+        // `\[...\]` is not real CommonMark link syntax (it renders as
+        // literal brackets), but the raw source still has bracket
+        // characters a user chose to write there — inserting `[[...]]`
+        // markup touching or inside them is exactly the corruption this
+        // zone exists to prevent, real link or not.
+        assert!(needle_is_inert(r"\[widget config\]", "widget"));
+    }
+
+    #[test]
+    fn generic_bracket_zone_still_lets_unclosed_brackets_stay_literal() {
+        // No matching `]` anywhere: the `[` is just a literal character,
+        // not a zone, and the word after it is still a real candidate.
+        assert!(!needle_is_inert("stray [ opener with net later", "net"));
+    }
+
+    #[test]
+    fn generic_bracket_zone_scan_is_not_quadratic_on_many_unclosed_openers() {
+        // iter-217 review #2: a block with many `[` that never close used
+        // to re-scan to the end of the block for every single one
+        // (O(n^2); measured 11.5s on a 32k-line block in review). This
+        // must complete quickly and still find the real mention after all
+        // the noise.
+        let mut line = "[".repeat(50_000);
+        line.push_str(" net");
+        let start = std::time::Instant::now();
+        let zones = inert_link_zones(&line);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "inert_link_zones took too long on many unclosed openers: {:?}",
+            start.elapsed()
+        );
+        let net_start = line.rfind("net").unwrap();
+        assert!(
+            !overlaps_zone(&zones, net_start, net_start + 3),
+            "the real mention after 50,000 unclosed '[' must still be a candidate"
+        );
+    }
+
+    // --- iter-217 review #3: overlaps_zone binary search + merge_zones ---
+
+    #[test]
+    fn overlaps_zone_binary_search_matches_linear_semantics() {
+        let zones = vec![(0, 5), (10, 20), (25, 30)];
+        assert!(overlaps_zone(&zones, 0, 5));
+        assert!(overlaps_zone(&zones, 12, 15));
+        assert!(overlaps_zone(&zones, 4, 11)); // straddles a gap into a zone
+        assert!(!overlaps_zone(&zones, 5, 10)); // exactly the gap
+        assert!(!overlaps_zone(&zones, 20, 25));
+        assert!(!overlaps_zone(&zones, 30, 40));
+    }
+
+    #[test]
+    fn merge_zones_coalesces_overlapping_and_nested_ranges() {
+        let mut zones = vec![(10, 20), (0, 100), (5, 12), (150, 160)];
+        merge_zones(&mut zones);
+        assert_eq!(zones, vec![(0, 100), (150, 160)]);
+    }
+
+    #[test]
+    fn merge_zones_leaves_disjoint_ranges_alone() {
+        let mut zones = vec![(10, 20), (0, 5), (30, 40)];
+        merge_zones(&mut zones);
+        assert_eq!(zones, vec![(0, 5), (10, 20), (30, 40)]);
+    }
+
+    #[test]
+    fn overlaps_zone_after_merge_finds_a_position_inside_a_formerly_nested_zone() {
+        // The exact shape from auto_link.rs: a whole-line definition zone
+        // (0, 100) plus a `[ref]` bracket sub-zone (5, 12) that nests
+        // inside it, pushed in the "wrong" (unsorted-together) order.
+        let mut zones = vec![(5, 12), (0, 100)];
+        merge_zones(&mut zones);
+        assert!(overlaps_zone(&zones, 7, 9), "must find the nested position");
+        assert!(
+            overlaps_zone(&zones, 50, 55),
+            "must find any other position inside the merged span"
+        );
+    }
+
+    // --- iter-217 review #1: CRLF definition lines ---
+
+    #[test]
+    fn reference_definition_recognised_on_a_crlf_line() {
+        assert!(parse_reference_definition_label(
+            "[Gamma]: https://example.com/g \"Gamma page\"\r"
+        ));
+        assert!(parse_reference_definition_label(
+            "[Gamma]: https://example.com/g\r\n"
+        ));
+    }
+
+    // --- direct unit tests for parse_reference_definition_label ---
+
+    #[test]
+    fn reference_definition_label_accepts_all_documented_forms() {
+        assert!(parse_reference_definition_label("[ref]: /url"));
+        assert!(parse_reference_definition_label("[ref]: /url \"title\""));
+        assert!(parse_reference_definition_label("[ref]: /url 'title'"));
+        assert!(parse_reference_definition_label("[ref]: /url (title)"));
+        assert!(parse_reference_definition_label(
+            "[ref]: <a url with spaces>"
+        ));
+        assert!(parse_reference_definition_label("   [ref]: /url")); // 3-space indent
+    }
+
+    #[test]
+    fn reference_definition_label_rejects_non_definitions() {
+        assert!(!parse_reference_definition_label(
+            "Mentioned as [Gamma] in prose."
+        ));
+        assert!(!parse_reference_definition_label(
+            "[ref](inline-link-not-a-definition)"
+        ));
+        assert!(!parse_reference_definition_label("    [ref]: /url")); // 4-space indent: too much
+        assert!(!parse_reference_definition_label(
+            "[ref]: /url trailing garbage"
+        ));
+        assert!(!parse_reference_definition_label("[]: /url")); // empty label
+        assert!(!parse_reference_definition_label("[ref]:")); // no destination
+        assert!(!parse_reference_definition_label("not a definition at all"));
     }
 
     // --- .md suffix stripping (Obsidian compatibility) ---

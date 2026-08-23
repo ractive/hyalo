@@ -215,6 +215,16 @@ fn build_title_inventory(
         }
     };
 
+    // A `link_target` (stem) that maps to 2+ different source files is
+    // ambiguous even when the *title keys* are distinct — see the note
+    // below, past the loop, for why. Populated in the same pass as
+    // `try_insert` above (iter-217 review #8): a separate second loop over
+    // `entries` re-ran the same `--exclude-target-glob` match and
+    // `stem_from_rel` call for every entry just to build this; folding it
+    // in reuses both. Keys/values borrow from `entries` — nothing here
+    // needs to outlive this function.
+    let mut target_sources: HashMap<&str, HashSet<&str>> = HashMap::new();
+
     for entry in entries {
         let rel = &entry.rel_path;
 
@@ -227,6 +237,7 @@ fn build_title_inventory(
 
         // 1. Filename stem.
         let stem = stem_from_rel(rel);
+        target_sources.entry(stem).or_default().insert(rel.as_str());
         try_insert(
             stem,
             TitleEntry {
@@ -283,48 +294,33 @@ fn build_title_inventory(
         .filter_map(|(k, v)| v.map(|entry| (k, entry)))
         .collect();
 
-    // Second pass: a `link_target` (stem) that maps to 2+ different source
-    // files is ambiguous even when the *title keys* are distinct.  For
-    // example, `projects/apple.md` (title "Apple Inc") and
-    // `companies/apple.md` (title "Apple Company") both generate
-    // `link_target = "apple"` — emitting `[[apple]]` would be wrong.
-    //
-    // Computed from `entries` directly (every non-excluded file's own stem),
-    // not from `title_map.values()` (iter-217, NEW-4 real-corpus gap): a
-    // conflicting file's own title-map entries can vanish from `title_map`
-    // for a completely unrelated reason — e.g. its title collides
-    // first-pass with a *third* file's identical title — which would hide
-    // that file's stem contribution from a check keyed off survivors alone.
-    // On GitHub Docs, `rest/pulls/pulls.md` and `rest/pulls/index.md` share
-    // the exact title "REST API endpoints for pull requests", so
+    // A target with 2+ distinct sources is ambiguous even when the *title
+    // keys* that led to it are distinct. For example, `projects/apple.md`
+    // (title "Apple Inc") and `companies/apple.md` (title "Apple Company")
+    // both generate `link_target = "apple"` — emitting `[[apple]]` would be
+    // wrong. `target_sources` (built above, from `entries` directly rather
+    // than from `title_map.values()`) is what makes this visible even when
+    // a conflicting file's own title-map entries vanished for a completely
+    // unrelated reason — e.g. its title collides first-pass with a *third*
+    // file's identical title, which would hide its stem contribution from
+    // a check keyed off survivors alone (iter-217, NEW-4 real-corpus gap:
+    // `rest/pulls/pulls.md` and `rest/pulls/index.md` share the exact title
+    // "REST API endpoints for pull requests" on GitHub Docs, so
     // `rest/pulls/pulls.md`'s title entry never reached `title_map` — but
-    // its plain stem `pulls` still collided with `graphql/reference/pulls.md`,
-    // and that collision has to be visible regardless of what else happened
-    // to either file's title.
-    let mut target_sources: HashMap<String, HashSet<String>> = HashMap::new();
-    for entry in entries {
-        let rel = &entry.rel_path;
-        if let Some(ref gs) = glob_set
-            && gs.is_match(rel)
-        {
-            continue;
-        }
-        target_sources
-            .entry(stem_from_rel(rel).to_owned())
-            .or_default()
-            .insert(rel.clone());
-    }
-    let ambiguous_targets: HashSet<String> = target_sources
+    // its plain stem `pulls` still collided with
+    // `graphql/reference/pulls.md`, and that collision has to be visible
+    // regardless of what else happened to either file's title).
+    let ambiguous_targets: HashSet<&str> = target_sources
         .into_iter()
         .filter(|(_, sources)| sources.len() > 1)
         .map(|(target, _)| target)
         .collect();
 
     if !ambiguous_targets.is_empty() {
-        title_map.retain(|_, entry| !ambiguous_targets.contains(&entry.link_target));
+        title_map.retain(|_, entry| !ambiguous_targets.contains(entry.link_target.as_str()));
         for target in &ambiguous_targets {
             if !ambiguous.iter().any(|a| a.eq_ignore_ascii_case(target)) {
-                ambiguous.push(target.clone());
+                ambiguous.push((*target).to_owned());
             }
         }
     }
@@ -718,37 +714,51 @@ struct LineBlock<'a> {
     text: String,
 }
 
-/// Split `content` into [`LineBlock`]s, marking every line that is itself a
-/// CommonMark reference-link definition (`[ref]: url "title"`).
+/// Call `f` once for each paragraph-like [`LineBlock`] in `content`, in
+/// document order, marking every line that is itself a CommonMark
+/// reference-link definition (`[ref]: url "title"`).
+///
+/// Blocks are yielded — and dropped — one at a time rather than
+/// materialized into a `Vec` up front (iter-217 review #10): a file's
+/// blocks together hold roughly a second copy of its non-frontmatter,
+/// non-fenced content (the `LineBlock::text` fields), so streaming caps
+/// memory at one paragraph instead of the whole file.
 ///
 /// Frontmatter, fenced code, and comment-fence lines are excluded from every
 /// block, as are blank and heading lines (which end the current block
 /// without joining it, matching [`crate::scanner::is_block_boundary`]).
 /// Reuses [`LineScanner`] for cross-line code-span / HTML-comment blanking
 /// (iter-183 L-3/L-15).
-fn build_blocks(content: &str) -> Vec<LineBlock<'_>> {
-    let mut blocks = Vec::new();
+fn for_each_block<'a>(content: &'a str, mut f: impl FnMut(&LineBlock<'a>)) {
     let mut scanner = LineScanner::new();
-    let mut current: Option<LineBlock<'_>> = None;
+    let mut current: Option<LineBlock<'a>> = None;
+
+    // A local macro rather than a closure: the block being flushed needs to
+    // be handed to `f` (itself a closure) while `current` is mutably
+    // borrowed to take it out, which a second closure capturing both
+    // `current` and `f` cannot do without extra indirection.
+    macro_rules! flush_current {
+        () => {
+            if let Some(b) = current.take() {
+                f(&b);
+            }
+        };
+    }
 
     for (line, rest) in lines_with_rest(content) {
         let LineClass::Body(body) = scanner.classify(line, rest) else {
-            if let Some(b) = current.take() {
-                blocks.push(b);
-            }
+            flush_current!();
             continue;
         };
 
         if crate::scanner::is_block_boundary(line) {
-            if let Some(b) = current.take() {
-                blocks.push(b);
-            }
+            flush_current!();
             continue;
         }
 
         let cleaned = body.cleaned(line, rest);
         let cleaned_str: &str = cleaned.as_ref();
-        let is_definition = crate::links::parse_reference_definition_label(cleaned_str).is_some();
+        let is_definition = crate::links::parse_reference_definition_label(cleaned_str);
 
         let block = current.get_or_insert_with(|| LineBlock {
             lines: Vec::new(),
@@ -758,6 +768,17 @@ fn build_blocks(content: &str) -> Vec<LineBlock<'_>> {
             block.text.push('\n');
         }
         let block_offset = block.text.len();
+        // `scan_file_for_matches` slices `block.text[bl.block_offset..bl
+        // .block_offset + bl.line.len()]` to recover each line's cleaned
+        // form — that only stays in bounds and byte-aligned because
+        // blanking substitutes spaces 1:1 and never changes length.
+        // Nothing enforces that at the type level, so assert it here where
+        // the invariant is created (iter-217 review #9).
+        debug_assert_eq!(
+            cleaned_str.len(),
+            line.len(),
+            "cleaned line must be the same byte length as the original"
+        );
         block.text.push_str(cleaned_str);
         block.lines.push(BlockLine {
             line_num: scanner.line_num(),
@@ -766,11 +787,7 @@ fn build_blocks(content: &str) -> Vec<LineBlock<'_>> {
             is_definition,
         });
     }
-    if let Some(b) = current.take() {
-        blocks.push(b);
-    }
-
-    blocks
+    flush_current!();
 }
 
 /// Scan a single file's content for unlinked title mentions, returning all
@@ -794,19 +811,27 @@ fn scan_file_for_matches(
     patterns_sorted: &[(&str, &TitleEntry)],
 ) -> Vec<AutoLinkMatch> {
     let mut results = Vec::new();
-    let blocks = build_blocks(content);
 
-    for block in &blocks {
+    for_each_block(content, |block| {
         // ---- Zones that are syntactically part of a link or tag
         // (iter-200 H-2, iter-207 BUG-2/BUG-3, iter-217 NEW-1/NEW-2/NEW-10) ----
         let mut zones_block = crate::links::inert_link_zones(&block.text);
         // A reference-link definition line is inert in its entirety, label
         // through title, even when its shape doesn't exactly match the
         // lenient parser's expectations for the destination/title spans.
+        let had_definition_line = block.lines.iter().any(|bl| bl.is_definition);
         for bl in &block.lines {
             if bl.is_definition {
                 zones_block.push((bl.block_offset, bl.block_offset + bl.line.len()));
             }
+        }
+        // The pushes above are only individually sorted (by line order),
+        // not sorted together with `inert_link_zones`'s own output, and a
+        // definition line's whole-line zone nests around its own `[ref]`
+        // bracket sub-zone rather than sitting beside it — `overlaps_zone`
+        // requires ascending, non-overlapping zones (iter-217 review #3).
+        if had_definition_line {
+            crate::links::merge_zones(&mut zones_block);
         }
 
         for bl in &block.lines {
@@ -849,6 +874,19 @@ fn scan_file_for_matches(
                 // Use original line text for the matched_text (preserves casing).
                 let matched_text = line.get(start..end).unwrap_or(&cleaned_str[start..end]);
 
+                // A title/alias containing `|` or `]]` would make
+                // `wikilink_replacement_text`'s alias form
+                // (`[[target|matched_text]]`) itself malformed — a stray
+                // `|` shifts where the alias is read from, and `]]` closes
+                // the wikilink early, leaking the rest of `matched_text` as
+                // trailing garbage. Titles are unlikely to contain either,
+                // but nothing stops one from doing so, and this is exactly
+                // the class of self-inflicted bracket corruption the rest
+                // of this scanner exists to prevent (iter-217 review #12).
+                if matched_text.contains('|') || matched_text.contains("]]") {
+                    continue;
+                }
+
                 // `col` counts Unicode scalars, not bytes (iter-210). `start`
                 // indexes the cleaned line, which preserves the original line's
                 // byte layout, so the original text is the right thing to count
@@ -869,7 +907,7 @@ fn scan_file_for_matches(
                 });
             }
         }
-    }
+    });
 
     results
 }
@@ -1304,6 +1342,52 @@ mod tests {
             "only the body mention should match"
         );
         assert_eq!(report.matches[0].line, 3);
+    }
+
+    #[test]
+    fn heading_skip_uses_commonmark_atx_rules_not_a_bare_hash_prefix() {
+        // iter-217 review #11: the heading skip changed from "line starts
+        // with #, trimmed" to `crate::scanner::is_block_boundary`, reused
+        // for paragraph-block scoping. That's a real behavior change: a
+        // line starting with `#` but not shaped like an ATX heading (no
+        // space after the hashes) is no longer treated as a heading, and
+        // is scanned as ordinary body text. Documented in CHANGELOG.md.
+        let page = make_entry("target.md", vec![]);
+        let other = make_entry("notes.md", vec![]);
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "target.md", "");
+        write_file(
+            &tmp,
+            "notes.md",
+            "#nothash mentions target here.\n## Real Heading mentions target too\n",
+        );
+
+        let index = MockIndex::new(vec![page, other]);
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        // `#nothash` (no space after `#`) is not a CommonMark ATX heading —
+        // it is scanned as body text, so its mention matches. `## Real
+        // Heading` is a real heading and stays skipped.
+        assert_eq!(
+            report.matches.len(),
+            1,
+            "only the non-heading line's mention should match: {:?}",
+            report.matches
+        );
+        assert_eq!(report.matches[0].line, 1);
     }
 
     // -----------------------------------------------------------------
@@ -3107,5 +3191,97 @@ mod tests {
             written, "See [[target]] for details.\n",
             "an exact match must stay a plain wikilink, no alias noise"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // iter-217 review #12: a matched surface text containing `|` or `]]`
+    // would make the alias-emission replacement itself malformed.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn matched_text_containing_a_pipe_is_never_linked() {
+        // An alias "a|b" for `target.md`, mentioned verbatim in prose: the
+        // alias form would be `[[target|a|b]]`, where the extra `|` shifts
+        // what a reader (or hyalo's own parser) treats as the alias.
+        let page = make_entry(
+            "target.md",
+            vec![(
+                "aliases",
+                Value::Array(vec![Value::String("a|b".to_owned())]),
+            )],
+        );
+        let other = make_entry("notes.md", vec![]);
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "target.md", "");
+        let body = "See a|b for details.\n";
+        write_file(&tmp, "notes.md", body);
+
+        let index = MockIndex::new(vec![page, other]);
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: true,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.matches.is_empty(),
+            "matched text containing '|' must never be linked: {:?}",
+            report.matches
+        );
+        let written = std::fs::read_to_string(tmp.path().join("notes.md")).unwrap();
+        assert_eq!(written, body, "the file must be byte-identical after apply");
+    }
+
+    #[test]
+    fn matched_text_containing_a_double_close_bracket_is_never_linked() {
+        // An alias "x]]y": the alias form would be `[[target|x]]y]]`, where
+        // the first `]]` closes the wikilink early and leaks "y]]" as
+        // trailing garbage — exactly the bracket corruption this whole
+        // scanner exists to prevent.
+        let page = make_entry(
+            "target.md",
+            vec![(
+                "aliases",
+                Value::Array(vec![Value::String("x]]y".to_owned())]),
+            )],
+        );
+        let other = make_entry("notes.md", vec![]);
+        let tmp = TempDir::new().unwrap();
+        write_file(&tmp, "target.md", "");
+        let body = "See x]]y for details.\n";
+        write_file(&tmp, "notes.md", body);
+
+        let index = MockIndex::new(vec![page, other]);
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: true,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: false,
+                exclude_target_globs: &[],
+                file_filter: Some("notes.md"),
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.matches.is_empty(),
+            "matched text containing ']]' must never be linked: {:?}",
+            report.matches
+        );
+        let written = std::fs::read_to_string(tmp.path().join("notes.md")).unwrap();
+        assert_eq!(written, body, "the file must be byte-identical after apply");
     }
 }
