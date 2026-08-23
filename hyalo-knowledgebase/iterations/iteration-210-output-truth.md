@@ -12,6 +12,7 @@ tags:
 related:
   - "[[dogfood-results/dogfood-v0210-pre2-integrity-wave]]"
   - "[[iterations/iteration-204-dogfood-low-batch]]"
+  - "[[iterations/iteration-208a-links-output-and-hint-ux]]"
 ---
 
 # Iteration 210 — output truth (lint/links JSON counters, hints, error parity)
@@ -93,6 +94,16 @@ decision.
       `links --help`; either way add a multibyte-line e2e pinning it.
 - [ ] Give `links`, `views`, and `lint-rules list` at least one useful
       drill-down hint each, correctly classified read-only vs `[writes]`.
+- [ ] (from superseded iter-208a) Redesign `links` text-output ordering so
+      the actionable buckets (unfixable, out-of-vault, case mismatches)
+      are not buried under thousands of per-link fix lines — decide the
+      layout against real GitHub Docs/MDN output and record a DEC; surface
+      `out_of_vault_links`/`unfixable_links` in text output when
+      non-empty, not just JSON.
+- [ ] (from superseded iter-208a) De-duplicate hint listings that repeat
+      the same long `--index-file <path>` 4-5 times; make the
+      `[types.note]` config error suggest `hyalo types set` as the fix
+      path.
 
 ## Acceptance criteria
 
@@ -107,6 +118,8 @@ decision.
 - [ ] Every hint emitted by `lint`, `find`, `links`, `views`, and
       `lint-rules list` executes successfully verbatim (extend the
       executed-hint gate)
+- [ ] A GitHub Docs scratch-copy `links fix` text run shows out-of-vault
+      and unfixable counts without scrolling past the per-link fix lines
 - [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 

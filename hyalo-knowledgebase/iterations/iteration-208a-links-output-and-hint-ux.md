@@ -2,7 +2,7 @@
 title: Iteration 208 — links output ordering and hint/message UX residue
 type: iteration
 date: 2026-08-22
-status: planned
+status: superseded
 branch: iter-208/links-output-and-hint-ux
 tags:
   - iteration
@@ -16,6 +16,18 @@ related:
 ---
 
 # Iteration 208 — links output ordering and hint/message UX residue
+
+## Superseded — 2026-08-23 disposition
+
+Renumbered 208 → 208a and folded into the dogfood-v0.21.0-pre2 wave so the
+post-release loop range (210-214) stays contiguous:
+
+- Text-output ordering, surfacing `out_of_vault`/`unfixable` in text, the
+  repeated `--index-file` hint path, and the `[types.note]` error's
+  `hyalo types set` suggestion → [[iterations/iteration-210-output-truth]].
+- `config_excluded` wording/semantics → [[iterations/iteration-213-config-ux-polish]]
+  (the 2026-08-23 dogfood found the deeper bug: it counts titles, not
+  suppressed candidates).
 
 ## Goal
 

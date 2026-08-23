@@ -84,6 +84,11 @@ and BUG-14:
       truncation footer to `tags --limit`; suppress the stale
       malformed-config warning once `--dir` has switched vaults; unify
       hint flag placement.
+- [ ] (from superseded iter-207a) Update `md047_fix`'s doc comment in
+      `crates/hyalo-mdlint/src/engine.rs` (and
+      [[docs/upstream-mdbook-lint-reports]] if any "not filed" language
+      remains) to cross-reference the filed upstream issue
+      joshrotenberg/mdbook-lint#495.
 - [ ] Docs/help/CHANGELOG sync for every behavior change above; extend
       the executed-hint and command-reference xtask gates where they
       apply.

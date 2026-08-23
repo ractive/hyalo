@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 207 — post mdbook-lint 0.16.0 follow-up (upstream #456 comment, MD047 CRLF issue)"
 date: 2026-08-22
-status: planned
+status: superseded
 tags:
   - iteration
   - upstream
@@ -16,6 +16,19 @@ related:
 ---
 
 # Iteration 207 — post mdbook-lint 0.16.0 follow-up (upstream #456 comment, MD047 CRLF issue)
+
+## Superseded — 2026-08-23 disposition
+
+Renumbered 207 → 207a to free the number for
+[[iterations/iteration-207-inert-zone-completion]] (release blocker; the
+`iteration-207-*` plan glob must be unambiguous). Substance resolved the
+day after filing:
+
+- The MD047 CRLF issue was filed, user-authorized, as
+  [joshrotenberg/mdbook-lint#495](https://github.com/joshrotenberg/mdbook-lint/issues/495).
+- The #456 follow-up comment was **dropped by user choice** — do not post.
+- The remaining `md047_fix` code-comment cross-reference to #495 is folded
+  into [[iterations/iteration-213-config-ux-polish]].
 
 ## Goal
 
