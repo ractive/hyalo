@@ -821,6 +821,59 @@ mod tests {
     }
 
     #[test]
+    fn lexically_normalize_collapses_traversal_without_touching_disk() {
+        assert_eq!(
+            lexically_normalize(Path::new("/repo/docs/../../CHANGELOG.md")),
+            std::path::PathBuf::from("/CHANGELOG.md")
+        );
+        assert_eq!(
+            lexically_normalize(Path::new("/repo/./a/b/../CHANGELOG.md")),
+            std::path::PathBuf::from("/repo/a/CHANGELOG.md")
+        );
+        // A `..` with nothing left to pop is kept, so the rendered path never
+        // silently claims a location above the filesystem root.
+        assert_eq!(
+            lexically_normalize(Path::new("../CHANGELOG.md")),
+            std::path::PathBuf::from("../CHANGELOG.md")
+        );
+    }
+
+    /// The refusal must carry the two-path form: the resolved destination in
+    /// the message, the raw config value as the error's `path`.
+    #[test]
+    fn resolve_changelog_target_refuses_an_escaping_config_path() {
+        let outcome = resolve_changelog_target(
+            Path::new("/repo/docs"),
+            Path::new("/repo"),
+            Some("../CHANGELOG.md"),
+            Format::Json,
+        );
+        let ChangelogTarget::Refused(CommandOutcome::UserError(rendered)) = outcome else {
+            panic!("an escaping [changelog] path must be refused");
+        };
+        assert!(
+            rendered.contains("resolves outside vault boundary"),
+            "got: {rendered}"
+        );
+        assert!(rendered.contains("/CHANGELOG.md"), "got: {rendered}");
+        assert!(rendered.contains("../CHANGELOG.md"), "got: {rendered}");
+    }
+
+    #[test]
+    fn resolve_changelog_target_passes_a_bounded_path_through() {
+        let outcome = resolve_changelog_target(
+            Path::new("/repo/docs"),
+            Path::new("/repo"),
+            Some("CHANGELOG.md"),
+            Format::Json,
+        );
+        let ChangelogTarget::Path(path) = outcome else {
+            panic!("a bounded [changelog] path must resolve");
+        };
+        assert_eq!(path, std::path::PathBuf::from("/repo/CHANGELOG.md"));
+    }
+
+    #[test]
     fn resolve_changelog_file_rejects_absolute_path() {
         let dir = Path::new("/repo/docs");
         let config_dir = Path::new("/repo");
