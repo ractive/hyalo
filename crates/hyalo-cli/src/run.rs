@@ -720,7 +720,13 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
-        crate::config::emit_config_diagnostics(&effective);
+        // UX-3 (dogfood pre3): every other command relies on this stderr
+        // warning as the only signal that its config is unusable, but
+        // `hyalo config` itself already leads its own report body with the
+        // identical diagnostic (`malformed`/`parse_error` in JSON, the
+        // `malformed: true` block in text) — printing it a second time here
+        // added nothing but noise for the one command whose entire purpose is
+        // to show it.
         let report = crate::commands::config::collect_config_report(
             &cwd,
             effective,

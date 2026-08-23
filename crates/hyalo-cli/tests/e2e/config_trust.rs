@@ -216,6 +216,72 @@ fn dir_to_a_tree_with_its_own_config_names_that_file() {
     );
 }
 
+/// NEW-17 (dogfood pre3): `--dir .` naming the config's own root (not its
+/// configured vault) used to print the identical `./.hyalo.toml` path on
+/// both halves of one sentence — "does not apply" and "is in effect" about
+/// the very same file. It must say the file is still governing the run
+/// instead of contradicting itself.
+#[test]
+fn dir_dot_at_the_config_root_does_not_contradict_itself() {
+    let tmp = TempDir::new().unwrap();
+    build_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["summary", "--dir", ".", "--format", "json"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !(stderr.contains("does not apply") && stderr.contains("is in effect")),
+        "must not claim the same file both does not apply and is in effect: {stderr}"
+    );
+    assert!(
+        stderr.contains("still in effect"),
+        "expected the file to be named as still governing the run: {stderr}"
+    );
+}
+
+/// NEW-17 (dogfood pre3): `--dir <foreign-subdir>` used to check only that
+/// exact directory for a `.hyalo.toml`, so a subdirectory of an unrelated
+/// tree with its *own* ancestor config reported "no .hyalo.toml — built-in
+/// defaults" — even though `cd`-ing into that same subdirectory and running
+/// the identical command would have silently adopted the ancestor config.
+#[test]
+fn dir_to_a_foreign_subdir_adopts_its_own_ancestor_config() {
+    let tmp = TempDir::new().unwrap();
+    // No config at `tmp` itself — the run's own CWD config is built-in
+    // defaults, so nothing here is "shadowed"; this is purely about whether
+    // `--dir` discovers the *target* tree's ancestor config.
+    let other = tmp.path().join("other");
+    fs::create_dir_all(other.join("deep/sub")).unwrap();
+    fs::write(other.join(".hyalo.toml"), "site_prefix = \"adopted\"\n").unwrap();
+    write_md(&other, "c.md", "---\ntitle: C\n---\n# C\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "config",
+            "--dir",
+            other.join("deep/sub").to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let json = envelope(&output.stdout, &output.stderr);
+    assert_eq!(
+        json["results"]["site_prefix"].as_str(),
+        Some("adopted"),
+        "the foreign subdir's own ancestor config must be adopted: {json}"
+    );
+    assert_eq!(
+        json["results"]["malformed"].as_bool(),
+        Some(false),
+        "must not report built-in defaults when an ancestor config exists: {json}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // H-4 — `hyalo config` tells the truth and emits runnable hints
 // ---------------------------------------------------------------------------

@@ -35,6 +35,10 @@ pub(crate) struct ConfigReport {
     /// stderr — before iter-213 `hyalo config` exited 0 with populated defaults
     /// and said nothing (dogfood UX-2).
     pub malformed: Option<String>,
+    /// `true` when [`Self::dir`] was recovered from the malformed file rather
+    /// than defaulted, so the "every value below is a built-in default" note
+    /// can say `dir` is the exception (NEW-17, dogfood pre3).
+    pub dir_salvaged: bool,
     /// Current working directory.
     pub cwd: PathBuf,
     /// Resolved vault directory: the effective directory the CLI would use —
@@ -135,6 +139,7 @@ pub(crate) fn collect_config_report(
         config_path,
         raw_contents,
         malformed: resolved.malformed,
+        dir_salvaged: resolved.dir_salvaged,
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
@@ -211,6 +216,10 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             // diagnostic that was previously stderr-only.
             "malformed": report.malformed.is_some(),
             "parse_error": report.malformed,
+            // `true` when `dir` below was salvaged from an otherwise
+            // unusable file rather than defaulted (NEW-17, dogfood pre3) —
+            // meaningful only alongside `malformed: true`.
+            "dir_salvaged": report.dir_salvaged,
             // Only present with --raw; `null` otherwise so the key's shape
             // never changes between invocations.
             "raw_contents": report.raw_contents,
@@ -308,11 +317,27 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     // Lead with the integrity problem: when the config did not parse, every
     // line below it is a built-in default rather than a configured value, and
     // reading them as "the effective configuration" is the mistake to prevent.
+    //
+    // NEW-17 (dogfood pre3): `dir` is the one exception — a lenient re-read
+    // salvages it from the broken file when possible (see `salvage_dir`), so
+    // claiming it is a "built-in default" alongside everything else
+    // contradicts the `dir: <value>` line printed right below. Say so only
+    // when a value was actually salvaged *and* the printed `dir` is that
+    // salvaged value: an unclosed table or invalid UTF-8 fails even the
+    // lenient re-read (`dir` really is defaulted then), and a `--dir`
+    // override replaces the printed `dir` with the flag's own text — the
+    // salvaged value is no longer what is on screen, so the note would be
+    // pointing at the wrong line.
     let malformed_str = match report.malformed.as_deref() {
         Some(diagnostic) => format!(
             "malformed: true\n  {}\n  note: every value below is a built-in default, \
-             not what the file asked for\n",
-            diagnostic.trim_end().replace('\n', "\n  ")
+             not what the file asked for{}\n",
+            diagnostic.trim_end().replace('\n', "\n  "),
+            if report.dir_salvaged && !report.dir_overridden {
+                " — except dir, which was salvaged from the file despite the rest failing to parse"
+            } else {
+                ""
+            }
         ),
         None => String::new(),
     };

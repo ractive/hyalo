@@ -1597,11 +1597,13 @@ Repeatable (AND).\n\
         display_order = 899,
         long_about = "Print the effective configuration for the current working directory.\n\n\
             Shows which .hyalo.toml is active (or none) and the effective values:\n\
-            config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
+            config_path, cwd, dir, dir_salvaged, format, hints, site_prefix, exempt.\n\n\
             MALFORMED CONFIG: when a .hyalo.toml exists but could not be parsed, `malformed`\n\
             is true and `parse_error` carries the diagnostic — every other value shown is a\n\
-            built-in default, not what the file asked for. Detectable from the output alone,\n\
-            without scraping stderr.\n\n\
+            built-in default, not what the file asked for, except `dir` when `dir_salvaged`\n\
+            is true: a lenient re-read recovers just that key so read-only commands still\n\
+            point at the configured vault. Detectable from the output alone, without\n\
+            scraping stderr — this command does not print the diagnostic there too.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo config\n\
             \u{00a0} hyalo config --raw\n\

@@ -242,6 +242,42 @@ fn config_json_output_with_config() {
     );
 }
 
+/// UX-3 (dogfood pre3): `hyalo config` on a malformed `.hyalo.toml` used to
+/// print the parse diagnostic twice — once on stderr (`warning: malformed
+/// .hyalo.toml: ...`) and again as the lead line of its own report body
+/// (`malformed: true` / `parse_error`). The report already carries it; the
+/// stderr copy added nothing but noise for the one command whose entire job
+/// is to show this exact information. Every *other* command still needs the
+/// stderr copy, since their own output doesn't surface `malformed` at all —
+/// this test only pins `hyalo config` itself.
+#[test]
+fn config_does_not_double_print_the_malformed_diagnostic() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \"vault\"\nbogus_top_level_field = true\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join("vault")).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.contains("malformed: true"),
+        "the report body must still show the diagnostic: {stdout}"
+    );
+    assert!(
+        !stderr.contains("malformed .hyalo.toml"),
+        "the stderr copy is now redundant with the report body: {stderr}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Edge cases
 // ---------------------------------------------------------------------------

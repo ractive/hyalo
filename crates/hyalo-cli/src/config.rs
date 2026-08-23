@@ -296,6 +296,16 @@ pub(crate) struct ResolvedDefaults {
     /// and a rule set the user never configured. Callers use this to refuse the
     /// run instead of silently proceeding on defaults.
     pub(crate) malformed: Option<String>,
+    /// `true` when [`Self::dir`] was recovered from an otherwise-unusable
+    /// `.hyalo.toml` by [`salvage_dir`] — only meaningful alongside
+    /// [`Self::malformed`].
+    ///
+    /// NEW-17 (dogfood pre3): the malformed-config note says "every value
+    /// below is a built-in default", which is false for `dir` whenever this
+    /// is `true` — the reported vault came from the broken file, not a
+    /// hardcoded fallback. Lets the reporter say so instead of contradicting
+    /// itself.
+    pub(crate) dir_salvaged: bool,
     /// Active conformance profiles from `[lint] profiles` (or the deprecated
     /// `[lint] profile` alias) in `.hyalo.toml` (e.g. `["okf", "madr"]`).
     /// Enables every listed profile's advisory lint rules for plain
@@ -350,6 +360,7 @@ impl ResolvedDefaults {
             lint_strict: false,
             loaded_from_file: false,
             malformed: None,
+            dir_salvaged: false,
             lint_profiles: Vec::new(),
         }
     }
@@ -370,9 +381,11 @@ impl ResolvedDefaults {
     /// is lost: it keeps read-only commands pointed at the vault the user
     /// configured instead of silently re-rooting them at the config directory.
     fn unusable_for(dir: &Path, diagnostic: String, salvaged_dir: Option<PathBuf>) -> Self {
+        let dir_salvaged = salvaged_dir.is_some();
         Self {
             dir: salvaged_dir.unwrap_or_else(|| PathBuf::from(".")),
             malformed: Some(diagnostic),
+            dir_salvaged,
             ..Self::defaults_for(dir)
         }
     }
@@ -452,13 +465,46 @@ fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
     ));
 }
 
-/// Load configuration for the current working directory.
+/// Load configuration governing `start_dir`, with the ancestor-discovery
+/// fallback [`discover_ancestor_config`] describes.
 ///
 /// Resolution order:
-/// 1. `.hyalo.toml` in the working directory.
+/// 1. `.hyalo.toml` in `start_dir` itself.
 /// 2. Otherwise the nearest ancestor `.hyalo.toml` whose configured vault
-///    contains the working directory (see [`discover_ancestor_config`]).
+///    contains `start_dir` (see [`discover_ancestor_config`]).
 /// 3. Otherwise built-in defaults.
+///
+/// NEW-17 (dogfood pre3): originally inlined into [`load_config`] for the
+/// real process working directory only. `resolve_effective`'s `--dir
+/// <foreign-tree>` branch used to call [`load_config_from`] directly instead
+/// — which checks only `<foreign-tree>` itself — so `--dir sub/deep` from the
+/// repo root reported "no .hyalo.toml — built-in defaults" for a tree where
+/// `cd sub/deep && hyalo …` would have silently adopted the repo-root config.
+/// Which `.hyalo.toml` governs a directory must not depend on how the caller
+/// named it.
+fn load_config_for_dir(start_dir: &Path) -> ResolvedDefaults {
+    if start_dir.join(".hyalo.toml").is_file() {
+        return load_config_from(start_dir);
+    }
+    match discover_ancestor_config(start_dir) {
+        Some(ancestor) => {
+            let mut config = load_config_from(&ancestor);
+            // `dir` is stored relative to the config file, and the caller's
+            // directory is not necessarily where the file lives — everything
+            // downstream resolves the vault against `start_dir`. Absolutize
+            // it so the two cannot disagree (`config_dir` still points at the
+            // adopted file, so `views set` and friends keep writing to it).
+            let vault = ancestor.join(&config.dir);
+            config.dir = dunce::canonicalize(&vault).unwrap_or(vault);
+            announce_ancestor_config(start_dir, &ancestor, &config.dir);
+            config
+        }
+        None => load_config_from(start_dir),
+    }
+}
+
+/// Load configuration for the current working directory. See
+/// [`load_config_for_dir`] for the resolution order.
 ///
 /// Missing file → silent, returns hardcoded defaults.
 /// I/O error (not NotFound) → records a diagnostic, returns defaults.
@@ -466,27 +512,7 @@ fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
 /// Valid config → merges with defaults (config values take precedence).
 pub(crate) fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
-        Ok(cwd) => {
-            if cwd.join(".hyalo.toml").is_file() {
-                return load_config_from(&cwd);
-            }
-            match discover_ancestor_config(&cwd) {
-                Some(ancestor) => {
-                    let mut config = load_config_from(&ancestor);
-                    // `dir` is stored relative to the config file, and the
-                    // process is no longer standing there — everything
-                    // downstream resolves the vault against the *working*
-                    // directory. Absolutize it so the two cannot disagree
-                    // (`config_dir` still points at the adopted file, so
-                    // `views set` and friends keep writing to it).
-                    let vault = ancestor.join(&config.dir);
-                    config.dir = dunce::canonicalize(&vault).unwrap_or(vault);
-                    announce_ancestor_config(&cwd, &ancestor, &config.dir);
-                    config
-                }
-                None => load_config_from(&cwd),
-            }
-        }
+        Ok(cwd) => load_config_for_dir(&cwd),
         Err(e) => {
             crate::warn::warn(format!(
                 "could not determine current directory to locate .hyalo.toml: {e}"
@@ -731,6 +757,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         lint_strict,
         loaded_from_file: true,
         malformed: None,
+        dir_salvaged: false,
         lint_profiles,
     }
 }
@@ -963,6 +990,18 @@ pub(crate) struct EffectiveConfig {
     /// `true` when `--dir` selected a *different* vault and the CWD did have a
     /// `.hyalo.toml`, so that file no longer applies to this run.
     pub(crate) cwd_config_shadowed: bool,
+    /// The CWD `.hyalo.toml` that [`Self::cwd_config_shadowed`] refers to,
+    /// `None` unless it is `true`.
+    ///
+    /// NEW-17 (dogfood pre3): [`dir_override_note`] used to hardcode
+    /// `./.hyalo.toml` for "the file that no longer applies" instead of
+    /// naming it from data. At a config root, `--dir .` reloads that very
+    /// file for the new vault (`--dir .` targets the config's own directory,
+    /// which does have a `.hyalo.toml` — itself), so the hardcoded half and
+    /// the freshly computed [`Self::config_path`] printed the identical path
+    /// twice while claiming the first "does not apply" and the second "is in
+    /// effect".
+    pub(crate) shadowed_config_path: Option<PathBuf>,
 }
 
 /// Path of the `.hyalo.toml` in `dir`, or `None` when there is no file there.
@@ -1004,6 +1043,7 @@ pub(crate) fn resolve_effective(
             config_path: cwd_config_path,
             dir_redundant: false,
             cwd_config_shadowed: false,
+            shadowed_config_path: None,
         };
     };
 
@@ -1026,16 +1066,36 @@ pub(crate) fn resolve_effective(
             config_path: cwd_config_path,
             dir_redundant: true,
             cwd_config_shadowed: false,
+            shadowed_config_path: None,
         };
     }
 
-    let target = load_config_from(cli_dir);
+    // NEW-17 (dogfood pre3): `load_config_for_dir` (not `load_config_from`)
+    // so a foreign `--dir` gets the same ancestor-discovery fallback `cd
+    // <dir> && hyalo …` would — otherwise this branch could wrongly report
+    // "no .hyalo.toml — built-in defaults" for a directory whose *ancestor*
+    // config actually governs it.
+    let target = load_config_for_dir(cli_dir);
+    // The config actually governing `target` may live in an ancestor of
+    // `cli_dir`, not `cli_dir` itself — read it from `target.config_dir`
+    // (which `load_config_for_dir` sets to wherever the file was actually
+    // found) rather than re-deriving it from `cli_dir`, and canonicalize so
+    // this note prints absolute like the ancestor-adoption note does.
+    let target_config_dir = dunce::canonicalize(&target.config_dir).unwrap_or_else(|_| target.config_dir.clone());
+    let target_config_path = config_file_in(&target_config_dir);
+    // Canonicalize the shadowed CWD config path too so a self-reference (see
+    // `shadowed_config_path`'s doc comment) is caught by equality, not just
+    // by coincidentally matching relative-path text.
+    let shadowed_config_path = cwd_config_path.as_deref().map(|p| {
+        dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    });
     EffectiveConfig {
         config: target,
         dir: cli_dir.to_path_buf(),
-        config_path: config_file_in(cli_dir),
+        config_path: target_config_path,
         dir_redundant: false,
-        cwd_config_shadowed: cwd_config_path.is_some(),
+        cwd_config_shadowed: shadowed_config_path.is_some(),
+        shadowed_config_path,
     }
 }
 
@@ -1180,14 +1240,31 @@ pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
         return None;
     }
     let dir = effective.dir.display();
+    // NEW-17 (dogfood pre3): the shadowed file used to be hardcoded as the
+    // literal text `./.hyalo.toml`, so `--dir .` at a config root — which
+    // reloads that very file as `config_path` — printed the identical path
+    // twice while claiming the first half "does not apply" and the second
+    // "is in effect". Name the shadowed file from data, and when it turns
+    // out to be the very file still in effect, say that instead of
+    // contradicting the line right after it.
+    let shadowed = effective
+        .shadowed_config_path
+        .as_deref()
+        .map_or_else(|| "./.hyalo.toml".to_owned(), |p| p.display().to_string());
+    if effective.config_path.as_deref() == effective.shadowed_config_path.as_deref() {
+        return Some(format!(
+            "--dir {dir} selects a different vault: {shadowed} is still in effect (it lives in \
+             {dir}) but its own `dir` setting no longer applies to this run"
+        ));
+    }
     Some(match &effective.config_path {
         Some(path) => format!(
-            "--dir {dir} selects a different vault: ./.hyalo.toml does not apply, \
+            "--dir {dir} selects a different vault: {shadowed} does not apply, \
              {} is in effect",
             path.display()
         ),
         None => format!(
-            "--dir {dir} selects a different vault: ./.hyalo.toml does not apply and \
+            "--dir {dir} selects a different vault: {shadowed} does not apply and \
              {dir} has no .hyalo.toml — running on built-in defaults"
         ),
     })
@@ -1280,7 +1357,12 @@ mod tests {
             Some("other"),
             "the target's own config must apply"
         );
-        assert_eq!(effective.config_path, Some(other.join(".hyalo.toml")));
+        // NEW-17 (dogfood pre3): `config_path` is now canonicalized so this
+        // note prints absolute like the ancestor-adoption note does — compare
+        // against the canonicalized form too, since a tempdir path can itself
+        // cross a symlink (e.g. macOS `/var` -> `/private/var`).
+        let expected = dunce::canonicalize(other.join(".hyalo.toml")).unwrap();
+        assert_eq!(effective.config_path, Some(expected));
         let note = dir_override_note(&effective).expect("the switch must be announced");
         assert!(
             note.contains(".hyalo.toml is in effect"),
@@ -1312,6 +1394,69 @@ mod tests {
         let cli_dir = dir.path().join("kb");
         let effective = resolve_effective(load_config_from(dir.path()), Some(&cli_dir));
         assert!(!effective.dir_redundant);
+    }
+
+    /// NEW-17 (dogfood pre3): `--dir .` at the config's own root used to
+    /// print `./.hyalo.toml does not apply, ./.hyalo.toml is in effect` — the
+    /// identical literal path on both halves of one contradictory sentence.
+    /// The repro: a config root (`dir = "kb"`) is asked to treat *itself*
+    /// (not `kb/`) as the vault. That is a different vault than the
+    /// configured one, but the `.hyalo.toml` governing it is the very same
+    /// file — the note must say so, not contradict itself.
+    #[test]
+    fn dir_naming_the_config_root_itself_does_not_contradict_itself() {
+        let project = make_project();
+        // `--dir <config-root>` names the directory the `.hyalo.toml` itself
+        // lives in — not the `kb` vault it configures — so `same_vault` is
+        // false and this hits the "different vault" branch, but the file
+        // `load_config_for_dir` finds there is the identical physical file
+        // `cwd_config` was already loaded from.
+        let effective =
+            resolve_effective(load_config_from(project.path()), Some(project.path()));
+        assert!(effective.cwd_config_shadowed);
+
+        let note = dir_override_note(&effective).expect("the switch must be announced");
+        assert!(
+            !(note.contains("does not apply") && note.contains("is in effect")),
+            "note must not claim the same file both does not apply and is in effect: {note}"
+        );
+        assert!(
+            note.contains("is still in effect"),
+            "note should say the file is still the one governing this run: {note}"
+        );
+    }
+
+    /// NEW-17 (dogfood pre3): `--dir <foreign-tree>` used to call
+    /// `load_config_from` directly, which only checks `<foreign-tree>` itself
+    /// — so a subdirectory of an unrelated tree with its *own* ancestor
+    /// config reported "no .hyalo.toml — built-in defaults", even though `cd
+    /// <foreign-tree> && hyalo …` would have adopted that ancestor config.
+    #[test]
+    fn dir_naming_a_foreign_subdir_adopts_its_own_ancestor_config() {
+        let dir = make_temp();
+        // An unrelated tree, `other/`, with its own root config and a deep
+        // subdirectory that carries no `.hyalo.toml` of its own.
+        fs::create_dir_all(dir.path().join("other/deep/sub")).unwrap();
+        fs::write(
+            dir.path().join("other/.hyalo.toml"),
+            "dir = \".\"\nsite_prefix = \"adopted\"\n",
+        )
+        .unwrap();
+
+        let cwd_config = load_config_from(dir.path()); // no config at `dir` itself
+        let effective = resolve_effective(cwd_config, Some(&dir.path().join("other/deep/sub")));
+
+        assert_eq!(
+            effective.config.site_prefix.as_deref(),
+            Some("adopted"),
+            "the foreign subdir's own ancestor config must be adopted, not built-in defaults; \
+             malformed: {:?}",
+            effective.config.malformed
+        );
+        assert!(
+            effective.config_path.is_some(),
+            "config_path must name the adopted ancestor file, not report no config"
+        );
     }
 
     #[test]
