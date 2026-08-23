@@ -211,6 +211,7 @@ mod tests {
             label: None,
             kind: links::LinkKind::Wikilink,
             fragment: None,
+            query: None,
         };
         assert_eq!(format_link_string(&link), "[[my-note]]");
     }
@@ -222,6 +223,7 @@ mod tests {
             label: Some("My Note".to_owned()),
             kind: links::LinkKind::Wikilink,
             fragment: None,
+            query: None,
         };
         assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
     }
@@ -233,6 +235,7 @@ mod tests {
             label: Some("Example".to_owned()),
             kind: links::LinkKind::Markdown,
             fragment: None,
+            query: None,
         };
         assert_eq!(format_link_string(&link), "[Example](https://example.com)");
     }
@@ -244,6 +247,7 @@ mod tests {
             label: Some("Some Note".to_owned()),
             kind: links::LinkKind::Markdown,
             fragment: None,
+            query: None,
         };
         assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }

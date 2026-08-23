@@ -255,11 +255,18 @@ impl LinkWriter {
         source_rel: &str,
         site_prefix: Option<&str>,
     ) -> String {
+        // Mirror presence/absence of the `.md` suffix from the original
+        // spelling. iter-211 / BUG-12: this used to be applied only on the
+        // site-absolute branch, so an extensionless *relative* link
+        // (`[f](foo/index)`) came back from `mv` as `[f](bar/index.md)` —
+        // a suffix the author never wrote, breaking iter-203's spelling
+        // guarantee on one of its ten forms.
+        let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
+        let styled_target = if had_md { new_vault_rel } else { new_stem };
+
         if span.link.target.starts_with('/') {
             // Preserve absolute-path style (vault-absolute).
-            // Mirror presence/absence of `.md` suffix from the original.
-            let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
-            let target = if had_md { new_vault_rel } else { new_stem };
+            let target = styled_target;
             // L-11: only re-emit the site prefix when the original spelling
             // carried it. The prefix is often *auto-derived* from the vault
             // directory name, and blindly prepending it turns a working
@@ -274,7 +281,7 @@ impl LinkWriter {
                 _ => format!("/{target}"),
             }
         } else {
-            relative_path_between(source_rel, new_vault_rel)
+            relative_path_between(source_rel, styled_target)
         }
     }
 }

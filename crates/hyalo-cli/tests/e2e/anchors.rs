@@ -102,7 +102,9 @@ Broken md anchor: [t](Foo.md#missing).
 "),
     );
 
-    // Fragment-only same-file links — must NOT be file links.
+    // Fragment-only same-file links resolve against THIS file's own headings
+    // (iter-211 / BUG-8). They are never file links, so they must not appear
+    // as outbound links — but a *dead* one must still be caught.
     write_md(
         tmp.path(),
         "same_file.md",
@@ -110,8 +112,23 @@ Broken md anchor: [t](Foo.md#missing).
 ---
 title: Same File
 ---
+## Real
 Wiki: [[#Real]].
 Md: [t](#Real).
+Slug: [t](#real).
+"),
+    );
+
+    // A same-file anchor naming a heading that does not exist here.
+    write_md(
+        tmp.path(),
+        "same_file_broken.md",
+        md!(r"
+---
+title: Same File Broken
+---
+## Present
+Md: [b](#nope).
 "),
     );
 
@@ -206,10 +223,39 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
         "[{label}] block ref must never be reported: {files:?}"
     );
 
-    // same_file.md — fragment-only links are not file links → NOT surfaced.
+    // same_file.md — every same-file anchor names a real heading here, in both
+    // the raw-text and slug spellings → NOT surfaced.
     assert!(
         !files.contains(&"same_file.md".to_string()),
-        "[{label}] fragment-only same-file links are not links: {files:?}"
+        "[{label}] valid same-file anchors must not be reported: {files:?}"
+    );
+
+    // same_file_broken.md — `[b](#nope)` names no heading in this file
+    // (iter-211 / BUG-8: these used to be invisible to --broken-links).
+    assert!(
+        files.contains(&"same_file_broken.md".to_string()),
+        "[{label}] dead same-file anchor must be surfaced: {files:?}"
+    );
+    let sf = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["file"].as_str() == Some("same_file_broken.md"))
+        .unwrap()["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["fragment"].as_str() == Some("nope"))
+        .expect("dead same-file anchor present in links");
+    assert_eq!(
+        sf["broken_anchor"].as_bool(),
+        Some(true),
+        "[{label}] same-file anchor must carry broken_anchor"
+    );
+    assert_eq!(
+        sf["path"].as_str(),
+        Some("same_file_broken.md"),
+        "[{label}] same-file anchor resolves to its own file"
     );
 
     // broken_anchor.md — [[Foo#nope]] target resolves, anchor broken.
