@@ -12,7 +12,7 @@
 ///
 /// Exit code: 0 = clean, 1 = errors found, 2 = internal error.
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -1491,7 +1491,14 @@ pub struct ExtLintOutput {
 }
 
 /// Full extended lint output in fix-mode.
-#[derive(Debug, serde::Serialize)]
+///
+/// `Default` backs the empty-result shape `run.rs` emits when
+/// `--files-from` resolves to zero files (review finding #5) — serializing
+/// `Self::default()` (with only `dry_run` overridden) keeps that shape from
+/// drifting out of sync with the real field set as fields are added or
+/// removed here, and its `#[serde(skip_serializing_if)]` on `dry_run`
+/// applies the same way it does on the non-empty path.
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ExtLintFixOutput {
     pub files: Vec<ExtFileLintFixResult>,
     pub total_fixed: usize,
@@ -1501,8 +1508,17 @@ pub struct ExtLintFixOutput {
     pub files_with_violations: usize,
     pub files_checked: usize,
     pub files_truncated: bool,
-    pub errors: usize,
-    pub warnings: usize,
+    /// Error-severity violations left unfixed after this run.
+    ///
+    /// Named `remaining_errors`/`remaining_warnings` (not `errors`/
+    /// `warnings`, iter-218 NEW-6b) because those keys mean something
+    /// different on [`ExtLintOutput`]: whole-run severity counts, not a
+    /// remaining-after-fix count. The two commands used to share a key name
+    /// for two different quantities — a script reading `.errors` off both
+    /// `lint` and `lint --fix` JSON silently got answers to different
+    /// questions.
+    pub remaining_errors: usize,
+    pub remaining_warnings: usize,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
 }
@@ -1682,6 +1698,26 @@ pub fn lint_files_extended(
         seen.len()
     };
 
+    // Fix-mode totals, computed over EVERY result *before* the display cap,
+    // exactly like `authoritative_total`/`authoritative_rules_fired` above.
+    // The per-file display loop below only builds the (possibly truncated)
+    // `files[]` array for fix-mode too — deriving `total_fixed` /
+    // `total_remaining` / `total_conflicts` from it (as this did before
+    // iter-218) made `--limit` silently understate `conflicts`, hiding
+    // apply-time surprises from anyone who dry-ran at the default limit
+    // (NEW-6).
+    let (authoritative_total_fixed, authoritative_total_remaining, authoritative_total_conflicts) =
+        if is_fix_mode {
+            all_results
+                .iter()
+                .fold((0, 0, 0), |(fixed, remaining, conflicts), r| {
+                    let (f, rem, c) = fix_mode_file_totals(r);
+                    (fixed + f, remaining + rem, conflicts + c)
+                })
+        } else {
+            (0, 0, 0)
+        };
+
     // Cap the display list (0 == unlimited is normalized to `usize::MAX` by the
     // caller, so truncation here is a no-op for `--limit 0`).
     all_results.truncate(opts.max_files);
@@ -1691,9 +1727,6 @@ pub fn lint_files_extended(
         // Fix-mode output: fixed_groups / remaining_groups / conflicts shape.
         // -------------------------------------------------------------------
         let mut output_fix_files: Vec<ExtFileLintFixResult> = Vec::new();
-        let mut grand_total_fixed = 0usize;
-        let mut grand_total_remaining = 0usize;
-        let mut grand_total_conflicts = 0usize;
 
         for r in &all_results {
             // Build a set of (rule_id, order-within-rule) → FixOutcome from
@@ -1735,7 +1768,6 @@ pub fn lint_files_extended(
             // fixed_groups: rules with at least one applied fix + SCHEMA if fixed.
             let mut fixed_groups: Vec<FixedGroup> = Vec::new();
             if schema_fix_count > 0 {
-                grand_total_fixed += schema_fix_count;
                 fixed_groups.push(FixedGroup {
                     rule: "SCHEMA".to_owned(),
                     count: schema_fix_count,
@@ -1769,7 +1801,6 @@ pub fn lint_files_extended(
                     .get(rule_id)
                     .map_or(0, |vs| vs.iter().filter(|v| v.fixed).count());
                 if count > 0 {
-                    grand_total_fixed += count;
                     fixed_groups.push(FixedGroup {
                         rule: rule_id.clone(),
                         count,
@@ -1818,7 +1849,6 @@ pub fn lint_files_extended(
                     if remaining == 0 {
                         continue;
                     }
-                    grand_total_remaining += remaining;
                     let shown = remaining.min(opts.max_per_rule);
                     let truncated = remaining > shown;
                     let body_violations = remaining_owned
@@ -1855,7 +1885,6 @@ pub fn lint_files_extended(
                 if remaining_count == 0 {
                     continue;
                 }
-                grand_total_remaining += remaining_count;
 
                 let autofixable = md_lint_engine
                     .available_rules()
@@ -1893,7 +1922,6 @@ pub fn lint_files_extended(
             // conflicts: rules with at least one conflicting fix.
             let mut conflicts: Vec<ConflictEntry> = Vec::new();
             for (rule_id, blocking_rule) in &conflict_by_rule {
-                grand_total_conflicts += 1;
                 conflicts.push(ConflictEntry {
                     rule: rule_id.clone(),
                     reason: format!("range overlap with {blocking_rule}"),
@@ -1913,15 +1941,15 @@ pub fn lint_files_extended(
 
         let fix_output = ExtLintFixOutput {
             files: output_fix_files,
-            total_fixed: grand_total_fixed,
-            total_remaining: grand_total_remaining,
-            total_conflicts: grand_total_conflicts,
+            total_fixed: authoritative_total_fixed,
+            total_remaining: authoritative_total_remaining,
+            total_conflicts: authoritative_total_conflicts,
             rules_fired: authoritative_rules_fired,
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,
-            errors: authoritative_errors,
-            warnings: authoritative_warnings,
+            remaining_errors: authoritative_errors,
+            remaining_warnings: authoritative_warnings,
             dry_run: matches!(opts.fix, FixMode::DryRun),
         };
         serde_json::to_value(&fix_output).context("failed to serialize fix lint output")?
@@ -2103,14 +2131,66 @@ struct PerFileLintResult {
     post_fix_schema_remaining: Option<Vec<InternalViolation>>,
 }
 
+/// Compute one file's fix-mode totals — (fixed, remaining, conflicts) —
+/// without building the display groups (`fixed_groups`/`remaining_groups`/
+/// `conflicts`). Mirrors the per-file accounting the display loop in
+/// [`run_ext_lint`] does inline, but is called separately over the *full*
+/// `all_results` before the `--limit` display cap is applied, so
+/// `total_fixed`/`total_remaining`/`total_conflicts` describe the whole run
+/// even when the listing is truncated (iter-218 NEW-6).
+fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usize) {
+    let mut applied_rules: HashSet<&str> = HashSet::new();
+    let mut conflict_rules: HashSet<&str> = HashSet::new();
+    for (rule_id, outcome) in &r.body_fix_outcomes {
+        match outcome {
+            FixOutcome::Applied => {
+                applied_rules.insert(rule_id.as_str());
+            }
+            FixOutcome::Conflict { .. } => {
+                conflict_rules.insert(rule_id.as_str());
+            }
+            FixOutcome::NoFix => {}
+        }
+    }
+
+    let schema_before = r
+        .violations_by_rule
+        .get("SCHEMA")
+        .map_or(0, std::vec::Vec::len);
+    let schema_after = r
+        .post_fix_schema_remaining
+        .as_ref()
+        .map_or(schema_before, std::vec::Vec::len);
+    let mut fixed = schema_before.saturating_sub(schema_after);
+    let mut remaining = 0usize;
+
+    for (rule_id, violations) in &r.violations_by_rule {
+        if rule_id == "SCHEMA" {
+            remaining += schema_after;
+            continue;
+        }
+        if applied_rules.contains(rule_id.as_str()) {
+            fixed += violations.iter().filter(|v| v.fixed).count();
+        }
+        remaining += violations.iter().filter(|v| !v.fixed).count();
+    }
+
+    (fixed, remaining, conflict_rules.len())
+}
+
 /// Count the error- and warning-severity violations across every result,
 /// independent of the `max_files` display cap.
 ///
-/// In read-only mode this is simply every violation. In fix mode it counts the
+/// In read-only mode this is simply every violation, reported as
+/// [`ExtLintOutput::errors`]/`::warnings`. In fix mode it counts the
 /// violations that *remain* after fixing — SCHEMA remainders come from
-/// `post_fix_schema_remaining`, body remainders from `!v.fixed` — so the
-/// reported `errors`/`warnings` (and the exit code they drive) reflect the true
-/// post-fix state of the whole vault, not just the first `max_files` shown.
+/// `post_fix_schema_remaining`, body remainders from `!v.fixed` — reported as
+/// [`ExtLintFixOutput::remaining_errors`]/`::remaining_warnings` (renamed
+/// from `errors`/`warnings` in iter-218 NEW-6b, since this mode's count means
+/// something different from the read-only mode's despite the pre-rename JSON
+/// using the same key for both). Either way, the exit code they drive
+/// reflects the true whole-vault state, not just the first `max_files`
+/// shown.
 fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (usize, usize) {
     let mut errors = 0usize;
     let mut warnings = 0usize;

@@ -377,19 +377,29 @@ fn inject_ext_file_result(
                 _ => extra_warnings += n,
             }
         }
+        // Fix-mode renamed these to `remaining_errors`/`remaining_warnings`
+        // (iter-218 NEW-6b) since they mean something different there than
+        // on the read-only shape's `errors`/`warnings` (remaining-after-fix
+        // vs whole-run severity counts) — bump whichever key this payload
+        // actually carries.
+        let (errors_key, warnings_key) = if is_fix_mode {
+            ("remaining_errors", "remaining_warnings")
+        } else {
+            ("errors", "warnings")
+        };
         if extra_errors > 0
-            && let Some(n) = obj.get_mut("errors").and_then(|v| v.as_u64())
+            && let Some(n) = obj.get_mut(errors_key).and_then(|v| v.as_u64())
         {
             obj.insert(
-                "errors".to_string(),
+                errors_key.to_string(),
                 serde_json::Value::from(n + extra_errors),
             );
         }
         if extra_warnings > 0
-            && let Some(n) = obj.get_mut("warnings").and_then(|v| v.as_u64())
+            && let Some(n) = obj.get_mut(warnings_key).and_then(|v| v.as_u64())
         {
             obj.insert(
-                "warnings".to_string(),
+                warnings_key.to_string(),
                 serde_json::Value::from(n + extra_warnings),
             );
         }
