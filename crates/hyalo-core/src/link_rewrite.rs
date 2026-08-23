@@ -2033,8 +2033,10 @@ mod tests {
 
     #[test]
     fn plan_mv_wikilink_with_path_and_md_extension() {
-        // [[sub/b.md]] has a path separator → PathRelative form.
-        // Path-form is preserved: [[sub/b.md]] → [[archive/b]] (stem without .md).
+        // [[sub/b.md]] has a path separator → PathRelative form. iter-211 /
+        // BUG-12: the `.md` the author wrote is a spelling choice orthogonal
+        // to the path shape, so it is re-applied — previously the rewrite
+        // silently dropped it (`[[archive/b]]`), which is not a round-trip.
         let vault = create_vault(&[
             ("a.md", "See [[sub/b.md]] here\n"),
             ("sub/b.md", "Content\n"),
@@ -2044,8 +2046,8 @@ mod tests {
             .plans;
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements[0].old_text, "[[sub/b.md]]");
-        // PathRelative form preserved, emits stem without .md suffix
-        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b]]");
+        // PathRelative form preserved, and so is the explicit `.md`.
+        assert_eq!(plans[0].replacements[0].new_text, "[[archive/b.md]]");
     }
 
     // ---- Absolute-path inbound link tests ----

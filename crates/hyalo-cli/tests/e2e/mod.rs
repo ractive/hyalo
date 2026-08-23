@@ -28,6 +28,7 @@ mod jq;
 mod json_errors;
 mod links;
 mod links_iter136;
+mod links_resolution;
 mod lint;
 mod lint_rules;
 mod llm_misuse;

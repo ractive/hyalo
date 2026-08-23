@@ -967,7 +967,22 @@ fn normalize_link_target<'a>(
             if target.starts_with('/') {
                 std::borrow::Cow::Borrowed(target)
             } else if target.contains('/') || target.contains('\\') {
-                std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), target))
+                let mut norm = normalize_target(Path::new(source_rel), target);
+                // iter-211 / BUG-10: `normalize_path_components` drops a
+                // trailing slash, erasing the one signal that makes `foo/` an
+                // *explicit* directory reference. Without this, the relative
+                // spelling `[a](foo/)` resolved to `foo.md` while the
+                // site-absolute `[b](/foo/)` — which never goes through
+                // normalization — resolved to `foo/index.md`, so one file was
+                // a backlink of the other's target. Re-attach it and let
+                // `resolve_target` apply the documented precedence once.
+                if (target.ends_with('/') || target.ends_with('\\'))
+                    && !norm.is_empty()
+                    && !norm.ends_with('/')
+                {
+                    norm.push('/');
+                }
+                std::borrow::Cow::Owned(norm)
             } else {
                 // Bare basename: try source-relative first so same-folder links
                 // resolve correctly, then fall back to the raw target.
