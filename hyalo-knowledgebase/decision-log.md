@@ -1929,15 +1929,29 @@ spliced output and comparing it against the requested property map before
 returning `Spliced`; anything that doesn't verify was never at risk of
 reaching disk wrong, only of missing the minimal-diff optimization.
 
-**Flow-list append that can't be inlined still falls back, and still
-warns:** if the new item can't be rendered as a single-line token (e.g. it
-would force a multi-line block scalar), the *whole document* is
-re-serialized via the DEC-081 fallback path, with the same explicit
-warning as any other fallback. This is a wider hammer than strictly
-necessary for a one-key problem, but reuses DEC-081's existing "full
-rewrite, always announced" machinery rather than inventing a second,
-narrower warning channel for a shape expected to be rare in practice (short
-redirect/alias/tag strings, not multi-paragraph values).
+**A list that "looks like" flow or block but doesn't fit the model still
+falls back, and still warns — for both append and remove:** the first
+implementation checked whether the *new item* could be inlined before
+checking whether the body even *was* a flow list, so a non-inlineable item
+appended to a flow list took the `NotApplicable` path and silently
+re-serialized flow to block with no warning — precisely the DEC-081
+violation this decision exists to prevent (caught in PR #250 review, M1).
+The fix reorders the checks: `is_single_line_flow(body)` is evaluated
+first, so once a body is recognized as flow-shaped, *any* reason splicing
+fails inside it — an unrenderable new item, or (M2/M3) the existing list
+itself having a trailing `#`-comment the tokenizer can't represent —
+routes to the explicit `FlowListNotModellable` fallback, symmetrically for
+`ListDelta::Append` and `ListDelta::Remove`. The same logic applies to
+block lists: a `#`-comment interleaved between item lines used to silently
+fall through to a whole-key re-serialize that discarded the comment with
+no explanation (M6); `is_unmodellable_block_list` now detects "this is
+block-sequence-shaped but doesn't split cleanly" and routes it to a
+dedicated `BlockListNotModellable` fallback instead. Both are a wider
+hammer than strictly necessary for a one-key problem, but reuse DEC-081's
+existing "full rewrite, always announced" machinery rather than inventing
+a narrower warning channel for shapes expected to be rare in practice
+(short redirect/alias/tag strings without comments, not multi-paragraph
+values or heavily annotated lists).
 
 ## DEC-087: mixed line endings get an honest full-rewrite fallback, not a silent per-line-preserving splice (2026-08-23)
 
@@ -2011,12 +2025,44 @@ what was already documented and enforced elsewhere.
 **Why interception, not a new error type:** `serde_saphyr::Error` is
 `#[non_exhaustive]` and its message formatting is a library concern hyalo
 doesn't control. Rather than growing a parallel error hierarchy,
-`friendly_parse_error` unwraps `Error::WithSnippet` to the underlying
-variant and pattern-matches the two offending shapes (`Error::Budget`,
-`Error::DuplicateMappingKey`) directly — not by string-matching the
-rendered message, which would be fragile against upstream wording changes
-— falling through to the crate's own `Display` for every other variant
-that doesn't have this problem.
+`friendly_parse_error` *matches on* `unwrap_snippet(err)` — walking past
+`Error::WithSnippet` wrappers only to reach the two offending shapes
+(`Error::Budget`, `Error::DuplicateMappingKey`) for pattern-matching, not
+by string-matching the rendered message, which would be fragile against
+upstream wording changes.
+
+**Every other variant returns the original, still-wrapped error (PR #250
+review, M4):** the first implementation's catch-all arm called
+`.to_string()` on the *unwrapped* inner error returned by
+`unwrap_snippet`, which discards `Error::WithSnippet`'s source-context
+caret/window — for the common cases this function was never meant to
+rewrite (bad indentation, an unexpected token), this made error quality
+strictly worse than before the fix, the opposite of the goal. The catch-all
+now returns `err.to_string()` — the original, outer error — so `unwrap_snippet`
+is used only to decide *which* branch to take, never to build the returned
+message for anything but the two variants actually being rewritten.
+
+**Location is preserved, not dropped, on the rewritten variants:** both
+`Error::Budget` and `Error::DuplicateMappingKey` carry a `location` field;
+the first cut of the rewrite discarded it, which broke an existing CLI-side
+test (`terse_root_cause_strips_duplicate_key_policy_advice`) that depended
+on line/column surviving into the terse message. `friendly_parse_error`
+now appends `" at line X, column Y"` — the exact phrasing
+`serde_saphyr`'s own localizer uses elsewhere, matched deliberately rather
+than invented — and omits it entirely when the location is
+`serde_saphyr::Location::UNKNOWN`, rather than printing "at line 0, column 0".
+
+**The scalar-byte limit named in the `ScalarBytes` message is passed in,
+not hardcoded (L13):** `splice_frontmatter`'s own verification pass parses
+with a 2x budget (`MAX_FRONTMATTER_BYTES * 2` — see DEC-086's
+verification-gate note), specifically so a caller-supplied value larger
+than the read-path budget isn't mistaken for a splicing failure. That path
+doesn't currently route its errors through `friendly_parse_error` (they're
+discarded and turned into a generic `VerificationFailed` fallback instead),
+but `describe_budget_breach` takes `scalar_byte_limit` as an explicit
+parameter rather than reading the `MAX_FRONTMATTER_BYTES` constant
+directly, so a future caller wiring that path through here cannot silently
+get a message naming the wrong limit.
 
 ## DEC-089: NEW-16 write-path residue — no invented trailing newline, a narrow dotted-key guard, and a retype advisory (2026-08-23)
 
@@ -2037,29 +2083,54 @@ GitHub Docs repro is `--property versions.fpt=X` against a file with an
 existing `versions:` map, which used to create a `versions.fpt` key
 sitting right next to the map it looked like it should have nested into.
 `set`/`append` now reject that one collision with an error naming the
-file and the colliding key, before writing anything. A dotted key with no
-colliding map is unchanged — still a literal flat key — because adding
-real nested-path support is explicitly out of scope for this iteration;
-only the confusing collision is guarded against, not the general case.
-`remove` is not guarded: removing a nonexistent literal dotted key is
-already a harmless no-op (reported as skipped), not a data-corruption risk.
+file and the colliding key — and the error's hint spells out what to do
+instead (edit the file directly to change a value inside the map, or
+choose a non-colliding key name) rather than only explaining what's
+unsupported. A dotted key with no colliding map is unchanged — still a
+literal flat key — because adding real nested-path support is explicitly
+out of scope for this iteration; only the confusing collision is guarded
+against, not the general case. `remove` is not guarded: removing a
+nonexistent literal dotted key is already a harmless no-op (reported as
+skipped), not a data-corruption risk.
+
+**Runs as a whole-batch pre-pass, not a mid-loop check (PR #250 review,
+M5):** the first implementation checked for the collision *inside* the
+per-file read-modify-write loop and `return`ed immediately on a hit. On a
+50-file batch, hitting the collision on file 7 left files 1-6 already
+written to disk, and skipped the end-of-loop `save_index_if_dirty` call
+entirely — a partial write plus a stale on-disk snapshot index, exactly
+the kind of half-applied batch mutation the rest of this codebase goes out
+of its way to avoid (see the existing BUG-D pre-validation pass in both
+`set` and `append`, which this guard now sits next to). The fix moves the
+check into its own read-only pass over every filtered file, run before any
+mutation and before the (also pre-existing) `--validate` pass — reject the
+whole batch, or don't touch anything.
 
 **Retype advisory reuses the existing advisory mechanism, scoped to avoid
 noise (NEW-16c):** `set`'s CLI argument is always a bare string, so type
 inference has no way to know a property was deliberately quoted to stay
 text — `code: '42'` (string) silently becoming `code: 42` (number) via
 `set --property code=42` is inherent to how the CLI parses values, not a
-bug to fix. What was missing was visibility: `advisory_note` (already used
-for the date and enum/pattern advisories, DEC nnn/iter-181) gained a third
-branch that fires when the *first mutated file's* pre-existing value for
-that property was a string and the newly inferred value is a number or
-boolean (`advisory_note` already carries the BUG-B date advisory and the
-iter-181 enum/pattern advisory; this is a third branch in the same
-function, not a new mechanism). Scoped to "was previously a string, now
-isn't" rather than "is a number/boolean at all" specifically to avoid
-noise on properties that are numeric by design (`priority=3` on a file
-where `priority` never existed, or was already numeric, does not fire this
-advisory) — the surprising case is specifically the type *changing* under
-an existing value, mirroring how the date advisory only fires when a
-date-typed property's *new* value fails to look like a date, not on every
-write to that property.
+bug to fix. What was missing was visibility: `advisory_note` (which already
+carries the BUG-B date advisory and the iter-181 enum/pattern advisory)
+gained a third branch that fires when the *first mutated file's*
+pre-existing value for that property was a string and the newly inferred
+value is a number or boolean — a third branch in the same function, not a
+new mechanism. Scoped to "was previously a string, now isn't" rather than
+"is a number/boolean at all" specifically to avoid noise on properties
+that are numeric by design (`priority=3` on a file where `priority` never
+existed, or was already numeric, does not fire this advisory) — the
+surprising case is specifically the type *changing* under an existing
+value, mirroring how the date advisory only fires when a date-typed
+property's *new* value fails to look like a date, not on every write to
+that property.
+
+**Wording hedges the batch-vs-sample gap (PR #250 review, L11):** the
+sampled value comes from exactly one representative file — the same
+"first mutated file" sampling `batch_type_from_file` already uses for
+schema resolution — not from every file the batch touches. The first cut
+of the message ("was previously stored as a string") stated this as fact
+about the whole batch; it now reads "at least one matched file previously
+stored this property as a string ... (other matched files may differ)" so
+the advisory doesn't imply a guarantee about files it never actually
+inspected.

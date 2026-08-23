@@ -162,8 +162,9 @@ fn advisory_note(
         };
         if let Some(new_kind) = new_kind {
             return Some(format!(
-                "value {raw_value:?} was previously stored as a string and is now inferred as \
-                 {new_kind}; pass a schema type to keep it a string"
+                "value {raw_value:?} is now inferred as {new_kind}, but at least one matched \
+                 file previously stored this property as a string; pass a schema type to keep \
+                 it a string (other matched files may differ)"
             ));
         }
     }
@@ -396,6 +397,31 @@ pub fn set(
     let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); tag_args.len()];
 
+    // --- Dotted-key collision pre-pass (iter-219 M5): reject the whole batch
+    //     before any file is modified, not mid-loop. A mid-loop `return` (the
+    //     original iter-219 shape) left files already written in an earlier
+    //     iteration on disk, and skipped the end-of-loop
+    //     `save_index_if_dirty` entirely — a partial write plus a stale
+    //     on-disk index for whichever file happened to trip the guard.
+    for (full_path, rel_path) in &files {
+        let props = match frontmatter::read_frontmatter(full_path) {
+            Ok(p) => p,
+            // Parse errors are reported as warnings during the write loop; skip here.
+            Err(e) if frontmatter::is_parse_error(&e) => continue,
+            Err(e) => return Err(e),
+        };
+        if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
+            continue;
+        }
+        for (name, _, _) in &parsed_props {
+            if let Some(outcome) =
+                super::reject_dotted_property_collision(name, &props, rel_path, format)
+            {
+                return Ok(outcome);
+            }
+        }
+    }
+
     // --- Pre-validation pass (BUG-D): validate all proposed writes before any file
     //     is modified. This keeps batch mutations atomic — if any file would fail
     //     validation, no files are written. The schema is chosen from the merged
@@ -515,13 +541,10 @@ pub fn set(
 
         let mut file_changed = false;
 
-        // Apply all --property mutations
+        // Apply all --property mutations. The dotted-key collision guard
+        // already ran as a whole-batch pre-pass above, so no per-file check
+        // (and no mid-loop `return`) is needed here.
         for (i, (name, _, value)) in parsed_props.iter().enumerate() {
-            if let Some(outcome) =
-                super::reject_dotted_property_collision(name, &props, rel_path, format)
-            {
-                return Ok(outcome);
-            }
             if first_old_value[i].is_none() {
                 first_old_value[i] = props.get(*name).cloned();
             }
@@ -1576,7 +1599,7 @@ versions:
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let note = parsed["note"].as_str().unwrap_or_default();
         assert!(
-            note.contains("previously stored as a string"),
+            note.contains("previously stored this property as a string"),
             "note: {note:?}"
         );
         assert!(note.contains("number"), "note: {note:?}");

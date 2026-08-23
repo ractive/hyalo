@@ -22,6 +22,10 @@ and this project adheres to
   it applies uniformly to `append`, `remove --property k=v`, and
   `remove --tag t` with no CLI-layer changes. A replacement, reorder, or
   non-scalar item still falls back to the existing whole-key re-serialize.
+  A list that itself doesn't fit the splicer's simple model — a `#`-comment
+  interleaved between items, or a flow list with a trailing comment the
+  tokenizer can't represent — now falls back with an explicit warning
+  rather than a silent whole-key re-serialize that could drop the comment.
   See DEC-086.
 - **Mixed line endings in a frontmatter block no longer silently drop or
   add `\r`s** (iter-219, dogfood NEW-7). A block that mixed `\r\n` and `\n`
@@ -39,12 +43,6 @@ and this project adheres to
   DEC-088.
 - **A file whose last bytes are literally `---` (no trailing newline, no
   body) no longer gains one on write** (iter-219, dogfood NEW-16a).
-- **`set`/`append --property a.b=x` now rejects the write, instead of
-  silently creating a literal `"a.b"` key, when a top-level `a` already
-  exists as a mapping** (iter-219, dogfood NEW-16b). hyalo does not support
-  dotted path syntax for nested properties; only this specific collision is
-  guarded — a dotted key with no colliding map is unchanged (still a
-  literal flat key). See DEC-089.
 - **`set` now notes when type inference silently retypes a previously
   string-valued property** (iter-219, dogfood NEW-16c), e.g. `code: '42'`
   (string) becoming `code: 42` (number) via `set --property code=42`. The
@@ -118,6 +116,18 @@ and this project adheres to
 
 ### Changed
 
+- **`set`/`append --property a.b=x` now rejects the whole batch, instead of
+  silently creating a literal `"a.b"` key, when a top-level `a` already
+  exists as a mapping in a matched file's frontmatter** (iter-219, dogfood
+  NEW-16b — behavior change: a write that previously succeeded now fails
+  with an error). Scoped to `set` and `append` only — `remove` is
+  unaffected, since removing a nonexistent literal dotted key was already a
+  harmless no-op. hyalo does not support dotted path syntax for nested
+  properties; only this specific collision is guarded — a dotted key with
+  no colliding map is still unchanged (still a literal flat key). The
+  guard runs as a pre-pass over every matched file before any file in the
+  batch is written, so a collision found on file 7 of 50 does not leave
+  files 1-6 already mutated. See DEC-089.
 - **Frontmatter's internal scalar-content budget raised to match the
   documented 64 KiB limit** (iter-219, dogfood NEW-8), from an undocumented
   8192-byte parser default. A real GitHub Docs `admin/index.md` (7,961

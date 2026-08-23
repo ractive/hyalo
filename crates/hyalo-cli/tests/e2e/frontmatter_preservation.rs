@@ -575,7 +575,7 @@ fn set_retype_advisory_fires_as_json_note() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let note = parsed["results"]["note"].as_str().unwrap_or_default();
     assert!(
-        note.contains("previously stored as a string"),
+        note.contains("previously stored this property as a string"),
         "stdout: {stdout}"
     );
 }

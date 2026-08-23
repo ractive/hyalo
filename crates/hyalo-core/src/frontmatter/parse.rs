@@ -62,28 +62,52 @@ pub fn hyalo_options() -> Options {
 /// `Options` type, not something the user can act on). Both are intercepted
 /// here; everything else falls through to the crate's own message, which
 /// does not have this problem.
-pub(crate) fn friendly_parse_error(err: &serde_saphyr::Error) -> String {
+///
+/// `scalar_byte_limit` is the `max_total_scalar_bytes` the caller's
+/// `Options` was actually built with — passed explicitly, rather than
+/// hardcoding [`MAX_FRONTMATTER_BYTES`], because `splice_frontmatter`'s own
+/// verification pass parses with a *different* (2x) budget; a caller
+/// wiring that error path through here in the future must not get a
+/// message naming the wrong limit.
+pub(crate) fn friendly_parse_error(err: &serde_saphyr::Error, scalar_byte_limit: usize) -> String {
     match unwrap_snippet(err) {
-        serde_saphyr::Error::Budget { breach, location } => {
-            format!(
-                "{} (line {} column {})",
-                describe_budget_breach(breach),
-                location.line(),
-                location.column()
-            )
-        }
+        serde_saphyr::Error::Budget { breach, location } => with_location(
+            &describe_budget_breach(breach, scalar_byte_limit),
+            *location,
+        ),
         serde_saphyr::Error::DuplicateMappingKey { key, location } => {
             let what = match key {
                 Some(k) => format!("duplicate key '{k}' in frontmatter"),
                 None => "duplicate key in frontmatter".to_owned(),
             };
-            format!(
-                "{what} — YAML mappings must have unique keys (line {} column {})",
-                location.line(),
-                location.column()
+            with_location(
+                &format!("{what} — YAML mappings must have unique keys"),
+                *location,
             )
         }
-        other => other.to_string(),
+        // Every other variant's own `Display` is already clean — return the
+        // *original* (still-`WithSnippet`-wrapped, when present) error, not
+        // the unwrapped inner one, so its source-snippet caret/window
+        // survives. Only the two rewritten variants above need unwrapping,
+        // to reach their `location`/`breach`/`key` fields for matching.
+        _ => err.to_string(),
+    }
+}
+
+/// Append `" at line X, column Y"` — the same phrasing `serde_saphyr`'s own
+/// localizer uses for every other error — unless `location` is
+/// [`serde_saphyr::Location::UNKNOWN`] (no precise position was available),
+/// in which case the suffix is omitted entirely rather than printing
+/// "line 0, column 0".
+fn with_location(message: &str, location: serde_saphyr::Location) -> String {
+    if location == serde_saphyr::Location::UNKNOWN {
+        message.to_owned()
+    } else {
+        format!(
+            "{message} at line {}, column {}",
+            location.line(),
+            location.column()
+        )
     }
 }
 
@@ -97,12 +121,19 @@ fn unwrap_snippet(err: &serde_saphyr::Error) -> &serde_saphyr::Error {
 }
 
 /// Describe a budget breach without leaking the `BudgetBreach` Debug format.
-fn describe_budget_breach(breach: &serde_saphyr::budget::BudgetBreach) -> String {
+///
+/// `scalar_byte_limit` names the actual configured `max_total_scalar_bytes`
+/// for the `ScalarBytes` case — see [`friendly_parse_error`] for why this
+/// isn't just [`MAX_FRONTMATTER_BYTES`].
+fn describe_budget_breach(
+    breach: &serde_saphyr::budget::BudgetBreach,
+    scalar_byte_limit: usize,
+) -> String {
     use serde_saphyr::budget::BudgetBreach;
     match breach {
         BudgetBreach::ScalarBytes { total_scalar_bytes } => format!(
             "frontmatter content is too large ({total_scalar_bytes} bytes of scalar text exceeds \
-             the {MAX_FRONTMATTER_BYTES}-byte limit); trim large values or split them into separate files"
+             the {scalar_byte_limit}-byte limit); trim large values or split them into separate files"
         ),
         BudgetBreach::Anchors { .. } | BudgetBreach::Aliases { .. } => {
             "frontmatter uses YAML anchors/aliases, which hyalo does not support — expand the \
@@ -322,7 +353,7 @@ impl Document {
                     serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
                         anyhow::Error::new(FrontmatterError(format!(
                             "failed to parse YAML frontmatter: {}",
-                            friendly_parse_error(&e)
+                            friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
                         )))
                     })?;
                 (props, compact)
@@ -914,7 +945,7 @@ pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
     serde_saphyr::from_str_with_options(&yaml, hyalo_options()).map_err(|e| {
         anyhow::Error::new(FrontmatterError(format!(
             "failed to parse YAML frontmatter: {}",
-            friendly_parse_error(&e)
+            friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
         )))
     })
 }

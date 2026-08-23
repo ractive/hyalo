@@ -1378,7 +1378,7 @@ Body.
         let err =
             serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options())
                 .unwrap_err();
-        let msg = friendly_parse_error(&err);
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
         assert!(!msg.contains("ScalarBytes"), "leaked internals: {msg}");
         assert!(!msg.contains('{'), "leaked Debug-struct syntax: {msg}");
         assert!(msg.contains("too large"), "message: {msg}");
@@ -1392,7 +1392,7 @@ Body.
         let err =
             serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(yaml, hyalo_options())
                 .unwrap_err();
-        let msg = friendly_parse_error(&err);
+        let msg = friendly_parse_error(&err, MAX_FRONTMATTER_BYTES);
         assert!(
             !msg.contains("DuplicateKeyPolicy"),
             "leaked internal type name: {msg}"
@@ -1431,7 +1431,9 @@ Body.
         assert!(
             result.is_ok(),
             "~60 KiB frontmatter must parse under the documented 64 KiB budget: {:?}",
-            result.err().map(|e| friendly_parse_error(&e))
+            result
+                .err()
+                .map(|e| friendly_parse_error(&e, MAX_FRONTMATTER_BYTES))
         );
     }
 }
