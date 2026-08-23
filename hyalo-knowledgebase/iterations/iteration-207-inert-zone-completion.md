@@ -2,7 +2,7 @@
 title: Iteration 207 — inert-zone completion (release blocker)
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-207/inert-zone-completion
 tags:
   - iteration
@@ -54,7 +54,7 @@ for full repros and corpus measurements. Summary:
   fixable at `[fuzzy 0.966]` becomes `Unfixable: 1`, and fixes are
   reported against the alias name.
 
-## Tasks
+## Tasks [6/6]
 
 - [x] Replace the inline-code parity model in `inert_link_zones` with a
       CommonMark-correct code-span scanner: a code span opens only when a
@@ -115,7 +115,7 @@ BUG-7 repro: with `alias-target.md -> target.md` present, `links fix
 [fuzzy 0.966]` and `Unfixable: 0`; the fix is attributed to `target.md`,
 not the alias.
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] The BUG-1 minimal repro (unmatched backtick in `<kbd>`) produces 0
       insertions inside code spans
