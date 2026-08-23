@@ -2571,16 +2571,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let changelog_file =
-                    match crate::commands::changelog::resolve_changelog_target(
-                        ctx.dir,
-                        ctx.config_dir,
-                        ctx.changelog_path,
-                        effective_format,
-                    ) {
-                        crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                        crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                    };
+                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
+                    ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                    effective_format,
+                ) {
+                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+                };
                 let boundary_root = crate::commands::changelog::changelog_boundary_root(
                     ctx.dir,
                     ctx.config_dir,
@@ -2607,16 +2606,15 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 apply,
                 dry_run: _,
             } => {
-                let changelog_file =
-                    match crate::commands::changelog::resolve_changelog_target(
-                        ctx.dir,
-                        ctx.config_dir,
-                        ctx.changelog_path,
-                        effective_format,
-                    ) {
-                        crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                        crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                    };
+                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
+                    ctx.dir,
+                    ctx.config_dir,
+                    ctx.changelog_path,
+                    effective_format,
+                ) {
+                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+                };
                 let boundary_root = crate::commands::changelog::changelog_boundary_root(
                     ctx.dir,
                     ctx.config_dir,

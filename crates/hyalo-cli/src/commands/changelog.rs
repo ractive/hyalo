@@ -123,10 +123,7 @@ pub(crate) fn resolve_changelog_target(
             let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
             ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
                 format,
-                &hyalo_core::fs_util::outside_vault_message(
-                    "[changelog] path",
-                    Some(&resolved),
-                ),
+                &hyalo_core::fs_util::outside_vault_message("[changelog] path", Some(&resolved)),
                 Some(raw),
                 Some(
                     "set [changelog] path to a location inside the config directory, \

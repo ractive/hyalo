@@ -314,11 +314,20 @@ fn format_results_as_text(
             let tag_label = if total == 1 { "tag" } else { "tags" };
             let header = format!("{total} unique {tag_label}");
             let entries = format_value_as_text(results, cache);
-            return if entries.is_empty() {
+            let mut out = if entries.is_empty() {
                 header
             } else {
                 format!("{header}\n{entries}")
             };
+            // `tags --limit N` used to print the full unique-tag count in the
+            // header and then N rows, with nothing saying the list was cut —
+            // the truncation footer every other limited listing carries was
+            // skipped by this early return (iter-213, dogfood UX-5).
+            let shown = arr.len() as u64;
+            if shown < total {
+                let _ = write!(out, "\nshowing {shown} of {total} matches");
+            }
+            return out;
         }
     }
 
@@ -1418,12 +1427,35 @@ fn format_lint_fix_output_text(map: &serde_json::Map<String, serde_json::Value>)
             }
 
             // Conflicts.
+            //
+            // A rule with several violations in one file can have some fixes
+            // applied and one lose a range overlap, which printed the rule as
+            // both `fixed` and `conflict` two lines apart — read as a
+            // contradiction rather than as two different violations (iter-213,
+            // dogfood UX-5). The `fixed` line is the one that describes what
+            // changed on disk, so the conflict line is dropped when the same
+            // rule already appears there. The JSON keeps both: `conflicts` is
+            // how a consumer learns a fix was skipped, and dropping entries
+            // from it would lose that.
+            let fixed_rules: std::collections::HashSet<&str> = file_entry
+                .get("fixed_groups")
+                .and_then(|g| g.as_array())
+                .map(|groups| {
+                    groups
+                        .iter()
+                        .filter_map(|g| g.get("rule").and_then(serde_json::Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
             if let Some(conflicts) = file_entry.get("conflicts").and_then(|c| c.as_array()) {
                 for conflict in conflicts {
                     let rule = conflict
                         .get("rule")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("?");
+                    if fixed_rules.contains(rule) {
+                        continue;
+                    }
                     let reason = conflict
                         .get("reason")
                         .and_then(serde_json::Value::as_str)

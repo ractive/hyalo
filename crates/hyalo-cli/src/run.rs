@@ -1531,8 +1531,13 @@ fn run_inner() -> Result<(), AppError> {
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(
-                        "index was built for vault '{hdr_vault}' (prefix {hdr_prefix:?}) but current \
-                         vault is '{vault_dir_str}' (prefix {site_prefix:?}); falling back to disk scan",
+                        "index does not match this run ({}); falling back to disk scan",
+                        crate::config::index_mismatch_summary(
+                            hdr_vault,
+                            &vault_dir_str,
+                            hdr_prefix.as_deref(),
+                            site_prefix,
+                        ),
                     ));
                     None
                 }

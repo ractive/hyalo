@@ -455,6 +455,12 @@ fn files_from_hints(counters: Option<FilesFromCounterSummary>) -> Vec<Hint> {
 // ---------------------------------------------------------------------------
 
 /// Push the global flags that were explicitly passed on the CLI.
+///
+/// Always the **last** thing a hint builder pushes (iter-213, dogfood UX-5).
+/// Several builders used to push globals mid-command and then append
+/// `--glob`/file targets after them, so the same `--format text` landed in a
+/// different position depending on which hint you were reading — the block of
+/// hints under one result set did not look like variations of one command.
 fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     if let Some(dir) = &ctx.dir {
         parts.push("--dir".to_owned());
@@ -545,11 +551,11 @@ fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
     for arg in args {
         parts.push(shell_quote(arg));
     }
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -561,7 +567,6 @@ fn build_command_with_glob_and_files(ctx: &HintContext, args: &[&str]) -> String
     for arg in args {
         parts.push(shell_quote(arg));
     }
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
@@ -569,6 +574,7 @@ fn build_command_with_glob_and_files(ctx: &HintContext, args: &[&str]) -> String
     for ft in &ctx.file_targets {
         parts.push(shell_quote(ft));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -599,11 +605,11 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
         parts.push(shell_quote(arg));
     }
     push_find_index_file(&mut parts, ctx);
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -683,11 +689,11 @@ fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str]) -> Strin
         parts.push(shell_quote(arg));
     }
     push_find_index_file(&mut parts, ctx);
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -713,11 +719,11 @@ fn build_find_command_with_pattern(ctx: &HintContext, new_pattern: &str) -> Stri
         parts.push("--file".to_owned());
         parts.push(shell_quote(ft));
     }
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -1118,7 +1124,6 @@ fn auto_view_name(ctx: &HintContext) -> String {
 /// Build the `hyalo views set <name> <filters…>` command string.
 fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
     let mut parts: Vec<String> = vec!["hyalo".to_owned()];
-    push_global_flags(&mut parts, ctx);
     parts.push("views".to_owned());
     parts.push("set".to_owned());
     parts.push(shell_quote(view_name));
@@ -1134,6 +1139,7 @@ fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
         parts.push("--task".to_owned());
         parts.push(shell_quote(task));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 
@@ -2065,7 +2071,6 @@ fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> String {
         parts.push("--fix-rule".to_owned());
         parts.push(shell_quote(fr));
     }
-    push_global_flags(&mut parts, ctx);
     for glob in &ctx.glob {
         parts.push("--glob".to_owned());
         parts.push(shell_quote(glob));
@@ -2073,6 +2078,7 @@ fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> String {
     for ft in &ctx.file_targets {
         parts.push(shell_quote(ft));
     }
+    push_global_flags(&mut parts, ctx);
     parts.join(" ")
 }
 

@@ -1117,6 +1117,43 @@ pub(crate) fn resolve_site_prefix(
     (derived, SitePrefixSource::Derived)
 }
 
+/// Render an index-vs-run mismatch as the field(s) that actually differ.
+///
+/// UX-3 (iter-213): the old wording printed the vault path twice — once for the
+/// snapshot, once for the run — even when the paths were identical and only the
+/// site prefix differed, and rendered the prefixes with `{:?}` so the reader
+/// got `Some("en-us")` instead of a value. The one differing field was the last
+/// thing you could see. This names only what differs, in `field: index X vs run
+/// Y` form.
+pub(crate) fn index_mismatch_summary(
+    index_vault: &str,
+    run_vault: &str,
+    index_prefix: Option<&str>,
+    run_prefix: Option<&str>,
+) -> String {
+    fn show(value: Option<&str>) -> String {
+        value.map_or_else(|| "(none)".to_owned(), |v| format!("'{v}'"))
+    }
+    let mut parts = Vec::new();
+    if index_vault != run_vault {
+        parts.push(format!("vault: index '{index_vault}' vs run '{run_vault}'"));
+    }
+    if index_prefix != run_prefix {
+        parts.push(format!(
+            "site prefix: index {} vs run {}",
+            show(index_prefix),
+            show(run_prefix)
+        ));
+    }
+    if parts.is_empty() {
+        // Unreachable while `SnapshotIndex::validate` compares exactly these
+        // two fields, but a future header field must not produce an empty
+        // parenthetical.
+        return "header differs".to_owned();
+    }
+    parts.join("; ")
+}
+
 /// Print the config-integrity diagnostic for the configuration that actually
 /// governs this run, if any.
 ///

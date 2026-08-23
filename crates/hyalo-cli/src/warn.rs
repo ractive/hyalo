@@ -68,6 +68,23 @@ pub fn note(msg: impl AsRef<str>) {
     emit_with_prefix("note", msg.as_ref());
 }
 
+/// Emit a message that is *fatal* to this run, with an `error` prefix.
+///
+/// Distinct from [`warn`] purely in what it promises the reader: a `warning:`
+/// line means the run continued past the problem. A single-file write whose
+/// frontmatter will not parse does not continue — it exits 1 — and labelling
+/// its diagnostic `warning:` made the exit code and the stderr text disagree
+/// (iter-213, dogfood UX-5). Not suppressible by `-q`, for the same reason
+/// [`warn_always`] is not: the run failed, and a script reading only stderr
+/// must be able to see why.
+pub fn error(msg: impl AsRef<str>) {
+    emit(&Emit {
+        prefix: "error",
+        msg: msg.as_ref(),
+        force: true,
+    });
+}
+
 /// Emit a warning that `--quiet` cannot suppress.
 ///
 /// Reserved for **config-integrity** problems (iter-201): a `.hyalo.toml` that
