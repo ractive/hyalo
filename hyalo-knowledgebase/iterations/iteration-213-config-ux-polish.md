@@ -2,7 +2,7 @@
 title: Iteration 213 — config & UX polish batch
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-213/config-ux-polish
 tags:
   - iteration
@@ -55,7 +55,7 @@ and BUG-14:
   hint `--format` flag placement is inconsistent between read-only and
   writes hints.
 
-## Tasks
+## Tasks [10/10]
 
 - [x] UX-1: when no cwd config exists, walk ancestors for `.hyalo.toml`
       whose configured vault contains cwd; either adopt it (preferred —
@@ -93,7 +93,7 @@ and BUG-14:
       the executed-hint and command-reference xtask gates where they
       apply.
 
-## Acceptance criteria
+## Acceptance criteria [6/6]
 
 - [x] Running any command from a vault subdirectory either uses the
       ancestor config or prints a warning naming it — never silent
