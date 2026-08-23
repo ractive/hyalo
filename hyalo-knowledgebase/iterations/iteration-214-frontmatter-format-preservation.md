@@ -2,7 +2,7 @@
 title: Iteration 214 — frontmatter format preservation (minimal-diff writes)
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-214/frontmatter-format-preservation
 tags:
   - iteration
@@ -41,7 +41,7 @@ re-serialization only when the file's YAML cannot be span-mapped
 (anchors/aliases, exotic constructs) — and warning when that fallback
 triggers.
 
-## Tasks
+## Tasks [6/6]
 
 - [x] Research the current write path (`write_frontmatter` and callers)
       and the span information available from the YAML parser; record
@@ -66,7 +66,7 @@ triggers.
 - [x] Docs/CHANGELOG: describe the new guarantee and its fallback
       boundary.
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] Adding one property to the GitHub Docs fixture changes only the
       inserted line (was 116 of 198 lines)
