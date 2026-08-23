@@ -107,7 +107,13 @@ fn block_lookahead(rest: &str) -> &str {
 
 /// Whether `line` ends the paragraph a code span could have been opened in.
 /// See [`block_lookahead`] for the rationale and the list of boundaries.
-fn is_block_boundary(line: &str) -> bool {
+///
+/// `pub(crate)` (iter-217): reused by `auto_link`'s document-scoped
+/// link/HTML-tag zone scan to group body lines into the same paragraph-like
+/// units — a wikilink, markdown link, or raw HTML tag can wrap across a line
+/// break, but never across a blank line, heading, or fence, exactly like an
+/// inline code span cannot (iter-207, BUG-1).
+pub(crate) fn is_block_boundary(line: &str) -> bool {
     let trimmed = line.trim_end_matches(['\r']);
     if trimmed.trim().is_empty() {
         return true;
@@ -121,6 +127,19 @@ fn is_block_boundary(line: &str) -> bool {
     if body.starts_with("```") || body.starts_with("~~~") {
         return true;
     }
+    is_atx_heading(body)
+}
+
+/// Whether `body` (already stripped of any leading indent) is a CommonMark
+/// ATX heading: 1-6 `#` characters followed by whitespace or end of line.
+///
+/// Split out of [`is_block_boundary`] (iter-217 review C3) so callers that
+/// need to distinguish "this line ends the current block" from "this line
+/// specifically is a heading" — e.g. `auto_link.rs`'s existing-link prepass,
+/// which must still scan a heading's own (single-line) content for links
+/// even though a heading can never join a cross-line paragraph block —
+/// don't have to re-derive the ATX grammar themselves.
+pub(crate) fn is_atx_heading(body: &str) -> bool {
     let hashes = body.len() - body.trim_start_matches('#').len();
     (1..=6).contains(&hashes) && body[hashes..].starts_with([' ', '\t'])
         || ((1..=6).contains(&hashes) && body.len() == hashes)

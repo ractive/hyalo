@@ -1682,3 +1682,155 @@ from the message alone.
 **Not warned:** creating frontmatter on a file that had none, and writing into
 an empty `---\n---` block. Neither has any formatting to preserve, so neither is
 churn.
+
+## DEC-082: `links auto` emits an alias, not a silent prose rewrite, when matched text differs from the target (2026-08-23)
+
+**Decision:** `links auto --apply` writes `[[link_target|matched_text]]`
+whenever the matched surface text is not byte-identical to the emitted
+target — including a bare case difference (`Pulls` vs `pulls`) — and only
+writes the plain `[[link_target]]` form when the two are identical. The
+comparison is exact string equality; there is no separate case-insensitive
+carve-out; any difference at all routes through the alias branch.
+
+**Why:** before this decision, `--apply` always substituted the target stem
+for the matched text, so `pull requests` became `[[pulls]]` and `PULLS`
+became `[[pulls]]` — silently changing what the page renders. On a GitHub
+Docs dogfood corpus, 22.2% of proposed insertions (7,968 of 35,860) altered
+rendered prose this way; 5,178 of those were pure case differences. No prior
+decision documented prose substitution as intended, and the read side
+already supported the alias form — `AutoLinkMatch` carried `matched_text`
+and `link_target` as two separate fields specifically so the write side
+could tell them apart. The fix is confined to the replacement-text
+construction (`wikilink_replacement_text` in `auto_link.rs`); the scan and
+match logic are unchanged.
+
+**Why exact equality, not case-insensitive-equal-then-plain:** a title
+mention that differs only by case is still a case difference the author
+chose to write, and `[[target]]` alone would flip it to whatever case the
+target's stem happens to use. Preserving the exact surface form via an
+alias is strictly safer than guessing which case differences are "close
+enough" to normalize away.
+
+**Text-format dry-run output mirrors this:** the `links auto` text renderer
+shows `"<matched_text>" → [[target|matched_text]]` (or plain `[[target]]`
+when they match) so a dry-run preview shows exactly what `--apply` will
+write, not a simplified approximation of it.
+
+## DEC-083: `links auto` ambiguity is checked in the emitted namespace, not just the title namespace (2026-08-23)
+
+**Decision:** a candidate title is excluded from the auto-link inventory
+when **either** of two conditions holds: two different source files produce
+the identical (lowercased) title-map key (the pre-existing check), **or**
+two different source files would each emit the same `link_target` — the
+filename stem actually written into `[[…]]` — even though their title-map
+keys differ. Both conditions add every implicated title to
+`ambiguous_titles`.
+
+**Why the second condition is necessary:** ambiguity has to be checked
+against what gets **written**, not against the human-readable title used to
+find the candidate. `graphql/reference/pulls.md` (title "Pull requests")
+and `rest/pulls/pulls.md` (title "REST API endpoints for pull requests")
+have distinct titles — so a title-only ambiguity check sees no conflict —
+but both files are literally named `pulls.md`, so both resolve to the same
+emitted stem `pulls`. Checking titles alone let `links auto --apply` write
+`[[pulls]]` for either mention, a link hyalo's own resolver then reports as
+ambiguous (`links` on a real GitHub Docs corpus: `ambiguous` count 0 → 1,492
+after such a run).
+
+**Implementation is a second pass over `entries`, not over the survivors of
+the first:** a second pass builds `target_sources` — `stem → {source
+files}` — directly from the raw index `entries` (minus `--exclude-target-glob`
+matches, mirroring the first pass's own exclusion), and removes any
+`title_map` entry whose target has more than one distinct source, adding the
+target to `ambiguous_titles` if not already present.
+
+The first implementation tried instead grouped `title_map.values()` — the
+entries that *survived* the identical-key pass — and passed the
+`graphql/reference/pulls.md` / `rest/pulls/pulls.md` synthetic test built to
+verify it. It failed on the real GitHub Docs corpus: `rest/pulls/pulls.md`
+and `rest/pulls/index.md` happen to share the exact title "REST API
+endpoints for pull requests", an *unrelated* first-pass key collision that
+removed `rest/pulls/pulls.md`'s own title-map entry before the
+target-collision pass ever ran. With that file's contribution gone from
+`title_map`, the survivors-only pass saw only `graphql/reference/pulls.md`'s
+"Pull requests" entry targeting `pulls` — a lone source, not ambiguous — and
+`links auto --apply` wrote `[[pulls]]` 1,429 times before this was caught by
+running the fix against real data rather than a 2-file unit test. The lesson
+generalizes: an ambiguity check must be computed from ground truth (every
+file's own stem, from `entries`), never from a structure that a different,
+unrelated collision can have already thinned out. Regression coverage:
+`same_stem_different_dirs_and_titles_is_ambiguous`,
+`stem_collision_survives_even_when_one_side_title_collides_elsewhere`, and
+`same_stem_different_dirs_ambiguity_blocks_actual_writes` in `auto_link.rs`
+— the middle test is the real-corpus shape and is the one that would have
+failed under the survivors-only implementation.
+
+**AC:** `hyalo links` (the independent resolver) reports the same
+`ambiguous` count before and after `links auto --apply` on any corpus —
+nothing written by `--apply` may ever appear in that count afterward.
+Verified on live GitHub Docs and vscode-docs scratch copies, not only unit
+tests, precisely because the unit-test-only version of this fix shipped a
+real gap.
+
+## DEC-084: any well-formed `[...]` bracket span is inert, not only ones that resolve to a real link or reference (2026-08-23)
+
+**Decision:** `links auto`'s zone scan treats **every** syntactically
+well-formed `[...]` span — an unescaped `[` matched by a later unescaped
+`]` within the same paragraph block — as inert, regardless of what is
+inside it. This subsumes CommonMark reference-link usages (`[label][ref]`,
+`[ref][]`, shortcut `[ref]`, `![ref][ref]`) as a special case, but is not
+conditioned on a matching `[ref]: url` definition existing anywhere in the
+document.
+
+**Supersedes the iter-217 plan as written.** The iteration's own task list
+said: "Shortcut-form detection must not blanket-ban all bracketed text:
+only labels that match a definition in the same document are reference
+links" — i.e. `[Gamma]` should stay a linkable candidate when no
+`[Gamma]: url` definition exists, since otherwise it is just prose in
+square brackets. A first implementation did exactly that (gated shortcut
+zoning on a document-wide `definitions: HashSet<String>`), passed every
+unit test built against that premise, and still corrupted real corpora.
+
+**Why the premise was wrong:** GitHub Docs and vscode-docs both use plain,
+*undefined* `[...]` bracket conventions for things that were never links —
+GitHub's style guide writes permission-statement placeholders as
+`[ACCOUNT ROLE]`; vscode's release notes prefix each entry with a PR area
+tag like `[typescript-language-features]`. Neither has a corresponding
+`[ref]: url` definition; under the definition-gated design both were
+correctly judged "not a reference link" and left open to auto-linking.
+Auto-linking "ACCOUNT" or "typescript" inside them spliced `[[…]]` markup
+directly against the pre-existing bracket, producing
+`[[[account|ACCOUNT]] ROLE]` and `[[[typescript]]-language-features]` —
+syntactically valid nowhere, and specifically misread by hyalo's own
+wikilink parser as a link with a mangled target (`"[account"`,
+`"[typescript"`). Verification against live corpora (not just the 2-3-file
+unit tests the definition-gated version passed) caught this: GH Docs
+`broken` count rose 6,099 → 6,107, vscode-docs 330 → 371, even after NEW-1
+(defined reference links), NEW-2 (wrapped links), NEW-4 (emitted-namespace
+ambiguity) were all independently fixed and verified.
+
+**Why blanket-inert is the right trade, not a workaround:** the codebase's
+standing zone-scan philosophy — stated for Liquid/HTML in iter-207 and
+reused throughout `inert_link_zones` — is "an unterminated marker makes
+the rest of the line inert… a missed auto-link candidate costs nothing, a
+corrupted file does." A bracket span that isn't a real link is exactly
+this shape: ambiguous intent, cheap to skip, expensive to guess wrong on.
+Treating every bracket span uniformly (rather than trying to distinguish
+"this bracket looks decorative" from "this bracket might resolve someday")
+also keeps the rule simple: one fallback arm in `inert_link_zones`'s
+existing `[` handling, no new state, no interaction with the definition
+collector. The recall this costs — a title mention that happens to sit
+inside unrelated brackets never gets linked — was already the accepted
+trade-off for every other zone in this scanner.
+
+**What still needs the definition collector:** a `[ref]: url "title"`
+*definition line itself*. The `[ref]` part is already covered by the
+generic bracket rule, but the destination and title after the colon sit
+outside any bracket and would otherwise be ordinary, linkable prose —
+`parse_reference_definition_label` and the per-line `is_definition` flag in
+`auto_link.rs`'s block builder exist specifically to blank the whole line.
+
+**Regression coverage:** `bracketed_mention_without_a_reference_definition_stays_inert`
+and `placeholder_style_bracket_text_is_never_corrupted` in `auto_link.rs`
+lock in the corrected behavior; the former replaced a same-named-in-spirit
+test that asserted the opposite under the superseded design.

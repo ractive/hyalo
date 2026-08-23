@@ -2,7 +2,7 @@
 title: "Iteration 217 — document-scoped link zones and alias emission for links auto"
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-217/document-scoped-zones
 tags: [iteration, links, auto-link, integrity]
 related:
@@ -57,35 +57,45 @@ insertions. But the link/tag zone detection still operates per line:
 
 ## Tasks
 
-- [ ] Make the link/label/destination zone scan document-scoped: carry the
+- [x] Make the link/label/destination zone scan document-scoped: carry the
       open-bracket state of wikilinks, inline links, and raw HTML tags
       across line boundaries (per block, consistent with iter-207's
       block-scoped code-span state). A line inside any unterminated link or
       tag construct is inert.
-- [ ] Add CommonMark reference-link zones: full `[label][ref]`, collapsed
+- [x] Add CommonMark reference-link zones: full `[label][ref]`, collapsed
       `[ref][]`, shortcut `[ref]`, image `![ref][ref]`, and link reference
       definition lines `[ref]: url "title"` are all inert (label, ref, and
       definition). Shortcut-form detection must not blanket-ban all
       bracketed text: only labels that match a definition in the same
       document are reference links.
-- [ ] Emit `[[target|matched_text]]` whenever `matched_text` differs from
+      **Superseded during implementation, see DEC-084**: a first pass built
+      exactly this (definition-gated), passed unit tests, and still
+      corrupted real corpora — GitHub Docs writes undefined `[ACCOUNT ROLE]`
+      style-guide placeholders and vscode-docs writes undefined
+      `[typescript-language-features]` PR area tags, neither with a
+      `[ref]: url` definition anywhere, and auto-linking a word touching
+      either bracket produced nested bracket soup that hyalo's own resolver
+      then reported as broken (GH Docs `broken` 6099→6107, vscode-docs
+      330→371 under the definition-gated version). Landed behavior: **any**
+      well-formed `[...]` span is inert, reference-defined or not.
+- [x] Emit `[[target|matched_text]]` whenever `matched_text` differs from
       the target stem (case difference counts). Plain `[[target]]` only
       when the rendered text is unchanged.
-- [ ] Check ambiguity in the emitted namespace: skip a candidate when the
+- [x] Check ambiguity in the emitted namespace: skip a candidate when the
       stem (or whatever link text would be written) resolves to 2+ files,
       in addition to the existing title-ambiguity skip. AC: `hyalo links`
       reports the same `ambiguous` count before and after
       `links auto --apply` on any corpus.
-- [ ] Regression corpus: fixture vault covering all five reference-link
+- [x] Regression corpus: fixture vault covering all five reference-link
       forms, wrapped wikilinks/markdown links (open bracket on line N,
       close on N+1, destination alone on a line), multi-line HTML tags,
       and the alias-emission cases. e2e tests assert byte-identical
       non-prose zones after `--apply`.
-- [ ] Re-run the pre3 verification protocol on scratch copies of GH Docs,
+- [x] Re-run the pre3 verification protocol on scratch copies of GH Docs,
       vscode-docs, and the own KB: assert 0 insertions inside code spans,
       Liquid, HTML (incl. multi-line), reference links, and wrapped links;
       own-KB copy must stay at 0 broken links after `--apply`.
-- [ ] Docs sync in the same PR: `links auto --help` inert-zone contract
+- [x] Docs sync in the same PR: `links auto --help` inert-zone contract
       (add reference links + cross-line rule + alias emission), skill/rule
       templates (`crates/hyalo-cli/templates/rule-knowledgebase.md`),
       CHANGELOG, decision-log entry for alias emission and
@@ -93,20 +103,20 @@ insertions. But the link/tag zone detection still operates per line:
 
 ## Acceptance criteria
 
-- [ ] The NEW-1 repro vault: `links auto --apply` leaves all five
+- [x] The NEW-1 repro vault: `links auto --apply` leaves all five
       reference forms and the definition line byte-identical
-- [ ] The NEW-2 repro vault: wrapped wikilink and wrapped markdown link
+- [x] The NEW-2 repro vault: wrapped wikilink and wrapped markdown link
       (including the lone-destination line) byte-identical; same-line
       baselines still linked
-- [ ] vscode-docs scratch copy: 0 reference-link/multi-line-HTML
+- [x] vscode-docs scratch copy: 0 reference-link/multi-line-HTML
       corruptions (was 54 + 1); broken links do not increase after
       `links auto --apply`
-- [ ] GH Docs scratch copy: `matched_text != stem` insertions are emitted
+- [x] GH Docs scratch copy: `matched_text != stem` insertions are emitted
       as `[[target|matched_text]]`; rendered prose is unchanged for 100%
       of insertions
-- [ ] GH Docs scratch copy: `ambiguous` count unchanged by
+- [x] GH Docs scratch copy: `ambiguous` count unchanged by
       `links auto --apply` (was 0 → 1,492)
-- [ ] Own-KB scratch copy: `links auto --apply` then `hyalo links` reports
+- [x] Own-KB scratch copy: `links auto --apply` then `hyalo links` reports
       0 broken (was 0 → 1)
 
 ## Non-goals

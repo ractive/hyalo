@@ -9,8 +9,56 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **`links auto --apply` no longer corrupts wrapped wikilinks, wrapped
+  markdown links, multi-line HTML tags, or any bracketed text**
+  (iter-217, dogfood NEW-1/NEW-2/NEW-10). The zone scan that decides what is
+  safe to rewrite was line-scoped: a wikilink or markdown link whose target,
+  label, or destination wrapped onto the next line was invisible to it, so a
+  title mention inside the wrap got rewritten in place
+  (`[[research/[[release-pipeline-unification]]|reusable`-style double
+  brackets on a real own-KB file). CommonMark reference links
+  (`[label][ref]`, `[ref][]`, shortcut `[ref]`, `![ref][ref]`, and
+  `[ref]: url` definition lines) were not recognized at all and got
+  rewritten wholesale, definition line included — 54 corruptions on
+  vscode-docs, 8 on GitHub Docs. The scan is now block-scoped: a construct
+  is inert across its whole span, including across a line break, but never
+  across a blank line, heading, or fence, mirroring the block-scoping
+  iter-207 already applies to cross-line code spans. Any well-formed
+  `[...]` bracket span is now inert regardless of whether it resolves to a
+  real link or reference — style-guide placeholders (`[ACCOUNT ROLE]`) and
+  PR area tags (`[typescript-language-features]`) are not links either, but
+  writing `[[target]]` touching or inside one produced the same nested
+  bracket corruption. See DEC-084.
+- **`links auto` never writes a link its own resolver would call
+  ambiguous** (iter-217, dogfood NEW-4). Ambiguity was checked against the
+  human-readable title, but the link is emitted as a filename stem — two
+  files with distinct titles that happen to share a filename (e.g. two
+  `pulls.md` in different directories) passed the title check yet both
+  resolved to the same `[[pulls]]` stem. `links auto --apply` on a GitHub
+  Docs corpus wrote 1,492 such links that `hyalo links` then reported as
+  ambiguous. Ambiguity is now also checked against the emitted stem, so
+  either file's title is skipped. See DEC-083.
+
 ### Changed
 
+- **`links auto`'s heading skip now uses the same CommonMark ATX-heading
+  rule as the rest of the zone scan** (iter-217, review follow-up), instead
+  of "the trimmed line starts with `#`". A line like `#nothash` (no space
+  after the `#`) is no longer treated as a heading and is scanned as
+  ordinary body text; a real heading (`## Real Heading`, 1-6 hashes
+  followed by a space or end of line, indent 0-3) is still skipped exactly
+  as before.
+- **`links auto --apply` emits an alias instead of silently rewriting
+  rendered prose** (iter-217, dogfood NEW-3). A match whose surface text
+  differs from the emitted target — including only by case (`Pulls` vs
+  `pulls`) — now writes `[[target|matched_text]]` instead of substituting
+  the bare target, which used to change what the page renders. On a GitHub
+  Docs corpus, 22.2% of proposed insertions (7,968 of 35,860) altered
+  rendered prose this way before this change. A plain `[[target]]` is still
+  written when the matched text is byte-identical to the target. See
+  DEC-082.
 - **Frontmatter writes now touch only the keys they change** (iter-214,
   dogfood BUG-14). `set`, `remove`, `append`, `tags rename`,
   `properties rename`, `types apply` and `lint --fix` parsed the whole YAML
