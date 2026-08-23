@@ -78,7 +78,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [x] UX-4: `hyalo read --format json` without `--frontmatter` hints that
       frontmatter is omitted; `hyalo properties` types nested maps as
       `map` instead of `text`
-- [ ] NEW-16: heading task-counts render once — when a hand-written
+- [x] NEW-16: heading task-counts render once — when a hand-written
       `[n/m]` disagrees with the computed count, show the computed one
       (optionally: new lint rule flagging the stale hand-written count)
 - [x] CHG-1 (found during iter-217): `hyalo changelog add --category
@@ -91,7 +91,7 @@ excluded: broken-links line numbers + Liquid heading slugs
       `hyalo changelog add --category Fixed --message "$(printf 'l1\nl2')"
       --dry-run`. Create the missing subsection under `[Unreleased]` and
       indent continuation lines
-- [ ] Docs sync in same PR: helps touched above, CHANGELOG
+- [x] Docs sync in same PR: helps touched above, CHANGELOG
 
 ## Acceptance criteria
 

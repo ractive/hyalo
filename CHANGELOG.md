@@ -175,6 +175,15 @@ and this project adheres to
   — `hyalo properties` and `find --fields properties-typed` now report
   `"map"` so a scalar property is distinguishable from a mapping one
   without inspecting the raw value.
+- **a hand-written `[n/m]` task count in a heading no longer doubles with
+  the computed one in text output** (iter-220, dogfood NEW-16). `## Tasks
+  [6/6]` with 1 of 2 checkboxes actually open used to render as `## Tasks
+  [6/6] [1/2]` — the stale hand-written count appended right next to the
+  correct computed one — in both `find --fields sections` and the
+  single-section jq filter. The computed count now replaces a trailing
+  `[n/m]`-shaped bracket group in the heading text rather than appending
+  a second one; a heading with no task section (nothing to replace it
+  with) keeps its own bracket text exactly as written.
 
 ### Changed
 

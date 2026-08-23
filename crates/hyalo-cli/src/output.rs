@@ -484,7 +484,15 @@ const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)")\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `OutlineSection` with tasks: `{code_blocks, heading, level, line, links, tasks}`
-const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
+///
+/// NEW-16 (dogfood pre3): `.heading` is the raw markdown text, which may
+/// itself already carry a hand-written `[n/m]` count (`## Tasks [6/6]`) —
+/// unconditionally appending the computed one doubled it (`## Tasks [6/6]
+/// [1/2]`), with the hand-written half free to go stale the moment a task
+/// checkbox changed. Strips any such trailing bracket count from the heading
+/// before appending the one hyalo actually computed, so it renders once and
+/// is always current.
+const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \((.heading // "(pre-heading)") | sub("\\s*\\[[0-9]+/[0-9]+\\]\\s*$"; "")) [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `TaskInfo`: `{done, line, status, text}`
 const TASK_INFO_FILTER: &str =
@@ -903,9 +911,15 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
 
     // Sections: header then each as "    ## Heading [done/total]" or "    ## Heading"
     // Note: uses r##"..."## because the jq filter contains the sequence "#" (hash-quoted).
+    // NEW-16 (dogfood pre3): when a computed count is about to be appended,
+    // strip a trailing hand-written `[n/m]` from `.heading` first — see
+    // OUTLINE_SECTION_WITH_TASKS_FILTER's doc comment for why. Only stripped
+    // when `.tasks` is present: a heading with no task section keeps its text
+    // exactly as written, even if it happens to end in bracket text that
+    // merely looks like a count.
     if map.contains_key("sections") {
         parts.push(
-            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(if .tasks then ((.heading // "(pre-heading)") | sub("\\s*\\[[0-9]+/[0-9]+\\]\\s*$"; "")) else (.heading // "(pre-heading)") end)\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 
@@ -2509,6 +2523,35 @@ mod tests {
         assert!(out.contains("##"));
         assert!(out.contains("Tasks"));
         assert!(out.contains("[2/4]"));
+    }
+
+    /// NEW-16 (dogfood pre3): a hand-written `[n/m]` already in the heading
+    /// text must render once — the computed count replaces it rather than
+    /// appending a second bracket group (`## Tasks [6/6] [2/4]`).
+    #[test]
+    fn outline_section_with_tasks_filter_replaces_a_stale_hand_written_count() {
+        let val = json!({
+            "code_blocks": [],
+            "heading": "Tasks [6/6]",
+            "level": 2,
+            "line": 10,
+            "links": [],
+            "tasks": {"done": 2, "total": 4}
+        });
+        let out = jq(OUTLINE_SECTION_WITH_TASKS_FILTER, &val).unwrap();
+        assert!(
+            out.contains("Tasks [2/4]"),
+            "expected the computed count, got: {out}"
+        );
+        assert!(
+            !out.contains("[6/6]"),
+            "the stale hand-written count must not survive: {out}"
+        );
+        assert_eq!(
+            out.matches('[').count(),
+            1,
+            "exactly one bracket group must render: {out}"
+        );
     }
 
     // --- FindTaskInfo filter ---
