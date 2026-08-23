@@ -108,8 +108,12 @@ Broken md anchor: [t](Foo.md#missing).
     );
 
     // Fragment-only same-file links resolve against THIS file's own headings
-    // (iter-211 / BUG-8). They are never file links, so they must not appear
-    // as outbound links — but a *dead* one must still be caught.
+    // (iter-211 / BUG-8). Since NEW-12 (dogfood pre3) resolvable ones DO
+    // appear in the general `find --fields links` inventory (see
+    // find_fields_links_inventory_includes_resolvable_same_file_anchors) —
+    // but never as `--orphan`/`--dead-end` outbound edges, since a same-file
+    // jump is not a link to another file. A *dead* same-file anchor must
+    // still be caught by `--broken-links`.
     write_md(
         tmp.path(),
         "same_file.md",
@@ -229,10 +233,12 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     );
 
     // same_file.md — every same-file anchor names a real heading here, in both
-    // the raw-text and slug spellings → NOT surfaced.
+    // the raw-text and slug spellings → NOT surfaced under --broken-links
+    // (nothing here is broken). They DO appear in the unfiltered `links`
+    // inventory — see find_fields_links_inventory_includes_resolvable_same_file_anchors.
     assert!(
         !files.contains(&"same_file.md".to_string()),
-        "[{label}] valid same-file anchors must not be reported: {files:?}"
+        "[{label}] valid same-file anchors must not be reported as broken: {files:?}"
     );
 
     // same_file_broken.md — `[b](#nope)` names no heading in this file
@@ -352,6 +358,102 @@ fn anchor_matrix_indexed() {
     create_index(&tmp);
     let json = run_broken_links(&tmp, true);
     assert_matrix(&json, "index");
+}
+
+/// NEW-12 (dogfood pre3): the general `find --fields links` inventory (no
+/// `--broken-links` filter) must include a *resolvable* same-file anchor —
+/// completeness must not depend on the broken/ok verdict. Also verifies the
+/// verdict itself (`broken_anchor: false`) is what a consumer checks, not
+/// the entry's mere presence.
+#[test]
+fn find_fields_links_inventory_includes_resolvable_same_file_anchors() {
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir,
+            "find",
+            "--fields",
+            "links",
+            "--file",
+            "same_file.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let links = json["results"][0]["links"]
+        .as_array()
+        .expect("links array present");
+
+    // `same_file.md` writes three resolvable same-file anchors: a wikilink
+    // (`[[#Real]]`), a markdown link (`[t](#Real)`), and a rendered-slug
+    // spelling (`[t](#real)`) — all three must be inventoried now.
+    let real_fragment_entries: Vec<_> = links
+        .iter()
+        .filter(|l| {
+            l["fragment"]
+                .as_str()
+                .is_some_and(|f| f.eq_ignore_ascii_case("real"))
+        })
+        .collect();
+    assert_eq!(
+        real_fragment_entries.len(),
+        3,
+        "every resolvable same-file anchor must be inventoried, not just broken ones: {links:?}"
+    );
+    for entry in &real_fragment_entries {
+        // `broken_anchor: false` is skipped from JSON by design (L-21) — a
+        // resolvable anchor is distinguished from a broken one by the key's
+        // *absence*, not by an explicit `false`. The point under test is
+        // that the entry appears at all; a present-and-true would be the bug.
+        assert_ne!(
+            entry["broken_anchor"].as_bool(),
+            Some(true),
+            "a resolvable same-file anchor must not carry broken_anchor: {entry:?}"
+        );
+        assert_eq!(entry["path"].as_str(), Some("same_file.md"));
+    }
+}
+
+/// NEW-12 follow-on: including resolvable same-file anchors in the inventory
+/// must not turn a same-file-only file into a non-orphan — same-file jumps
+/// are not edges to another file.
+#[test]
+fn same_file_anchor_alone_still_counts_as_orphan() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "alone.md",
+        md!(r"
+---
+title: Alone
+---
+## Section
+
+See [jump](#section) — the file's only link is to itself.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--orphan", "--format", "json"])
+        .output()
+        .expect("hyalo find --orphan should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["file"].as_str())
+        .collect();
+    assert!(
+        files.contains(&"alone.md"),
+        "a file whose only link is a same-file anchor must still be an orphan: {files:?}"
+    );
 }
 
 /// Text output renders the fragment on the target and marks a missing

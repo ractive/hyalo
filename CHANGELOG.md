@@ -119,6 +119,16 @@ and this project adheres to
   without `--wrap` used to carry its second and later lines as a literal `\n`
   inside one logical entry, which wrote them out flush-left instead of
   indented under the bullet.
+- **`find --fields links` inventory no longer depends on the broken/ok
+  verdict** (iter-220, dogfood NEW-12). A resolvable same-file fragment
+  link (`[a](#part-two)` where `#part-two` exists) used to be silently
+  absent from the inventory while a broken one (`[b](#nope)`) was
+  listed — completeness was backwards. Resolvable same-file anchors now
+  always appear, with `broken_anchor` (present-when-true) carrying the
+  verdict. Same-file entries are excluded from the `--orphan`/
+  `--dead-end` outbound-edge count, since a same-file heading jump is
+  not an edge to another file — a file whose only "link" is to its own
+  heading still counts as an orphan.
 
 ### Changed
 

@@ -36,7 +36,7 @@ excluded: broken-links line numbers + Liquid heading slugs
       vs `/en-US/docs/…` spelled links → 49,772 false broken and a 110 s
       run, silently). Mark derived prefixes as a guess in `hyalo config`
       output beyond the current bare `(derived)`
-- [ ] NEW-12: `find --fields links` inventory is complete — a same-file
+- [x] NEW-12: `find --fields links` inventory is complete — a same-file
       fragment link appears whether or not its anchor resolves; the
       broken/ok verdict is a field, not a presence filter
 - [x] NEW-13: stop counting path relocations under `case_mismatches` /
