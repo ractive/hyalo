@@ -254,6 +254,9 @@ Review the dry-run output first. For any links it can't resolve (reported as unf
 leave them and report them in Phase 5. Guesses — fuzzy matches, and basename fallbacks
 for any target that wrote a directory (`/a/b` or `a/b`) — sit in the `fuzzy` bucket and
 are only written when you add `--apply-fuzzy`; check those by hand before opting in.
+`--apply-fuzzy` still refuses anything under the confidence floor (0.8 by default —
+`fuzzy_below_floor` counts what it suppressed); lower it with `--min-confidence` only
+after reading the proposals it would unlock.
 
 ### Update stale statuses
 If an iteration's branch was merged:

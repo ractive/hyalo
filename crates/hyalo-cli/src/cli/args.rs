@@ -1158,6 +1158,11 @@ Repeatable (AND).\n\
             fuzzy (low-confidence guess, needs --apply-fuzzy), unfixable (no candidate at all) or \
             templated, so those four counts add up to broken. case_mismatches, ambiguous and \
             out_of_vault are counted separately — those links are not broken.\n\
+            CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
+            --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
+            counts the proposals it suppresses — those have a candidate but are never written, \
+            so `fuzzy - fuzzy_below_floor` is what --apply-fuzzy would apply. Each entry in \
+            fuzzy_fixes also carries rule (kebab-case strategy) and below_floor.\n\
             TEXT LAYOUT: the counts come first, then the fixes that would be (or were) written, \
             then the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous, \
             templated) capped at 20 entries each, and finally the fuzzy proposals — the longest \
@@ -1984,13 +1989,31 @@ pub(crate) enum LinksAction {
                target was written WITH a directory (/a/b or a/b) this is only a\n\
                basename guess and is reported as the separate\n\
                basename-fallback strategy\n\
-            4. Jaro-Winkler fuzzy match above --threshold\n\n\
+            4. Fuzzy match: a candidate must clear --threshold on the\n\
+               Jaro-Winkler similarity of the filename stem\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
-            LOW-CONFIDENCE MATCHES ARE GATED: a broken [[foo]] can \"match\" an unrelated bar.md,\n\
-            and /actions or guides/actions can \"match\" any actions.md anywhere in the vault.\n\
-            Both fuzzy and basename-fallback fixes are reported in their own bucket and are NOT\n\
-            written by plain --apply. Opt in with --apply-fuzzy, optionally gating on\n\
-            --min-confidence <0.0-1.0> (which implies --apply-fuzzy).\n\n\
+            CONFIDENCE: every low-confidence proposal carries a score in 0.0-1.0 that weights\n\
+            the final path segment (the basename/slug) at 70% and the directory path at 30%.\n\
+            The directory term is itself three-quarters shared leading components, so a\n\
+            relocation inside a section (a/b/c/page -> a/b/d/page) scores far above a\n\
+            same-name substitution across sections (/actions -> graphql/reference/actions.md,\n\
+            which scores exactly 0.7). A target written with no directory at all asserts no\n\
+            location, so only its basename is scored.\n\n\
+            LOW-CONFIDENCE MATCHES ARE GATED TWICE: a broken [[foo]] can \"match\" an unrelated\n\
+            bar.md, and /actions or guides/actions can \"match\" any actions.md anywhere in the\n\
+            vault. Both fuzzy and basename-fallback fixes are reported in their own bucket and\n\
+            are NOT written by plain --apply.\n\
+              Gate 1 — opt in with --apply-fuzzy (or --min-confidence, which implies it).\n\
+              Gate 2 — a confidence floor, 0.8 by default. Proposals below it stay reported\n\
+                       but unapplied and are counted as fuzzy_below_floor. Move the floor with\n\
+                       --min-confidence <0.0-1.0> or `[links] fuzzy_min_confidence` in\n\
+                       .hyalo.toml (the flag wins); --min-confidence 0 accepts everything.\n\
+            Measured on the GitHub Docs corpus (3,710 files, 6,099 broken links): the default\n\
+            floor applies 2,253 rewrites at 99.3% correct, against 4,659 at 82.2% with no floor.\n\n\
+            STRATEGY LABELS: the text report brackets each proposal with the strategy that\n\
+            produced it — [basename-fallback 0.87] for a discarded directory, [fuzzy-match 0.91]\n\
+            for path similarity — so the two are never confused. JSON carries both the\n\
+            PascalCase `strategy` and the kebab-case `rule`.\n\n\
             THE BASENAME GATE KEYS ON THE WRITTEN DIRECTORY, NOT THE LEADING SLASH: a target\n\
             written with any directory component (/guides/actions, guides/actions,\n\
             [[sub/actions]]) asserts a location, so throwing it away and matching on the last\n\
@@ -2020,23 +2043,30 @@ pub(crate) enum LinksAction {
         /// Apply fixes to files on disk
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Minimum similarity threshold for fuzzy matching (0.0–1.0)
+        /// Minimum Jaro-Winkler stem similarity for a file to be considered a
+        /// fuzzy candidate at all (0.0–1.0). Candidates that clear it are then
+        /// scored and ranked by confidence — see --min-confidence.
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
         /// Apply low-confidence fixes too (excluded from --apply by default).
         ///
-        /// Jaro-Winkler fuzzy matches are guesses: a broken [[foo]] can
-        /// "match" an unrelated bar.md at 0.9 similarity. So is a
-        /// basename fallback, where a target that wrote a directory
-        /// (/actions or guides/actions) matches some actions.md elsewhere in
-        /// the vault. Both are reported in a separate bucket and are NOT
-        /// written by plain --apply. Pass --apply-fuzzy to opt in, optionally
-        /// narrowing with --min-confidence.
+        /// Fuzzy matches are guesses: a broken [[foo]] can "match" an
+        /// unrelated bar.md. So is a basename fallback, where a target that
+        /// wrote a directory (/actions or guides/actions) matches some
+        /// actions.md elsewhere in the vault. Both are reported in a separate
+        /// bucket and are NOT written by plain --apply. Pass --apply-fuzzy to
+        /// opt in — which still only writes proposals at or above the
+        /// confidence floor (0.8 by default; see --min-confidence).
         #[arg(long)]
         apply_fuzzy: bool,
-        /// Only apply fuzzy fixes whose confidence is at least this value
-        /// (0.0–1.0). Implies --apply-fuzzy. Fixes below the bar stay in the
-        /// reported-but-not-applied bucket.
+        /// Confidence floor for applying low-confidence fixes (0.0–1.0).
+        /// Implies --apply-fuzzy.
+        ///
+        /// Defaults to 0.8, or to `[links] fuzzy_min_confidence` in
+        /// .hyalo.toml when set; this flag overrides both. Proposals below the
+        /// floor stay in the reported-but-not-applied bucket and are counted
+        /// as fuzzy_below_floor. Pass 0 to accept every proposal (the
+        /// pre-0.21 behaviour), 0.99 to apply almost nothing.
         #[arg(long, value_parser = parse_threshold)]
         min_confidence: Option<f64>,
         /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate

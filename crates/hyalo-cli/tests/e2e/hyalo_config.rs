@@ -501,3 +501,91 @@ fn config_json_reports_effective_links_auto() {
         "envelope should carry first_only: {json}"
     );
 }
+
+/// Run `hyalo config` against `dir` and return stdout, asserting success.
+fn fuzzy_config_stdout(dir: &std::path::Path, format: &str) -> String {
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().expect("temp path should be valid UTF-8"),
+            "config",
+            "--format",
+            format,
+        ])
+        .output()
+        .expect("hyalo config should run");
+    assert!(
+        output.status.success(),
+        "hyalo config exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// iter-212: `links fix --apply-fuzzy` gates on a confidence floor, so
+/// `hyalo config` has to be able to answer "which floor is in force?".
+#[test]
+fn config_reports_the_effective_fuzzy_confidence_floor() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    let stdout = fuzzy_config_stdout(tmp.path(), "text");
+    assert!(
+        stdout.contains("links.fuzzy_min_confidence: 0.8"),
+        "the built-in default must be reported, not omitted: {stdout}"
+    );
+
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\nfuzzy_min_confidence = 0.6\n",
+    )
+    .expect("config write should succeed");
+
+    let stdout = fuzzy_config_stdout(tmp.path(), "text");
+    assert!(
+        stdout.contains("links.fuzzy_min_confidence: 0.6"),
+        "the configured floor must win: {stdout}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&fuzzy_config_stdout(tmp.path(), "json"))
+        .expect("config --format json should emit JSON");
+    assert_eq!(
+        json["results"]["links_fuzzy_min_confidence"].as_f64(),
+        Some(0.6),
+        "{json}"
+    );
+}
+
+/// An out-of-range floor is a config mistake the user must see; it is warned
+/// about and ignored rather than silently clamped.
+#[test]
+fn config_rejects_an_out_of_range_fuzzy_confidence_floor() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\nfuzzy_min_confidence = 1.5\n",
+    )
+    .expect("config write should succeed");
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "config",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo config should run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("fuzzy_min_confidence"),
+        "an out-of-range floor must be warned about: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("links.fuzzy_min_confidence: 0.8"),
+        "and the built-in default must take over: {stdout}"
+    );
+}

@@ -125,6 +125,43 @@ and this project adheres to
 
 ### Changed
 
+- **`--apply-fuzzy` now gates on a confidence floor, and the confidence means
+  something** (iter-212, dogfood BUG-11, DEC-078). **Behaviour change for
+  `--apply-fuzzy` users: fewer, better fixes.** The old confidence was a raw
+  Jaro-Winkler score over filename stems, which rewards a shared prefix — so on
+  GitHub Docs `/actions/reference/actions-limits` →
+  `graphql/reference/actions.md` scored **0.9** (wrong document) while a
+  genuine relocation whose basename matched byte-for-byte sat at the flat
+  `BasenameFallback` constant **0.6**. The ordering was inverted relative to
+  usefulness, and with no floor a bare `--apply-fuzzy` wrote every proposal.
+
+  Confidence is now `0.7 · basename + 0.3 · directory`. The basename term is a
+  soft token match (so `actions-limits` stops looking like `actions`, while the
+  typo `configuraton` → `configuration` still scores 0.96); the directory term
+  is three quarters *shared leading components*, so a relocation inside a
+  section outranks a same-name substitution across sections. A target written
+  with no directory asserts no location and is scored on its basename alone.
+  The three dogfood proposals reorder to 0.87 / 0.504 / 0.533 — correct first.
+
+  `--apply-fuzzy` writes only proposals at or above **0.8**, overridable with
+  `--min-confidence <0.0-1.0>` or `[links] fuzzy_min_confidence` in
+  `.hyalo.toml` (the flag wins; the config key never opts *in* to applying).
+  `--min-confidence 0` restores the old accept-everything behaviour. Measured
+  on the GitHub Docs corpus (3,710 files, 6,099 broken links) against the
+  `redirect_from` metadata GitHub maintains as ground truth: the default floor
+  applies **2,253** rewrites at **99.3% correct**, where the previous release
+  applied **4,659** at **82.2%** — 804 links rewritten to a provably wrong
+  document. Broken links still fall monotonically (6,099 → 3,846) and the run
+  is idempotent.
+
+  Reporting caught up too: the text report brackets each proposal with the
+  strategy that produced it — `[basename-fallback 0.87]` vs
+  `[fuzzy-match 0.91]`, where everything used to read `[fuzzy N]` — marks
+  suppressed proposals `— below floor`, and names the floor. JSON gains
+  `fuzzy_below_floor` plus `rule`/`below_floor` on each entry, and
+  `fuzzy_min_confidence` is now always the effective number instead of `null`.
+  `hyalo config` reports it as `links.fuzzy_min_confidence`.
+
 - **A basename-only link repair is gated on whether the author wrote a
   directory, not on a leading slash** (iter-211, dogfood BUG-12, DEC-076).
   iteration 200 put `[x](/guides/actions)` → `reference/actions.md` behind

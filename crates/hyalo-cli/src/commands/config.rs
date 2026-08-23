@@ -46,6 +46,12 @@ pub(crate) struct ConfigReport {
     pub exempt: Vec<String>,
     /// Effective `[links.auto]` settings (iter-195a).
     pub links_auto: LinksAutoReport,
+    /// Effective confidence floor for `links fix --apply-fuzzy` (iter-212):
+    /// `[links] fuzzy_min_confidence` when set, otherwise the built-in
+    /// [`hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE`]. Reported so a
+    /// surprisingly small `--apply-fuzzy` run is one command away from an
+    /// explanation.
+    pub fuzzy_min_confidence: f64,
 }
 
 /// Effective `[links.auto]` settings, as `hyalo config` reports them.
@@ -128,6 +134,9 @@ pub(crate) fn collect_config_report(
             first_only: resolved.auto_link_first_only,
             warn_common_titles: resolved.auto_link_warn_common_titles,
         },
+        fuzzy_min_confidence: resolved
+            .fuzzy_min_confidence
+            .unwrap_or(hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE),
     })
 }
 
@@ -199,6 +208,9 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
                 "first_only": report.links_auto.first_only,
                 "warn_common_titles": report.links_auto.warn_common_titles,
             },
+            // Effective `links fix --apply-fuzzy` confidence floor (iter-212).
+            // Always a number — the built-in default when the key is unset.
+            "links_fuzzy_min_confidence": report.fuzzy_min_confidence,
         },
         "hints": hints,
         "dir": report.dir.display().to_string(),
@@ -280,7 +292,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
 
     let mut out = format!(
         "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
-         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\n",
+         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
@@ -288,6 +300,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         auto_globs = list_or_none(&report.links_auto.exclude_target_globs),
         auto_first_only = report.links_auto.first_only,
         auto_warn_common = report.links_auto.warn_common_titles,
+        fuzzy_floor = report.fuzzy_min_confidence,
     );
 
     if let Some(ref contents) = report.raw_contents {

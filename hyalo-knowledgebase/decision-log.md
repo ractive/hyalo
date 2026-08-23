@@ -1488,3 +1488,80 @@ Three surfaces disagreed:
 
 `find --broken-links`, `backlinks`, `links fix` and HYALO006 now agree on all
 eight dogfood spellings, verified corpus-wide against GitHub Docs.
+
+## DEC-078: fix confidence is basename-dominant, and `--apply-fuzzy` has a floor (2026-08-23)
+
+**Decision:** the confidence attached to a `links fix` proposal is
+`0.7 · basename_similarity + 0.3 · directory_similarity`, and `--apply-fuzzy`
+writes only proposals at or above **0.8** unless the user says otherwise
+(`--min-confidence`, or `[links] fuzzy_min_confidence` in `.hyalo.toml`).
+
+**Why the old score had to go:** it was `strsim::jaro_winkler` over the two
+filename stems. Jaro-Winkler adds a bonus for a shared prefix, which is exactly
+the wrong bias for documentation slugs, and it has no view of the directory at
+all. Meanwhile `BasenameFallback` — the strategy that fires when the basename
+matches *exactly* — reported a flat constant of 0.6. The result on GitHub Docs
+was an inverted ordering:
+
+| proposal | old | new |
+| --- | --- | --- |
+| `/actions/reference/actions-limits` → `graphql/reference/actions.md` (wrong) | 0.9 | 0.504 |
+| `/billing/reference/actions-minute-multipliers` → `…/actions-built-in-queries.md` (wrong) | 0.889 | 0.533 |
+| `…/scan-code-for-vulnerabilities/configuring-larger-runners-for-default-setup` → `…/find-and-fix-code-vulnerabilities/…` (correct) | 0.6 | 0.87 |
+
+**The model** (`hyalo-core/src/link_score.rs`):
+
+- *Basename* — a soft token F1 over the slug tokens. Each token is paired with
+  its best partner in the other slug, but the pairing only counts above a
+  Jaro-Winkler floor of 0.85. Without that floor every unrelated English word
+  pair contributes 0.5–0.65 of partial credit and long slugs score high against
+  short ones; with it, `actions-limits` vs `actions` drops to 0.667 while the
+  typo `configuraton` vs `configuration` stays at 0.96.
+- *Directory* — three quarters shared **leading** components, one quarter
+  unordered token overlap. Pure membership was tried first and failed: generic
+  levels (`how-tos`, `reference`, `guides`) are shared by thousands of
+  unrelated pages, so `actions/how-tos/x` scored 0.67 against `billing/how-tos/y`
+  and every cross-product substitution cleared the floor.
+- *No location claim, no directory term.* A target written with no separator
+  (`[[targt]]`) asserts nothing about where the file lives (DEC-076), so
+  scoring it against the candidate's directory would penalise it for a claim it
+  never made. Site-absolute targets are the opposite case: `/actions` strips to
+  a bare `actions` but still claims the site root, so the claim is passed in
+  explicitly rather than inferred from the stripped text.
+- Relative targets are resolved against the source directory before scoring —
+  `../c/target.md` in `a/b/page.md` is a claim about `a/c/`, not about a
+  directory named `..`.
+
+**Why 0.8:** measured on the GitHub Docs corpus (3,710 files, 6,099 broken
+links), classifying every proposal against the `redirect_from:` frontmatter
+GitHub maintains as ground truth (9,467 redirects indexed):
+
+| floor | applied | wrong | unknown | correct (of known) |
+| --- | --- | --- | --- | --- |
+| none (v0.20.0 behaviour) | 4,659 | 804 | 144 | 82.2% |
+| 0.75 | 3,111 | 39 | 17 | 98.7% |
+| **0.8 (chosen)** | **2,253** | **15** | **3** | **99.3%** |
+| 0.85 | 596 | 11 | 0 | 98.2% |
+| 0.9 | 312 | 0 | 0 | 100% |
+
+Accuracy is monotone in the score across the whole range (bands below 0.45 are
+under 30% correct, bands above 0.8 are over 99%), which is the real result: the
+number is now a usable signal rather than decoration. 0.8 was chosen over 0.75
+because it is the same number as the existing `--threshold` default — one fewer
+magic constant to explain — and because the iteration's purpose is trust, which
+argues for the precision-favouring end of a range where both options clear the
+≥90% target. Users who want the extra 858 fixes pass `--min-confidence 0.75`.
+
+**Kept separate:** `--threshold` still means "minimum Jaro-Winkler stem score
+for a file to be a fuzzy *candidate* at all". It admits candidates; the
+confidence floor decides which admitted candidates get written. Reusing the
+stem gate also keeps the composite scorer off the ~99% of the vault that could
+never win, so scoring stayed free (13.6s on 3,710 files, unchanged).
+
+**Side effect, accepted:** ranking by the composite instead of the raw stem
+score breaks ties the old code declined. Two same-stem candidates in different
+directories used to score identically and be rejected as ambiguous; now the
+directory-nearer one wins. Fuzzy proposals rose 4,659 → 5,506 and `unfixable`
+fell 1,377 → 530, but applied rewrites fell 4,659 → 2,253 because the floor
+does the real filtering. Reporting more candidates while writing fewer is the
+intended shape.

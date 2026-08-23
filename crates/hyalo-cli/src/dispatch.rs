@@ -172,6 +172,11 @@ pub(crate) struct CommandContext<'a> {
     pub auto_link_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only` — `--first-only` for every run.
     pub auto_link_first_only: bool,
+    /// `[links] fuzzy_min_confidence` — the confidence floor `links fix
+    /// --apply-fuzzy` uses when `--min-confidence` is absent (iter-212).
+    /// `None` means the built-in
+    /// [`hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE`].
+    pub config_fuzzy_min_confidence: Option<f64>,
     /// `[links.auto] warn_common_titles` (default `true`) — whether `links auto`
     /// may emit the advisory note naming noisy candidate titles (common English
     /// words, or titles that dominate the run).
@@ -1649,6 +1654,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                             links_commands::FuzzyApply {
                                 apply_fuzzy,
                                 min_confidence,
+                                config_min_confidence: ctx.config_fuzzy_min_confidence,
                             },
                         )?
                     }

@@ -3175,8 +3175,12 @@ Body also links [[wrong/real-target]].
             "--apply",
             // DEC-076 (iter-211): `wrong/real-target` writes a directory, so
             // repairing it by basename is a guess and needs the fuzzy opt-in.
-            // This test is about frontmatter+body rewriting, not gating.
+            // iter-212 adds a confidence floor on top, and `wrong/` shares
+            // nothing with `sub/`, so the guess scores exactly 0.7. This test
+            // is about frontmatter+body rewriting, not gating — open the floor.
             "--apply-fuzzy",
+            "--min-confidence",
+            "0",
             "--format",
             "json",
         ])
@@ -3576,6 +3580,11 @@ fn links_fix_apply_partial_failure_reports_failed_and_exits_nonzero() {
             "fix",
             "--apply",
             "--apply-fuzzy",
+            // iter-212: `--apply-fuzzy` now gates on a confidence floor. This
+            // test is about the write-failure path, not about scoring, so the
+            // floor is opened right up.
+            "--min-confidence",
+            "0",
             "--format",
             "json",
         ])
@@ -4612,8 +4621,22 @@ See [x](../c/target.md) here.
         "and it must be reported under the honest strategy: {plain}"
     );
 
-    // Opting in writes it, still in the author's source-relative style.
-    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    // iter-212 adds a second gate on top of the opt-in: `a/c/` (what
+    // `../c/target.md` resolves to) shares nothing with `z/`, so the guess
+    // scores the bare-basename floor of 0.7 and a default `--apply-fuzzy`
+    // still refuses it.
+    let default_floor = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(
+        default_floor["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "a cross-tree basename guess is below the default confidence floor: {default_floor}"
+    );
+
+    // Opening the floor writes it, still in the author's source-relative style.
+    let applied = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
+    );
     assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
 
     let written =
@@ -5138,13 +5161,34 @@ Bare URL: https://example.com/z/target.md
         "broken count must strictly decrease ({broken_before} → {broken_after}): {after}"
     );
     assert_eq!(
-        broken_after, 0,
-        "every fixture link has a real target: {after}"
-    );
-    assert_eq!(
         after["case_mismatches"].as_u64(),
         Some(0),
         "case mismatches must be repaired too: {after}"
+    );
+
+    // iter-212: exactly one fixture link survives a default `--apply-fuzzy` —
+    // `../c/target.md` → `z/target.md` discards the author's directory for an
+    // unrelated tree and scores the bare-basename floor of 0.7, under the
+    // default 0.8. It is reported, not written.
+    assert_eq!(broken_after, 1, "{after}");
+    assert_eq!(after["fuzzy_below_floor"].as_u64(), Some(1), "{after}");
+    assert_eq!(
+        after["fuzzy_fixes"][0]["confidence"].as_f64(),
+        Some(0.7),
+        "{after}"
+    );
+
+    // Opening the floor is the documented escape hatch and clears the rest.
+    let forced = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
+    );
+    assert_eq!(forced["failed"].as_u64(), Some(0), "{forced}");
+    let final_state = links_fix_results(tmp.path(), &[]);
+    assert_eq!(
+        final_state["broken"].as_u64(),
+        Some(0),
+        "every fixture link has a real target: {final_state}"
     );
 
     // The file whose links all resolved must be byte-identical.
@@ -5349,7 +5393,7 @@ fn links_text_and_json_buckets_sum_to_broken() {
     };
     let broken = count_line("Broken links:");
     let fixable = count_line("Fixable:");
-    let fuzzy = count_line("Fuzzy matches (low-confidence, excluded from plain --apply):");
+    let fuzzy = count_line("Low-confidence matches (excluded from plain --apply):");
     let unfixable = count_line("Unfixable:");
     assert_eq!(
         broken,
@@ -5386,7 +5430,7 @@ fn links_text_puts_fuzzy_listing_after_actionable_buckets() {
         .find("Unfixable links (no candidate in the vault):")
         .unwrap_or_else(|| panic!("no unfixable section:\n{text}"));
     let fuzzy_at = text
-        .find("Fuzzy matches (low-confidence, not applied")
+        .find("Low-confidence matches (not applied")
         .unwrap_or_else(|| panic!("no fuzzy listing:\n{text}"));
     assert!(
         unfixable_at < fuzzy_at,
@@ -5478,4 +5522,223 @@ fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
     assert_detail(&applied["fixes"], "fixes (apply)", true);
     assert_detail(&applied["fuzzy_fixes"], "fuzzy_fixes (apply)", true);
     assert_detail(&applied["applied_fixes"], "applied_fixes", true);
+}
+
+// ---------------------------------------------------------------------------
+// iter-212: fuzzy confidence trust — scoring, default floor, honest labels
+// ---------------------------------------------------------------------------
+
+/// Build the BUG-11 shape: one relocation *inside* a section (correct) and two
+/// same-prefix substitutions *across* sections (wrong). Before iter-212 the
+/// two wrong proposals scored 0.9 / 0.889 and the correct one 0.6.
+fn setup_confidence_corpus() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    // Real destinations.
+    write_md(
+        tmp.path(),
+        "graphql/reference/actions.md",
+        "# GraphQL actions\n",
+    );
+    write_md(
+        tmp.path(),
+        "code-security/code-scanning/actions-built-in-queries.md",
+        "# Built-in queries\n",
+    );
+    write_md(
+        tmp.path(),
+        "code-security/how-tos/find-and-fix/configuring-larger-runners-for-default-setup.md",
+        "# Larger runners\n",
+    );
+    // One source holding all three broken links.
+    write_md(
+        tmp.path(),
+        "src.md",
+        md!(r"
+Wrong A: [a](/actions/reference/actions-limits)
+Wrong B: [b](/billing/reference/actions-minute-multipliers)
+Correct: [c](/code-security/how-tos/scan-code/configuring-larger-runners-for-default-setup)
+"),
+    );
+    tmp
+}
+
+fn confidence_of(results: &serde_json::Value, needle: &str) -> f64 {
+    results["fuzzy_fixes"]
+        .as_array()
+        .expect("fuzzy_fixes array")
+        .iter()
+        .find(|f| {
+            f["old_target"]
+                .as_str()
+                .is_some_and(|t| t.ends_with(needle))
+        })
+        .unwrap_or_else(|| panic!("no proposal for {needle}: {results}"))["confidence"]
+        .as_f64()
+        .expect("confidence is a number")
+}
+
+#[test]
+fn links_fix_confidence_orders_the_correct_relocation_highest() {
+    let tmp = setup_confidence_corpus();
+    let r = links_fix_results(tmp.path(), &[]);
+
+    let wrong_a = confidence_of(&r, "actions-limits");
+    let wrong_b = confidence_of(&r, "actions-minute-multipliers");
+    let correct = confidence_of(&r, "configuring-larger-runners-for-default-setup");
+
+    assert!(
+        correct > wrong_a && correct > wrong_b,
+        "the only correct proposal must score highest \
+         (correct={correct} wrong_a={wrong_a} wrong_b={wrong_b}): {r}"
+    );
+    // And the ordering has to translate into the apply decision.
+    assert!(correct >= 0.8, "correct={correct}: {r}");
+    assert!(wrong_a < 0.8 && wrong_b < 0.8, "{r}");
+}
+
+#[test]
+fn links_fix_bare_apply_fuzzy_respects_the_default_floor() {
+    let tmp = setup_confidence_corpus();
+    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+
+    assert_eq!(
+        applied["fuzzy_min_confidence"].as_f64(),
+        Some(0.8),
+        "the effective floor must be reported, not left null: {applied}"
+    );
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(1),
+        "only the in-section relocation may be written: {applied}"
+    );
+    assert_eq!(
+        applied["fuzzy_below_floor"].as_u64(),
+        Some(2),
+        "the two cross-section guesses stay reported-but-unapplied: {applied}"
+    );
+
+    // Broken count decreases monotonically and the survivors keep candidates.
+    let after = links_fix_results(tmp.path(), &[]);
+    assert_eq!(after["broken"].as_u64(), Some(2), "{after}");
+    assert_eq!(after["unfixable"].as_u64(), Some(0), "{after}");
+}
+
+#[test]
+fn links_fix_min_confidence_zero_restores_accept_everything() {
+    let tmp = setup_confidence_corpus();
+    let applied = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
+    );
+    assert_eq!(applied["fuzzy_min_confidence"].as_f64(), Some(0.0));
+    assert_eq!(
+        applied["fuzzy_below_floor"].as_u64(),
+        Some(0),
+        "nothing is below a zero floor: {applied}"
+    );
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(3),
+        "the escape hatch must write every proposal, garbage included: {applied}"
+    );
+}
+
+#[test]
+fn links_fix_min_confidence_near_one_applies_nothing() {
+    let tmp = setup_confidence_corpus();
+    let applied = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0.99"],
+    );
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "{applied}"
+    );
+    let after = links_fix_results(tmp.path(), &[]);
+    assert_eq!(after["broken"].as_u64(), Some(3), "{after}");
+}
+
+#[test]
+fn links_fix_config_fuzzy_min_confidence_moves_the_floor() {
+    let tmp = setup_confidence_corpus();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\nfuzzy_min_confidence = 0.99\n",
+    )
+    .expect("config write should succeed");
+
+    let dry = links_fix_results(tmp.path(), &[]);
+    assert_eq!(
+        dry["fuzzy_min_confidence"].as_f64(),
+        Some(0.99),
+        "the config key must reach the report: {dry}"
+    );
+    // The config key moves the bar but must never opt *in* to applying.
+    assert_eq!(dry["fuzzy_applied"].as_bool(), Some(false), "{dry}");
+
+    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "config floor of 0.99 rejects everything: {applied}"
+    );
+
+    // An explicit flag still wins over the config value.
+    let overridden = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0.8"],
+    );
+    assert_eq!(overridden["fuzzy_min_confidence"].as_f64(), Some(0.8));
+    assert_eq!(
+        overridden["applied_fixes"].as_array().map(Vec::len),
+        Some(1),
+        "{overridden}"
+    );
+}
+
+#[test]
+fn links_fix_text_distinguishes_basename_fallback_from_fuzzy() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(tmp.path(), "notes/target.md", "# Target\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        md!(r"
+Typo: [[targt]]
+Relocation: [x](/wrong/place/target.md)
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        text.contains("[basename-fallback "),
+        "a basename-fallback guess must be labelled as one: {text}"
+    );
+    assert!(
+        text.contains("[fuzzy-match "),
+        "a path-similarity guess must be labelled as one: {text}"
+    );
+    assert!(
+        !text.contains("[fuzzy 0."),
+        "the old strategy-blind `[fuzzy N]` label must be gone: {text}"
+    );
+    assert!(
+        text.contains("below the confidence floor 0.8"),
+        "the report must name the floor that suppressed a proposal: {text}"
+    );
 }

@@ -34,6 +34,14 @@ struct LinksConfig {
     /// Persistent `hyalo links auto` preferences (`[links.auto]`).
     #[serde(default)]
     auto: Option<AutoLinksConfig>,
+    /// Default confidence floor for `hyalo links fix --apply-fuzzy`
+    /// (`[links] fuzzy_min_confidence`, iter-212).
+    ///
+    /// Must be in `[0.0, 1.0]`. Unset means the built-in
+    /// [`hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE`];
+    /// `--min-confidence` on the command line wins over this value.
+    #[serde(default)]
+    fuzzy_min_confidence: Option<f64>,
 }
 
 /// Auto-link configuration from `[links.auto]` in `.hyalo.toml` (iter-195a).
@@ -265,6 +273,11 @@ pub(crate) struct ResolvedDefaults {
     /// (iter-205). `--no-warn-common-titles` turns it off for a single run; there
     /// is no flag to turn it back on, because the default already does.
     pub(crate) auto_link_warn_common_titles: bool,
+    /// `[links] fuzzy_min_confidence` — the confidence floor `links fix
+    /// --apply-fuzzy` applies when `--min-confidence` is not given (iter-212).
+    /// `None` falls back to
+    /// [`hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE`].
+    pub(crate) fuzzy_min_confidence: Option<f64>,
     /// When `true`, "no 'type' property" and "undeclared property in frontmatter"
     /// warnings are promoted to errors.  From `[lint] strict = true` in `.hyalo.toml`.
     /// Can be overridden per-invocation with `hyalo lint --strict`.
@@ -306,6 +319,7 @@ impl PartialEq for ResolvedDefaults {
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
             && self.case_insensitive_mode == other.case_insensitive_mode
+            && self.fuzzy_min_confidence == other.fuzzy_min_confidence
     }
 }
 
@@ -332,6 +346,7 @@ impl ResolvedDefaults {
             auto_link_exclude_target_globs: Vec::new(),
             auto_link_first_only: false,
             auto_link_warn_common_titles: true,
+            fuzzy_min_confidence: None,
             lint_strict: false,
             loaded_from_file: false,
             malformed: None,
@@ -561,6 +576,19 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    // `[links] fuzzy_min_confidence` (iter-212) — an out-of-range value is a
+    // config error the user should see, not a silent clamp, so warn and ignore.
+    let fuzzy_min_confidence = match cfg.links.as_ref().and_then(|l| l.fuzzy_min_confidence) {
+        Some(v) if (0.0..=1.0).contains(&v) => Some(v),
+        Some(v) => {
+            crate::warn::warn(format!(
+                "invalid [links] fuzzy_min_confidence in .hyalo.toml: {v} is outside 0.0-1.0 — ignoring"
+            ));
+            None
+        }
+        None => None,
+    };
+
     // `[links.auto]` — taken out of `cfg.links` before the struct is moved below.
     let links_auto = cfg
         .links
@@ -608,6 +636,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         auto_link_exclude_target_globs: links_auto.exclude_target_globs,
         auto_link_first_only: links_auto.first_only.unwrap_or(false),
         auto_link_warn_common_titles: links_auto.warn_common_titles.unwrap_or(true),
+        fuzzy_min_confidence,
         lint_strict,
         loaded_from_file: true,
         malformed: None,

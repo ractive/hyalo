@@ -13,6 +13,7 @@ default_limit = 100       # max results for list commands (default: 50; 0 = unli
 [links]
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
+fuzzy_min_confidence = 0.8                            # confidence floor for links fix --apply-fuzzy (default: 0.8)
 
 [links.auto]
 exclude_titles = ["permissions", "README"]            # titles hyalo links auto never links
@@ -225,6 +226,52 @@ stops for good.
 `--ignore-target <substring>`. It matches link *targets* by substring rather
 than page titles or paths, so it is deliberately not part of `[links.auto]` and
 keeps its own name.
+
+## Fuzzy-fix confidence floor
+
+`hyalo links fix` never writes a low-confidence guess under a plain `--apply`.
+Opting in with `--apply-fuzzy` clears the first gate; the second is a
+**confidence floor**, `0.8` by default.
+
+Every proposal in the low-confidence bucket carries a score in `0.0`–`1.0`:
+
+- **70%** the final path segment — a soft token match over the slug, so
+  `actions-limits` no longer looks like `actions` just because they share a
+  prefix, while a typo (`configuraton` → `configuration`) still scores high.
+- **30%** the directory path, three quarters of which is *shared leading
+  components*. A relocation inside a section (`a/b/c/page` → `a/b/d/page`)
+  therefore scores far above a same-name substitution across sections
+  (`/actions` → `graphql/reference/actions.md`, which lands on exactly `0.7`).
+- A target written with no directory at all (`[[page]]`) asserts no location,
+  so only its basename is scored.
+
+Move the floor per run with `--min-confidence <0.0-1.0>` (which also implies
+`--apply-fuzzy`), or per vault:
+
+```toml
+[links]
+fuzzy_min_confidence = 0.9   # only near-certain guesses are written
+```
+
+The flag wins over the config key, and the config key wins over the built-in
+default. Setting the key never opts *in* to applying fuzzy fixes — that still
+requires `--apply-fuzzy`. `--min-confidence 0` restores the pre-0.21
+accept-everything behaviour.
+
+Proposals below the floor are still reported: `fuzzy_below_floor` counts them
+in JSON and the text report marks each one `— below floor`. `hyalo config`
+prints the floor in force as `links.fuzzy_min_confidence`.
+
+Measured on the GitHub Docs corpus (3,710 files, 6,099 broken links), scoring
+proposals against the `redirect_from` metadata GitHub maintains as ground
+truth:
+
+| floor | rewrites applied | provably wrong | correct |
+| ----- | ---------------- | -------------- | ------- |
+| none (pre-0.21) | 4,659 | 804 | 82.2% |
+| 0.75 | 3,111 | 39 | 98.7% |
+| **0.8 (default)** | **2,253** | **15** | **99.3%** |
+| 0.9 | 312 | 0 | 100% |
 
 ## Schemas
 
