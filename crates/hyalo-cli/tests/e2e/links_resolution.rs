@@ -13,16 +13,16 @@ use tempfile::TempDir;
 
 fn run_json(tmp: &TempDir, args: &[&str]) -> serde_json::Value {
     let dir = tmp.path().to_str().expect("utf-8 path");
-    let mut argv = vec!["--dir", dir];
-    argv.extend_from_slice(args);
-    argv.extend_from_slice(&["--format", "json"]);
+    let mut cmd_args = vec!["--dir", dir];
+    cmd_args.extend_from_slice(args);
+    cmd_args.extend_from_slice(&["--format", "json"]);
     let output = hyalo_no_hints()
-        .args(&argv)
+        .args(&cmd_args)
         .output()
         .expect("hyalo should run");
     serde_json::from_slice(&output.stdout).unwrap_or_else(|e| {
         panic!(
-            "stdout should be JSON for {argv:?}: {e}\nstdout: {}\nstderr: {}",
+            "stdout should be JSON for {cmd_args:?}: {e}\nstdout: {}\nstderr: {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
@@ -48,8 +48,7 @@ fn hyalo006_reported_line(frontmatter_lines: usize) -> (usize, usize) {
     let body = "# Heading\n\nfiller\n\nSee [x](does-not-exist.md).\n";
     // The link is on body line 5; absolute line = frontmatter_lines + 5.
     let expected = frontmatter_lines + 5;
-    std::fs::write(tmp.path().join("a.md"), format!("{frontmatter}{body}"))
-        .expect("write fixture");
+    std::fs::write(tmp.path().join("a.md"), format!("{frontmatter}{body}")).expect("write fixture");
 
     let json = run_json(&tmp, &["lint", "--rule", "HYALO006"]);
     let reported = json["results"]["files"]
@@ -61,7 +60,10 @@ fn hyalo006_reported_line(frontmatter_lines: usize) -> (usize, usize) {
         .and_then(|v| v.first())
         .and_then(|v| v["line"].as_u64())
         .unwrap_or_else(|| panic!("expected one HYALO006 violation, got: {json}"));
-    (expected, usize::try_from(reported).expect("line fits usize"))
+    (
+        expected,
+        usize::try_from(reported).expect("line fits usize"),
+    )
 }
 
 #[test]
@@ -116,7 +118,11 @@ fn hyalo006_agrees_with_the_markdown_rules_on_the_same_file() {
 /// double-count) plus a `baz.md` with no directory of its own.
 fn setup_slash_vault() -> TempDir {
     let tmp = TempDir::new().expect("tempdir");
-    write_md(tmp.path(), "foo.md", "---\ntitle: Foo file\n---\n# Foo file\n");
+    write_md(
+        tmp.path(),
+        "foo.md",
+        "---\ntitle: Foo file\n---\n# Foo file\n",
+    );
     write_md(
         tmp.path(),
         "foo/index.md",
@@ -146,9 +152,7 @@ title: Linker
 /// `backlinks <file>` count, self-links excluded as the command does.
 fn backlink_count(tmp: &TempDir, file: &str) -> usize {
     let json = run_json(tmp, &["backlinks", file]);
-    json["results"]["backlinks"]
-        .as_array()
-        .map_or(0, Vec::len)
+    json["results"]["backlinks"].as_array().map_or(0, Vec::len)
 }
 
 #[test]
@@ -199,8 +203,7 @@ fn backlinks_agrees_with_find_broken_links_on_every_spelling() {
     let links = json["results"][0]["links"].as_array().expect("links array");
     assert_eq!(links.len(), 8, "all eight spellings must parse: {json}");
 
-    let mut resolved: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut resolved: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for l in links {
         let path = l["path"]
             .as_str()
@@ -229,7 +232,11 @@ fn query_string_survives_a_rename() {
     // `[x](/deep/page?x=1)` used to come back as `[x](/deep/Page)`: the query
     // was glued to the target, so the rewrite span swallowed it.
     let tmp = TempDir::new().expect("tempdir");
-    write_md(tmp.path(), "deep/page.md", "---\ntitle: Page\n---\n# Page\n");
+    write_md(
+        tmp.path(),
+        "deep/page.md",
+        "---\ntitle: Page\n---\n# Page\n",
+    );
     write_md(
         tmp.path(),
         "linker.md",
@@ -261,7 +268,11 @@ fn query_string_survives_a_rename() {
 #[test]
 fn a_query_string_does_not_make_a_link_broken() {
     let tmp = TempDir::new().expect("tempdir");
-    write_md(tmp.path(), "deep/page.md", "---\ntitle: Page\n---\n# Page\n");
+    write_md(
+        tmp.path(),
+        "deep/page.md",
+        "---\ntitle: Page\n---\n# Page\n",
+    );
     write_md(
         tmp.path(),
         "linker.md",

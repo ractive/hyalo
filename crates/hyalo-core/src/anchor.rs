@@ -166,7 +166,7 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     if needle_slug.is_empty() {
         return false;
     }
-    heading_slugs(sections).iter().any(|s| *s == needle_slug)
+    heading_slugs(sections).contains(&needle_slug)
 }
 
 #[cfg(test)]

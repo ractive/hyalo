@@ -859,20 +859,25 @@ pub fn find(
                     // anchors are deliberately not emitted: they would inflate
                     // every file's outbound-link list and silently change the
                     // `--orphan` / `--dead-end` verdicts.
-                    .chain(entry.self_anchors.iter().filter_map(|(_, fragment)| {
-                        (!hyalo_core::anchor::fragment_matches_headings(
-                            fragment,
-                            &entry.sections,
-                        ))
-                        .then(|| LinkInfo {
-                            target: String::new(),
-                            path: Some(entry.rel_path.clone()),
-                            label: None,
-                            fragment: Some(fragment.clone()),
-                            broken_anchor: true,
-                            out_of_vault: false,
-                        })
-                    }))
+                    .chain(
+                        entry
+                            .self_anchors
+                            .iter()
+                            .filter(|(_, fragment)| {
+                                !hyalo_core::anchor::fragment_matches_headings(
+                                    fragment,
+                                    &entry.sections,
+                                )
+                            })
+                            .map(|(_, fragment)| LinkInfo {
+                                target: String::new(),
+                                path: Some(entry.rel_path.clone()),
+                                label: None,
+                                fragment: Some(fragment.clone()),
+                                broken_anchor: true,
+                                out_of_vault: false,
+                            }),
+                    )
                     .collect::<Vec<_>>(),
             )
         } else {

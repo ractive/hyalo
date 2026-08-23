@@ -667,7 +667,9 @@ fn insert_file_links(
         // `backlinks` / `backlinks_ci` probe both the `.md` and stem forms of
         // the canonical path, and `mv` rewrites from the `BacklinkEntry`,
         // which still carries the original written link text.
-        let key = resolved_key.or(dir_index_key).unwrap_or_else(|| link.target.clone());
+        let key = resolved_key
+            .or(dir_index_key)
+            .unwrap_or_else(|| link.target.clone());
         index.entry(key).or_default().push(entry);
     }
 }

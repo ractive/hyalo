@@ -609,9 +609,7 @@ fn try_parse_markdown_link_span_at(
     };
     // Stop the rewritable span at whichever URL suffix comes first, so both
     // `#fragment` and `?query` bytes are preserved verbatim (iter-211/BUG-12).
-    let target_end_in_raw = target_raw
-        .find(['#', '?'])
-        .unwrap_or(target_raw.len());
+    let target_end_in_raw = target_raw.find(['#', '?']).unwrap_or(target_raw.len());
 
     let full_end = paren_start + dest.end;
 
@@ -1099,6 +1097,147 @@ fn split_target_and_query(target: &str) -> (&str, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- iter-211 / BUG-12: query strings and CommonMark titles ---
+
+    fn one_link(text: &str) -> Link {
+        let mut out = Vec::new();
+        extract_links_from_text(text, &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "expected exactly one link in {text:?}: {out:?}"
+        );
+        out.pop().expect("one link")
+    }
+
+    #[test]
+    fn query_string_is_split_off_the_target() {
+        let link = one_link("see [x](/deep/page?x=1) here");
+        assert_eq!(link.target, "/deep/page");
+        assert_eq!(link.query.as_deref(), Some("x=1"));
+        assert_eq!(link.fragment, None);
+    }
+
+    #[test]
+    fn query_and_fragment_split_independently() {
+        let link = one_link("see [x](/deep/page?a=1&b=2#frag) here");
+        assert_eq!(link.target, "/deep/page");
+        assert_eq!(link.fragment.as_deref(), Some("frag"));
+        assert_eq!(link.query.as_deref(), Some("a=1&b=2"));
+    }
+
+    #[test]
+    fn a_question_mark_inside_a_fragment_stays_in_the_fragment() {
+        // Browsers read `#` first, so `page#frag?x` has no query at all.
+        let link = one_link("see [x](page.md#frag?x) here");
+        assert_eq!(link.target, "page.md");
+        assert_eq!(link.fragment.as_deref(), Some("frag?x"));
+        assert_eq!(link.query, None);
+    }
+
+    #[test]
+    fn empty_query_is_dropped_but_trimmed_from_the_path() {
+        let link = one_link("see [x](page.md?) here");
+        assert_eq!(link.target, "page.md");
+        assert_eq!(link.query, None);
+    }
+
+    #[test]
+    fn query_span_stops_before_the_question_mark() {
+        let spans = extract_link_spans("see [x](/deep/page?x=1) here");
+        assert_eq!(spans.len(), 1);
+        let s = &spans[0];
+        assert_eq!(
+            &"see [x](/deep/page?x=1) here"[s.target_start..s.target_end],
+            "/deep/page"
+        );
+    }
+
+    #[test]
+    fn commonmark_title_is_not_part_of_the_target() {
+        let link = one_link(r#"see [a](p.md "The Title") here"#);
+        assert_eq!(link.target, "p.md");
+        assert_eq!(link.label.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn commonmark_title_forms_all_parse() {
+        assert_eq!(one_link(r#"[a](p.md "d")"#).target, "p.md");
+        assert_eq!(one_link("[a](p.md 'd')").target, "p.md");
+        assert_eq!(one_link("[a](p.md (d))").target, "p.md");
+    }
+
+    #[test]
+    fn a_title_containing_a_paren_does_not_truncate_the_span() {
+        let text = r#"[a](p.md "has ) paren") tail"#;
+        let spans = extract_link_spans(text);
+        assert_eq!(spans.len(), 1);
+        let s = &spans[0];
+        assert_eq!(&text[s.target_start..s.target_end], "p.md");
+        assert_eq!(
+            &text[s.full_start..s.full_end],
+            r#"[a](p.md "has ) paren")"#
+        );
+    }
+
+    #[test]
+    fn an_unencoded_space_without_a_title_keeps_the_whole_destination() {
+        // Not valid CommonMark, but common in hand-written vaults — the title
+        // split must not silently truncate these to `my`.
+        let link = one_link("[x](my dest.md)");
+        assert_eq!(link.target, "my dest.md");
+    }
+
+    #[test]
+    fn a_leading_space_in_a_destination_is_left_alone() {
+        let link = one_link("[x]( p.md )");
+        assert_eq!(link.target, " p.md ");
+    }
+
+    // --- iter-211 / BUG-8: same-file anchors ---
+
+    fn anchors_of(text: &str) -> Vec<String> {
+        let mut links = Vec::new();
+        let mut anchors = Vec::new();
+        extract_links_and_self_anchors(text, text, &mut links, &mut anchors);
+        anchors
+    }
+
+    #[test]
+    fn same_file_markdown_anchor_is_collected() {
+        assert_eq!(anchors_of("see [b](#nope) here"), vec!["nope".to_owned()]);
+    }
+
+    #[test]
+    fn same_file_wikilink_anchor_is_collected() {
+        assert_eq!(anchors_of("see [[#Nope]] here"), vec!["Nope".to_owned()]);
+        assert_eq!(
+            anchors_of("see [[#Nope|alias]] here"),
+            vec!["Nope".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_targeted_fragment_is_not_a_same_file_anchor() {
+        assert!(anchors_of("see [b](p.md#frag) here").is_empty());
+        assert!(anchors_of("see [[p#frag]] here").is_empty());
+    }
+
+    #[test]
+    fn same_file_anchors_do_not_become_links() {
+        let mut links = Vec::new();
+        let mut anchors = Vec::new();
+        extract_links_and_self_anchors(
+            "[b](#nope) and [[#other]] and [real](p.md)",
+            "[b](#nope) and [[#other]] and [real](p.md)",
+            &mut links,
+            &mut anchors,
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "p.md");
+        assert_eq!(anchors, vec!["nope".to_owned(), "other".to_owned()]);
+    }
 
     // --- inert link zones (iter-200) ---
 

@@ -141,13 +141,6 @@ pub enum FixStrategy {
     /// markdown links) or the canonical short-form stem (for bare wikilinks
     /// whose stem lookup succeeded with a case-only difference).
     LinkCaseMismatch,
-    /// Reserved for future use; no current code path emits this. Previously
-    /// emitted for short-form wikilink stem casing mismatches, but those are
-    /// now reported as [`LinkCaseMismatch`] for consistency with path-form
-    /// case mismatches — they represent the same user intent (fix the
-    /// casing).
-    #[doc(hidden)]
-    ShortFormStemMismatch,
 }
 
 impl FixStrategy {
@@ -167,7 +160,6 @@ impl FixStrategy {
             FixStrategy::BasenameFallback => "basename-fallback",
             FixStrategy::FuzzyMatch => "fuzzy-match",
             FixStrategy::LinkCaseMismatch => "link-case-mismatch",
-            FixStrategy::ShortFormStemMismatch => "short-form-stem-mismatch",
         }
     }
 }

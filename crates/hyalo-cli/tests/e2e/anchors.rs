@@ -37,6 +37,10 @@ Some content.
 ## my heading
 
 Percent-encoded target.
+
+### Sub Section
+
+DEC-072: reachable as the rendered slug `#sub-section`.
 "),
     );
 
@@ -98,6 +102,7 @@ title: Markdown Variants
 ---
 Bare: [t](Foo.md#Real).
 Percent: [t](Foo.md#my%20heading).
+Slug: [t](Foo.md#sub-section).
 Broken md anchor: [t](Foo.md#missing).
 "),
     );
@@ -309,6 +314,7 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     // Foo.md#missing is broken.
     let mut real_ok = false;
     let mut pct_ok = false;
+    let mut slug_ok = false;
     let mut missing_broken = false;
     for l in md_links {
         let frag = l["fragment"].as_str().unwrap_or("");
@@ -316,6 +322,7 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
         match frag {
             "Real" => real_ok = !broken && l["path"].as_str() == Some("Foo.md"),
             "my%20heading" => pct_ok = !broken && l["path"].as_str() == Some("Foo.md"),
+            "sub-section" => slug_ok = !broken && l["path"].as_str() == Some("Foo.md"),
             "missing" => missing_broken = broken,
             _ => {}
         }
@@ -324,6 +331,10 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     assert!(
         pct_ok,
         "[{label}] percent-encoded #my%20heading must resolve to `my heading`"
+    );
+    assert!(
+        slug_ok,
+        "[{label}] DEC-072: the rendered slug #sub-section must match `### Sub Section`"
     );
     assert!(missing_broken, "[{label}] markdown #missing must be broken");
 }
