@@ -22,6 +22,29 @@
 //! the written link (the rewrite span never covers the fragment) and decoded
 //! only for matching here.
 //!
+//! ## DEC-072 — GitHub slug forms are accepted too (iter-211, BUG-8)
+//!
+//! DEC-060 alone made hyalo unusable on any corpus written for a static-site
+//! renderer. Every markdown renderer in wide use (GitHub, GitLab, MDN,
+//! Docusaurus, mdBook) turns `### Sub Section` into the anchor
+//! `#sub-section`, so authors write `[c](t.md#sub-section)` — and hyalo
+//! reported all of them broken while *accepting* the raw-text spelling
+//! `#Sub Section` that no renderer ever emits. On the GitHub Docs corpus 6 of
+//! 7 checkable anchors were false positives.
+//!
+//! A fragment therefore matches when **either** convention holds:
+//!
+//! 1. DEC-060 raw-text equality (unchanged — Obsidian compatibility), or
+//! 2. [`github_slug`] of the fragment equals the GitHub slug of the heading,
+//!    where repeated heading slugs get the renderer's `-1`, `-2`, … dedupe
+//!    suffixes in document order.
+//!
+//! Slugifying *both* sides makes the check idempotent: an already-slugged
+//! fragment (`#sub-section`) slugs to itself, and a raw-text fragment
+//! (`#Sub Section`) slugs to the same value the heading does. The union is
+//! deliberately permissive — this check exists to catch dead anchors, and a
+//! false positive costs a user far more than a missed exotic spelling.
+//!
 //! `^block-id` fragments (fragment starting with `^`) are Obsidian block
 //! references. hyalo does not index block ids, so these are **skipped** — never
 //! reported broken.
@@ -48,6 +71,65 @@ fn normalize_for_match(s: &str) -> String {
     }
 }
 
+/// Convert heading text into the anchor slug a GitHub-style markdown renderer
+/// would generate for it (iter-211, BUG-8).
+///
+/// The algorithm every mainstream renderer converges on:
+///
+/// 1. Trim, then lowercase (Unicode-aware, so `Ü` → `ü`).
+/// 2. Drop every character that is not alphanumeric, `-`, `_`, or whitespace —
+///    this strips `.,:;!?()[]{}"'*` and backticks, plus emoji.
+/// 3. Replace each remaining whitespace character with `-`.
+///
+/// Consecutive spaces deliberately produce consecutive hyphens (`a  b` →
+/// `a--b`), matching GitHub rather than collapsing them.
+///
+/// Duplicate slugs within one document are *not* handled here — that is a
+/// document-level concern, applied by [`heading_slugs`].
+#[must_use]
+pub fn github_slug(heading: &str) -> String {
+    let trimmed = heading.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    for ch in trimmed.chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' {
+            out.extend(ch.to_lowercase());
+        } else if ch.is_whitespace() {
+            out.push('-');
+        }
+        // Everything else (punctuation, emoji, markdown markers) is dropped.
+    }
+    out
+}
+
+/// The GitHub anchor slug for each heading in `sections`, in document order,
+/// with the renderer's duplicate-suffix rule applied.
+///
+/// A slug seen for the *n*-th time (n > 1) gets `-{n-1}` appended, so three
+/// `## Notes` headings yield `notes`, `notes-1`, `notes-2`. Sections with
+/// `heading: None` contribute nothing.
+fn heading_slugs(sections: &[OutlineSection]) -> Vec<String> {
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut slugs = Vec::with_capacity(sections.len());
+    for section in sections {
+        let Some(heading) = section.heading.as_deref() else {
+            continue;
+        };
+        let base = github_slug(heading);
+        if base.is_empty() {
+            continue;
+        }
+        let count = seen.entry(base.clone()).or_insert(0);
+        let slug = if *count == 0 {
+            base.clone()
+        } else {
+            format!("{base}-{count}")
+        };
+        *count += 1;
+        slugs.push(slug);
+    }
+    slugs
+}
+
 /// Validate a link fragment against a target file's outline sections.
 ///
 /// Returns `true` when the fragment matches one of the headings under the
@@ -71,11 +153,20 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
         // matching so it is never reported broken.
         return true;
     }
-    sections.iter().any(|s| {
+    // DEC-060: raw heading text, case-insensitive.
+    if sections.iter().any(|s| {
         s.heading
             .as_deref()
             .is_some_and(|h| h.trim().eq_ignore_ascii_case(&needle))
-    })
+    }) {
+        return true;
+    }
+    // DEC-072: GitHub-rendered slug, with duplicate suffixes.
+    let needle_slug = github_slug(&needle);
+    if needle_slug.is_empty() {
+        return false;
+    }
+    heading_slugs(sections).iter().any(|s| *s == needle_slug)
 }
 
 #[cfg(test)]
@@ -139,8 +230,78 @@ mod tests {
     fn unicode_heading() {
         let secs = [sec(Some("Überschrift"))];
         assert!(fragment_matches_headings("Überschrift", &secs));
-        // ASCII-case-insensitive: a non-ASCII case fold is NOT expected to match.
-        assert!(!fragment_matches_headings("überschrift", &secs));
+        // DEC-060's raw-text comparison is ASCII-case-insensitive only, but the
+        // DEC-072 slug path lowercases Unicode the way a renderer does, so the
+        // lowercased spelling now matches (iter-211, BUG-8).
+        assert!(fragment_matches_headings("überschrift", &secs));
+    }
+
+    // --- DEC-072: GitHub slug forms (iter-211, BUG-8) ---
+
+    #[test]
+    fn github_slug_lowercases_and_hyphenates() {
+        assert_eq!(github_slug("Sub Section"), "sub-section");
+        assert_eq!(github_slug("  Trimmed  "), "trimmed");
+        assert_eq!(github_slug("Already-Hyphenated"), "already-hyphenated");
+        assert_eq!(github_slug("snake_case Name"), "snake_case-name");
+    }
+
+    #[test]
+    fn github_slug_strips_punctuation_and_keeps_double_hyphens() {
+        assert_eq!(github_slug("What's New?"), "whats-new");
+        assert_eq!(github_slug("`code` blocks (v2)"), "code-blocks-v2");
+        // GitHub does NOT collapse runs of whitespace.
+        assert_eq!(github_slug("a  b"), "a--b");
+    }
+
+    #[test]
+    fn github_slug_lowercases_unicode() {
+        assert_eq!(github_slug("Überschrift"), "überschrift");
+    }
+
+    #[test]
+    fn slug_fragment_matches_raw_heading() {
+        // The BUG-8 headline case: `#sub-section` against `### Sub Section`.
+        let secs = [sec(Some("Sub Section"))];
+        assert!(fragment_matches_headings("sub-section", &secs));
+    }
+
+    #[test]
+    fn slug_fragment_still_rejects_a_dead_anchor() {
+        let secs = [sec(Some("Sub Section"))];
+        assert!(!fragment_matches_headings("nope", &secs));
+        assert!(!fragment_matches_headings("sub-sections", &secs));
+    }
+
+    #[test]
+    fn slug_fragment_matches_heading_with_punctuation() {
+        let secs = [sec(Some("What's New?"))];
+        assert!(fragment_matches_headings("whats-new", &secs));
+    }
+
+    #[test]
+    fn duplicate_headings_get_renderer_dedupe_suffixes() {
+        let secs = [sec(Some("Notes")), sec(Some("Notes")), sec(Some("Notes"))];
+        assert!(fragment_matches_headings("notes", &secs));
+        assert!(fragment_matches_headings("notes-1", &secs));
+        assert!(fragment_matches_headings("notes-2", &secs));
+        assert!(!fragment_matches_headings("notes-3", &secs));
+    }
+
+    #[test]
+    fn raw_text_form_still_accepted_alongside_slug() {
+        // Obsidian spelling keeps working (DEC-060 is not replaced).
+        let secs = [sec(Some("Sub Section"))];
+        assert!(fragment_matches_headings("Sub Section", &secs));
+        assert!(fragment_matches_headings("sub%20section", &secs));
+    }
+
+    #[test]
+    fn punctuation_only_fragment_is_broken_not_matched() {
+        // Slugifying `!!!` yields an empty slug; it must not match every
+        // heading by accident.
+        let secs = [sec(Some("Tasks"))];
+        assert!(!fragment_matches_headings("!!!", &secs));
     }
 
     #[test]

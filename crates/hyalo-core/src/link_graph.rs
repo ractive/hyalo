@@ -487,6 +487,15 @@ pub(crate) struct FileLinks {
     pub(crate) source: PathBuf,
     /// Links extracted from the file body, with 1-based line numbers.
     pub(crate) links: Vec<(usize, Link)>,
+    /// Same-file heading anchors (`[b](#frag)`, `[[#frag]]`) with 1-based line
+    /// numbers, fragment text only (no leading `#`).
+    ///
+    /// These are not graph edges — they point at the source file itself — so
+    /// the link graph ignores them. They ride along on `FileLinks` because
+    /// they are produced by the same single-pass body scan, and are copied
+    /// onto [`crate::index::IndexEntry::self_anchors`] so `find --broken-links`
+    /// can validate them (iter-211 / BUG-8).
+    pub(crate) self_anchors: Vec<(usize, String)>,
 }
 
 /// Strip a trailing `.md` extension from `s`, matching any ASCII casing
@@ -665,7 +674,9 @@ pub const DEFAULT_FRONTMATTER_LINK_PROPERTIES: &[&str] =
 pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
+    self_anchors: Vec<(usize, String)>,
     scratch: Vec<Link>,
+    anchor_scratch: Vec<String>,
     /// Frontmatter property names to scan for [[wikilink]] patterns.
     frontmatter_props: Vec<String>,
 }
@@ -676,7 +687,9 @@ impl LinkGraphVisitor {
         Self {
             source,
             links: Vec::new(),
+            self_anchors: Vec::new(),
             scratch: Vec::new(),
+            anchor_scratch: Vec::new(),
             frontmatter_props,
         }
     }
@@ -686,6 +699,7 @@ impl LinkGraphVisitor {
         FileLinks {
             source: self.source,
             links: self.links,
+            self_anchors: self.self_anchors,
         }
     }
 
@@ -740,9 +754,18 @@ impl FileVisitor for LinkGraphVisitor {
         // inside backtick spans are not indexed as real links.
         // Pass `raw` as original so backtick-wrapped link labels are preserved.
         self.scratch.clear();
-        extract_links_from_text_with_original(cleaned, raw, &mut self.scratch);
+        self.anchor_scratch.clear();
+        crate::links::extract_links_and_self_anchors(
+            cleaned,
+            raw,
+            &mut self.scratch,
+            &mut self.anchor_scratch,
+        );
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
+        }
+        for frag in self.anchor_scratch.drain(..) {
+            self.self_anchors.push((line_num, frag));
         }
         ScanAction::Continue
     }
