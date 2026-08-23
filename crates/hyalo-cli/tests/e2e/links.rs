@@ -3175,8 +3175,12 @@ Body also links [[wrong/real-target]].
             "--apply",
             // DEC-076 (iter-211): `wrong/real-target` writes a directory, so
             // repairing it by basename is a guess and needs the fuzzy opt-in.
-            // This test is about frontmatter+body rewriting, not gating.
+            // iter-212 adds a confidence floor on top, and `wrong/` shares
+            // nothing with `sub/`, so the guess scores exactly 0.7. This test
+            // is about frontmatter+body rewriting, not gating — open the floor.
             "--apply-fuzzy",
+            "--min-confidence",
+            "0",
             "--format",
             "json",
         ])
@@ -3576,6 +3580,11 @@ fn links_fix_apply_partial_failure_reports_failed_and_exits_nonzero() {
             "fix",
             "--apply",
             "--apply-fuzzy",
+            // iter-212: `--apply-fuzzy` now gates on a confidence floor. This
+            // test is about the write-failure path, not about scoring, so the
+            // floor is opened right up.
+            "--min-confidence",
+            "0",
             "--format",
             "json",
         ])
@@ -4612,8 +4621,22 @@ See [x](../c/target.md) here.
         "and it must be reported under the honest strategy: {plain}"
     );
 
-    // Opting in writes it, still in the author's source-relative style.
-    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    // iter-212 adds a second gate on top of the opt-in: `a/c/` (what
+    // `../c/target.md` resolves to) shares nothing with `z/`, so the guess
+    // scores the bare-basename floor of 0.7 and a default `--apply-fuzzy`
+    // still refuses it.
+    let default_floor = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(
+        default_floor["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "a cross-tree basename guess is below the default confidence floor: {default_floor}"
+    );
+
+    // Opening the floor writes it, still in the author's source-relative style.
+    let applied = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
+    );
     assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
 
     let written =
@@ -5138,13 +5161,34 @@ Bare URL: https://example.com/z/target.md
         "broken count must strictly decrease ({broken_before} → {broken_after}): {after}"
     );
     assert_eq!(
-        broken_after, 0,
-        "every fixture link has a real target: {after}"
-    );
-    assert_eq!(
         after["case_mismatches"].as_u64(),
         Some(0),
         "case mismatches must be repaired too: {after}"
+    );
+
+    // iter-212: exactly one fixture link survives a default `--apply-fuzzy` —
+    // `../c/target.md` → `z/target.md` discards the author's directory for an
+    // unrelated tree and scores the bare-basename floor of 0.7, under the
+    // default 0.8. It is reported, not written.
+    assert_eq!(broken_after, 1, "{after}");
+    assert_eq!(after["fuzzy_below_floor"].as_u64(), Some(1), "{after}");
+    assert_eq!(
+        after["fuzzy_fixes"][0]["confidence"].as_f64(),
+        Some(0.7),
+        "{after}"
+    );
+
+    // Opening the floor is the documented escape hatch and clears the rest.
+    let forced = links_fix_results(
+        tmp.path(),
+        &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
+    );
+    assert_eq!(forced["failed"].as_u64(), Some(0), "{forced}");
+    let final_state = links_fix_results(tmp.path(), &[]);
+    assert_eq!(
+        final_state["broken"].as_u64(),
+        Some(0),
+        "every fixture link has a real target: {final_state}"
     );
 
     // The file whose links all resolved must be byte-identical.
@@ -5349,7 +5393,7 @@ fn links_text_and_json_buckets_sum_to_broken() {
     };
     let broken = count_line("Broken links:");
     let fixable = count_line("Fixable:");
-    let fuzzy = count_line("Fuzzy matches (low-confidence, excluded from plain --apply):");
+    let fuzzy = count_line("Low-confidence matches (excluded from plain --apply):");
     let unfixable = count_line("Unfixable:");
     assert_eq!(
         broken,
@@ -5386,7 +5430,7 @@ fn links_text_puts_fuzzy_listing_after_actionable_buckets() {
         .find("Unfixable links (no candidate in the vault):")
         .unwrap_or_else(|| panic!("no unfixable section:\n{text}"));
     let fuzzy_at = text
-        .find("Fuzzy matches (low-confidence, not applied")
+        .find("Low-confidence matches (not applied")
         .unwrap_or_else(|| panic!("no fuzzy listing:\n{text}"));
     assert!(
         unfixable_at < fuzzy_at,
