@@ -52,12 +52,21 @@ pub struct AutoLinkMatch {
     pub file: String,
     /// 1-based line number.
     pub line: usize,
-    /// Byte offset of the match within its line.
+    /// Byte offset of the match within its line, 0-based.
     ///
-    /// Held 0-based in memory (it indexes straight into the line's bytes when
-    /// building the replacement) but **serialized 1-based** under `col`, so
-    /// every position in hyalo's JSON — `line` and `col` alike — counts from
-    /// one (L-15).
+    /// Internal only — it indexes straight into the line's bytes when building
+    /// the replacement, so it must stay a byte offset. It is **not**
+    /// serialized: JSON reports [`AutoLinkMatch::col`] instead, which counts
+    /// Unicode scalars like lint's `column` does (iter-210).
+    #[serde(skip)]
+    pub byte_col: usize,
+    /// Column of the match within its line, counted in Unicode scalar values.
+    ///
+    /// Held 0-based in memory but **serialized 1-based** under `col`, so every
+    /// position in hyalo's JSON — `line` and `col` alike — counts from one
+    /// (L-15) and counts *characters*, matching `lint`'s `column` (iter-210).
+    /// Before iter-210 this was a byte index, so a match after a multibyte
+    /// character reported a column no editor agreed with.
     #[serde(serialize_with = "serialize_one_based")]
     pub col: usize,
     /// The matched text as it appears in the file.
@@ -728,10 +737,21 @@ fn scan_file_for_matches(
             // Use original line text for the matched_text (preserves casing).
             let matched_text = line.get(start..end).unwrap_or(&cleaned_str[start..end]);
 
+            // `col` counts Unicode scalars, not bytes (iter-210). `start`
+            // indexes the cleaned line, which preserves the original line's
+            // byte layout, so the original text is the right thing to count
+            // when it is available.
+            let char_col = line
+                .get(..start)
+                .unwrap_or_else(|| cleaned_str.get(..start).unwrap_or_default())
+                .chars()
+                .count();
+
             results.push(AutoLinkMatch {
                 file: rel_path.to_owned(),
                 line: line_num,
-                col: start,
+                byte_col: start,
+                col: char_col,
                 matched_text: matched_text.to_owned(),
                 link_target: entry.link_target.clone(),
             });
@@ -828,7 +848,7 @@ fn apply_matches(
             .iter()
             .map(|m| Replacement {
                 line: m.line,
-                byte_offset: m.col,
+                byte_offset: m.byte_col,
                 old_text: m.matched_text.clone(),
                 new_text: format!("[[{}]]", m.link_target),
             })

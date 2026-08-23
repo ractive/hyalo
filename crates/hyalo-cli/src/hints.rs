@@ -101,6 +101,13 @@ pub enum HintSource {
     OkfIndex,
     /// `hyalo okf log` — suggest validating conformance.
     OkfLog,
+    /// `hyalo views list` (iter-210). Listing saved views used to be a
+    /// navigation dead end: the whole point of a view is to run it, and the
+    /// listing never said how.
+    ViewsList,
+    /// `hyalo lint-rules list` (iter-210). Same dead end — the catalog told
+    /// you a rule exists but not how to inspect, disable or lint with it.
+    LintRulesList,
 }
 
 /// Which snapshot index a `find` query used, for re-emission in derived hints.
@@ -336,6 +343,8 @@ pub fn generate_hints_with_counters(
         HintSource::DropIndex => hints_for_drop_index(ctx, data),
         HintSource::Lint => hints_for_lint(ctx, data, total),
         HintSource::Types { .. } => hints_for_types(ctx, data),
+        HintSource::ViewsList => hints_for_views_list(ctx, data),
+        HintSource::LintRulesList => hints_for_lint_rules_list(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
         HintSource::OkfIndex => hints_for_okf_index(ctx, data),
         HintSource::OkfLog => hints_for_okf_log(ctx),
@@ -596,6 +605,36 @@ fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str])
         parts.push(shell_quote(glob));
     }
     parts.join(" ")
+}
+
+/// Render a snapshot-index path for a hint command, preferring the shortest
+/// spelling that still runs verbatim from the user's working directory.
+///
+/// A snapshot path is the longest single token any hint carries, and a `find`
+/// listing repeats the *same* one on every derived query — four or five copies
+/// of one absolute path in a five-line block (iter-208a / UX-5). Eliding it
+/// from the repeats is not an option: hints have to stay copy-pasteable, and a
+/// `find` hint that quietly loses `--index-file` rescans the vault and answers
+/// a different question. Shortening the path to its working-directory-relative
+/// form keeps every hint runnable while removing most of the bulk, since an
+/// index almost always lives inside the project it indexes.
+#[must_use]
+pub fn shorten_index_path_for_hint(path: &std::path::Path) -> String {
+    let absolute = path.display().to_string();
+    let Ok(cwd) = std::env::current_dir() else {
+        return absolute;
+    };
+    match path.strip_prefix(&cwd) {
+        Ok(rel) if !rel.as_os_str().is_empty() => {
+            let relative = rel.to_string_lossy().replace('\\', "/");
+            if relative.len() < absolute.len() {
+                relative
+            } else {
+                absolute
+            }
+        }
+        _ => absolute,
+    }
 }
 
 /// Push `--index-file <path>` when the query ran against an explicit non-default
@@ -1800,6 +1839,34 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         )));
     }
 
+    // Case-mismatch repairs are written by plain `--apply` but are *not* part
+    // of `fixable`, so a vault whose only problem is casing produced no "Apply"
+    // hint at all — the fix was available and unadvertised (iter-210).
+    let case_mismatches = data
+        .get("case_mismatches")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if is_dry_run && case_mismatches > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+        hints.push(Hint::new(
+            format!("Apply {case_mismatches} case-mismatch fixes"),
+            build_command_with_glob(ctx, &["links", "fix", "--apply"]),
+        ));
+    }
+
+    // A vault with nothing broken used to emit no hints whatsoever, making
+    // `links` a navigation dead end (dogfood UX-4). Point at the two link
+    // questions a clean fix report does *not* answer.
+    if hints.is_empty() {
+        hints.push(Hint::new(
+            "Preview title mentions that could become links",
+            build_command_with_glob(ctx, &["links", "auto"]),
+        ));
+        hints.push(Hint::new(
+            "List notes nothing links to",
+            build_command_no_glob(ctx, &["find", "--orphan"]),
+        ));
+    }
+
     hints
 }
 
@@ -2298,6 +2365,120 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
             "See defined type schemas",
             build_command_no_glob(ctx, &["types", "list"]),
         ));
+    }
+
+    hints
+}
+
+/// Drill-downs for `hyalo views list` (iter-210, dogfood UX-4).
+///
+/// The listing was a dead end: it named saved queries without saying how to
+/// run one, and on an empty vault it printed nothing at all with no way
+/// forward. The hints now always lead somewhere — into the first view when one
+/// exists, into creating one when none does.
+fn hints_for_views_list(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let names: Vec<&str> = data
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("name").and_then(serde_json::Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if let Some(first) = names.first() {
+        hints.push(Hint::new(
+            format!("Run the '{first}' view"),
+            build_command_no_glob(ctx, &["find", "--view", first]),
+        ));
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Delete the '{first}' view"),
+                build_command_no_glob(ctx, &["views", "remove", first]),
+            ));
+        }
+    } else {
+        // No views yet. `views set` needs at least one filter to be a valid
+        // command, so the suggestion carries a concrete (and runnable) one.
+        hints.push(Hint::new(
+            "Save a query as a view",
+            build_command_no_glob(
+                ctx,
+                &["views", "set", "drafts", "--property", "status=draft"],
+            ),
+        ));
+        hints.push(Hint::new(
+            "Survey the vault to decide which query is worth saving",
+            build_command_no_glob(ctx, &["summary"]),
+        ));
+    }
+
+    hints
+}
+
+/// Drill-downs for `hyalo lint-rules list` (iter-210, dogfood UX-4).
+///
+/// Picks the first *overridden* rule when there is one — that is the row a
+/// reader is most likely to be checking — and otherwise the first listed rule.
+fn hints_for_lint_rules_list(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let rules = data.as_array().map(Vec::as_slice).unwrap_or_default();
+    let rule_id = |v: &serde_json::Value| {
+        v.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let overridden = rules
+        .iter()
+        .find(|r| {
+            r.get("has_override")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        })
+        .and_then(rule_id);
+    let focus = overridden
+        .clone()
+        .or_else(|| rules.first().and_then(rule_id));
+
+    if let Some(ref id) = focus {
+        hints.push(Hint::new(
+            format!("Show what {id} checks and how to configure it"),
+            build_command_no_glob(ctx, &["lint-rules", "show", id]),
+        ));
+    }
+
+    if let Some(ref id) = overridden {
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Drop the {id} override and go back to the default"),
+                build_command_no_glob(ctx, &["lint-rules", "remove", id]),
+            ));
+        }
+    } else if let Some(ref id) = focus
+        && hints.len() < MAX_HINTS
+    {
+        hints.push(Hint::new(
+            format!("Turn {id} off for this vault"),
+            build_command_no_glob(ctx, &["lint-rules", "set", id, "--enabled", "false"]),
+        ));
+    }
+
+    if hints.len() < MAX_HINTS {
+        match focus {
+            // Narrowing lint to the rule in question is the fastest way to see
+            // whether it actually fires here.
+            Some(ref id) => hints.push(Hint::new(
+                format!("Run just {id} against the vault"),
+                build_command_no_glob(ctx, &["lint", "--rule", id]),
+            )),
+            None => hints.push(Hint::new(
+                "Run the markdown lint rules against the vault",
+                build_command_no_glob(ctx, &["lint"]),
+            )),
+        }
     }
 
     hints
@@ -4093,6 +4274,31 @@ mod tests {
             narrow.description.contains("(6 files)"),
             "count should be shown when not truncated: {:?}",
             narrow.description
+        );
+    }
+
+    /// iter-210 / UX-5: the snapshot path is the longest token a hint carries
+    /// and it is repeated on every derived query. Inside the working directory
+    /// it renders relative — shorter, and still runnable verbatim.
+    #[test]
+    fn index_path_renders_relative_to_the_working_directory() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let inside = cwd.join("sub").join(".hyalo-index");
+        assert_eq!(shorten_index_path_for_hint(&inside), "sub/.hyalo-index");
+    }
+
+    /// A path outside the working directory has no shorter runnable spelling,
+    /// so it stays absolute rather than turning into a `../..` chain.
+    #[test]
+    fn index_path_outside_the_working_directory_stays_absolute() {
+        let outside = std::path::Path::new(if cfg!(windows) {
+            r"C:\definitely\elsewhere\.hyalo-index"
+        } else {
+            "/definitely/elsewhere/.hyalo-index"
+        });
+        assert_eq!(
+            shorten_index_path_for_hint(outside),
+            outside.display().to_string()
         );
     }
 

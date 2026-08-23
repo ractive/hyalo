@@ -650,3 +650,363 @@ fn custom_index_path_drop_hint_targets_that_index() {
         "the default index must be left alone"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-13 (iter-210): error hints must be runnable and must not be invented
+// ---------------------------------------------------------------------------
+//
+// The sweep above harvests the `hints` array of a *successful* envelope. The
+// hints attached to *errors* — the `hint` key next to `error`/`path` — were
+// never executed by any gate, and two of them were wrong:
+//
+//   * `hyalo lint sub/` answered `--glob 'sub//*'`. The doubled separator
+//     matches nothing, so pasting the hint reported a clean vault for a
+//     directory that was never linted.
+//   * `hyalo lint nosuchdir/` answered `did you mean nosuchdir/.md?` — a
+//     candidate produced by string concatenation without ever checking that
+//     such a file exists.
+
+/// Extract `error`/`path`/`hint` from a JSON error envelope.
+fn error_envelope(argv: &[&str], vault: &Path) -> serde_json::Value {
+    let output = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--no-hints"])
+        .args(argv)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "`hyalo {}` should be a user error; stdout: {} stderr: {}",
+        argv.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // User errors are written to stderr, possibly after a `note:` line.
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let Some(start) = stderr.find('{') else {
+        panic!("`hyalo {}` emitted no JSON: {stderr}", argv.join(" "));
+    };
+    let json = &stderr[start..];
+    serde_json::from_str(json)
+        .unwrap_or_else(|e| panic!("`hyalo {}` emitted no JSON ({e}): {stderr}", argv.join(" ")))
+}
+
+/// The `--glob '<dir>/*'` hint a directory argument produces must, when run,
+/// actually select the files in that directory.
+#[test]
+fn directory_error_hint_glob_is_executed_and_matches_files() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // Both spellings of the same mistake — with and without a trailing slash.
+    for arg in ["notes", "notes/"] {
+        let envelope = error_envelope(&["lint", arg], tmp.path());
+        assert_eq!(envelope["error"], "path is a directory, not a file");
+        let hint = envelope["hint"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no hint for `lint {arg}`: {envelope}"));
+        assert!(
+            !hint.contains("//"),
+            "the glob hint must not double the separator: {hint}"
+        );
+
+        // Run `hyalo lint <hint>` verbatim and require it to select files.
+        let argv = to_argv(&format!("hyalo lint {hint}"), tmp.path());
+        let run = hyalo()
+            .args(&argv)
+            .args(["--format", "json", "--no-hints"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("hint `{hint}` produced no JSON ({e}): {stdout}"));
+        let checked = parsed["results"]["files_checked"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("no files_checked in {parsed}"));
+        assert!(
+            checked > 0,
+            "the hint `hyalo lint {hint}` linted {checked} files — it reads as a clean \
+             vault while checking nothing"
+        );
+    }
+}
+
+/// A `did you mean X?` suggestion must name a file that exists. Anything else
+/// sends the user to a second not-found error.
+#[test]
+fn not_found_suggestions_name_a_file_that_exists() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // `nosuchdir/` has no candidate at all: no suggestion may be offered.
+    for cmd in [
+        ["lint", "nosuchdir/"],
+        ["read", "nosuchdir/"],
+        ["backlinks", "nosuchdir/"],
+    ] {
+        let envelope = error_envelope(&cmd, tmp.path());
+        assert_eq!(envelope["error"], "file not found", "for {cmd:?}");
+        assert!(
+            envelope["hint"].is_null(),
+            "`hyalo {}` invented a suggestion: {envelope}",
+            cmd.join(" ")
+        );
+    }
+
+    // `decision-log` (extension omitted) does have a candidate, and running the
+    // suggested path must succeed.
+    let envelope = error_envelope(&["read", "decision-log"], tmp.path());
+    let hint = envelope["hint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the extension hint stopped firing: {envelope}"));
+    let suggested = hint
+        .trim_start_matches("did you mean ")
+        .trim_end_matches('?');
+    assert_eq!(suggested, "decision-log.md");
+    let run = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "json", "--no-hints", "read", suggested])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "the suggested path did not resolve: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+}
+
+/// L-7 parity: `find --file <missing>` must fail the same way `lint`/`read` do
+/// instead of reporting an empty result set at exit 0.
+#[test]
+fn find_missing_file_matches_lint_and_read_not_found() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    let find = error_envelope(&["find", "--file", "notes/absent.md"], tmp.path());
+    let read = error_envelope(&["read", "notes/absent.md"], tmp.path());
+    assert_eq!(find["error"], read["error"]);
+    assert_eq!(find["path"], read["path"]);
+    assert_eq!(find["error"], "file not found");
+
+    // A directory argument gets the same runnable glob hint everywhere.
+    let find_dir = error_envelope(&["find", "--file", "notes/"], tmp.path());
+    assert_eq!(find_dir["hint"], "--glob 'notes/*'");
+
+    // An existing file that simply matches no filter is still a clean empty run.
+    let ok = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "json", "--no-hints"])
+        .args([
+            "find",
+            "--file",
+            "notes/note-1.md",
+            "--tag",
+            "no-such-tag-anywhere",
+        ])
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "an existing file must not error");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&ok.stdout)).unwrap();
+    assert_eq!(parsed["total"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// UX-4 (iter-210): no listing command may be a navigation dead end
+// ---------------------------------------------------------------------------
+
+/// Harvest hints from a command run against a caller-prepared vault.
+fn harvest_in(vault: &Path, seed: &[&str]) -> Vec<Harvested> {
+    let output = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--hints"])
+        .args(seed)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "`hyalo {}` emitted no envelope ({e}): {stdout}",
+            seed.join(" ")
+        )
+    });
+    envelope["hints"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|h| {
+                    let cmd = h.get("cmd")?.as_str()?;
+                    if cmd.trim().is_empty() {
+                        return None;
+                    }
+                    Some(Harvested {
+                        seed: seed.join(" "),
+                        description: h
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        cmd: cmd.to_owned(),
+                        writes: h
+                            .get("writes")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Run a harvested hint against a fresh copy of the fixture and require the CLI
+/// to accept it.
+fn assert_hint_runs(h: &Harvested) {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let argv = to_argv(&h.cmd, tmp.path());
+    let output = hyalo().args(&argv).output().unwrap();
+    let reason = rejection_reason(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(reason, None, "hint `{}` did not run", h.cmd);
+}
+
+/// `views list`, `lint-rules list` and `links` each have to offer somewhere to
+/// go. All three emitted an empty `hints` array before iter-210.
+#[test]
+fn listing_commands_are_not_navigation_dead_ends() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    for seed in [
+        vec!["views", "list"],
+        vec!["lint-rules", "list"],
+        vec!["links", "fix", "--dry-run"],
+    ] {
+        let hints = harvest_in(tmp.path(), &seed);
+        assert!(
+            !hints.is_empty(),
+            "`hyalo {}` emitted no hints",
+            seed.join(" ")
+        );
+        for h in &hints {
+            assert_hint_runs(h);
+        }
+    }
+}
+
+/// The `views list` hints must adapt: run/remove the view that exists, or
+/// suggest creating one when the vault has none.
+#[test]
+fn views_list_hints_target_an_existing_view() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // No views configured yet — the hint has to be about creating one.
+    let empty = harvest_in(tmp.path(), &["views", "list"]);
+    assert!(
+        empty.iter().any(|h| h.cmd.contains("views set")),
+        "expected a create-a-view hint, got {:?}",
+        empty.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    assert!(
+        empty
+            .iter()
+            .find(|h| h.cmd.contains("views set"))
+            .unwrap()
+            .writes,
+        "`views set` writes .hyalo.toml and must be marked"
+    );
+
+    // With a view saved, the hints point into it.
+    let saved = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+    assert!(saved.status.success(), "views set failed: {saved:?}");
+
+    let hints = harvest_in(tmp.path(), &["views", "list"]);
+    let run_hint = hints
+        .iter()
+        .find(|h| h.cmd.contains("find --view"))
+        .unwrap_or_else(|| panic!("no run-the-view hint: {hints:?}"));
+    assert!(run_hint.cmd.contains("drafts"), "got {}", run_hint.cmd);
+    assert!(!run_hint.writes, "running a view is read-only");
+}
+
+/// `lint-rules list` prefers the rule the vault actually overrode — that is the
+/// row the reader is most likely inspecting — and offers to revert it.
+#[test]
+fn lint_rules_list_hints_focus_the_overridden_rule() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let set = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["lint-rules", "set", "MD022", "--enabled", "false"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "lint-rules set failed: {set:?}");
+
+    let hints = harvest_in(tmp.path(), &["lint-rules", "list"]);
+    assert!(
+        hints
+            .iter()
+            .any(|h| h.cmd.contains("lint-rules show MD022")),
+        "expected a show hint for the overridden rule, got {:?}",
+        hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    let revert = hints
+        .iter()
+        .find(|h| h.cmd.contains("lint-rules remove MD022"))
+        .unwrap_or_else(|| panic!("no revert hint: {hints:?}"));
+    assert!(revert.writes, "removing an override writes .hyalo.toml");
+    for h in &hints {
+        assert_hint_runs(h);
+    }
+}
+
+/// A vault with no broken links still has to lead somewhere. `links` on a clean
+/// vault emitted nothing at all.
+#[test]
+fn links_on_a_clean_vault_still_offers_drill_downs() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n\nLinks to [[b]].\n",
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\ntitle: B\n---\n\nNothing broken.\n",
+    );
+
+    let hints = harvest_in(tmp.path(), &["links", "fix", "--dry-run"]);
+    assert!(
+        !hints.is_empty(),
+        "a clean `links` run must still offer a drill-down"
+    );
+    assert!(
+        hints.iter().all(|h| !h.writes),
+        "a clean vault has nothing to write: {:?}",
+        hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    for h in &hints {
+        let argv = to_argv(&h.cmd, tmp.path());
+        let output = hyalo().args(&argv).output().unwrap();
+        assert_eq!(
+            rejection_reason(
+                output.status.code(),
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            ),
+            None,
+            "hint `{}` did not run",
+            h.cmd
+        );
+    }
+}

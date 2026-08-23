@@ -517,6 +517,10 @@ pub(crate) enum Commands {
             POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
             Subsequent positional arguments are treated as FILE targets. \
             To filter by file without a body search, use --file instead of a positional argument.\n\
+            A FILE target that names nothing is a user error at exit 1 — the same `file not found` \
+            envelope `read` and `lint` emit, with the same `did you mean` / `--glob '<dir>/*'` \
+            hints — so a typo can never be mistaken for a query that legitimately matched nothing. \
+            A path already present in an `--index-file` snapshot is accepted without touching disk.\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo find 'error handling'\n\
@@ -1138,12 +1142,22 @@ Repeatable (AND).\n\
             This matches Obsidian's behavior when copy-pasting note names that include the extension.\n\n\
             Default behavior (no subcommand): dry-run of `links fix` — shows what would be\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
-            OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
-            (source, line, old_target, new_target, strategy, confidence), and \
-            the list of links that could not be matched. With --apply it also \
+            OUTPUT: JSON object with broken/fixable/fuzzy/unfixable counts, per-fix details \
+            (source, line, old_target, new_target, strategy, confidence) under fixes, \
+            fuzzy_fixes and case_mismatch_fixes — populated in dry-run too, so a proposal \
+            can be audited before anything is written — and the list of links that could not \
+            be matched. With --apply it also \
             reports applied_fixes (fixes actually written to disk) plus \
             unapplied/unapplied_fixes for plans whose on-disk text no longer \
             matched — only applied_fixes were durably written.\n\
+            BUCKETS: every broken link lands in exactly one of fixable (plain --apply writes it), \
+            fuzzy (low-confidence guess, needs --apply-fuzzy), unfixable (no candidate at all) or \
+            templated, so those four counts add up to broken. case_mismatches, ambiguous and \
+            out_of_vault are counted separately — those links are not broken.\n\
+            TEXT LAYOUT: the counts come first, then the fixes that would be (or were) written, \
+            then the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous, \
+            templated) capped at 20 entries each, and finally the fuzzy proposals — the longest \
+            section. Use --format json for uncapped lists.\n\
             OUT OF VAULT: a target that normalizes above the vault root \
             (../../CONTRIBUTING.md) can never resolve to a scanned file, so it is \
             counted under out_of_vault / out_of_vault_links instead of broken and is \
@@ -1212,9 +1226,13 @@ Repeatable (AND).\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
-            `files_with_violations`, and `files_truncated`. The `errors`/`warnings` counters\n\
-            and the exit code always reflect the WHOLE vault, never just the displayed slice —\n\
-            a file cap can never mask an error.\n\
+            `files_with_violations`, and `files_truncated`. EVERY counter in that payload —\n\
+            `total`, `rules_fired`, `errors`, `warnings`, `files_with_violations`,\n\
+            `files_checked` — and the exit code describe the WHOLE vault, never just the\n\
+            displayed slice: a file cap can never mask an error, and `total` reconciles\n\
+            against `errors + warnings`. `files_truncated` is about the displayed `files[]`\n\
+            list — true only when there were more violating files than the cap, not merely\n\
+            when the vault is bigger than it.\n\
             LIMIT: --limit/-n N caps the displayed files[]; `--limit 0` means UNLIMITED (lift\n\
             the cap entirely, matching `--count --limit 0`) — it never empties the list.\n\n\
             SKIP VISIBILITY: with `--files-from`, dropped input paths (missing / non-markdown)\n\
@@ -1238,7 +1256,10 @@ Repeatable (AND).\n\
             FILTER FLAGS:\n\
             \u{00a0} --rule <ID>             restrict to a single rule\n\
             \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
-            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\n\
+            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\
+            --rule and --rule-prefix are both case-insensitive and both validated: an id or a\n\
+            prefix that selects no rule is a user error at exit 1, never a silent full-vault\n\
+            lint that reads as green. `hyalo lint-rules list` shows what exists.\n\n\
             CONFORMANCE PROFILES: --profile <NAME> overlays an embedded ruleset for this\n\
             invocation without touching `.hyalo.toml` — useful for CI or third-party bundles.\n\
             `--profile okf` encodes the Open Knowledge Format §9 conformance rules: it requires\n\
@@ -2075,6 +2096,10 @@ pub(crate) enum LinksAction {
             When config exclusions actually remove candidates, the report adds a \
             config_excluded count so a bare run stays explainable.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
+            OUTPUT: each proposed match carries file, line, col, matched_text and link_target. \
+            `line` and `col` are both 1-based, and `col` counts Unicode scalar values (characters), \
+            not bytes — the same convention as `lint`'s `column`, so a mention after an accented or \
+            CJK character reports the column an editor shows.\n\n\
             COMMON MISTAKES:\n\
             - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
             Use --exclude-target-glob for directories (e.g. 'templates/*'), --exclude-title for words.\n\

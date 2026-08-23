@@ -1440,16 +1440,27 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.okf_profile_active = config.lint_profiles.iter().any(|p| p == "okf");
                 Some(ctx)
             }
+            // iter-210 (dogfood UX-4): `views list` and `lint-rules list` used
+            // to emit no hints at all — a listing with nothing to click. Only
+            // the *list* subcommands get them; `set`/`remove`/`show` already
+            // end somewhere concrete.
+            Commands::Views { action } => {
+                matches!(action, None | Some(crate::cli::args::ViewsAction::List))
+                    .then(|| HintContext::from_common(HintSource::ViewsList, &common))
+            }
+            Commands::LintRules { action } => matches!(
+                action,
+                None | Some(crate::cli::args::LintRulesAction::List { .. })
+            )
+            .then(|| HintContext::from_common(HintSource::LintRulesList, &common)),
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
             | Commands::Config
-            | Commands::Views { .. }
             | Commands::Madr { .. }
-            | Commands::Changelog { .. }
-            | Commands::LintRules { .. } => None,
+            | Commands::Changelog { .. } => None,
         }
     } else {
         None
@@ -1482,7 +1493,9 @@ fn run_inner() -> Result<(), AppError> {
             ctx.find_index = if *p == default_path {
                 HintContext::default_find_index()
             } else {
-                HintContext::file_find_index(p.to_string_lossy().into_owned())
+                // Shortened to its CWD-relative form when possible — the same
+                // path is repeated on every derived hint (iter-210 / UX-5).
+                HintContext::file_find_index(crate::hints::shorten_index_path_for_hint(p))
             };
         }
     }

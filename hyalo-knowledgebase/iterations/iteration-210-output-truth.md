@@ -2,7 +2,7 @@
 title: Iteration 210 — output truth (lint/links JSON counters, hints, error parity)
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-210/output-truth
 tags:
   - iteration
@@ -65,62 +65,62 @@ lands after the release, document byte semantics instead and defer the
 switch. Decide by release status at implementation time and record the
 decision.
 
-## Tasks
+## Tasks [10/10]
 
-- [ ] BUG-6: make lint JSON `total`, per-rule counts, and `rules_fired`
+- [x] BUG-6: make lint JSON `total`, per-rule counts, and `rules_fired`
       describe the full run (matching `warnings`/`errors`), and compute
       `files_truncated` from actual list truncation. Add e2e asserting
       `total == warnings + errors` and `files_truncated == (listed <
       files_with_violations)` on a >50-file fixture vault.
-- [ ] BUG-5: an unmatched `--rule-prefix` exits 1 with the same error
+- [x] BUG-5: an unmatched `--rule-prefix` exits 1 with the same error
       shape as an unmatched `--rule` (naming the prefix, hinting
       `lint-rules list`); matching prefixes unchanged.
-- [ ] UX-4: add the `fuzzy` bucket to `links` text output and to the
+- [x] UX-4: add the `fuzzy` bucket to `links` text output and to the
       OUTPUT section of `links --help`; assert text and JSON buckets sum
       to `broken` in an e2e.
-- [ ] BUG-11/JSON: populate per-fix detail (`fixes`, `fuzzy_fixes`,
+- [x] BUG-11/JSON: populate per-fix detail (`fixes`, `fuzzy_fixes`,
       `case_mismatch_fixes`: file, line, col, from-target, to-target,
       strategy, confidence) in dry-run and apply JSON, or remove the
       always-empty keys — populate is strongly preferred; it unblocks
       programmatic review of fuzzy proposals.
-- [ ] BUG-13: fix the directory-hint glob (`sub/*`, not `sub//*`) and
+- [x] BUG-13: fix the directory-hint glob (`sub/*`, not `sub//*`) and
       gate `did you mean X.md?` on the candidate existing; add both to
       the executed-hint e2e gate so emitted hints are run, not just
       string-checked.
-- [ ] BUG-13: unify missing-path behavior — `find <nonexistent path>`
+- [x] BUG-13: unify missing-path behavior — `find <nonexistent path>`
       reports not-found at exit 1 like `lint`/`read` (L-7 parity).
-- [ ] `col` semantics: per the Context note, either switch to
+- [x] `col` semantics: per the Context note, either switch to
       Unicode-scalar columns (pre-release) or document byte semantics in
       `links --help`; either way add a multibyte-line e2e pinning it.
-- [ ] Give `links`, `views`, and `lint-rules list` at least one useful
+- [x] Give `links`, `views`, and `lint-rules list` at least one useful
       drill-down hint each, correctly classified read-only vs `[writes]`.
-- [ ] (from superseded iter-208a) Redesign `links` text-output ordering so
+- [x] (from superseded iter-208a) Redesign `links` text-output ordering so
       the actionable buckets (unfixable, out-of-vault, case mismatches)
       are not buried under thousands of per-link fix lines — decide the
       layout against real GitHub Docs/MDN output and record a DEC; surface
       `out_of_vault_links`/`unfixable_links` in text output when
       non-empty, not just JSON.
-- [ ] (from superseded iter-208a) De-duplicate hint listings that repeat
+- [x] (from superseded iter-208a) De-duplicate hint listings that repeat
       the same long `--index-file <path>` 4-5 times; make the
       `[types.note]` config error suggest `hyalo types set` as the fix
       path.
 
-## Acceptance criteria
+## Acceptance criteria [7/7]
 
-- [ ] On a 61-file vault with 1 violating file: `total` equals the
+- [x] On a 61-file vault with 1 violating file: `total` equals the
       whole-run violation count, `files_truncated` is `false`, and
       `rules_fired` covers all firing rules at any `--limit`
-- [ ] `lint --rule-prefix nope` exits 1 and lints nothing
-- [ ] `links` text buckets sum to the broken count on the GitHub Docs
+- [x] `lint --rule-prefix nope` exits 1 and lints nothing
+- [x] `links` text buckets sum to the broken count on the GitHub Docs
       scratch copy
-- [ ] A script can list every proposed fuzzy fix (file, targets,
+- [x] A script can list every proposed fuzzy fix (file, targets,
       confidence) from dry-run JSON without parsing text output
-- [ ] Every hint emitted by `lint`, `find`, `links`, `views`, and
+- [x] Every hint emitted by `lint`, `find`, `links`, `views`, and
       `lint-rules list` executes successfully verbatim (extend the
       executed-hint gate)
-- [ ] A GitHub Docs scratch-copy `links fix` text run shows out-of-vault
+- [x] A GitHub Docs scratch-copy `links fix` text run shows out-of-vault
       and unfixable counts without scrolling past the per-link fix lines
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

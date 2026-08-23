@@ -196,6 +196,32 @@ pub fn find(
     }
     let files_arg: &[String] = &rewritten_files;
 
+    // L-7 parity (iter-210 / BUG-13): a `--file` / positional path that names
+    // nothing is a user error here, exactly as it already is for `lint` and
+    // `read`. Before this, `find nosuchdir/` scoped the query to a path no
+    // index entry could match and printed "No results" at exit 0 —
+    // indistinguishable from a genuine empty result set, and the opposite of
+    // what the same argument does on every other command.
+    //
+    // A path already present in the index is accepted without touching disk:
+    // with `--index-file` the snapshot is the authority and the files need not
+    // exist locally.
+    if !files_arg.is_empty() {
+        let known: std::collections::HashSet<&str> = index
+            .entries()
+            .iter()
+            .map(|e| e.rel_path.as_str())
+            .collect();
+        for f in files_arg {
+            if known.contains(f.as_str()) {
+                continue;
+            }
+            if let Err(err) = discovery::resolve_file(dir, f) {
+                return Ok(crate::commands::resolve_error_to_outcome(err, format));
+            }
+        }
+    }
+
     // Filter entries by --file / --glob scoping
     let scoped_entries = filter_index_entries(index.entries(), files_arg, globs)?;
 

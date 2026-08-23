@@ -5148,3 +5148,286 @@ fn links_auto_match_col_is_one_based() {
     assert_eq!(m["col"], 5, "col must be 1-based too: {json}");
     assert_eq!(m["matched_text"], "Target Note");
 }
+
+/// iter-210: `col` counts Unicode scalars, not bytes, so it agrees with what an
+/// editor shows and with lint's `column`. It used to be a byte index, which
+/// drifted on any line containing a multibyte character.
+#[test]
+fn links_auto_match_col_counts_characters_not_bytes() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target Note\n---\nBody.\n",
+    );
+    // Line 4 is "Café — Target Note here." — "Target Note" starts at character
+    // index 7 (column 8) but byte offset 11 (é is 2 bytes, — is 3).
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nCafé — Target Note here.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "links auto failed: {output:?}");
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let m = &json["results"]["matches"][0];
+    assert_eq!(m["matched_text"], "Target Note", "{json}");
+    assert_eq!(
+        m["col"], 8,
+        "col must count characters (8), not bytes (12): {json}"
+    );
+}
+
+/// The character column must still point at the right byte when the fix is
+/// written: applying the auto-link on a multibyte line produces valid text.
+#[test]
+fn links_auto_apply_is_correct_on_multibyte_lines() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target Note\n---\nBody.\n",
+    );
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\nCafé — Target Note here.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["links", "auto", "--apply", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "links auto --apply failed: {output:?}"
+    );
+    let body = std::fs::read_to_string(tmp.path().join("src.md")).unwrap();
+    assert!(
+        body.starts_with("---\ntitle: Src\n---\nCafé — [[")
+            && body.trim_end().ends_with("]] here."),
+        "the rewrite must land on the right bytes: {body:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// UX-4 / BUG-11 (iter-210): links output truth
+// ---------------------------------------------------------------------------
+
+/// A vault carrying one link of every interesting kind: certain-fixable
+/// (short-form, via `--expand-short-form`), fuzzy, unfixable, and
+/// case-mismatched.
+///
+/// Note the case-mismatch line behaves differently per filesystem: on a
+/// case-insensitive volume `[[Sub/Target]]` resolves and lands in the
+/// `case_mismatches` bucket, on a case-sensitive one it is broken and gets a
+/// certain `CaseInsensitive` fix. Every assertion below is written to hold
+/// either way.
+fn setup_bucket_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "sub/target.md",
+        "---\ntitle: Target\n---\nBody.\n",
+    );
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\n\
+         Certain: [[target]]\n\
+         Fuzzy: [[targett]]\n\
+         Unfixable: [[completely-unrelated-xyzzy]]\n\
+         Case: [[Sub/Target]]\n",
+    );
+    tmp
+}
+
+fn links_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["links", "fix", "--format", "json"];
+    args.extend_from_slice(extra);
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(&args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("links fix {extra:?} did not emit JSON: {stdout} ({e})"));
+    val["results"].clone()
+}
+
+fn links_fix_text(dir: &std::path::Path, extra: &[&str]) -> String {
+    let mut args = vec!["links", "fix", "--format", "text"];
+    args.extend_from_slice(extra);
+    let out = hyalo_no_hints()
+        .current_dir(dir)
+        .args(&args)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// UX-4: the JSON buckets partition `broken` exactly, and the text report now
+/// prints all of them — the `fuzzy` count used to be JSON-only, so text readers
+/// could not reconcile "6098 broken" with "25 fixable + 1400 unfixable".
+#[test]
+fn links_text_and_json_buckets_sum_to_broken() {
+    let tmp = setup_bucket_vault();
+
+    let r = links_fix_json(tmp.path(), &["--expand-short-form", "--dry-run"]);
+    let n = |k: &str| r[k].as_u64().unwrap_or_else(|| panic!("missing {k}: {r}"));
+    assert!(n("broken") > 0, "fixture must produce broken links: {r}");
+    assert_eq!(
+        n("broken"),
+        n("fixable") + n("fuzzy") + n("unfixable") + n("templated"),
+        "JSON buckets must partition `broken`: {r}"
+    );
+
+    let text = links_fix_text(tmp.path(), &["--expand-short-form", "--dry-run"]);
+    let count_line = |label: &str| -> u64 {
+        text.lines()
+            .find_map(|l| l.strip_prefix(label))
+            .unwrap_or_else(|| panic!("text output has no `{label}` line:\n{text}"))
+            .trim()
+            .parse()
+            .unwrap_or_else(|e| panic!("`{label}` line is not a number in:\n{text} ({e})"))
+    };
+    let broken = count_line("Broken links:");
+    let fixable = count_line("Fixable:");
+    let fuzzy = count_line("Fuzzy matches (low-confidence, excluded from plain --apply):");
+    let unfixable = count_line("Unfixable:");
+    assert_eq!(
+        broken,
+        fixable + fuzzy + unfixable,
+        "text buckets must sum to the broken count:\n{text}"
+    );
+    assert_eq!(broken, n("broken"), "text and JSON must agree:\n{text}");
+}
+
+/// UX-4: unfixable links used to be JSON-only. They now appear in text too.
+#[test]
+fn links_text_lists_unfixable_links() {
+    let tmp = setup_bucket_vault();
+
+    let text = links_fix_text(tmp.path(), &["--dry-run"]);
+    assert!(
+        text.contains("Unfixable links (no candidate in the vault):"),
+        "text must carry an unfixable section:\n{text}"
+    );
+    assert!(
+        text.contains("completely-unrelated-xyzzy"),
+        "text must name the unfixable target:\n{text}"
+    );
+}
+
+/// The fuzzy proposal listing is the longest section, so it must come last —
+/// otherwise the actionable buckets are buried under thousands of lines.
+#[test]
+fn links_text_puts_fuzzy_listing_after_actionable_buckets() {
+    let tmp = setup_bucket_vault();
+
+    let text = links_fix_text(tmp.path(), &["--dry-run"]);
+    let unfixable_at = text
+        .find("Unfixable links (no candidate in the vault):")
+        .unwrap_or_else(|| panic!("no unfixable section:\n{text}"));
+    let fuzzy_at = text
+        .find("Fuzzy matches (low-confidence, not applied")
+        .unwrap_or_else(|| panic!("no fuzzy listing:\n{text}"));
+    assert!(
+        unfixable_at < fuzzy_at,
+        "the fuzzy listing must come last:\n{text}"
+    );
+}
+
+/// The text lists are capped so a vault with thousands of unfixable links stays
+/// readable; the footer says how many were withheld and where to get them.
+#[test]
+fn links_text_caps_long_bucket_listings() {
+    let tmp = TempDir::new().unwrap();
+    let mut body = String::from("---\ntitle: Src\n---\n");
+    for i in 0..30 {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "Line {i}: [[totally-absent-target-{i:03}-zzz]]");
+    }
+    write_md(tmp.path(), "src.md", &body);
+
+    let text = links_fix_text(tmp.path(), &["--dry-run"]);
+    let listed = text
+        .lines()
+        .filter(|l| l.contains("totally-absent-target-"))
+        .count();
+    assert_eq!(listed, 20, "the text listing is capped at 20:\n{text}");
+    assert!(
+        text.contains("and 10 more (use --format json for the full list)"),
+        "the cap footer must say how many were withheld:\n{text}"
+    );
+
+    // JSON is never capped — a script still sees everything.
+    let r = links_fix_json(tmp.path(), &["--dry-run"]);
+    assert_eq!(
+        r["unfixable_links"].as_array().map(Vec::len),
+        Some(30),
+        "JSON must list every unfixable link: {r}"
+    );
+}
+
+/// BUG-11: a script must be able to audit every proposed fix from dry-run JSON
+/// — file, both targets, strategy and confidence — without parsing text output,
+/// and `--apply` must report the same detail.
+#[test]
+fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
+    fn assert_detail(arr: &serde_json::Value, label: &str, require_non_empty: bool) {
+        let items = arr
+            .as_array()
+            .unwrap_or_else(|| panic!("{label} is not an array: {arr}"));
+        if require_non_empty {
+            assert!(!items.is_empty(), "{label} must not be empty: {arr}");
+        }
+        for f in items {
+            for key in [
+                "source",
+                "line",
+                "old_target",
+                "new_target",
+                "strategy",
+                "confidence",
+            ] {
+                assert!(!f[key].is_null(), "{label} entry lacks {key}: {f}");
+            }
+            assert!(
+                f["confidence"]
+                    .as_f64()
+                    .is_some_and(|c| (0.0..=1.0).contains(&c)),
+                "{label} confidence must be in [0,1]: {f}"
+            );
+        }
+    }
+
+    let tmp = setup_bucket_vault();
+
+    let dry = links_fix_json(tmp.path(), &["--expand-short-form", "--dry-run"]);
+    assert_detail(&dry["fixes"], "fixes", true);
+    assert_detail(&dry["fuzzy_fixes"], "fuzzy_fixes", true);
+    // Only populated on a case-insensitive filesystem — see setup_bucket_vault.
+    assert_detail(&dry["case_mismatch_fixes"], "case_mismatch_fixes", false);
+    assert_eq!(
+        dry["fuzzy_fixes"][0]["strategy"], "FuzzyMatch",
+        "the fuzzy proposal must name its strategy: {dry}"
+    );
+    assert_eq!(
+        dry["fixes"][0]["strategy"], "ShortestPath",
+        "the certain proposal must name its strategy: {dry}"
+    );
+
+    let applied = links_fix_json(tmp.path(), &["--expand-short-form", "--apply"]);
+    assert_detail(&applied["fixes"], "fixes (apply)", true);
+    assert_detail(&applied["fuzzy_fixes"], "fuzzy_fixes (apply)", true);
+    assert_detail(&applied["applied_fixes"], "applied_fixes", true);
+}

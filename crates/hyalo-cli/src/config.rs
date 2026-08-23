@@ -427,6 +427,45 @@ fn schema_table_has_required_sections_key(schema: Option<&toml::Value>) -> bool 
     })
 }
 
+/// Turn a serde "unknown field" TOML error into the command that actually
+/// creates the setting the user was reaching for.
+///
+/// `[types.note]` is the recurring case (dogfood UX-5): the real key is
+/// `[schema.types.note]`, and the raw serde error only lists `schema` among the
+/// accepted fields — enough to tell the reader they were wrong, not enough to
+/// tell them what to run. Every entry here names a `hyalo` subcommand, because
+/// hand-editing the TOML is what produced the broken file in the first place.
+fn unknown_field_fix_path(error: &str) -> Option<&'static str> {
+    const FIX_PATHS: &[(&str, &str)] = &[
+        (
+            "types",
+            "type schemas live under [schema.types.<name>] — create one with \
+             `hyalo types set <name> --required title,date` instead of editing the TOML",
+        ),
+        (
+            "rules",
+            "lint rule overrides live under [lint.rules] — set one with \
+             `hyalo lint-rules set <RULE_ID> --severity error`",
+        ),
+        (
+            "view",
+            "saved queries live under [views] — create one with \
+             `hyalo views set <name> --property status=draft`",
+        ),
+        (
+            "profiles",
+            "lint profiles live under [lint] as `profiles = [...]` — see `hyalo config`",
+        ),
+    ];
+
+    // serde_toml renders this as: unknown field `types`, expected one of `dir`, …
+    let field = error.split("unknown field `").nth(1)?.split('`').next()?;
+    FIX_PATHS
+        .iter()
+        .find(|(name, _)| *name == field)
+        .map(|(_, fix)| *fix)
+}
+
 /// This variant accepts an explicit directory to make it testable without
 /// relying on the process working directory.
 pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
@@ -449,7 +488,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let mut cfg: ConfigFile = match toml::from_str(&contents) {
         Ok(c) => c,
         Err(e) => {
-            let diagnostic = format!("malformed .hyalo.toml: {e}");
+            let mut diagnostic = format!("malformed .hyalo.toml: {e}");
+            if let Some(fix) = unknown_field_fix_path(&e.to_string()) {
+                diagnostic.push_str("\n  fix: ");
+                diagnostic.push_str(fix);
+            }
             crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
         }

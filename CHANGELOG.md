@@ -11,6 +11,28 @@ and this project adheres to
 
 ### Added
 
+- **`views list`, `lint-rules list` and a clean `links` run now emit
+  drill-down hints** (iter-210, dogfood UX-4). All three used to return an
+  empty `hints` array, which made them navigation dead ends: the listing named
+  a thing and never said what to do with it. `views list` offers to run (or
+  delete) the first saved view, or to create one when the vault has none;
+  `lint-rules list` focuses whichever rule the vault actually overrode and
+  offers to inspect it, revert the override, or lint with just that rule; and
+  `links` on a vault with nothing broken points at `links auto` and
+  `find --orphan` — the two link questions a clean fix report does not answer.
+  `links` also advertises "Apply N case-mismatch fixes", a repair plain
+  `--apply` has always performed but never mentioned, because case mismatches
+  are deliberately excluded from the `fixable` count.
+
+- **A malformed `.hyalo.toml` names the command that fixes it** (iter-210,
+  dogfood UX-5). `[types.note]` is the recurring mis-spelling of
+  `[schema.types.note]`, and the raw serde error only listed `schema` among the
+  accepted fields — enough to say you were wrong, not enough to say what to
+  run. Unknown `types`, `rules`, `view` and `profiles` keys now carry a
+  `fix:` line naming the real table *and* the `hyalo types set` /
+  `hyalo lint-rules set` / `hyalo views set` command that writes it correctly.
+  A malformed file with no recognised key gets no invented suggestion.
+
 - **The `links auto` noisy-title note now fires on frequency, not just on an
   English word list** (iter-205). A title is flagged when it is a common
   English word **or** when it dominates the run — at least 25 proposed links
@@ -102,6 +124,33 @@ and this project adheres to
   dependency.
 
 ### Changed
+
+- **`hyalo lint --rule-prefix <p>` fails when the prefix matches no rule**
+  (iter-210, dogfood BUG-5). It used to print a warning and then lint
+  *everything*: the empty rule filter fell through to "no filtering", so
+  `--rule-prefix nope` ran every markdown rule and exited 0 — worse than the
+  unknown-`--rule` case, which has failed loudly since iter-204. An unmatched
+  prefix is now the same user error, naming the prefix and pointing at
+  `hyalo lint-rules list`. Matching prefixes are unaffected and the match stays
+  case-insensitive.
+
+- **`links auto` JSON `col` counts characters, not bytes** (iter-210, dogfood
+  BUG-13). `col` was 1-based but byte-indexed and undocumented, so a mention
+  after an accented or CJK character reported a column no editor agrees with
+  (character 9 was reported as 12). It now counts Unicode scalar values, the
+  same convention `lint`'s `column` uses, and `links auto --help` says so. The
+  byte offset the rewriter needs is kept internally and is no longer
+  serialized; `--apply` output is byte-identical.
+
+- **`links` text output accounts for every broken link** (iter-210, dogfood
+  UX-4/UX-3). The summary block omitted the `fuzzy` bucket, so a GitHub Docs
+  run reported `6098 broken` over `25 fixable + 1400 unfixable` and left 4,673
+  links unexplained; JSON reconciled exactly. `Fuzzy matches` now has a count
+  line beside `Fixable`/`Unfixable`, the previously JSON-only
+  `unfixable_links` and `out_of_vault_links` are listed in text (capped at 20
+  with an "and N more" footer), and the fuzzy per-fix listing — by far the
+  longest section — moved to the end so the actionable buckets are no longer
+  buried under thousands of fix lines. JSON lists stay uncapped.
 
 - **The `links auto` noisy-title note is honest about truncation and spells
   titles the way your vault does** (iter-205, dogfood L-12/L-13). With more
@@ -268,6 +317,45 @@ and this project adheres to
   `lint_files_extended` are untouched and still live.
 
 ### Fixed
+
+- **`lint` JSON counters describe the whole run, not the truncated file list**
+  (iter-210, dogfood BUG-6, found independently by two testers). `results.total`
+  and `rules_fired` were computed inside the display-capped loops while
+  `errors`/`warnings` came from the full pass, so on MDN's `web/api` the JSON
+  reported `total: 1358` against 14,248 errors+warnings — a tenfold
+  disagreement inside one object — and `rules_fired: 7` where 8 rules fired.
+  `files_truncated` was derived from `files_checked > limit` rather than from
+  actual list truncation, so it was `true` on every clean vault over 50 files.
+  All three now come from the pre-cap pass; the text renderer, which was always
+  right, is unchanged.
+
+- **The directory hint no longer doubles the path separator, and
+  `did you mean X.md?` is only offered when `X.md` exists** (iter-210, dogfood
+  BUG-13). `hyalo lint sub/` answered `--glob 'sub//*'`; pasting that back
+  matched nothing and exited 0, so a directory that was never linted reported
+  as a clean vault. `hyalo lint nosuchdir/` answered
+  `did you mean nosuchdir/.md?` — a path that can never exist — because the
+  candidate was built by string concatenation without ever checking disk. Both
+  hints are now produced from the trimmed path and gated on the candidate
+  resolving, and the executed-hint e2e gate runs *error* hints too, not just
+  the ones attached to a successful envelope.
+
+- **`find --file <missing>` reports not-found at exit 1** (iter-210, dogfood
+  BUG-13 / L-7). It used to scope the query to a path no entry could match and
+  print "No results" at exit 0 — indistinguishable from a query that genuinely
+  matched nothing, and the opposite of what `lint` and `read` do with the same
+  argument. All three now emit the same `file not found` envelope, including
+  the `--glob '<dir>/*'` hint for a directory argument. A path already present
+  in a `--index-file` snapshot is still accepted without touching disk, and an
+  existing file that simply matches no filter is still a clean empty run.
+
+- **Hints stop repeating a long absolute snapshot-index path** (iter-210,
+  dogfood UX-5). Every derived `find` hint has to carry `--index-file <path>`
+  or it would silently rescan the vault and answer a different question, so the
+  same path appeared four or five times in one hint block. The path now renders
+  in its working-directory-relative form whenever that is shorter, which keeps
+  each hint runnable verbatim while removing most of the bulk — an index
+  almost always lives inside the project it indexes.
 
 - **`links auto --apply` no longer injects wikilinks into code spans after an
   unmatched backtick** (iter-207, dogfood BUG-1). One stray backtick — the

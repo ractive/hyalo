@@ -1019,10 +1019,12 @@ fn find_no_match_returns_empty_array() {
 
 // --- find: file not found ---
 
+/// iter-210 / BUG-13 (L-7 parity): a `--file` naming nothing is a user error,
+/// not an empty result set. Reporting "no results" for a path that does not
+/// exist is indistinguishable from a query that legitimately matched nothing,
+/// and it is the opposite of what `lint`/`read` do with the same argument.
 #[test]
-fn find_file_not_found_returns_empty_results() {
-    // The index-backed `find` silently returns zero results for a
-    // `--file` argument that matches no index entry (no UserError).
+fn find_file_not_found_is_a_user_error() {
     let tmp = setup_vault();
     let fields = Fields::default();
     let result = run_find(
@@ -1045,9 +1047,51 @@ fn find_file_not_found_returns_empty_results() {
         Format::Json,
     )
     .unwrap();
+    match result {
+        CommandOutcome::UserError(msg) => {
+            assert!(
+                msg.contains("does-not-exist.md"),
+                "the error must name the path: {msg}"
+            );
+            assert!(
+                msg.contains("not found"),
+                "the error must say not found: {msg}"
+            );
+        }
+        other => panic!("expected a UserError, got {other:?}"),
+    }
+}
+
+/// A file that exists on disk but carries no frontmatter still resolves, so
+/// scoping to it is a legitimate empty result — not a not-found error.
+#[test]
+fn find_existing_file_with_no_match_is_still_empty_success() {
+    let tmp = setup_vault();
+    fs::write(tmp.path().join("bare.md"), "no frontmatter here\n").unwrap();
+    let fields = Fields::default();
+    let result = run_find(
+        tmp.path(),
+        None,
+        None,
+        None,
+        &[],
+        &["no-such-tag".to_owned()],
+        None,
+        &[],
+        &["bare.md".to_owned()],
+        &[],
+        &fields,
+        None,
+        false,
+        None,
+        false,
+        None,
+        Format::Json,
+    )
+    .unwrap();
     let out = unwrap_success(result);
     let json: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert!(json.as_array().unwrap().is_empty());
+    assert!(json.as_array().unwrap().is_empty(), "got {json}");
 }
 
 // --- matches_task_filter ---
