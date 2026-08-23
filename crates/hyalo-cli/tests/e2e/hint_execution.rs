@@ -650,3 +650,164 @@ fn custom_index_path_drop_hint_targets_that_index() {
         "the default index must be left alone"
     );
 }
+
+// ---------------------------------------------------------------------------
+// BUG-13 (iter-210): error hints must be runnable and must not be invented
+// ---------------------------------------------------------------------------
+//
+// The sweep above harvests the `hints` array of a *successful* envelope. The
+// hints attached to *errors* — the `hint` key next to `error`/`path` — were
+// never executed by any gate, and two of them were wrong:
+//
+//   * `hyalo lint sub/` answered `--glob 'sub//*'`. The doubled separator
+//     matches nothing, so pasting the hint reported a clean vault for a
+//     directory that was never linted.
+//   * `hyalo lint nosuchdir/` answered `did you mean nosuchdir/.md?` — a
+//     candidate produced by string concatenation without ever checking that
+//     such a file exists.
+
+/// Extract `error`/`path`/`hint` from a JSON error envelope.
+fn error_envelope(argv: &[&str], vault: &Path) -> serde_json::Value {
+    let output = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--no-hints"])
+        .args(argv)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "`hyalo {}` should be a user error; stdout: {} stderr: {}",
+        argv.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // User errors are written to stderr, possibly after a `note:` line.
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let json = stderr
+        .find('{')
+        .map(|i| &stderr[i..])
+        .unwrap_or_else(|| panic!("`hyalo {}` emitted no JSON: {stderr}", argv.join(" ")));
+    serde_json::from_str(json)
+        .unwrap_or_else(|e| panic!("`hyalo {}` emitted no JSON ({e}): {stderr}", argv.join(" ")))
+}
+
+/// The `--glob '<dir>/*'` hint a directory argument produces must, when run,
+/// actually select the files in that directory.
+#[test]
+fn directory_error_hint_glob_is_executed_and_matches_files() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // Both spellings of the same mistake — with and without a trailing slash.
+    for arg in ["notes", "notes/"] {
+        let envelope = error_envelope(&["lint", arg], tmp.path());
+        assert_eq!(envelope["error"], "path is a directory, not a file");
+        let hint = envelope["hint"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no hint for `lint {arg}`: {envelope}"));
+        assert!(
+            !hint.contains("//"),
+            "the glob hint must not double the separator: {hint}"
+        );
+
+        // Run `hyalo lint <hint>` verbatim and require it to select files.
+        let argv = to_argv(&format!("hyalo lint {hint}"), tmp.path());
+        let run = hyalo()
+            .args(&argv)
+            .args(["--format", "json", "--no-hints"])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|e| panic!("hint `{hint}` produced no JSON ({e}): {stdout}"));
+        let checked = parsed["results"]["files_checked"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("no files_checked in {parsed}"));
+        assert!(
+            checked > 0,
+            "the hint `hyalo lint {hint}` linted {checked} files — it reads as a clean \
+             vault while checking nothing"
+        );
+    }
+}
+
+/// A `did you mean X?` suggestion must name a file that exists. Anything else
+/// sends the user to a second not-found error.
+#[test]
+fn not_found_suggestions_name_a_file_that_exists() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // `nosuchdir/` has no candidate at all: no suggestion may be offered.
+    for cmd in [
+        ["lint", "nosuchdir/"],
+        ["read", "nosuchdir/"],
+        ["backlinks", "nosuchdir/"],
+    ] {
+        let envelope = error_envelope(&cmd, tmp.path());
+        assert_eq!(envelope["error"], "file not found", "for {cmd:?}");
+        assert!(
+            envelope["hint"].is_null(),
+            "`hyalo {}` invented a suggestion: {envelope}",
+            cmd.join(" ")
+        );
+    }
+
+    // `decision-log` (extension omitted) does have a candidate, and running the
+    // suggested path must succeed.
+    let envelope = error_envelope(&["read", "decision-log"], tmp.path());
+    let hint = envelope["hint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the extension hint stopped firing: {envelope}"));
+    let suggested = hint
+        .trim_start_matches("did you mean ")
+        .trim_end_matches('?');
+    assert_eq!(suggested, "decision-log.md");
+    let run = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "json", "--no-hints", "read", suggested])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "the suggested path did not resolve: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+}
+
+/// L-7 parity: `find --file <missing>` must fail the same way `lint`/`read` do
+/// instead of reporting an empty result set at exit 0.
+#[test]
+fn find_missing_file_matches_lint_and_read_not_found() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    let find = error_envelope(&["find", "--file", "notes/absent.md"], tmp.path());
+    let read = error_envelope(&["read", "notes/absent.md"], tmp.path());
+    assert_eq!(find["error"], read["error"]);
+    assert_eq!(find["path"], read["path"]);
+    assert_eq!(find["error"], "file not found");
+
+    // A directory argument gets the same runnable glob hint everywhere.
+    let find_dir = error_envelope(&["find", "--file", "notes/"], tmp.path());
+    assert_eq!(find_dir["hint"], "--glob 'notes/*'");
+
+    // An existing file that simply matches no filter is still a clean empty run.
+    let ok = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--format", "json", "--no-hints"])
+        .args([
+            "find",
+            "--file",
+            "notes/note-1.md",
+            "--tag",
+            "no-such-tag-anywhere",
+        ])
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "an existing file must not error");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&ok.stdout)).unwrap();
+    assert_eq!(parsed["total"], 0);
+}
