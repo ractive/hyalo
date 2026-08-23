@@ -839,6 +839,12 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            FORMATTING: only the lines of the keys you change are rewritten. Every other \
+            frontmatter line — quote style, block scalars, flow collections, indentation, \
+            blank lines and comments — is preserved byte for byte. A block that cannot be \
+            mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
+            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
+            naming the file and the reason.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error \
             {\"error\": \"frontmatter would exceed size budget\", \"limit_bytes\": ..., \"would_be_bytes\": ..., \"file\": ...}.\n\
@@ -909,6 +915,12 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            FORMATTING: only the lines of the keys you change are rewritten. Every other \
+            frontmatter line — quote style, block scalars, flow collections, indentation, \
+            blank lines and comments — is preserved byte for byte. A block that cannot be \
+            mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
+            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
+            naming the file and the reason.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
@@ -1092,6 +1104,12 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            FORMATTING: only the lines of the keys you change are rewritten. Every other \
+            frontmatter line — quote style, block scalars, flow collections, indentation, \
+            blank lines and comments — is preserved byte for byte. A block that cannot be \
+            mapped to per-key line spans (explicit `? key` syntax, top-level flow collections, \
+            invalid UTF-8, mixed line endings) is rewritten in full, with a warning on stderr \
+            naming the file and the reason.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \

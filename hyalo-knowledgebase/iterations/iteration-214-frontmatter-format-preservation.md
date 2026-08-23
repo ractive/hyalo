@@ -2,7 +2,7 @@
 title: Iteration 214 — frontmatter format preservation (minimal-diff writes)
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-214/frontmatter-format-preservation
 tags:
   - iteration
@@ -41,41 +41,41 @@ re-serialization only when the file's YAML cannot be span-mapped
 (anchors/aliases, exotic constructs) — and warning when that fallback
 triggers.
 
-## Tasks
+## Tasks [6/6]
 
-- [ ] Research the current write path (`write_frontmatter` and callers)
+- [x] Research the current write path (`write_frontmatter` and callers)
       and the span information available from the YAML parser; record
       the chosen mechanism as a DEC (targeted splice vs format-preserving
       YAML crate vs other).
-- [ ] Implement minimal-diff writes for `set`, `remove`, `append`,
+- [x] Implement minimal-diff writes for `set`, `remove`, `append`,
       `task toggle` (frontmatter portion), `mv` (frontmatter-touching
       paths), and `types`/`lint-rules`/`views set` writes to
       `.hyalo.toml` if they share the problem (verify; scope to what
       actually churns).
-- [ ] Preservation test corpus: nested objects, block scalars (`>-`,
+- [x] Preservation test corpus: nested objects, block scalars (`>-`,
       `|`), single/double/unquoted strings, flow and block lists,
       comments, unusual indentation, CRLF — assert that changing key X
       leaves every line not belonging to X byte-identical. Use real
       GitHub Docs frontmatter shapes as fixtures.
-- [ ] e2e: repeat the dogfood measurement — add one property to a copied
+- [x] e2e: repeat the dogfood measurement — add one property to a copied
       GitHub Docs `index.md` and assert the diff touches only the added
       line(s).
-- [ ] Define and document the fallback: when span-mapping fails, either
+- [x] Define and document the fallback: when span-mapping fails, either
       refuse with a clear error or re-serialize with a loud warning —
       pick one, record as a DEC, never silently churn.
-- [ ] Docs/CHANGELOG: describe the new guarantee and its fallback
+- [x] Docs/CHANGELOG: describe the new guarantee and its fallback
       boundary.
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
-- [ ] Adding one property to the GitHub Docs fixture changes only the
+- [x] Adding one property to the GitHub Docs fixture changes only the
       inserted line (was 116 of 198 lines)
-- [ ] The preservation corpus passes byte-identity for untouched lines
+- [x] The preservation corpus passes byte-identity for untouched lines
       across all listed YAML shapes
-- [ ] Fallback behavior is explicit, tested, and never silent
-- [ ] Existing frontmatter-write e2e suite still green (semantics
+- [x] Fallback behavior is explicit, tested, and never silent
+- [x] Existing frontmatter-write e2e suite still green (semantics
       unchanged)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

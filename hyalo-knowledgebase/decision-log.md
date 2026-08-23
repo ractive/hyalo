@@ -50,6 +50,11 @@ Fields (`path`, `hint`, `cause`) are omitted when not applicable. The `cause` fi
 
 **Why:** serde_yaml_ng cannot preserve formatting (comments, quoting style, blank lines). Obsidian itself rewrites frontmatter on save. The files are machine-managed. Keeps the implementation simple. Can revisit if hand-edited YAML preservation becomes important.
 
+**Superseded by [[decision-log#DEC-080]] (iter-214):** "hand-edited YAML preservation"
+did become important — a one-key change rewrote 116 of 198 lines on a real
+GitHub Docs file. Formatting is now preserved by splicing per-key line spans
+in the write path; the parser choice in this decision is unaffected.
+
 ## DEC-007: serde_yaml_ng over serde_yaml (2026-03-20)
 
 **Decision:** Use `serde_yaml_ng` 0.10 instead of the deprecated `serde_yaml` 0.9.
@@ -1608,3 +1613,72 @@ from inside the vault now write to the ancestor `.hyalo.toml` instead of
 creating a new one in the working directory. That is the desired outcome —
 nested configs are shadowed and already warned about — but it does mean a run
 that previously created a config file now edits one.
+
+## DEC-080: frontmatter writes splice per-key line spans instead of re-serializing (2026-08-23)
+
+**Decision:** every frontmatter mutation re-emits the **original bytes** of every
+top-level key whose value did not change, and serializes only the keys that were
+added, changed, or reordered. The raw YAML block is segmented into one line span
+per top-level key; unchanged spans are copied verbatim, changed spans are
+replaced with freshly serialized YAML for that key alone, removed spans (and the
+comment block directly above them) are dropped.
+
+**Why:** the writer parsed the whole block into `serde_yaml`/`serde_saphyr`
+values and re-serialized everything, so a one-key change rewrote every line the
+serializer chose to format differently. On a real GitHub Docs `index.md` that
+was **116 of 198 frontmatter lines** for a single added property — long list
+items refolded into `>-` block scalars, `'` quote style flipped to `"`. The
+round trip was semantically lossless, so nothing was *lost*; but a 116-line diff
+for a one-key change is unreviewable, and it makes hyalo unusable in any repo
+where frontmatter is under code review. Diff churn is an adoption blocker
+independent of correctness.
+
+**Supersedes DEC-006**, which accepted full-block rewrites because the YAML
+library could not preserve formatting. The fix does not need the library to:
+the unchanged text is never handed to the serializer at all.
+
+**Splice, not a format-preserving YAML crate:** the alternative was to swap the
+parser for a CST-preserving YAML library (the `toml_edit` equivalent, which
+hyalo already uses for `.hyalo.toml` — that path never churned). No maintained
+Rust YAML crate offers `toml_edit`'s fidelity, and swapping the parser would put
+every read path, the hardened `Budget`, strict-boolean handling, and duplicate-key
+policy back on the table for a formatting problem. Line-span splicing is
+confined to the write path and leaves the read model untouched.
+
+**Comments belong to the key below them:** a contiguous run of blank/comment
+lines immediately above a key travels with that key — including into oblivion
+when the key is removed. Trivia before the *first* key is document-level and
+stays at the top; trivia after the last key is a footer and stays at the bottom.
+This is a convention, not a YAML rule, but it matches how frontmatter comments
+are actually written (`# explains the field below`).
+
+**Verified, not trusted:** span mapping is a heuristic, so the spliced text is
+re-parsed and compared against the exact property map the caller asked to write
+— same keys, same order, same values — before it is returned. Verification uses
+budgets scaled to the frontmatter size limit rather than the tighter read-path
+defaults, because a caller is allowed to *write* a value larger than the
+read-path scalar budget (the size-budget pre-flight is what rejects those) and
+verification must not mistake that for a splicing failure.
+
+## DEC-081: the full-rewrite fallback stays, but is never silent (2026-08-23)
+
+**Decision:** when a frontmatter block cannot be span-mapped, hyalo still
+performs the write — by re-serializing the whole block — and emits a
+`warning:` on stderr naming the file and the reason. It does **not** refuse.
+
+**Why not refuse:** the fallback triggers on YAML hyalo can read but this
+splicer deliberately does not model — explicit `? key` syntax, top-level flow
+collections, directives, invalid UTF-8, mixed line endings. Refusing would turn
+a *cosmetic* limitation into a hard failure on files that `set` has always
+handled correctly, and would leave the user with no in-tool way to change a
+property. The prior behavior (full rewrite) is still correct; it is only noisy.
+
+**Why not silent:** the entire point of DEC-080 is that unexplained diff churn
+destroys trust in the tool. A user who sees 116 changed lines must be able to
+tell "hyalo could not do better here, and said so" from "hyalo has a bug".
+The warning carries the reason string, so the fallback class is identifiable
+from the message alone.
+
+**Not warned:** creating frontmatter on a file that had none, and writing into
+an empty `---\n---` block. Neither has any formatting to preserve, so neither is
+churn.
