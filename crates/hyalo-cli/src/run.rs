@@ -1440,16 +1440,28 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.okf_profile_active = config.lint_profiles.iter().any(|p| p == "okf");
                 Some(ctx)
             }
+            // iter-210 (dogfood UX-4): `views list` and `lint-rules list` used
+            // to emit no hints at all — a listing with nothing to click. Only
+            // the *list* subcommands get them; `set`/`remove`/`show` already
+            // end somewhere concrete.
+            Commands::Views { action } => matches!(
+                action,
+                None | Some(crate::cli::args::ViewsAction::List)
+            )
+            .then(|| HintContext::from_common(HintSource::ViewsList, &common)),
+            Commands::LintRules { action } => matches!(
+                action,
+                None | Some(crate::cli::args::LintRulesAction::List { .. })
+            )
+            .then(|| HintContext::from_common(HintSource::LintRulesList, &common)),
             Commands::Properties { .. }
             | Commands::Tags { .. }
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
             | Commands::Config
-            | Commands::Views { .. }
             | Commands::Madr { .. }
-            | Commands::Changelog { .. }
-            | Commands::LintRules { .. } => None,
+            | Commands::Changelog { .. } => None,
         }
     } else {
         None

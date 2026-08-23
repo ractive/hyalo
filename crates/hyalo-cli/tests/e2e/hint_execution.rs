@@ -811,3 +811,188 @@ fn find_missing_file_matches_lint_and_read_not_found() {
         serde_json::from_str(&String::from_utf8_lossy(&ok.stdout)).unwrap();
     assert_eq!(parsed["total"], 0);
 }
+
+// ---------------------------------------------------------------------------
+// UX-4 (iter-210): no listing command may be a navigation dead end
+// ---------------------------------------------------------------------------
+
+/// Harvest hints from a command run against a caller-prepared vault.
+fn harvest_in(vault: &Path, seed: &[&str]) -> Vec<Harvested> {
+    let output = hyalo()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--format", "json", "--hints"])
+        .args(seed)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("`hyalo {}` emitted no envelope ({e}): {stdout}", seed.join(" ")));
+    envelope["hints"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|h| {
+                    let cmd = h.get("cmd")?.as_str()?;
+                    if cmd.trim().is_empty() {
+                        return None;
+                    }
+                    Some(Harvested {
+                        seed: seed.join(" "),
+                        description: h
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        cmd: cmd.to_owned(),
+                        writes: h
+                            .get("writes")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Run a harvested hint against a fresh copy of the fixture and require the CLI
+/// to accept it.
+fn assert_hint_runs(h: &Harvested) {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let argv = to_argv(&h.cmd, tmp.path());
+    let output = hyalo().args(&argv).output().unwrap();
+    let reason = rejection_reason(
+        output.status.code(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(reason, None, "hint `{}` did not run", h.cmd);
+}
+
+/// `views list`, `lint-rules list` and `links` each have to offer somewhere to
+/// go. All three emitted an empty `hints` array before iter-210.
+#[test]
+fn listing_commands_are_not_navigation_dead_ends() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    for seed in [
+        vec!["views", "list"],
+        vec!["lint-rules", "list"],
+        vec!["links", "fix", "--dry-run"],
+    ] {
+        let hints = harvest_in(tmp.path(), &seed);
+        assert!(
+            !hints.is_empty(),
+            "`hyalo {}` emitted no hints",
+            seed.join(" ")
+        );
+        for h in &hints {
+            assert_hint_runs(h);
+        }
+    }
+}
+
+/// The `views list` hints must adapt: run/remove the view that exists, or
+/// suggest creating one when the vault has none.
+#[test]
+fn views_list_hints_target_an_existing_view() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    // No views configured yet — the hint has to be about creating one.
+    let empty = harvest_in(tmp.path(), &["views", "list"]);
+    assert!(
+        empty.iter().any(|h| h.cmd.contains("views set")),
+        "expected a create-a-view hint, got {:?}",
+        empty.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    assert!(
+        empty.iter().find(|h| h.cmd.contains("views set")).unwrap().writes,
+        "`views set` writes .hyalo.toml and must be marked"
+    );
+
+    // With a view saved, the hints point into it.
+    let saved = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+    assert!(saved.status.success(), "views set failed: {saved:?}");
+
+    let hints = harvest_in(tmp.path(), &["views", "list"]);
+    let run_hint = hints
+        .iter()
+        .find(|h| h.cmd.contains("find --view"))
+        .unwrap_or_else(|| panic!("no run-the-view hint: {hints:?}"));
+    assert!(run_hint.cmd.contains("drafts"), "got {}", run_hint.cmd);
+    assert!(!run_hint.writes, "running a view is read-only");
+}
+
+/// `lint-rules list` prefers the rule the vault actually overrode — that is the
+/// row the reader is most likely inspecting — and offers to revert it.
+#[test]
+fn lint_rules_list_hints_focus_the_overridden_rule() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let set = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["lint-rules", "set", "MD022", "--enabled", "false"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "lint-rules set failed: {set:?}");
+
+    let hints = harvest_in(tmp.path(), &["lint-rules", "list"]);
+    assert!(
+        hints.iter().any(|h| h.cmd.contains("lint-rules show MD022")),
+        "expected a show hint for the overridden rule, got {:?}",
+        hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    let revert = hints
+        .iter()
+        .find(|h| h.cmd.contains("lint-rules remove MD022"))
+        .unwrap_or_else(|| panic!("no revert hint: {hints:?}"));
+    assert!(revert.writes, "removing an override writes .hyalo.toml");
+    for h in &hints {
+        assert_hint_runs(h);
+    }
+}
+
+/// A vault with no broken links still has to lead somewhere. `links` on a clean
+/// vault emitted nothing at all.
+#[test]
+fn links_on_a_clean_vault_still_offers_drill_downs() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n\nLinks to [[b]].\n",
+    );
+    write_md(tmp.path(), "b.md", "---\ntitle: B\n---\n\nNothing broken.\n");
+
+    let hints = harvest_in(tmp.path(), &["links", "fix", "--dry-run"]);
+    assert!(
+        !hints.is_empty(),
+        "a clean `links` run must still offer a drill-down"
+    );
+    assert!(
+        hints.iter().all(|h| !h.writes),
+        "a clean vault has nothing to write: {:?}",
+        hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    for h in &hints {
+        let argv = to_argv(&h.cmd, tmp.path());
+        let output = hyalo().args(&argv).output().unwrap();
+        assert_eq!(
+            rejection_reason(
+                output.status.code(),
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr),
+            ),
+            None,
+            "hint `{}` did not run",
+            h.cmd
+        );
+    }
+}
