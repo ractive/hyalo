@@ -55,7 +55,7 @@ From [[dogfood-results/dogfood-v0210-pre2-integrity-wave]]:
   `--apply-fuzzy` — per iter-200's documented design, but indefensible
   to a user.
 
-## Tasks
+## Tasks [9/9]
 
 - [x] Carry-over from iter-210 (PR #242 test plan): the counter-truth,
       hint-execution and bucket-sum fixes were only verified against
@@ -96,7 +96,7 @@ From [[dogfood-results/dogfood-v0210-pre2-integrity-wave]]:
       align its gating with the site-absolute form (one consistent rule;
       record as a DEC either way).
 
-## Acceptance criteria
+## Acceptance criteria [6/6]
 
 - [x] `[c](t.md#sub-section)` against `### Sub Section` is not broken;
       `[c](t.md#nope)` is; `[b](#nope)` same-file is caught
