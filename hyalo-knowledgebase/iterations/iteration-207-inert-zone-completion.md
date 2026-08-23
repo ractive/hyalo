@@ -2,7 +2,7 @@
 title: Iteration 207 — inert-zone completion (release blocker)
 type: iteration
 date: 2026-08-23
-status: planned
+status: in-progress
 branch: iter-207/inert-zone-completion
 tags:
   - iteration
@@ -56,48 +56,78 @@ for full repros and corpus measurements. Summary:
 
 ## Tasks
 
-- [ ] Replace the inline-code parity model in `inert_link_zones` with a
+- [x] Replace the inline-code parity model in `inert_link_zones` with a
       CommonMark-correct code-span scanner: a code span opens only when a
       backtick run is later closed by a run of equal length; an unmatched
       run is literal text and must not flip state for the rest of the
       line/file. Add the BUG-1 minimal repro (kbd-backtick) and the three
       real-corpus shapes as fixtures.
-- [ ] Add Liquid inert zones: `{% … %}` and `{{ … }}` spans are inert for
+- [x] Add Liquid inert zones: `{% … %}` and `{{ … }}` spans are inert for
       `links auto` candidate matching. Unterminated markers should be
       conservative (treat rest of line as inert) rather than corrupting.
-- [ ] Add raw-HTML inert zones: HTML tag spans (from `<` of a recognized
+- [x] Add raw-HTML inert zones: HTML tag spans (from `<` of a recognized
       tag/comment/autolink-lookalike to its closing `>`), covering
       attribute values. Text *between* tags stays linkable
       (`<div>prose</div>` — prose is fair game; the tag is not).
-- [ ] `links fix`: skip (report as ignored/unfixable with a distinct
+- [x] `links fix`: skip (report as ignored/unfixable with a distinct
       reason, never rewrite) any link target containing `{%`, `{{`, or
       `${` — templated destinations are dynamic, not broken.
-- [ ] BUG-7: make canonical dedup prefer the non-symlink path as the
+- [x] BUG-7: make canonical dedup prefer the non-symlink path as the
       representative (fall back to first-seen only when all candidates
       are symlinks). Fix reporting so fixes cite the real file's path.
       Regression test from the dogfood repro (fuzzy 0.966 must survive
       adding `alias-target.md`).
-- [ ] Re-run the dogfood corpus verification on scratch copies of GitHub
+- [x] Re-run the dogfood corpus verification on scratch copies of GitHub
       Docs and vscode-docs: `links auto --apply` must produce **0**
       insertions inside code spans, Liquid expressions, or HTML tags
       (use the dogfood's grep patterns), and `links fix` must offer 0
       rewrites of templated targets. Record the numbers in this file.
-- [ ] Update docs/help (`links --help`, knowledgebase docs) to name the
+- [x] Update docs/help (`links --help`, knowledgebase docs) to name the
       complete inert-zone list and the templated-target skip.
+
+## Verification (2026-08-23, scratch corpus copies)
+
+`links auto --apply` on fresh copies of GitHub Docs `content/` (3,710 files,
+35,860 insertions) and vscode-docs (780 files, 32,924 insertions), then
+checked with a CommonMark-correct code-span scanner plus Liquid/HTML span
+matching (`check_zones.py`; the dogfood's raw greps over-report, since
+`` `a` [[x]] `b` `` matches a naive backtick pattern):
+
+| Corpus | inside code spans | inside Liquid | inside HTML tags |
+|---|---|---|---|
+| GitHub Docs (was 9 / 3,328 / 5) | **0** | **0** | **0** |
+| vscode-docs (was 8 / — / 128) | **0** | **0** | **0** |
+
+The three `[[…]]` occurrences the scanner still reports inside GitHub Docs
+code spans (`` `[[source]]` ``, `` `[[tool.poetry.source]]` ``,
+`` `[[Nameofwikipage|Link Text]]` ``) and the one on vscode-docs
+(`` `src/routes/post/[[]id[]]/**` ``) are pre-existing corpus content —
+TOML tables and wiki-syntax documentation — present byte-for-byte in the
+pristine checkouts, not insertions.
+
+`links fix --dry-run` on the full GitHub Docs corpus: 6,099 broken,
+0 fixable, 4,658 fuzzy, 1,378 unfixable, **63 templated** — and **0** of the
+6,099 rewrite offers targets a destination containing `{%` / `{{` / `${`
+(was 25).
+
+BUG-7 repro: with `alias-target.md -> target.md` present, `links fix
+--dry-run` still reports `source.md line 5: "targt" → "target.md"
+[fuzzy 0.966]` and `Unfixable: 0`; the fix is attributed to `target.md`,
+not the alias.
 
 ## Acceptance criteria
 
-- [ ] The BUG-1 minimal repro (unmatched backtick in `<kbd>`) produces 0
+- [x] The BUG-1 minimal repro (unmatched backtick in `<kbd>`) produces 0
       insertions inside code spans
-- [ ] GitHub Docs scratch copy: 0 wikilinks inserted inside Liquid
+- [x] GitHub Docs scratch copy: 0 wikilinks inserted inside Liquid
       expressions or HTML tags (was 3,328 / 5); vscode-docs: 0 (was 8 in
       code spans / 128 in HTML)
-- [ ] `links fix` on the GitHub Docs corpus offers 0 rewrites for targets
+- [x] `links fix` on the GitHub Docs corpus offers 0 rewrites for targets
       containing `{%`/`{{`/`${` (was 25), and they are reported under a
       named bucket rather than silently dropped
-- [ ] The BUG-7 repro reports `fuzzy 0.966` with the symlink present, and
+- [x] The BUG-7 repro reports `fuzzy 0.966` with the symlink present, and
       the fix is attributed to the real filename
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all clean
 
 ## Non-goals

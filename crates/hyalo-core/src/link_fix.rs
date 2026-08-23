@@ -1545,7 +1545,9 @@ See [broken](old-name.md) here.
 
     #[test]
     fn is_templated_target_recognizes_the_three_marker_forms() {
-        assert!(is_templated_target("{% ifversion ghes %}/admin{% endif %}/guides"));
+        assert!(is_templated_target(
+            "{% ifversion ghes %}/admin{% endif %}/guides"
+        ));
         assert!(is_templated_target("{{ site.baseurl }}/guides"));
         assert!(is_templated_target("${BASE}/guides"));
         assert!(!is_templated_target("guides/index.md"));

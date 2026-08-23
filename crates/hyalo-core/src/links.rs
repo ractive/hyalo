@@ -1048,7 +1048,10 @@ mod tests {
         assert!(needle_is_inert("<!-- net comment -->", "net"));
         assert!(needle_is_inert("<?php echo net; ?>", "net"));
         // A `>` inside a quoted attribute must not end the tag early.
-        assert!(needle_is_inert(r#"<img alt="a > b" src="net.png">"#, "net.png"));
+        assert!(needle_is_inert(
+            r#"<img alt="a > b" src="net.png">"#,
+            "net.png"
+        ));
     }
 
     #[test]
@@ -1068,7 +1071,10 @@ mod tests {
 
     #[test]
     fn inert_zone_treats_unterminated_html_tag_as_inert_to_end_of_line() {
-        assert!(needle_is_inert(r#"<img src="net.png" alt="wraps"#, "net.png"));
+        assert!(needle_is_inert(
+            r#"<img src="net.png" alt="wraps"#,
+            "net.png"
+        ));
     }
 
     #[test]
