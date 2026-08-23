@@ -569,7 +569,9 @@ fn config_rejects_an_out_of_range_fuzzy_confidence_floor() {
     let output = hyalo_no_hints()
         .args([
             "--dir",
-            tmp.path().to_str().expect("temp path should be valid UTF-8"),
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
             "config",
             "--format",
             "text",

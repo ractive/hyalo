@@ -29,11 +29,11 @@ use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
 use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
-use crate::link_score::{self, candidate_confidence_with_claim};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
 };
+use crate::link_score::{self, candidate_confidence_with_claim};
 use crate::links::{
     LinkKind, extract_link_spans_with_original, parse_wikilink, strip_wikilink_md_suffix,
 };
@@ -635,11 +635,7 @@ impl LinkMatcher {
                 // 0.7 floor and therefore below the default apply floor.
                 (
                     FixStrategy::BasenameFallback,
-                    candidate_confidence_with_claim(
-                        &score_target,
-                        &self.files[indices[0]],
-                        true,
-                    ),
+                    candidate_confidence_with_claim(&score_target, &self.files[indices[0]], true),
                 )
             } else {
                 (FixStrategy::ShortestPath, SHORTEST_PATH_CONFIDENCE)

@@ -262,7 +262,9 @@ pub fn candidate_confidence_with_claim(
         return base;
     }
     let dirs = directory_similarity(&target_dirs, &cand_dirs);
-    BASENAME_WEIGHT.mul_add(base, DIR_WEIGHT * dirs).clamp(0.0, 1.0)
+    BASENAME_WEIGHT
+        .mul_add(base, DIR_WEIGHT * dirs)
+        .clamp(0.0, 1.0)
 }
 
 #[cfg(test)]
@@ -353,7 +355,10 @@ mod tests {
         // so a typo fix must keep its full score even though the candidate
         // lives in a subdirectory.
         let c = candidate_confidence("targt", "notes/target.md");
-        assert!(c > 0.96, "expected the ~0.966 typo offer to survive, got {c}");
+        assert!(
+            c > 0.96,
+            "expected the ~0.966 typo offer to survive, got {c}"
+        );
         // The same text written as a location claim is a different question.
         let claimed = candidate_confidence_with_claim("targt", "notes/target.md", true);
         assert!(claimed < c, "claimed={claimed} bare={c}");

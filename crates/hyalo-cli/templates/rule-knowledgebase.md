@@ -7,7 +7,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Body search**: `hyalo find "broken links"`
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
-  and the `[links.auto]` auto-link settings.
+  the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor
+  `links fix --apply-fuzzy` applies).
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or

@@ -126,7 +126,7 @@ and this project adheres to
 ### Changed
 
 - **`--apply-fuzzy` now gates on a confidence floor, and the confidence means
-  something** (iter-212, dogfood BUG-11, DEC-077). **Behaviour change for
+  something** (iter-212, dogfood BUG-11, DEC-078). **Behaviour change for
   `--apply-fuzzy` users: fewer, better fixes.** The old confidence was a raw
   Jaro-Winkler score over filename stems, which rewards a shared prefix — so on
   GitHub Docs `/actions/reference/actions-limits` →

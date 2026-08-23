@@ -5534,7 +5534,11 @@ fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
 fn setup_confidence_corpus() -> TempDir {
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     // Real destinations.
-    write_md(tmp.path(), "graphql/reference/actions.md", "# GraphQL actions\n");
+    write_md(
+        tmp.path(),
+        "graphql/reference/actions.md",
+        "# GraphQL actions\n",
+    );
     write_md(
         tmp.path(),
         "code-security/code-scanning/actions-built-in-queries.md",
@@ -5709,7 +5713,9 @@ Relocation: [x](/wrong/place/target.md)
     let output = hyalo_no_hints()
         .args([
             "--dir",
-            tmp.path().to_str().expect("temp path should be valid UTF-8"),
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
             "links",
             "fix",
             "--format",
