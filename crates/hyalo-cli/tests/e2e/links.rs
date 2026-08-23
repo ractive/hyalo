@@ -3173,6 +3173,10 @@ Body also links [[wrong/real-target]].
             "links",
             "fix",
             "--apply",
+            // DEC-073 (iter-211): `wrong/real-target` writes a directory, so
+            // repairing it by basename is a guess and needs the fuzzy opt-in.
+            // This test is about frontmatter+body rewriting, not gating.
+            "--apply-fuzzy",
             "--format",
             "json",
         ])
@@ -3193,7 +3197,7 @@ Body also links [[wrong/real-target]].
         "expected 2 broken links (frontmatter + body): {apply_json}"
     );
     assert_eq!(
-        apply_json["results"]["fixable"].as_u64(),
+        apply_json["results"]["fuzzy"].as_u64(),
         Some(2),
         "expected both occurrences to be fixable: {apply_json}"
     );
@@ -3513,14 +3517,16 @@ Also \[label](escaped-md-missing.md) is literal too.
 // L-11: honest partial-failure envelopes (iter-187)
 // ---------------------------------------------------------------------------
 
-/// Build a vault with one certain (non-fuzzy) fixable link in a subdirectory
-/// we can make read-only to induce a mid-batch write failure.
+/// Build a vault with one fixable link in a subdirectory we can make
+/// read-only to induce a mid-batch write failure.
 ///
 /// The markdown link `[bar](wrong/place/bar.md)` in `docs/src.md` points at a
 /// non-existent path (broken), but the stem `bar` uniquely matches
-/// `sub/bar.md` → a ShortestPath (certain, 0.95) fix that plain `--apply`
-/// writes. Using a path-form markdown link avoids Obsidian short-form
-/// resolution, which would otherwise make a bare `[[bar]]` resolve as valid.
+/// `sub/bar.md` → a `BasenameFallback` fix. Using a path-form markdown link
+/// avoids Obsidian short-form resolution, which would otherwise make a bare
+/// `[[bar]]` resolve as valid — and under DEC-073 (iter-211) that written
+/// directory is exactly what puts the repair behind `--apply-fuzzy`, which the
+/// failure test therefore passes.
 #[cfg(unix)]
 fn setup_readonly_fix_vault() -> TempDir {
     let tmp = TempDir::new().expect("tempdir creation should succeed");
@@ -3569,6 +3575,7 @@ fn links_fix_apply_partial_failure_reports_failed_and_exits_nonzero() {
             "links",
             "fix",
             "--apply",
+            "--apply-fuzzy",
             "--format",
             "json",
         ])
@@ -4575,9 +4582,14 @@ See [AUTOTITLE](/how-tos/old-home/moved-page) for details.
 }
 
 #[test]
-fn links_fix_apply_writes_a_resolving_relative_target_from_a_nested_source() {
-    // Same asymmetry without a leading slash: a vault-relative target written
-    // verbatim into `a/b/page.md` resolves against `a/b/`, not the vault root.
+fn links_fix_relative_basename_guess_is_gated_like_the_site_absolute_one() {
+    // DEC-073 (iter-211 / BUG-12): the gate keys on whether the author wrote a
+    // *directory*, not on a leading slash. `../c/target.md` asserts a location
+    // just as firmly as `/c/target.md` does, so throwing that location away
+    // and substituting `z/target.md` — matched on the basename alone — is the
+    // same guess and lands behind the same `--apply-fuzzy` gate. Before this
+    // change the two spellings had opposite gates, which is what the
+    // 2026-08-23 dogfood called indefensible.
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     write_md(
         tmp.path(),
@@ -4588,18 +4600,54 @@ See [x](../c/target.md) here.
     );
     write_md(tmp.path(), "z/target.md", "# Target\n");
 
-    let applied = links_fix_results(tmp.path(), &["--apply"]);
+    let plain = links_fix_results(tmp.path(), &["--apply"]);
     assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(1),
-        "a relative basename repair is still a plain --apply fix: {applied}"
+        plain["applied_fixes"].as_array().map(Vec::len),
+        Some(0),
+        "a written directory makes this a guess, not a certain fix: {plain}"
     );
+    assert_eq!(
+        plain["fuzzy_fixes"][0]["strategy"].as_str(),
+        Some("BasenameFallback"),
+        "and it must be reported under the honest strategy: {plain}"
+    );
+
+    // Opting in writes it, still in the author's source-relative style.
+    let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
 
     let written =
         fs::read_to_string(tmp.path().join("a").join("b").join("page.md")).expect("readable");
     assert!(
         written.contains("[x](../../z/target.md)"),
         "expected a source-relative target, got: {written}"
+    );
+
+    let after = links_fix_results(tmp.path(), &[]);
+    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
+}
+
+#[test]
+fn links_fix_bare_stem_repair_stays_a_plain_apply_fix() {
+    // The other half of DEC-073: a target with no directory component asserts
+    // no location, so resolving it by stem is the documented Obsidian
+    // short-form rule — a resolution, not a guess — and plain `--apply`
+    // writes it.
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    write_md(
+        tmp.path(),
+        "a/b/page.md",
+        md!(r"
+See [x](target.md) here.
+"),
+    );
+    write_md(tmp.path(), "z/target.md", "# Target\n");
+
+    let applied = links_fix_results(tmp.path(), &["--apply"]);
+    assert_eq!(
+        applied["applied_fixes"].as_array().map(Vec::len),
+        Some(1),
+        "a bare-stem repair stays a certain fix: {applied}"
     );
 
     let after = links_fix_results(tmp.path(), &[]);

@@ -167,6 +167,21 @@ pub fn links_fix(
         .collect();
     let ambiguous_count = ambiguous.len();
 
+    // iter-211 / BUG-12: carry each fix's own kebab-case rule code into the
+    // payload. The text renderer used to hard-code `[link-case-mismatch]` for
+    // everything in this bucket, so a bare-stem *relocation*
+    // (`[[note]]` → `sub/note`) was presented to the user as a casing fix.
+    let case_mismatch_json: Vec<serde_json::Value> = case_mismatches
+        .iter()
+        .map(|f| {
+            let mut v = serde_json::to_value(f).unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("rule".to_owned(), serde_json::json!(f.strategy.code()));
+            }
+            v
+        })
+        .collect();
+
     let mut modified_files = Vec::new();
     // Fixes that were part of the plan but produced no on-disk change (e.g. a
     // frontmatter occurrence whose text no longer matched what detection saw).
@@ -314,7 +329,7 @@ pub fn links_fix(
         "failed": failed_count,
         "failed_fixes": failed_fixes,
         "case_mismatches": case_mismatch_count,
-        "case_mismatch_fixes": case_mismatches,
+        "case_mismatch_fixes": case_mismatch_json,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
         // iter-193: targets resolving above the vault root are out of scope,
