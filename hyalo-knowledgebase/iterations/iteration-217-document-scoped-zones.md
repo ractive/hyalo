@@ -2,7 +2,7 @@
 title: "Iteration 217 — document-scoped link zones and alias emission for links auto"
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-217/document-scoped-zones
 tags: [iteration, links, auto-link, integrity]
 related:
