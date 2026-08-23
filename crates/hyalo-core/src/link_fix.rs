@@ -235,6 +235,53 @@ pub struct FailedFix {
 // Broken link detection
 // ---------------------------------------------------------------------------
 
+/// Count how many links in `index` are site-absolute (`/foo/bar`) and how
+/// many of those look plausibly resolvable — after `site_prefix` stripping,
+/// the remaining path's first segment names a real top-level entry in the
+/// vault — versus ones that don't.
+///
+/// NEW-9 (dogfood pre3): a `site_prefix` that strips *something* but not
+/// *enough* looks, from a naive "did the string change" check, identical to
+/// one that worked. On a real MDN checkout the auto-derived prefix (`en-us`,
+/// the last path segment of `--dir`) case-insensitively strips the `en-US/`
+/// segment from every `/en-US/docs/Web/...` link (iter-204 made that match
+/// case-insensitive) — but MDN's on-disk layout has no top-level `docs/`
+/// directory at all, only `web/`, `mdn/`, `glossary/`, etc., so the result
+/// (`docs/Web/...`) still resolves nowhere. Comparing against the vault's own
+/// top-level entries catches this in one pass over the index, without a
+/// second full link-resolution run: measured against this repo's real MDN
+/// checkout, the derived prefix leaves ~0% of site-absolute links
+/// plausible, the correct two-segment `en-US/docs` prefix ~100%.
+pub fn site_prefix_plausible_resolution_stats(
+    index: &dyn VaultIndex,
+    site_prefix: Option<&str>,
+) -> (usize, usize) {
+    let top_level: std::collections::HashSet<String> = index
+        .entries()
+        .iter()
+        .filter_map(|e| e.rel_path.split('/').next())
+        .map(str::to_lowercase)
+        .collect();
+
+    let mut absolute = 0usize;
+    let mut plausible = 0usize;
+    for entry in index.entries() {
+        for (_, link) in &entry.links {
+            let normalized = link.target.replace('\\', "/");
+            if !normalized.starts_with('/') {
+                continue;
+            }
+            absolute += 1;
+            let stripped = strip_site_prefix(&normalized, site_prefix);
+            let first_segment = stripped.split('/').next().unwrap_or("");
+            if !first_segment.is_empty() && top_level.contains(&first_segment.to_lowercase()) {
+                plausible += 1;
+            }
+        }
+    }
+    (absolute, plausible)
+}
+
 /// Detect broken links from index entries.
 ///
 /// Each [`IndexEntry`](crate::index::IndexEntry) has
@@ -2602,6 +2649,78 @@ See [broken](old-name.md) here.
             total_classified <= 1,
             "each link must appear at most once across broken + case_mismatches"
         );
+    }
+
+    // --- NEW-9 (dogfood pre3): site_prefix plausible-resolution stats ---
+
+    /// Mirrors the real MDN repro: on-disk layout has a top-level `web/` (no
+    /// `docs/`), links are spelled `/en-US/docs/Web/...`. The single-segment
+    /// derived prefix `en-us` case-insensitively strips `en-US/` (iter-204),
+    /// leaving `docs/Web/...` — `docs` is not a real top-level entry, so this
+    /// must not count as plausibly resolved even though the string changed.
+    #[test]
+    fn site_prefix_plausible_resolution_distinguishes_under_and_correctly_stripped() {
+        use crate::links::{Link, LinkKind};
+
+        let link = |target: &str| Link {
+            target: target.to_string(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: None,
+            query: None,
+        };
+        let index = mock_index(
+            "source.md",
+            vec![
+                (1, link("/en-US/docs/Web/A")),
+                (2, link("/en-US/docs/Web/B")),
+                (3, link("relative.md")),
+            ],
+            &["web/a.md", "web/b.md"],
+        );
+
+        // Under-stripped: `docs` is not a real top-level vault entry.
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        assert_eq!(absolute, 2, "two site-absolute links, one relative");
+        assert_eq!(
+            plausible, 0,
+            "the single-segment prefix leaves a `docs` segment nothing in the vault has"
+        );
+
+        // The correct multi-segment prefix leaves `Web/...`, which matches
+        // the real top-level `web/` entry case-insensitively.
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-US/docs"));
+        assert_eq!(absolute, 2);
+        assert_eq!(plausible, 2);
+    }
+
+    #[test]
+    fn site_prefix_plausible_resolution_zero_absolute_links_is_not_a_misconfiguration() {
+        use crate::links::{Link, LinkKind};
+
+        let index = mock_index(
+            "source.md",
+            vec![(
+                1,
+                Link {
+                    target: "relative.md".to_string(),
+                    label: None,
+                    kind: LinkKind::Markdown,
+                    fragment: None,
+                    query: None,
+                },
+            )],
+            &[],
+        );
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        assert_eq!(
+            absolute, 0,
+            "a vault with no site-absolute links must not be flagged"
+        );
+        assert_eq!(plausible, 0);
     }
 
     /// NEW-13 (dogfood pre3): a bare-stem relocation — the exact path fails,

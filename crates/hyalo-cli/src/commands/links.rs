@@ -110,6 +110,24 @@ pub fn links_fix(
     let report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
 
+    // NEW-9 (dogfood pre3): a `site_prefix` that demonstrably strips nothing
+    // useful turns a misconfiguration into a wall of "broken" links with no
+    // hint why — a real MDN checkout with the auto-derived `en-us` prefix
+    // reported every single `/en-US/docs/...` link broken with no signal that
+    // the prefix itself was the problem. Warn the moment every site-absolute
+    // link fails the cheap plausibility check, naming the prefix so the fix
+    // (`--site-prefix` / `.hyalo.toml`) is one line away.
+    let (site_absolute_links, plausibly_resolved) =
+        hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
+    if site_absolute_links > 0 && plausibly_resolved == 0 {
+        let prefix_desc = site_prefix.map_or_else(|| "(none)".to_owned(), |p| format!("'{p}'"));
+        crate::warn::warn(format!(
+            "site_prefix {prefix_desc} stripped 0 of {site_absolute_links} site-absolute link(s) \
+             to a plausible vault path — check --site-prefix or `site_prefix` in .hyalo.toml \
+             (see `hyalo config` for where the effective value came from)"
+        ));
+    }
+
     // Compute the set of in-scope source files when --glob is provided.
     // The same scope applies to broken, case_mismatches, and ambiguous so
     // that --apply never rewrites files outside the requested scope.

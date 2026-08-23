@@ -349,6 +349,53 @@ fn explicit_multi_segment_site_prefix_resolves_mdn_links() {
     );
 }
 
+/// NEW-9 (dogfood pre3): `hyalo links fix` warns when the effective
+/// `site_prefix` demonstrably stripped 0 of N site-absolute links — the MDN
+/// repro shape (a single-segment derived prefix against two-segment
+/// `/en-US/docs/...` links) leaves every stripped result's first remaining
+/// segment (`docs`) unmatched against any real top-level vault entry.
+#[test]
+fn links_fix_warns_when_site_prefix_strips_nothing_plausible() {
+    let tmp = TempDir::new().unwrap();
+    let vault = tmp.path().join("en-us");
+    std::fs::create_dir_all(&vault).unwrap();
+    write_mdn_shaped_vault(&vault);
+    write_md(
+        &vault,
+        "src.md",
+        "---\ntitle: Src\n---\nSee [Web API](/en-US/docs/web/api) and [CSS](/en-US/docs/web/css).\n",
+    );
+
+    let derived = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["links", "fix", "--dry-run", "--format", "text"])
+        .output()
+        .unwrap();
+    let derived_stderr = String::from_utf8_lossy(&derived.stderr);
+    assert!(
+        derived_stderr.contains("site_prefix 'en-us' stripped 0 of"),
+        "expected the misconfiguration warning, naming the prefix: {derived_stderr}"
+    );
+    assert!(
+        derived_stderr.contains("--site-prefix"),
+        "the warning must point at the fix: {derived_stderr}"
+    );
+
+    // The correct multi-segment prefix leaves `web/...`, a real top-level
+    // entry — no warning.
+    let explicit = hyalo_no_hints()
+        .args(["--dir", vault.to_str().unwrap()])
+        .args(["--site-prefix", "en-US/docs"])
+        .args(["links", "fix", "--dry-run", "--format", "text"])
+        .output()
+        .unwrap();
+    let explicit_stderr = String::from_utf8_lossy(&explicit.stderr);
+    assert!(
+        !explicit_stderr.contains("stripped 0 of"),
+        "a correctly stripping prefix must not warn: {explicit_stderr}"
+    );
+}
+
 /// `hyalo config` warns that a derived prefix is only ever one segment, so the
 /// MDN case is discoverable rather than silently wrong.
 #[test]

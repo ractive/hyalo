@@ -311,6 +311,15 @@ and this project adheres to
   `--no-warn-common-titles`, or `[links.auto] warn_common_titles = false`
   silence it. The word list is bundled in `hyalo-core::common_words` — no new
   dependency.
+- **`links fix` warns when the effective `site_prefix` stripped 0 of N
+  site-absolute links to a plausible vault path** (iter-220, dogfood NEW-9).
+  On a real MDN checkout, the auto-derived single-segment prefix (`en-us`)
+  case-insensitively stripped the `en-US/` segment from every
+  `/en-US/docs/...` link but left a `docs/...` remainder that names no
+  real top-level vault entry, silently turning a 110-second run into
+  49,762 broken links with no signal the prefix itself was the problem.
+  The warning names the effective prefix and points at `--site-prefix` /
+  `.hyalo.toml` / `hyalo config`.
 
 ### Changed
 

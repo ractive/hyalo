@@ -292,6 +292,11 @@ pub(crate) struct Cli {
     /// Also settable via `site_prefix = "docs"` in .hyalo.toml.
     /// Precedence: --site-prefix flag > .hyalo.toml > auto-derived from --dir.
     /// Run `hyalo config` to see the effective value and where it came from.
+    /// `hyalo links fix` warns on stderr when the effective prefix stripped
+    /// 0 of N site-absolute links to a plausible vault path — a real MDN
+    /// checkout with the auto-derived one-segment prefix left every
+    /// `/en-US/docs/...` link unresolved, since `docs` names no real
+    /// top-level entry once `en-US` alone is stripped.
     #[arg(long, global = true, value_name = "PREFIX")]
     pub site_prefix: Option<String>,
 
