@@ -1483,6 +1483,10 @@ pub struct ExtLintOutput {
     pub errors: usize,
     /// Number of warn-severity violations.
     pub warnings: usize,
+    /// Files dropped from this run by `[lint] ignore` (UX-1, dogfood pre3).
+    /// Always present (not skipped when zero) — consistent with the other
+    /// count fields on this struct.
+    pub files_ignored: usize,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
     /// Frontmatter fix actions applied (or previewed) per file.
@@ -1564,6 +1568,13 @@ pub struct ExtLintOptions<'a> {
     /// reference across the rayon workers. `None` when HYALO006 is disabled or
     /// filtered out, so no graph is built and the rule never runs.
     pub link_lint_ctx: Option<crate::commands::link_lint::LinkLintContext>,
+    /// Files dropped from this run by `[lint] ignore`, regardless of scope
+    /// (bare sweep, `--glob`, or `--file`). UX-1 (dogfood pre3): surfaced in
+    /// the bare-sweep summary line so a full-vault run stops silently hiding
+    /// how much of the vault it skipped (`68 files checked (318 ignored by
+    /// [lint] ignore)`) — the named-file/glob-all-ignored cases already get a
+    /// dedicated stderr notice from the caller.
+    pub files_ignored: usize,
 }
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
@@ -2034,6 +2045,7 @@ pub fn lint_files_extended(
             files_truncated,
             errors: authoritative_errors,
             warnings: authoritative_warnings,
+            files_ignored: opts.files_ignored,
             dry_run: false,
             fixes: all_fix_actions,
         };
@@ -3751,6 +3763,7 @@ type = \"skill\"
             changelog_profile: false,
             case_insensitive: false,
             link_lint_ctx: None,
+            files_ignored: 0,
         };
         lint_files_extended(&files, schema, &engine, &md_config, &mut opts).unwrap()
     }

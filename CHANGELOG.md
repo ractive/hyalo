@@ -139,6 +139,17 @@ and this project adheres to
   anchors are broken but targets are clean; the check only runs in that
   case, so it never adds a second resolution pass to a vault that already
   has broken targets.
+- **bare `hyalo lint` no longer hides how much of the vault `[lint] ignore`
+  dropped** (iter-220, dogfood UX-1). "68 files checked, no issues" on a
+  386-file vault used to read as a clean bill of health even though 318
+  files were silently config-ignored; the summary line now appends
+  "(N ignored by [lint] ignore)" and the JSON envelope carries the same
+  figure as `files_ignored`. A `--glob` whose matches are entirely
+  ignored now prints the same exclusion notice the named-file form
+  already did, instead of a silently vacuous "0 files checked, no
+  issues" — a `--glob` matching a mix of ignored and kept files stays
+  quiet (only the summary-line count), so a large partial sweep isn't
+  buried in per-file noise.
 
 ### Changed
 

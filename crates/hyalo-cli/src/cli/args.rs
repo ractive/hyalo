@@ -1298,7 +1298,10 @@ Repeatable (AND).\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
-            `files_with_violations`, and `files_truncated`. EVERY counter in that payload —\n\
+            `files_with_violations`, `files_truncated`, and `files_ignored` (files dropped by\n\
+            `[lint] ignore`, appended to the text summary line as \"(N ignored by [lint]\n\
+            ignore)\" so a bare sweep never reads as a clean bill of health for files it never\n\
+            looked at — UX-1). EVERY counter in that payload —\n\
             `total`, `rules_fired`, `errors`, `warnings`, `files_with_violations`,\n\
             `files_checked` — and the exit code describe the WHOLE vault, never just the\n\
             displayed slice: a file cap can never mask an error, and `total` reconciles\n\

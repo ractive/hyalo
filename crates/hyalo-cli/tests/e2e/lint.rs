@@ -2512,6 +2512,114 @@ fn lint_ignored_named_file_prints_notice() {
     );
 }
 
+/// UX-1 (dogfood pre3): a bare `hyalo lint` sweep (no --file/--glob) used to
+/// silently drop every `[lint] ignore`-matched file with no trace at all —
+/// "N files checked, no issues" read as a clean bill of health even when a
+/// large fraction of the vault was never looked at. The summary line now
+/// appends the ignored count.
+#[test]
+fn lint_bare_sweep_summary_appends_ignored_count() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint]\nignore = [\"archive/**\"]\n",
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n# A\n");
+    write_md(
+        tmp.path(),
+        "archive/old.md",
+        "---\ntitle: Old\n---\n# Old\n",
+    );
+
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        stdout.contains("1 file checked, no issues (1 ignored by [lint] ignore)"),
+        "expected the ignored count appended to the summary line: {stdout}"
+    );
+
+    // JSON carries the same figure under files_ignored.
+    let json_out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
+    assert_eq!(json["results"]["files_ignored"].as_u64(), Some(1));
+}
+
+/// UX-1: a `--glob` whose matches are *entirely* ignored prints the same
+/// exclusion notice the named-file form does, instead of a silently vacuous
+/// "0 files checked, no issues".
+#[test]
+fn lint_glob_matching_only_ignored_files_prints_notice() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint]\nignore = [\"archive/**\"]\n",
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n# A\n");
+    write_md(
+        tmp.path(),
+        "archive/old.md",
+        "---\ntitle: Old\n---\n# Old\n",
+    );
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--glob", "archive/*.md", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("excluded by [lint] ignore") && stderr.contains("archive/old.md"),
+        "an all-ignored --glob must print the same notice a named file does: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("0 files checked, no issues (1 ignored by [lint] ignore)"),
+        "the summary line must also carry the count: {stdout}"
+    );
+}
+
+/// UX-1: a `--glob` that matches a mix of ignored and non-ignored files must
+/// NOT print the loud named-file-style notice (that would be noisy on a
+/// large sweep) — only the quiet summary-line count.
+#[test]
+fn lint_glob_matching_mixed_ignored_and_kept_files_stays_quiet() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        "dir = \".\"\n[schema.default]\nrequired = []\n[lint]\nignore = [\"archive/**\"]\n",
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n# A\n");
+    write_md(
+        tmp.path(),
+        "archive/old.md",
+        "---\ntitle: Old\n---\n# Old\n",
+    );
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--glob", "**/*.md", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("excluded by [lint] ignore"),
+        "a partially-ignored --glob must not print the loud per-file notice: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("1 file checked, no issues (1 ignored by [lint] ignore)"),
+        "the summary line must still carry the count: {stdout}"
+    );
+}
+
 /// `--fix --dry-run --format github` marks would-be-fixed violations distinctly
 /// from remaining ones and uses a `N fixable, M remaining` summary — so the
 /// output is not identical to a plain lint run (df-own-kb U6).

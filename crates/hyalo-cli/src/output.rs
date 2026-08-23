@@ -1287,6 +1287,18 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
             "{files_checked} {files_label} checked, {files_with_issues} with issues ({error_count} {errors_label}, {warn_count} {warns_label})",
         );
     }
+    // UX-1 (dogfood pre3): a bare sweep silently dropped every `[lint]
+    // ignore`-matched file with no visible trace — "68 files checked, no
+    // issues" on a 386-file vault read as a clean bill of health, not "68 of
+    // 386 were actually looked at." The named-file / glob-all-ignored cases
+    // already get their own stderr notice; this is the everything-else case.
+    let files_ignored: u64 = map
+        .get("files_ignored")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if files_ignored > 0 {
+        let _ = write!(s, " ({files_ignored} ignored by [lint] ignore)");
+    }
 
     let fix_count: usize = map
         .get("fixes")

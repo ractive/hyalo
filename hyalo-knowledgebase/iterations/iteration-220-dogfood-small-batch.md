@@ -52,7 +52,7 @@ excluded: broken-links line numbers + Liquid heading slugs
       `--strict`-style nonzero exit when findings exist; `links` text
       gains a one-line "N broken anchors — see `find --broken-links`"
       when anchors are broken but targets are not
-- [ ] UX-1: bare `lint` summary appends the config-ignored count
+- [x] UX-1: bare `lint` summary appends the config-ignored count
       (`68 files checked (318 ignored by [lint] ignore)`), and a `--glob`
       whose matches are all ignored prints the same exclusion warning the
       named-file form already prints — no silent `0 files checked` green
@@ -100,7 +100,7 @@ excluded: broken-links line numbers + Liquid heading slugs
       wrong answer
 - [x] A vault whose only defect is a dead anchor can fail CI through a
       documented command/flag
-- [ ] `lint` on the own KB shows the ignored-file count; ignored-only
+- [x] `lint` on the own KB shows the ignored-file count; ignored-only
       `--glob` warns
 - [ ] `views run` hint parity with `find --view` (iter-213 AC completed)
 - [x] No command prints a self-contradictory config note
