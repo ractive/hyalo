@@ -8,6 +8,7 @@ use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
+use hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE;
 
 // ---------------------------------------------------------------------------
 // Command entry points
@@ -30,15 +31,22 @@ use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_in
 /// responsible for patching the snapshot index with these paths.
 /// Opt-in policy for applying low-confidence fuzzy-match fixes.
 ///
-/// Fuzzy (Jaro-Winkler) fixes are guesses: a broken `[[foo]]` can "match" an
-/// unrelated `bar.md`. They are always *reported* in their own bucket but are
-/// only written to disk under `--apply` when the user opts in here.
+/// Fuzzy fixes are guesses: a broken `[[foo]]` can "match" an unrelated
+/// `bar.md`. They are always *reported* in their own bucket but are only
+/// written to disk under `--apply` when the user opts in here.
+///
+/// iter-212: opting in is no longer a blank cheque. A bare `--apply-fuzzy`
+/// now gates on [`DEFAULT_FUZZY_MIN_CONFIDENCE`]; proposals below the floor
+/// stay in the report as unapplied candidates. `--min-confidence` (or
+/// `[links] fuzzy_min_confidence` in `.hyalo.toml`) moves the bar, and
+/// `--min-confidence 0` restores the pre-212 accept-everything behaviour.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FuzzyApply {
     /// `--apply-fuzzy`: include fuzzy-match fixes in `--apply`.
     pub apply_fuzzy: bool,
     /// `--min-confidence <f>`: only apply fuzzy fixes at or above this
-    /// confidence. Setting it implies `apply_fuzzy`.
+    /// confidence. Setting it implies `apply_fuzzy`. `None` means "use the
+    /// default floor", **not** "accept everything" — pass `Some(0.0)` for that.
     pub min_confidence: Option<f64>,
 }
 
@@ -48,10 +56,33 @@ impl FuzzyApply {
         self.apply_fuzzy || self.min_confidence.is_some()
     }
 
+    /// The confidence floor actually in force for this run.
+    fn floor(&self) -> f64 {
+        self.min_confidence.unwrap_or(DEFAULT_FUZZY_MIN_CONFIDENCE)
+    }
+
     /// Whether a fuzzy fix with the given confidence should be applied.
     fn accepts(&self, confidence: f64) -> bool {
-        self.enabled() && self.min_confidence.is_none_or(|min| confidence >= min)
+        self.enabled() && confidence >= self.floor()
     }
+}
+
+/// Serialize fix plans with their kebab-case rule code attached.
+///
+/// The JSON `strategy` field keeps the PascalCase enum variant for machine
+/// consumers; `rule` is the presentation-level spelling the text renderer
+/// prints in brackets (`[basename-fallback 0.7]`).
+fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::Value> {
+    fixes
+        .iter()
+        .map(|f| {
+            let mut v = serde_json::to_value(f).unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("rule".to_owned(), serde_json::json!(f.strategy.code()));
+            }
+            v
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -144,12 +175,21 @@ pub fn links_fix(
                     | hyalo_core::link_fix::FixStrategy::BasenameFallback
             )
         });
-    // Fuzzy fixes the policy accepts (opted-in and above --min-confidence).
+    // Fuzzy fixes the policy accepts (opted-in and at/above the confidence
+    // floor). iter-212: the floor is `DEFAULT_FUZZY_MIN_CONFIDENCE` unless the
+    // user overrode it, so a bare `--apply-fuzzy` no longer writes every guess.
     let applicable_fuzzy: Vec<_> = fuzzy_fixes
         .iter()
         .filter(|f| fuzzy.accepts(f.confidence))
         .cloned()
         .collect();
+    // Proposals that have a candidate but did not clear the floor. Reported so
+    // the gap between "we found something" and "we wrote something" is visible
+    // without diffing two lists.
+    let below_floor = fuzzy_fixes
+        .iter()
+        .filter(|f| f.confidence < fuzzy.floor())
+        .count();
 
     // Collect all fixes: broken-link fixes + case-mismatch fixes.
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
@@ -171,16 +211,20 @@ pub fn links_fix(
     // payload. The text renderer used to hard-code `[link-case-mismatch]` for
     // everything in this bucket, so a bare-stem *relocation*
     // (`[[note]]` → `sub/note`) was presented to the user as a casing fix.
-    let case_mismatch_json: Vec<serde_json::Value> = case_mismatches
-        .iter()
-        .map(|f| {
-            let mut v = serde_json::to_value(f).unwrap_or(serde_json::Value::Null);
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("rule".to_owned(), serde_json::json!(f.strategy.code()));
-            }
-            v
-        })
-        .collect();
+    let case_mismatch_json = fixes_with_rule(&case_mismatches);
+    // iter-212: the fuzzy bucket mixes genuine path-similarity guesses with
+    // `basename-fallback` relocations. The text renderer printed `[fuzzy N]`
+    // for both, so the honest strategy name never reached the user; carry each
+    // fix's own rule code into the payload and let the renderer use it.
+    let mut fuzzy_json = fixes_with_rule(&fuzzy_fixes);
+    for (v, f) in fuzzy_json.iter_mut().zip(fuzzy_fixes.iter()) {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "below_floor".to_owned(),
+                serde_json::json!(f.confidence < fuzzy.floor()),
+            );
+        }
+    }
 
     let mut modified_files = Vec::new();
     // Fixes that were part of the plan but produced no on-disk change (e.g. a
@@ -345,9 +389,15 @@ pub fn links_fix(
         // from --apply unless --apply-fuzzy / --min-confidence opts in; the
         // `fuzzy_applied` flag tells the caller whether they were written.
         "fuzzy": fuzzy_fixes.len(),
-        "fuzzy_fixes": fuzzy_fixes,
+        "fuzzy_fixes": fuzzy_json,
         "fuzzy_applied": fuzzy.enabled(),
-        "fuzzy_min_confidence": fuzzy.min_confidence,
+        // The floor actually in force this run — the `--min-confidence` value
+        // when given, otherwise `DEFAULT_FUZZY_MIN_CONFIDENCE` (iter-212).
+        // Always a number, so a consumer never has to know the default.
+        "fuzzy_min_confidence": fuzzy.floor(),
+        // How many of `fuzzy_fixes` fall below that floor and are therefore
+        // reported-but-not-applied even under `--apply-fuzzy`.
+        "fuzzy_below_floor": below_floor,
     });
 
     let _ = format;

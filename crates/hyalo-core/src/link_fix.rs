@@ -9,7 +9,9 @@
 //!
 //! 2. [`plan_fixes`] — for each broken link, find the best candidate file using
 //!    a priority-ordered strategy (case-insensitive → extension mismatch →
-//!    shortest-path → fuzzy Jaro-Winkler) and produce a [`FixReport`].
+//!    shortest-path → fuzzy) and produce a [`FixReport`]. Fuzzy candidacy is
+//!    gated by a Jaro-Winkler stem score, but the reported *confidence* comes
+//!    from [`crate::link_score::candidate_confidence`] (iter-212).
 //!
 //! 3. [`apply_fixes`] — convert [`FixPlan`]s to [`RewritePlan`]s and write
 //!    the corrected link text back to disk.
@@ -27,6 +29,7 @@ use crate::discovery::canonicalize_vault_dir;
 use crate::discovery::{LinkResolution, StemIndex, classify_link_from_source};
 use crate::index::VaultIndex;
 use crate::link_graph::{normalize_target, relative_path_between, strip_site_prefix};
+use crate::link_score::{self, candidate_confidence};
 use crate::link_rewrite::{
     Replacement, RewritePlan, apply_replacements, execute_plans_partial,
     find_frontmatter_wikilinks, rewrite_frontmatter_wikilink_text,
@@ -371,7 +374,9 @@ pub fn detect_broken_links_from_index(
 /// 1. Case-insensitive exact match
 /// 2. Extension mismatch (`.md` present/absent)
 /// 3. Shortest-path (unique stem match anywhere in vault)
-/// 4. Jaro-Winkler fuzzy match
+/// 4. Fuzzy match — Jaro-Winkler on the filename stem decides *candidacy*
+///    (`--threshold`), [`crate::link_score::candidate_confidence`] decides
+///    ranking and the reported confidence.
 ///
 /// Build once, then call [`find_match`] for each broken link target.
 pub struct LinkMatcher {
@@ -384,7 +389,9 @@ pub struct LinkMatcher {
     /// Lowercased stem (filename without .md and path) → list of indices.
     /// Used for shortest-path: unique means unambiguous.
     stem_to_indices: HashMap<String, Vec<usize>>,
-    /// Minimum Jaro-Winkler score for fuzzy matching.
+    /// Minimum Jaro-Winkler stem score for a file to be considered a fuzzy
+    /// candidate at all (`--threshold`). Candidates that clear it are then
+    /// ranked by [`crate::link_score::candidate_confidence`].
     threshold: f64,
     /// Site prefix stripped from site-absolute targets before matching, so a
     /// link written `/docs/a/b.md` is compared against the vault path
@@ -406,12 +413,18 @@ pub(crate) struct MatchResult {
 /// certain fix.
 pub(crate) const SHORTEST_PATH_CONFIDENCE: f64 = 0.95;
 
-/// Confidence reported for [`FixStrategy::BasenameFallback`] matches.
+/// Lower bound on the confidence reported for a [`FixStrategy::BasenameFallback`]
+/// match — the value a candidate gets when its basename matches exactly but its
+/// directory shares nothing at all with the path the author wrote.
 ///
-/// Deliberately well below the 0.95 of a genuine short-form stem match: the
-/// only evidence is the filename, and the directory the author actually wrote
-/// contradicts it.
-pub const BASENAME_FALLBACK_CONFIDENCE: f64 = 0.6;
+/// Deliberately below the 0.95 of a genuine short-form stem match: the only
+/// evidence is the filename, and the directory the author actually wrote
+/// contradicts it. Since iter-212 the reported confidence is no longer this
+/// flat constant — it is [`candidate_confidence`], which adds up to
+/// [`link_score::DIR_WEIGHT`] back for directory overlap, so a same-basename
+/// *relocation* inside a related subtree outranks a cross-tree substitution.
+/// The floor equals [`link_score::BASENAME_WEIGHT`] by construction.
+pub const BASENAME_FALLBACK_CONFIDENCE: f64 = link_score::BASENAME_WEIGHT;
 
 impl LinkMatcher {
     /// Build a matcher from a list of vault-relative file paths.
@@ -593,7 +606,19 @@ impl LinkMatcher {
             // stripping leaves a bare `actions` behind.
             let asserts_path = written_target.contains('/') || written_target.contains('\\');
             let (strategy, confidence) = if asserts_path {
-                (FixStrategy::BasenameFallback, BASENAME_FALLBACK_CONFIDENCE)
+                // iter-212: the confidence is no longer the flat
+                // BASENAME_FALLBACK_CONFIDENCE. The basename matches exactly
+                // (that is why we are here), so `candidate_confidence` reduces
+                // to `BASENAME_WEIGHT + DIR_WEIGHT * directory_similarity`:
+                // a relocation within a related subtree
+                // (`code-security/how-tos/a/x` → `code-security/how-tos/b/x`)
+                // now outranks a cross-tree substitution (`/actions` →
+                // `graphql/reference/actions.md`), which stays at exactly the
+                // 0.7 floor and therefore below the default apply floor.
+                (
+                    FixStrategy::BasenameFallback,
+                    candidate_confidence(raw_target, &self.files[indices[0]]),
+                )
             } else {
                 (FixStrategy::ShortestPath, SHORTEST_PATH_CONFIDENCE)
             };
@@ -614,8 +639,15 @@ impl LinkMatcher {
         // seeding `best_score = self.threshold` meant a lone real candidate
         // scoring just inside `(threshold, threshold + TIE_DELTA]` would push
         // the threshold value into `second_score` and be wrongly rejected as
-        // ambiguous. The threshold is now applied once, as a pure floor, after
-        // the loop.
+        // ambiguous. Since iter-212 the threshold is applied as a per-candidate
+        // admission gate before scoring, so it can never enter either slot.
+        //
+        // iter-212: candidacy is still gated by the raw Jaro-Winkler stem
+        // score against `--threshold` (unchanged semantics, and a cheap filter
+        // that keeps the composite scorer off the ~99% of the vault that could
+        // never win), but *ranking* and the reported confidence now come from
+        // [`candidate_confidence`], which weights the basename above the
+        // directory instead of rewarding a shared prefix.
         let mut best_score = f64::NEG_INFINITY;
         let mut second_score = f64::NEG_INFINITY;
         let mut best_idx: Option<usize> = None;
@@ -626,7 +658,10 @@ impl LinkMatcher {
             }
             let fname = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
             let fstem = fname.strip_suffix(".md").unwrap_or(fname);
-            let score = strsim::jaro_winkler(target_stem, fstem);
+            if strsim::jaro_winkler(target_stem, fstem) < self.threshold {
+                continue;
+            }
+            let score = candidate_confidence(raw_target, candidate);
             if score > best_score {
                 second_score = best_score;
                 best_score = score;
@@ -636,8 +671,9 @@ impl LinkMatcher {
             }
         }
 
-        // Floor check: the best candidate must clear the acceptance threshold.
-        let best_idx = best_idx.filter(|_| best_score >= self.threshold)?;
+        // Every surviving candidate already cleared `--threshold` on the stem
+        // gate above, so there is no second floor to apply here.
+        let best_idx = best_idx?;
 
         // If a real runner-up is within TIE_DELTA of the winner the match is
         // ambiguous — decline rather than guessing. When there is no second
@@ -660,7 +696,9 @@ impl LinkMatcher {
 /// For each broken link, attempts to find the best matching file using
 /// the [`LinkMatcher`] priority-ordered strategy.
 ///
-/// `threshold` is the minimum Jaro-Winkler score (0.0–1.0) for fuzzy matching.
+/// `threshold` is the minimum Jaro-Winkler stem score (0.0–1.0) for a file to
+/// be considered a fuzzy candidate; the confidence attached to the winning
+/// candidate is [`crate::link_score::candidate_confidence`].
 pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport {
     let mut fixes = Vec::new();
     let mut unfixable = Vec::new();
