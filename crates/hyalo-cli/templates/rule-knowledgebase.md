@@ -23,8 +23,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   Persist the noisy-title exclusions instead of retyping them: `[links.auto] exclude_titles = [...]`,
   `exclude_target_globs = [...]`, `first_only = true` in `.hyalo.toml`. Flags extend those lists
   rather than replacing them, and a run whose config exclusions removed candidates reports
-  `config_excluded`. `--no-first-only` forces first-only OFF for one run when the config
-  persists `first_only = true`. When a candidate title looks noisy — an ordinary English word,
+  `config_excluded_titles` plus the `config_excluded_mentions` those titles accounted for.
+  `--no-first-only` forces first-only OFF for one run when the config persists
+  `first_only = true`. When a candidate title looks noisy — an ordinary English word,
   or unusually frequent (>= 25 matches and >= 2.5% of the run, which also catches non-English
   titles) — a stderr `note:` names it with its match count and share, and suggests
   `--exclude-title` for every offender; act on it or silence it with
