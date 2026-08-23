@@ -40,6 +40,18 @@ files, read-only): `links` still took ~80s there too, unchanged by
 iter-203's directory-index resolution — so the cost is orthogonal to
 that change and reproduces on a second, larger corpus.
 
+**Rescoped by the 2026-08-23 dogfood**
+([[dogfood-results/dogfood-v0210-pre2-integrity-wave]], Performance):
+the ~80s MDN figure occurs only *without* a site prefix, where all
+49,703 links are broken and each pays the fuzzy-candidate cost; with
+`--site-prefix "en-US/docs"` (509 broken) the same command takes 8.7s,
+and 5.5s with a matching snapshot index. GitHub Docs measured 11.6s vs
+the 12.7s baseline — no regression from iters 200/203. Conclusion for
+profiling: the dominant cost tracks **broken-link count × candidate-set
+size** (the per-broken-link fuzzy pass), not corpus size. Target that,
+and treat the no-prefix MDN run as the stress case. The snapshot index
+buys only ~36% on `links` because bodies are still read.
+
 ## Tasks
 
 - [ ] Reproduce: run `hyalo links fix` (dry-run) and `hyalo links auto`
