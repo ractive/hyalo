@@ -2,6 +2,12 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 /// Infer the Obsidian property type from a YAML value.
+///
+/// UX-4 (dogfood pre3): a nested mapping (`versions: {fpt: ..., ghec: ...}`,
+/// GitHub Docs' `featuredLinks`) used to infer as `"text"` — the same label a
+/// plain string gets — so `hyalo properties` and `find --fields
+/// properties-typed` reported it as scalar text, not a mapping, and nothing
+/// downstream could tell the two apart without inspecting the raw value.
 #[must_use]
 pub fn infer_type(value: &Value) -> &'static str {
     match value {
@@ -10,7 +16,7 @@ pub fn infer_type(value: &Value) -> &'static str {
         Value::Array(_) => "list",
         Value::String(s) => infer_string_type(s),
         Value::Null => "null",
-        Value::Object(_) => "text",
+        Value::Object(_) => "map",
     }
 }
 

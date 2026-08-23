@@ -163,6 +163,18 @@ and this project adheres to
   file's own canonical resolved path, identically on every entry, instead
   of each occurrence's own written spelling (which could disagree in
   `.md` presence or relative-path form for the exact same target file).
+- **`hyalo read --format json` hints when `--frontmatter` was omitted, and
+  nested mapping properties are typed `map` instead of `text`** (iter-220,
+  dogfood UX-4). `read`'s JSON envelope silently drops the `frontmatter`
+  key entirely without `--frontmatter`, so `--jq '.results.frontmatter.x'`
+  read as `null` indistinguishably from "the property doesn't exist" —
+  a hint now names the flag, and disappears once it was actually passed.
+  Separately, `hyalo_core::frontmatter::infer_type` classified a nested
+  YAML mapping (`versions: {fpt: ..., ghec: ...}`, GitHub Docs'
+  `featuredLinks` shape) as `"text"`, the same label a plain string gets
+  — `hyalo properties` and `find --fields properties-typed` now report
+  `"map"` so a scalar property is distinguishable from a mapping one
+  without inspecting the raw value.
 
 ### Changed
 

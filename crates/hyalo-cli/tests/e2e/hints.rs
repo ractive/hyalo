@@ -1048,6 +1048,43 @@ Body content here.
     );
 }
 
+/// UX-4 (dogfood pre3): `read --format json` without `--frontmatter` silently
+/// omits the `frontmatter` key — `--jq '.results.frontmatter.x'` reads that as
+/// `null` indistinguishably from "the property doesn't exist." A hint must
+/// name the flag; it must disappear once frontmatter was actually requested.
+#[test]
+fn read_without_frontmatter_hints_the_flag() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n# Note\n");
+
+    let without = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "note.md", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(without.status.success());
+    let json: serde_json::Value =
+        serde_json::from_slice(&without.stdout).expect("valid JSON");
+    let hints_str = serde_json::to_string(&json["hints"]).unwrap();
+    assert!(
+        hints_str.contains("--frontmatter"),
+        "expected a hint naming --frontmatter: {hints_str}"
+    );
+
+    let with = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "note.md", "--frontmatter", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(with.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&with.stdout).expect("valid JSON");
+    let hints_str = serde_json::to_string(&json["hints"]).unwrap();
+    assert!(
+        !hints_str.contains("--frontmatter"),
+        "a caller who already asked for it needs no reminder: {hints_str}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // backlinks --hints
 // ---------------------------------------------------------------------------

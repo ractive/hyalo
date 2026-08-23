@@ -75,7 +75,7 @@ excluded: broken-links line numbers + Liquid heading slugs
 - [x] UX-3: ancestor-adoption stderr note respects `-q` (or fires once
       per run); drop the stderr `warning:` duplicate of the
       malformed-config diagnostic now that `config` output leads with it
-- [ ] UX-4: `hyalo read --format json` without `--frontmatter` hints that
+- [x] UX-4: `hyalo read --format json` without `--frontmatter` hints that
       frontmatter is omitted; `hyalo properties` types nested maps as
       `map` instead of `text`
 - [ ] NEW-16: heading task-counts render once — when a hand-written
