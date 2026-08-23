@@ -608,17 +608,27 @@ const BULLET_PREFIX: &str = "- ";
 
 /// Render an entry message into one or more physical lines.
 ///
-/// Without `wrap`, this is a single `- message` line. With `wrap = cols`, the
-/// message is greedily word-wrapped so no line exceeds `cols` columns: the first
-/// line carries the `- ` bullet and each continuation line is hanging-indented
-/// by two spaces to align under the bullet text (Keep-a-Changelog convention).
-/// A single word longer than the width is placed on its own line unbroken rather
-/// than split mid-word.
+/// Without `wrap`, this is a `- message` line per line already present in
+/// `message` — a multi-line `--message` (e.g. from `$(printf 'l1\nl2')`)
+/// carries embedded `\n`s, and without splitting on them here the second and
+/// later lines land in the changelog with no hanging indent (CHG-1, found
+/// during iter-217): they were never routed through the wrap path that
+/// applies [`INDENT`], just written out flush-left as raw continuation text.
+/// With `wrap = cols`, the whole message (its embedded newlines collapsed
+/// to spaces first) is greedily word-wrapped so no line exceeds `cols`
+/// columns: the first line carries the `- ` bullet and each continuation
+/// line is hanging-indented by two spaces to align under the bullet text
+/// (Keep-a-Changelog convention). A single word longer than the width is
+/// placed on its own line unbroken rather than split mid-word.
 fn render_entry(message: &str, wrap: Option<usize>) -> Vec<String> {
     // Two spaces aligns continuation lines under the bullet text.
     const INDENT: &str = "  ";
     let Some(cols) = wrap else {
-        return vec![format!("{BULLET_PREFIX}{message}")];
+        let mut physical_lines = message.lines();
+        let first = physical_lines.next().unwrap_or("");
+        let mut result = vec![format!("{BULLET_PREFIX}{first}")];
+        result.extend(physical_lines.map(|line| format!("{INDENT}{line}")));
+        return result;
     };
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::from(BULLET_PREFIX);
@@ -782,6 +792,80 @@ mod tests {
 [Unreleased]: https://x/compare/v1.0.0...HEAD
 [1.0.0]: https://x/tag/v1.0.0
 ";
+
+    /// CHG-1 (found during iter-217): a `--message` with embedded newlines
+    /// (`$(printf 'l1\nl2')`, no `--wrap`) used to render as a single logical
+    /// line carrying a literal `\n` byte, which `Changelog::render()` then
+    /// wrote out as an unindented second physical line. Continuation lines
+    /// must hang-indent under the bullet the same way `--wrap` continuations
+    /// do.
+    #[test]
+    fn render_entry_indents_embedded_newlines_without_wrap() {
+        let lines = render_entry("l1\nl2", None);
+        assert_eq!(lines, vec!["- l1".to_owned(), "  l2".to_owned()]);
+    }
+
+    #[test]
+    fn render_entry_indents_every_embedded_newline_without_wrap() {
+        let lines = render_entry("first\nsecond\nthird", None);
+        assert_eq!(
+            lines,
+            vec![
+                "- first".to_owned(),
+                "  second".to_owned(),
+                "  third".to_owned(),
+            ]
+        );
+    }
+
+    /// `insert_entry` must accept the multi-line `render_entry` output as-is
+    /// (each line already carries its own prefix) and create the missing
+    /// `### <category>` subsection under `[Unreleased]`, not append to a
+    /// same-named subsection under an already-released version.
+    #[test]
+    fn add_creates_missing_category_with_indented_continuation() {
+        let source = "\
+# Changelog
+
+## [Unreleased]
+
+### Changed
+
+- existing changed entry
+
+## [0.20.0] - 2026-07-19
+
+### Fixed
+
+- old release fixed entry
+";
+        let mut cl = Changelog::parse(source);
+        let idx = cl.version_heading_index("Unreleased").unwrap();
+        insert_entry(&mut cl, idx, "Fixed", &render_entry("new l1\nnew l2", None));
+        let out = cl.render();
+
+        let unreleased_pos = out.find("## [Unreleased]").expect("Unreleased present");
+        let released_pos = out.find("## [0.20.0]").expect("released section present");
+        let new_fixed_pos = out[unreleased_pos..released_pos]
+            .find("### Fixed")
+            .map(|p| p + unreleased_pos);
+        assert!(
+            new_fixed_pos.is_some(),
+            "the ### Fixed subsection must be created under [Unreleased], \
+             not left only under the released section:\n{out}"
+        );
+        let new_fixed_pos = new_fixed_pos.unwrap();
+        assert!(
+            new_fixed_pos < released_pos,
+            "### Fixed under Unreleased must come before the released section:\n{out}"
+        );
+        assert!(
+            out.contains("- new l1\n  new l2"),
+            "the continuation line must be hanging-indented:\n{out}"
+        );
+        // The pre-existing released-section entry is untouched.
+        assert!(out.contains("- old release fixed entry"));
+    }
 
     #[test]
     fn is_semver_cases() {

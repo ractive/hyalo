@@ -1378,6 +1378,77 @@ fn case_insensitive_links_fix_apply_rewrites_casing() {
     );
 }
 
+/// NEW-13 (dogfood pre3): a bare-stem link resolved to a *different
+/// directory* is a relocation, not a casing fix, and must be reported in its
+/// own `relocations`/`relocation_fixes` bucket — not counted under
+/// `case_mismatches`.
+#[test]
+fn bare_stem_relocation_reports_in_its_own_bucket() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "sub/target.md", "---\ntitle: Target\n---\nBody.\n");
+    write_md(tmp.path(), "src.md", "---\ntitle: Src\n---\n[a](target.md)\n");
+
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo links fix should run");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["results"]["case_mismatches"].as_u64(),
+        Some(0),
+        "a directory relocation must not inflate case_mismatches: {json}"
+    );
+    assert_eq!(
+        json["results"]["relocations"].as_u64(),
+        Some(1),
+        "the relocation must be counted in its own bucket: {json}"
+    );
+    let fixes = json["results"]["relocation_fixes"]
+        .as_array()
+        .expect("relocation_fixes should be an array");
+    assert_eq!(fixes.len(), 1);
+    assert_eq!(fixes[0]["strategy"], "ShortestPath");
+    assert_eq!(fixes[0]["new_target"], "sub/target.md");
+
+    let text = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "links",
+            "fix",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo links fix (text) should run");
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        stdout.contains("Relocations: 1"),
+        "text summary must carry a Relocations line:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Case mismatches:"),
+        "text summary must not report the relocation as a case mismatch:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Relocation fixes:") && stdout.contains("sub/target.md"),
+        "text detail must list the relocation:\n{stdout}"
+    );
+}
+
 // On macOS (case-insensitive FS) a wrong-cased path resolves via the OS even with CI mode
 // disabled, so this test is only meaningful on case-sensitive filesystems.
 #[cfg(target_os = "linux")]

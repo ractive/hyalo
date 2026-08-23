@@ -207,6 +207,16 @@ pub fn links_fix(
         .filter(|f| in_scope(f.source.as_str()))
         .collect();
     let case_mismatch_count = case_mismatches.len();
+    // NEW-13 (dogfood pre3): bare-stem relocations to a different directory
+    // are their own bucket, not folded into `case_mismatches` — a relocation
+    // is not a cosmetic casing fix. Still applied by plain `--apply` (same
+    // certainty as before), just reported and counted honestly.
+    let relocations: Vec<_> = report
+        .relocations
+        .into_iter()
+        .filter(|f| in_scope(f.source.as_str()))
+        .collect();
+    let relocation_count = relocations.len();
     // Ambiguous short-form links — reported but never auto-fixed.
     let ambiguous: Vec<_> = report
         .ambiguous
@@ -220,6 +230,7 @@ pub fn links_fix(
     // everything in this bucket, so a bare-stem *relocation*
     // (`[[note]]` → `sub/note`) was presented to the user as a casing fix.
     let case_mismatch_json = fixes_with_rule(&case_mismatches);
+    let relocation_json = fixes_with_rule(&relocations);
     // iter-212: the fuzzy bucket mixes genuine path-similarity guesses with
     // `basename-fallback` relocations. The text renderer printed `[fuzzy N]`
     // for both, so the honest strategy name never reached the user; carry each
@@ -257,6 +268,7 @@ pub fn links_fix(
     let mut all_fixes = certain_fixes.clone();
     all_fixes.extend(applicable_fuzzy.iter().cloned());
     all_fixes.extend(case_mismatches.iter().cloned());
+    all_fixes.extend(relocations.iter().cloned());
 
     if dry_run {
         if !all_fixes.is_empty() {
@@ -327,6 +339,7 @@ pub fn links_fix(
             .iter()
             .chain(applicable_fuzzy.iter())
             .chain(case_mismatches.iter())
+            .chain(relocations.iter())
             .filter(|f| {
                 !excluded_keys.contains(&(
                     f.source.as_str(),
@@ -382,6 +395,11 @@ pub fn links_fix(
         "failed_fixes": failed_fixes,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatch_json,
+        // NEW-13 (dogfood pre3): bare-stem relocations to a different
+        // directory, split out of `case_mismatches` — see
+        // `BrokenLinkReport::relocations`.
+        "relocations": relocation_count,
+        "relocation_fixes": relocation_json,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
         // iter-193: targets resolving above the vault root are out of scope,

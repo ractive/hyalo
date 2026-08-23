@@ -1911,16 +1911,31 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         )));
     }
 
-    // Case-mismatch repairs are written by plain `--apply` but are *not* part
-    // of `fixable`, so a vault whose only problem is casing produced no "Apply"
-    // hint at all — the fix was available and unadvertised (iter-210).
+    // Case-mismatch and relocation repairs are written by plain `--apply` but
+    // are *not* part of `fixable`, so a vault whose only problem was one of
+    // these produced no "Apply" hint at all — the fix was available and
+    // unadvertised (iter-210). NEW-13 (dogfood pre3) split relocations out of
+    // `case_mismatches` into their own bucket; both still land here since
+    // both are written by plain `--apply`.
     let case_mismatches = data
         .get("case_mismatches")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    if is_dry_run && case_mismatches > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+    let relocations = data
+        .get("relocations")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let case_and_relocation_fixes = case_mismatches + relocations;
+    if is_dry_run && case_and_relocation_fixes > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+        let label = if case_mismatches > 0 && relocations > 0 {
+            format!("Apply {case_mismatches} case-mismatch and {relocations} relocation fixes")
+        } else if relocations > 0 {
+            format!("Apply {relocations} relocation fixes")
+        } else {
+            format!("Apply {case_mismatches} case-mismatch fixes")
+        };
         hints.push(Hint::new(
-            format!("Apply {case_mismatches} case-mismatch fixes"),
+            label,
             build_command_with_glob(ctx, &["links", "fix", "--apply"]),
         ));
     }

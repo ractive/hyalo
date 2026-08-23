@@ -1187,16 +1187,19 @@ Repeatable (AND).\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/fuzzy/unfixable counts, per-fix details \
             (source, line, old_target, new_target, strategy, confidence) under fixes, \
-            fuzzy_fixes and case_mismatch_fixes — populated in dry-run too, so a proposal \
-            can be audited before anything is written — and the list of links that could not \
-            be matched. With --apply it also \
+            fuzzy_fixes, case_mismatch_fixes and relocation_fixes — populated in dry-run too, \
+            so a proposal can be audited before anything is written — and the list of links \
+            that could not be matched. With --apply it also \
             reports applied_fixes (fixes actually written to disk) plus \
             unapplied/unapplied_fixes for plans whose on-disk text no longer \
             matched — only applied_fixes were durably written.\n\
             BUCKETS: every broken link lands in exactly one of fixable (plain --apply writes it), \
             fuzzy (low-confidence guess, needs --apply-fuzzy), unfixable (no candidate at all) or \
-            templated, so those four counts add up to broken. case_mismatches, ambiguous and \
-            out_of_vault are counted separately — those links are not broken.\n\
+            templated, so those four counts add up to broken. case_mismatches, relocations, \
+            ambiguous and out_of_vault are counted separately — those links are not broken. \
+            relocations is a bare-stem link (no directory in the written target) whose stem \
+            resolved to a file in a different directory — a move, not a casing fix, so it is \
+            reported apart from case_mismatches (both are written by plain --apply).\n\
             CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
             counts the proposals it suppresses — those have a candidate but are never written, \
@@ -2105,7 +2108,10 @@ pub(crate) enum LinksAction {
             `[links] case_insensitive` in .hyalo.toml — \"auto\", \"true\", or \"false\"), broken links\n\
             that differ only in casing from an on-disk file are reported as case_mismatches and\n\
             rewritten to the canonical casing when --apply is used. On macOS and Windows,\n\
-            \"auto\" (the default) enables this automatically.")]
+            \"auto\" (the default) enables this automatically. A bare-stem link whose exact path\n\
+            fails but whose stem resolves in a *different directory* is a relocation, not a\n\
+            casing fix — reported separately as relocations/relocation_fixes, also written by\n\
+            plain --apply.")]
     Fix {
         /// Preview changes without modifying files (default when --apply is omitted)
         #[arg(long)]

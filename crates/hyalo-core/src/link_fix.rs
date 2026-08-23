@@ -69,6 +69,15 @@ pub struct BrokenLinkReport {
     ///   a full path). Detected via the stem index, which is always active
     ///   regardless of case-insensitive-path mode.
     pub case_mismatches: Vec<FixPlan>,
+    /// Links whose exact path failed to resolve but whose bare stem matched a
+    /// file somewhere else in the vault — [`FixStrategy::ShortestPath`].
+    ///
+    /// NEW-13 (dogfood pre3): before this bucket existed these landed in
+    /// [`Self::case_mismatches`] alongside genuine [`FixStrategy::LinkCaseMismatch`]
+    /// casing fixes. A user reading "Case mismatches: N" reasonably assumes a
+    /// cosmetic count; a relocation (`target.md` → `sub/target.md`) is a
+    /// different kind of change and gets its own bucket and section.
+    pub relocations: Vec<FixPlan>,
     /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
     /// These are left untouched by `--apply` because the correct target is
     /// ambiguous and auto-picking would be wrong.
@@ -251,6 +260,7 @@ pub fn detect_broken_links_from_index(
             total_links: 0,
             broken: Vec::new(),
             case_mismatches: Vec::new(),
+            relocations: Vec::new(),
             ambiguous: Vec::new(),
             out_of_vault: Vec::new(),
         };
@@ -265,6 +275,7 @@ pub fn detect_broken_links_from_index(
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
     let mut case_mismatches: Vec<FixPlan> = Vec::new();
+    let mut relocations: Vec<FixPlan> = Vec::new();
     let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
     let mut out_of_vault: Vec<BrokenLinkInfo> = Vec::new();
 
@@ -305,7 +316,12 @@ pub fn detect_broken_links_from_index(
                     // DEC-076: the written target carried no directory (that
                     // is the only way the stem fallback fires), so this is the
                     // documented short-form rule, not a guess.
-                    case_mismatches.push(FixPlan {
+                    //
+                    // NEW-13 (dogfood pre3): reported in its own `relocations`
+                    // bucket, not `case_mismatches` — a relocation is not a
+                    // cosmetic casing fix, and lumping the two made the "Case
+                    // mismatches" count lie about what changed.
+                    relocations.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
                         old_target: link.target.clone(),
@@ -352,6 +368,7 @@ pub fn detect_broken_links_from_index(
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    relocations.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     out_of_vault.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
@@ -359,6 +376,7 @@ pub fn detect_broken_links_from_index(
         total_links,
         broken,
         case_mismatches,
+        relocations,
         ambiguous,
         out_of_vault,
     }
@@ -2584,6 +2602,61 @@ See [broken](old-name.md) here.
             total_classified <= 1,
             "each link must appear at most once across broken + case_mismatches"
         );
+    }
+
+    /// NEW-13 (dogfood pre3): a bare-stem relocation — the exact path fails,
+    /// the stem resolves to a *different directory* — must land in
+    /// `relocations`, not `case_mismatches`. Before the fix both were counted
+    /// as "Case mismatches", presenting a move as a cosmetic casing fix.
+    #[test]
+    fn detect_broken_links_stem_relocation_is_not_a_case_mismatch() {
+        use crate::case_index::CaseInsensitiveIndex;
+        use crate::links::{Link, LinkKind};
+
+        // On-disk: `sub/target.md`. Link written as bare `target.md` — the
+        // exact path (`target.md` at vault root) does not exist, so
+        // resolution falls back to the bare-stem lookup and finds it in a
+        // different directory: a relocation, not a casing difference.
+        let tmp = vault_with_files(&[("sub/target.md", ""), ("source.md", "[a](target.md)")]);
+
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("sub/target.md");
+
+        let index = mock_index(
+            "source.md",
+            vec![(
+                1,
+                Link {
+                    target: "target.md".to_string(),
+                    label: Some("a".to_string()),
+                    kind: LinkKind::Markdown,
+                    fragment: None,
+                    query: None,
+                },
+            )],
+            &["sub/target.md"],
+        );
+
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, Some(&idx), false);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "a directory relocation must not be counted as a case mismatch; report: {report:#?}"
+        );
+        assert_eq!(
+            report.relocations.len(),
+            1,
+            "the relocation must appear in its own bucket; report: {report:#?}"
+        );
+        let fix = &report.relocations[0];
+        assert!(
+            matches!(fix.strategy, FixStrategy::ShortestPath),
+            "relocation must use the ShortestPath strategy, got: {:?}",
+            fix.strategy
+        );
+        assert_eq!(fix.old_target, "target.md");
+        assert_eq!(fix.new_target, "sub/target.md");
     }
 
     #[test]

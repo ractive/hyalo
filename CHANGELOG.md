@@ -113,6 +113,12 @@ and this project adheres to
   Docs corpus wrote 1,492 such links that `hyalo links` then reported as
   ambiguous. Ambiguity is now also checked against the emitted stem, so
   either file's title is skipped. See DEC-083.
+- **`changelog add` continuation lines are hanging-indented, and a missing
+  category subsection is created under `[Unreleased]`, not left implicit**
+  (iter-220, dogfood CHG-1, found during iter-217). A multi-line `--message`
+  without `--wrap` used to carry its second and later lines as a literal `\n`
+  inside one logical entry, which wrote them out flush-left instead of
+  indented under the bullet.
 
 ### Changed
 
