@@ -1138,12 +1138,22 @@ Repeatable (AND).\n\
             This matches Obsidian's behavior when copy-pasting note names that include the extension.\n\n\
             Default behavior (no subcommand): dry-run of `links fix` — shows what would be\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
-            OUTPUT: JSON object with broken/fixable/unfixable counts, per-fix details \
-            (source, line, old_target, new_target, strategy, confidence), and \
-            the list of links that could not be matched. With --apply it also \
+            OUTPUT: JSON object with broken/fixable/fuzzy/unfixable counts, per-fix details \
+            (source, line, old_target, new_target, strategy, confidence) under fixes, \
+            fuzzy_fixes and case_mismatch_fixes — populated in dry-run too, so a proposal \
+            can be audited before anything is written — and the list of links that could not \
+            be matched. With --apply it also \
             reports applied_fixes (fixes actually written to disk) plus \
             unapplied/unapplied_fixes for plans whose on-disk text no longer \
             matched — only applied_fixes were durably written.\n\
+            BUCKETS: every broken link lands in exactly one of fixable (plain --apply writes it), \
+            fuzzy (low-confidence guess, needs --apply-fuzzy), unfixable (no candidate at all) or \
+            templated, so those four counts add up to broken. case_mismatches, ambiguous and \
+            out_of_vault are counted separately — those links are not broken.\n\
+            TEXT LAYOUT: the counts come first, then the fixes that would be (or were) written, \
+            then the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous, \
+            templated) capped at 20 entries each, and finally the fuzzy proposals — the longest \
+            section. Use --format json for uncapped lists.\n\
             OUT OF VAULT: a target that normalizes above the vault root \
             (../../CONTRIBUTING.md) can never resolve to a scanned file, so it is \
             counted under out_of_vault / out_of_vault_links instead of broken and is \
