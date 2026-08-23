@@ -302,6 +302,26 @@ fn is_escaped(bytes: &[u8], pos: usize) -> bool {
     backslashes % 2 == 1
 }
 
+/// Find the absolute byte offset of the first unescaped occurrence of
+/// `needle` in `bytes` at or after `start`, skipping backslash-escaped
+/// bytes the same way [`is_escaped`] defines escaping.
+///
+/// A plain `bytes[start..].find(needle)` (or `str::find`) stops at the
+/// first literal occurrence regardless of a preceding `\`, which is wrong
+/// for any escapable delimiter — e.g. a reference-definition title
+/// `"A \"Gamma\" title"` closes at the first `\"` instead of the real
+/// closing quote (iter-217 review C4).
+fn find_unescaped_byte(bytes: &[u8], start: usize, needle: u8) -> Option<usize> {
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i] == needle && !is_escaped(bytes, i) {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Find the byte offset (relative to `s`) of the closing `]` that terminates
 /// a markdown link label, skipping over backslash-escaped `\]`/`\[` (L-A2).
 ///
@@ -1253,9 +1273,15 @@ pub(crate) fn parse_reference_definition_label(line: &str) -> bool {
     let Some(close) = find_label_close_bracket(&rest[1..]) else {
         return false;
     };
+    // iter-217 review C1: for an empty label (`[]: url`, `close == 0`) this
+    // is `rest[1..=0]`. Verified empirically (both a standalone slice-index
+    // test and running `links auto` against a real `[]: url` line) that
+    // Rust's `RangeInclusive` slice indexing handles this safely — it
+    // converts to the empty range `1..1`, not a panic — so `label_raw` is
+    // simply `""`, correctly rejected by the empty-check right below.
     let label_raw = &rest[1..=close];
     if label_raw.trim().is_empty() {
-        return false;
+        return false; // CommonMark: an empty link label is invalid
     }
     let after_close = 1 + close + 1; // byte offset right after ']'
     if bytes.get(after_close) != Some(&b':') {
@@ -1291,21 +1317,25 @@ pub(crate) fn parse_reference_definition_label(line: &str) -> bool {
         i += 1;
     }
 
-    // Optional title: `"…"`, `'…'`, or `(…)`.
+    // Optional title: `"…"`, `'…'`, or `(…)`. The closing delimiter search
+    // must skip backslash-escaped occurrences (iter-217 review C4) — a
+    // title like `"A \"Gamma\" title"` otherwise closes at the first `\"`,
+    // leaving `Gamma\" title"` as trailing garbage that fails the
+    // end-of-line check below, so the whole definition line (title text,
+    // "Gamma", included) was rejected and left open to being auto-linked.
     if i < bytes.len() {
         match bytes[i] {
             q @ (b'"' | b'\'') => {
-                let quote = q as char;
-                let Some(close_rel) = rest[i + 1..].find(quote) else {
+                let Some(close_abs) = find_unescaped_byte(bytes, i + 1, q) else {
                     return false;
                 };
-                i += 1 + close_rel + 1;
+                i = close_abs + 1;
             }
             b'(' => {
-                let Some(close_rel) = rest[i + 1..].find(')') else {
+                let Some(close_abs) = find_unescaped_byte(bytes, i + 1, b')') else {
                     return false;
                 };
-                i += 1 + close_rel + 1;
+                i = close_abs + 1;
             }
             _ => return false, // trailing content that isn't a title: not a clean definition
         }
@@ -1812,6 +1842,47 @@ mod tests {
             "[ref]: <a url with spaces>"
         ));
         assert!(parse_reference_definition_label("   [ref]: /url")); // 3-space indent
+    }
+
+    #[test]
+    fn reference_definition_label_empty_label_does_not_panic() {
+        // iter-217 review C1: an empty label (`close == 0`) used to slice
+        // with the inclusive range `1..=close` == `1..=0`. Verified this
+        // never actually panicked (Rust converts it to the empty range
+        // `1..1`), but CommonMark still says an empty link label is
+        // invalid, so this must return `false`, not treat `[]: url` as a
+        // definition with an empty-string label.
+        assert!(!parse_reference_definition_label("[]: url"));
+        assert!(!parse_reference_definition_label("[   ]: url")); // whitespace-only label
+        // A handful of adjacent shapes that must not panic either.
+        assert!(!parse_reference_definition_label("[]:"));
+        assert!(!parse_reference_definition_label("[]"));
+    }
+
+    #[test]
+    fn reference_definition_label_title_honors_backslash_escapes() {
+        // iter-217 review C4: a plain (non-escape-aware) search for the
+        // closing quote stops at the first `\"`, not the real one, leaving
+        // trailing garbage that made the whole line fail to parse as a
+        // definition — corrupting it, since the un-recognised title text
+        // ("Gamma") would then be open to auto-linking.
+        assert!(parse_reference_definition_label(
+            r#"[ref]: /url "A \"Gamma\" title""#
+        ));
+        assert!(parse_reference_definition_label(
+            "[ref]: /url 'A \\'Gamma\\' title'"
+        ));
+        assert!(parse_reference_definition_label(
+            r"[ref]: /url (A \) paren title)"
+        ));
+        // An escaped backslash before the delimiter must NOT itself count
+        // as escaping it (even number of backslashes = not escaped) — the
+        // quote here closes right after the doubled backslash, so
+        // everything after it is trailing garbage and the line is
+        // correctly rejected.
+        assert!(!parse_reference_definition_label(
+            r#"[ref]: /url "A \\" trailing garbage"#
+        ));
     }
 
     #[test]

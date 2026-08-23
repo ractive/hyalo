@@ -127,6 +127,19 @@ pub(crate) fn is_block_boundary(line: &str) -> bool {
     if body.starts_with("```") || body.starts_with("~~~") {
         return true;
     }
+    is_atx_heading(body)
+}
+
+/// Whether `body` (already stripped of any leading indent) is a CommonMark
+/// ATX heading: 1-6 `#` characters followed by whitespace or end of line.
+///
+/// Split out of [`is_block_boundary`] (iter-217 review C3) so callers that
+/// need to distinguish "this line ends the current block" from "this line
+/// specifically is a heading" — e.g. `auto_link.rs`'s existing-link prepass,
+/// which must still scan a heading's own (single-line) content for links
+/// even though a heading can never join a cross-line paragraph block —
+/// don't have to re-derive the ATX grammar themselves.
+pub(crate) fn is_atx_heading(body: &str) -> bool {
     let hashes = body.len() - body.trim_start_matches('#').len();
     (1..=6).contains(&hashes) && body[hashes..].starts_with([' ', '\t'])
         || ((1..=6).contains(&hashes) && body.len() == hashes)

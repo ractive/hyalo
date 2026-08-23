@@ -4145,6 +4145,11 @@ The gamma page.
         "Image: ![Gamma][Gamma]\n",
         "\n",
         "[Gamma]: https://example.com/gamma \"Gamma page\"\n",
+        // Review C1: an empty-label reference definition must not panic
+        // `links auto` — it is simply not a definition (CommonMark: an
+        // empty link label is invalid), so the bracket text stays exactly
+        // as written.
+        "[]: https://example.com/empty-label\n",
     ));
     write_md(tmp.path(), "notes.md", body);
 

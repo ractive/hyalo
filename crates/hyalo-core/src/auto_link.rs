@@ -221,9 +221,20 @@ fn build_title_inventory(
     // `try_insert` above (iter-217 review #8): a separate second loop over
     // `entries` re-ran the same `--exclude-target-glob` match and
     // `stem_from_rel` call for every entry just to build this; folding it
-    // in reuses both. Keys/values borrow from `entries` — nothing here
-    // needs to outlive this function.
-    let mut target_sources: HashMap<&str, HashSet<&str>> = HashMap::new();
+    // in reuses both. Values borrow from `entries` — nothing here needs to
+    // outlive this function.
+    //
+    // Keyed on the lowercased stem (iter-217 review C2), matching the
+    // *unconditional* lowercasing `LinkResolver::resolve_stem` and
+    // `CaseInsensitiveIndex::lookup_stem_all` apply on the read side —
+    // bare-stem wikilink resolution is case-insensitive regardless of the
+    // `[links] case_insensitive` config (that setting only gates *full
+    // path* matching; see `case_index.rs`'s own doc comment). A raw-case
+    // key here would let `docs/Pulls.md` and `api/pulls.md` (distinct
+    // titles) survive as two separate, unambiguous-looking buckets even
+    // though `[[Pulls]]` and `[[pulls]]` both resolve the same way on the
+    // read side and would be genuinely ambiguous.
+    let mut target_sources: HashMap<String, HashSet<&str>> = HashMap::new();
 
     for entry in entries {
         let rel = &entry.rel_path;
@@ -237,7 +248,10 @@ fn build_title_inventory(
 
         // 1. Filename stem.
         let stem = stem_from_rel(rel);
-        target_sources.entry(stem).or_default().insert(rel.as_str());
+        target_sources
+            .entry(stem.to_ascii_lowercase())
+            .or_default()
+            .insert(rel.as_str());
         try_insert(
             stem,
             TitleEntry {
@@ -310,17 +324,22 @@ fn build_title_inventory(
     // its plain stem `pulls` still collided with
     // `graphql/reference/pulls.md`, and that collision has to be visible
     // regardless of what else happened to either file's title).
-    let ambiguous_targets: HashSet<&str> = target_sources
+    let ambiguous_targets: HashSet<String> = target_sources
         .into_iter()
         .filter(|(_, sources)| sources.len() > 1)
         .map(|(target, _)| target)
         .collect();
 
     if !ambiguous_targets.is_empty() {
-        title_map.retain(|_, entry| !ambiguous_targets.contains(entry.link_target.as_str()));
+        // `entry.link_target` keeps its original case (it is the literal
+        // text written into `[[…]]`); the comparison against
+        // `ambiguous_targets`'s lowercased keys must lowercase it too.
+        title_map.retain(|_, entry| {
+            !ambiguous_targets.contains(&entry.link_target.to_ascii_lowercase())
+        });
         for target in &ambiguous_targets {
             if !ambiguous.iter().any(|a| a.eq_ignore_ascii_case(target)) {
-                ambiguous.push((*target).to_owned());
+                ambiguous.push(target.clone());
             }
         }
     }
@@ -627,15 +646,77 @@ pub fn auto_link(
     })
 }
 
+/// Resolve one already-extracted link span's target against `title_map`,
+/// inserting the matched `link_target` into `targets`.
+///
+/// Case-insensitive lookup against the title inventory (titles, stems,
+/// aliases). Also tries the last path segment as a stem, so
+/// `[[dir/target]]` resolves like `[[target]]` does.
+///
+/// Markdown links (`[text](target.md)`) keep their `.md` suffix —
+/// `parse_markdown_link` only strips the fragment — while wikilink targets
+/// already had it stripped by `parse_wikilink`. Stripping it again here is a
+/// no-op for wikilinks and required for markdown links, since `title_map`
+/// keys are extension-less.
+fn resolve_one_existing_link_target(
+    target: &str,
+    title_map: &HashMap<String, TitleEntry>,
+    targets: &mut HashSet<String>,
+) {
+    // `parse_destination`'s bare-destination path deliberately leaves a
+    // *leading* space in `[a]( p.md )` alone rather than stripping it
+    // (iter-211/BUG-12, documented on `parse_destination` itself) — but
+    // once the block-joining above (iter-217 review C3) lets a destination
+    // start on its own continuation line, that same "leave it alone"
+    // behavior captures the line-joining `\n` itself as part of the raw
+    // target (`"\nalice.md"`), which then matches nothing in `title_map`.
+    // Trimming here, rather than in `parse_destination`, keeps that
+    // upstream function's documented behavior — and its other three call
+    // sites — untouched; this is the one place that needs the resolved
+    // text clean.
+    let target = target.trim();
+    let raw = strip_wikilink_md_suffix(target);
+    if let Some(entry) = title_map.get(&raw.to_ascii_lowercase()) {
+        targets.insert(entry.link_target.clone());
+    } else if let Some(stem) = raw.rsplit('/').next()
+        && stem != raw
+        && let Some(entry) = title_map.get(&stem.to_ascii_lowercase())
+    {
+        targets.insert(entry.link_target.clone());
+    }
+}
+
+/// Extract every `[[wikilink]]`/`[markdown](link)` in `text` and resolve
+/// each target into `targets` via [`resolve_one_existing_link_target`].
+///
+/// `text` is passed as both the "cleaned" and "original" argument to
+/// [`extract_link_spans_with_original`] — safe here because this function
+/// never reads a span's label text (only `span.link.target`), which is the
+/// one thing that distinction protects.
+fn collect_existing_link_targets(
+    text: &str,
+    title_map: &HashMap<String, TitleEntry>,
+    targets: &mut HashSet<String>,
+) {
+    for span in extract_link_spans_with_original(text, text) {
+        resolve_one_existing_link_target(&span.link.target, title_map, targets);
+    }
+}
+
 /// Scan a file's content for existing `[[wikilinks]]` (and `[markdown](links)`)
 /// and resolve each one's target to a known `link_target` (file stem), used to
 /// pre-seed the `--first-only` keep-mask so an existing link counts as the
 /// first mention of its target.
 ///
-/// Mirrors the zone-skipping in [`scan_file_for_matches`] for frontmatter,
-/// fenced code blocks, and comment fences (`%%`) — link syntax inside those is
-/// inert. Unlike that function, heading lines are *not* skipped: a link inside
-/// a heading is a real, rendered link.
+/// Mirrors [`scan_file_for_matches`]'s zone-skipping for frontmatter, fenced
+/// code blocks, and comment fences (`%%`) — link syntax inside those is
+/// inert — and, since iter-217 review C3, its document-scoping too: a link
+/// wrapped across a line boundary (`[[target\n|alias]]`) is resolved as one
+/// construct, not missed entirely. Unlike that function, heading lines are
+/// *not* skipped: a link inside a heading is a real, rendered link. Headings
+/// are still self-contained single-line units, though (they can never join
+/// a cross-line paragraph the way body text can), so each one is resolved
+/// on its own rather than being joined into the surrounding block.
 fn resolve_existing_link_targets(
     content: &str,
     title_map: &HashMap<String, TitleEntry>,
@@ -646,9 +727,14 @@ fn resolve_existing_link_targets(
     // lines are ignored here; only body links count toward "already linked"
     // targets.
     let mut scanner = LineScanner::new();
+    let mut block_text = String::new();
 
     for (line, rest) in lines_with_rest(content) {
         let LineClass::Body(body) = scanner.classify(line, rest) else {
+            if !block_text.is_empty() {
+                collect_existing_link_targets(&block_text, title_map, &mut targets);
+                block_text.clear();
+            }
             continue;
         };
 
@@ -656,27 +742,34 @@ fn resolve_existing_link_targets(
         let cleaned = body.cleaned(line, rest);
         let cleaned_str: &str = cleaned.as_ref();
 
-        for span in extract_link_spans_with_original(cleaned_str, line) {
-            // Resolve the written target the same way plain-text mentions are
-            // resolved: case-insensitive lookup against the title inventory
-            // (titles, stems, aliases). Also try the last path segment as a
-            // stem, so `[[dir/target]]` resolves like `[[target]]` does.
-            //
-            // Markdown links (`[text](target.md)`) keep their `.md` suffix —
-            // `parse_markdown_link` only strips the fragment — while wikilink
-            // targets already had it stripped by `parse_wikilink`. Stripping
-            // it again here is a no-op for wikilinks and required for
-            // markdown links, since `title_map` keys are extension-less.
-            let raw = strip_wikilink_md_suffix(&span.link.target);
-            if let Some(entry) = title_map.get(&raw.to_ascii_lowercase()) {
-                targets.insert(entry.link_target.clone());
-            } else if let Some(stem) = raw.rsplit('/').next()
-                && stem != raw
-                && let Some(entry) = title_map.get(&stem.to_ascii_lowercase())
-            {
-                targets.insert(entry.link_target.clone());
+        // A heading is a self-contained, single-line construct: it always
+        // ends the current paragraph block (matching
+        // `crate::scanner::is_block_boundary`), but unlike a blank line it
+        // still carries real, rendered link syntax that must be resolved on
+        // its own (this function's own contract: heading links are not
+        // skipped, unlike in `scan_file_for_matches`).
+        let trimmed = line.trim_end_matches(['\r']);
+        let indent = trimmed.len() - trimmed.trim_start_matches(' ').len();
+        let is_heading = indent <= 3 && crate::scanner::is_atx_heading(&trimmed[indent..]);
+
+        if trimmed.trim().is_empty() || is_heading {
+            if !block_text.is_empty() {
+                collect_existing_link_targets(&block_text, title_map, &mut targets);
+                block_text.clear();
             }
+            if is_heading {
+                collect_existing_link_targets(cleaned_str, title_map, &mut targets);
+            }
+            continue;
         }
+
+        if !block_text.is_empty() {
+            block_text.push('\n');
+        }
+        block_text.push_str(cleaned_str);
+    }
+    if !block_text.is_empty() {
+        collect_existing_link_targets(&block_text, title_map, &mut targets);
     }
 
     targets
@@ -1934,6 +2027,67 @@ mod tests {
     }
 
     #[test]
+    fn test_first_only_wrapped_existing_link_suppresses_new_matches() {
+        // iter-217 review C3: the existing-link prepass used to extract
+        // spans per physical line, so a *markdown* link wrapped across a
+        // line boundary (label closes on one line, destination is alone on
+        // the next — the wrapped-markdown-link shape NEW-2 already made
+        // inert against corruption) was invisible to it — inconsistent
+        // with `scan_file_for_matches`, which has been document-scoped
+        // since NEW-2. A later plain-text mention must still be suppressed
+        // even though the existing link's destination is on the next line.
+        //
+        // NOTE: a *wikilink* wrapped the same way (`[[alice\n|Alice]]`) is
+        // NOT fixed by this change — `extract_link_spans_with_original`'s
+        // wikilink parser (`try_parse_wikilink_span_at` in links.rs)
+        // explicitly rejects any inner content containing `\n`, a
+        // restriction this fix does not touch (out of scope: that function
+        // is shared by read paths well beyond this prepass, and changing
+        // its cross-line semantics needs its own, separately-scoped
+        // review). The corruption-prevention side of a wrapped wikilink
+        // (NEW-2) does not depend on this function at all — it is already
+        // covered by `inert_link_zones`'s bracket-matching, which has no
+        // such restriction.
+        let tmp = TempDir::new().unwrap();
+        let entries = vec![
+            make_entry("alice.md", vec![("title", Value::String("Alice".into()))]),
+            make_entry("notes.md", vec![("title", Value::String("Notes".into()))]),
+        ];
+        write_file(&tmp, "alice.md", "---\ntitle: Alice\n---\nAlice bio.\n");
+        write_file(
+            &tmp,
+            "notes.md",
+            "---\ntitle: Notes\n---\nThe [alice](\nalice.md) page mentions Alice again in this sentence.\n",
+        );
+        let index = MockIndex::new(entries);
+
+        let report = auto_link(
+            &index,
+            tmp.path(),
+            &AutoLinkOptions {
+                apply: false,
+                min_length: 3,
+                exclude_titles: &[],
+                first_only: true,
+                exclude_target_globs: &[],
+                file_filter: None,
+                glob_filter: &[],
+            },
+        )
+        .unwrap();
+
+        let alice_matches: Vec<_> = report
+            .matches
+            .iter()
+            .filter(|m| m.file == "notes.md" && m.link_target == "alice")
+            .collect();
+        assert!(
+            alice_matches.is_empty(),
+            "a wrapped existing markdown link should suppress the later plain mention, got: {alice_matches:?}"
+        );
+    }
+
+    #[test]
     fn test_first_only_no_existing_link_unaffected() {
         // A file with no pre-existing link to the target: behavior should be
         // unchanged from the pre-fix first-only semantics (first plain mention
@@ -2574,6 +2728,62 @@ mod tests {
         assert!(
             ambiguous.iter().any(|a| a.eq_ignore_ascii_case("pulls")),
             "the ambiguity must be reported: {ambiguous:?}"
+        );
+    }
+
+    #[test]
+    fn emitted_namespace_ambiguity_is_case_insensitive() {
+        // iter-217 review C2: `target_sources` groups by the *emitted*
+        // stem, and the read-side resolver (`LinkResolver::resolve_stem`,
+        // `CaseInsensitiveIndex::lookup_stem_all`) always lowercases before
+        // matching a bare-stem wikilink — unconditionally, not gated on
+        // `[links] case_insensitive` (that setting only affects full-path
+        // matching). A raw-case grouping key would let `docs/Go.md` and
+        // `api/go.md` (stems "Go"/"go") survive as two separate,
+        // seemingly-unambiguous buckets even though `[[Go]]` and `[[go]]`
+        // resolve identically on read.
+        //
+        // The stems here are deliberately below `min_length` so neither
+        // file's *own* stem ever reaches `try_insert`'s first-pass
+        // identical-key collision check — that check would otherwise also
+        // catch this pair (it lowercases too) and make the test pass for a
+        // reason unrelated to `target_sources`'s own case-folding. Each
+        // file instead reaches `title_map` through a distinct, longer
+        // alias, isolating the emitted-namespace check as the only
+        // mechanism that can catch the collision.
+        let entries = vec![
+            make_entry(
+                "docs/Go.md",
+                vec![(
+                    "aliases",
+                    Value::Array(vec![Value::String("Golang Docs Page".to_owned())]),
+                )],
+            ),
+            make_entry(
+                "api/go.md",
+                vec![(
+                    "aliases",
+                    Value::Array(vec![Value::String("Golang API Page".to_owned())]),
+                )],
+            ),
+        ];
+        let (map, ambiguous) = build_title_inventory(&entries, 3, &[], &[]).unwrap();
+        assert!(
+            !map.contains_key("golang docs page"),
+            "an alias reaching the ambiguous emitted stem 'go' must be excluded"
+        );
+        assert!(
+            !map.contains_key("golang api page"),
+            "the other file's alias must also be excluded: same emitted stem, different case"
+        );
+        assert!(
+            !map.values()
+                .any(|e| e.link_target.eq_ignore_ascii_case("go")),
+            "no surviving entry may still emit 'Go' or 'go'"
+        );
+        assert!(
+            ambiguous.iter().any(|a| a.eq_ignore_ascii_case("go")),
+            "the case-insensitive stem collision must be reported: {ambiguous:?}"
         );
     }
 
