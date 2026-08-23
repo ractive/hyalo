@@ -770,7 +770,9 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix
 ///    blank lines counts one terminator and the rule never fires.
 ///
 /// (2) is a detection gap upstream owns; (1) is a fix-output gap this
-/// function compensates for. Kept as the documented exception required by
+/// function compensates for. Both are filed upstream as
+/// joshrotenberg/mdbook-lint#495; drop this function once a release carrying
+/// that fix is picked up. Kept as the documented exception required by
 /// iteration 196's acceptance criteria; re-check on the next mdbook-lint
 /// bump.
 fn md047_fix(body: &str) -> Option<DiagFix> {

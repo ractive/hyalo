@@ -68,6 +68,23 @@ pub fn note(msg: impl AsRef<str>) {
     emit_with_prefix("note", msg.as_ref());
 }
 
+/// Emit a message that is *fatal* to this run, with an `error` prefix.
+///
+/// Distinct from [`warn`] purely in what it promises the reader: a `warning:`
+/// line means the run continued past the problem. A single-file write whose
+/// frontmatter will not parse does not continue — it exits 1 — and labelling
+/// its diagnostic `warning:` made the exit code and the stderr text disagree
+/// (iter-213, dogfood UX-5). Not suppressible by `-q`, for the same reason
+/// [`warn_always`] is not: the run failed, and a script reading only stderr
+/// must be able to see why.
+pub fn error(msg: impl AsRef<str>) {
+    emit(&Emit {
+        prefix: "error",
+        msg: msg.as_ref(),
+        force: true,
+    });
+}
+
 /// Emit a warning that `--quiet` cannot suppress.
 ///
 /// Reserved for **config-integrity** problems (iter-201): a `.hyalo.toml` that
@@ -299,80 +316,6 @@ pub fn warn_llm_misuse(dir: &std::path::Path) {
     ));
 }
 
-/// If the current working directory lies inside the configured vault dir,
-/// emit the LLM-misuse warning once.
-///
-/// Walks ancestors of CWD looking for `.hyalo.toml`. When the file is found
-/// in a strict ancestor (not CWD itself) and its `dir` value resolves to a
-/// directory that contains CWD, the user has clearly `cd`-ed into the vault
-/// — warn so the LLM stops doing it.
-///
-/// Anything ambiguous (no `.hyalo.toml` in the chain, malformed TOML, vault
-/// that fails to canonicalize) is silently skipped.
-pub fn warn_if_cwd_in_vault() {
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    warn_if_cwd_in_vault_with_cwd(&cwd);
-}
-
-/// Same as [`warn_if_cwd_in_vault`], but with an explicit `cwd` so it can be
-/// exercised in tests without mutating the process working directory.
-pub(crate) fn warn_if_cwd_in_vault_with_cwd(cwd: &std::path::Path) {
-    let Ok(cwd_canonical) = dunce::canonicalize(cwd) else {
-        return;
-    };
-    // Walk strict ancestors looking for `.hyalo.toml`. Skip CWD itself —
-    // when the config lives in CWD, the project root *is* CWD and there's
-    // no "inside the vault" ambiguity to warn about.
-    let mut current: Option<&std::path::Path> = cwd_canonical.parent();
-    while let Some(ancestor) = current {
-        let toml_path = ancestor.join(".hyalo.toml");
-        if toml_path.is_file() {
-            check_cwd_against_config(&cwd_canonical, ancestor, &toml_path);
-            // The closest ancestor `.hyalo.toml` is the project root for this
-            // misuse check; whether or not it triggered the warning, stop
-            // walking. (Note: `config::load_config()` itself only reads CWD's
-            // `.hyalo.toml`, not ancestors — this walk exists specifically to
-            // detect the misuse case where the user `cd`-ed past the config.)
-            return;
-        }
-        current = ancestor.parent();
-    }
-}
-
-/// Read `dir` out of `toml_path` and warn if `cwd_canonical` is inside the
-/// resolved vault. Best-effort: anything malformed is silently skipped.
-fn check_cwd_against_config(
-    cwd_canonical: &std::path::Path,
-    config_dir: &std::path::Path,
-    toml_path: &std::path::Path,
-) {
-    let Ok(text) = std::fs::read_to_string(toml_path) else {
-        return;
-    };
-    let Ok(parsed) = toml::from_str::<toml::Value>(&text) else {
-        return;
-    };
-    let dir_value = parsed.get("dir").and_then(|v| v.as_str()).unwrap_or(".");
-    let dir_path = std::path::Path::new(dir_value);
-    if dir_path
-        .components()
-        .eq(std::path::Path::new(".").components())
-    {
-        // dir = "." — the configured vault *is* the project root, no nested
-        // subdir to be "inside".
-        return;
-    }
-    let vault_path = config_dir.join(dir_path);
-    let Ok(vault_canonical) = dunce::canonicalize(&vault_path) else {
-        return;
-    };
-    if cwd_canonical.starts_with(&vault_canonical) {
-        warn_llm_misuse(dir_path);
-    }
-}
-
 /// Print a summary of suppressed duplicate warnings, if any.
 ///
 /// Should be called just before the process exits. Prints to stderr.
@@ -594,97 +537,5 @@ mod tests {
         // First print is recorded with suppression count 0; the next two are
         // suppressed.
         assert_eq!(total_suppressed(), 2);
-    }
-
-    fn make_project_with_config(dir_value: &str) -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join(".hyalo.toml"),
-            format!("dir = \"{dir_value}\"\n"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(tmp.path().join(dir_value)).unwrap();
-        tmp
-    }
-
-    #[test]
-    fn cwd_in_vault_warns_when_inside_configured_dir() {
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let project = make_project_with_config("kb");
-        let vault = project.path().join("kb");
-        warn_if_cwd_in_vault_with_cwd(&vault);
-        assert!(any_tracked_starts_with(
-            "hyalo is configured with dir = \"kb\""
-        ));
-    }
-
-    #[test]
-    fn cwd_in_vault_warns_when_inside_a_subdir_of_vault() {
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let project = make_project_with_config("kb");
-        let nested = project.path().join("kb/iterations");
-        std::fs::create_dir_all(&nested).unwrap();
-        warn_if_cwd_in_vault_with_cwd(&nested);
-        assert!(any_tracked_starts_with(
-            "hyalo is configured with dir = \"kb\""
-        ));
-    }
-
-    #[test]
-    fn cwd_in_vault_no_warn_when_cwd_equals_config_dir() {
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let project = make_project_with_config("kb");
-        // CWD is the project root (where .hyalo.toml lives) — that's the
-        // intended invocation site, no warning.
-        warn_if_cwd_in_vault_with_cwd(project.path());
-        assert_eq!(total_suppressed(), 0);
-        assert!(!any_tracked_starts_with("hyalo is configured with dir"));
-    }
-
-    #[test]
-    fn cwd_in_vault_no_warn_when_no_config_in_ancestors() {
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let tmp = tempfile::tempdir().unwrap();
-        // No .hyalo.toml anywhere up the chain — silently skip.
-        warn_if_cwd_in_vault_with_cwd(tmp.path());
-        assert_eq!(total_suppressed(), 0);
-        assert!(!any_tracked_starts_with("hyalo is configured with dir"));
-    }
-
-    #[test]
-    fn cwd_in_vault_no_warn_when_dir_is_dot() {
-        // dir = "." means the project root *is* the vault — no nested vault to
-        // be inside, so we never warn.
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-        // Make a nested dir to invoke from.
-        let nested = tmp.path().join("sub");
-        std::fs::create_dir_all(&nested).unwrap();
-        warn_if_cwd_in_vault_with_cwd(&nested);
-        assert_eq!(total_suppressed(), 0);
-    }
-
-    #[test]
-    fn cwd_in_vault_no_warn_when_cwd_is_sibling_of_vault() {
-        let _guard = super::WARN_TEST_LOCK.lock().unwrap();
-        reset_for_test();
-        init(false);
-        let project = make_project_with_config("kb");
-        // CWD is a sibling of the vault, not inside it.
-        let sibling = project.path().join("other");
-        std::fs::create_dir_all(&sibling).unwrap();
-        warn_if_cwd_in_vault_with_cwd(&sibling);
-        assert_eq!(total_suppressed(), 0);
     }
 }

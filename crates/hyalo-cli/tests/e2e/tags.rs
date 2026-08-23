@@ -995,3 +995,47 @@ fn bug_iter149_4_nfc_vs_nfd_codepoint_equal() {
         "NFD (combining mark) should be rejected on query (symmetric with write)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-213 UX-5 — `tags --limit` says how much it truncated
+// ---------------------------------------------------------------------------
+
+/// The tag summary has its own text renderer, which returned before the shared
+/// truncation footer was appended — so a limited listing gave no sign that the
+/// list was cut, unlike `properties --limit`.
+#[test]
+fn tags_limit_prints_the_truncation_footer() {
+    let tmp = TempDir::new().unwrap();
+    for (i, tag) in ["alpha", "bravo", "charlie", "delta"].iter().enumerate() {
+        write_tagged(tmp.path(), &format!("n{i}.md"), &[tag]);
+    }
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["tags", "--limit", "2", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("showing 2 of 4"),
+        "expected the truncation footer, got: {stdout}"
+    );
+}
+
+/// Without a limit there is nothing to announce; the footer must not appear.
+#[test]
+fn tags_without_limit_has_no_truncation_footer() {
+    let tmp = TempDir::new().unwrap();
+    write_tagged(tmp.path(), "n.md", &["alpha"]);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["tags", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("showing "),
+        "an unlimited listing is not truncated, got: {stdout}"
+    );
+}

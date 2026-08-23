@@ -162,7 +162,7 @@ fn effective_index_path_for(
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
-        | Commands::Config
+        | Commands::Config { .. }
         | Commands::Types { .. }
         | Commands::Okf { .. }
         | Commands::Madr { .. }
@@ -623,7 +623,7 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Init { .. }
                 | Commands::Deinit
                 | Commands::Completion { .. }
-                | Commands::Config
+                | Commands::Config { .. }
         )
     {
         let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
@@ -674,7 +674,8 @@ fn run_inner() -> Result<(), AppError> {
     }
     // `config` inspects CWD directly and does not need normal pipeline setup.
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
-    if let Commands::Config = &mut cli.command {
+    if let Commands::Config { raw } = &mut cli.command {
+        let raw = *raw;
         // Determine output format (respect --format if given; otherwise default to Text
         // since this command is read-only introspection, not a pipeline command).
         let format = cli.format.unwrap_or_else(|| {
@@ -693,11 +694,13 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
+        crate::config::emit_config_diagnostics(&effective);
         let report = crate::commands::config::collect_config_report(
             &cwd,
             effective,
             dir_override.is_some(),
             cli.site_prefix.as_deref(),
+            raw,
         )
         .map_err(AppError::Internal)?;
 
@@ -789,6 +792,10 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(note) = crate::config::dir_override_note(&effective) {
         crate::warn::note(note);
     }
+    // Only now is it known which `.hyalo.toml` governs the run, so only now can
+    // an unusable one be reported without naming a file `--dir` already
+    // discarded (iter-213, UX-5).
+    crate::config::emit_config_diagnostics(&effective);
     let crate::config::EffectiveConfig {
         config,
         dir,
@@ -876,17 +883,14 @@ fn run_inner() -> Result<(), AppError> {
         )));
     }
 
-    // LLM-driven shells (Claude Code etc.) often `cd` into the configured
-    // vault dir and pass paths relative to that subdir. The current command
-    // works, but the next call from a sibling dir blows up. If CWD is inside
-    // the configured vault, warn once. Skipped when --dir was passed
-    // explicitly: the user has named the vault directly, so the ancestor
-    // walk would just produce false positives from unrelated `.hyalo.toml`
-    // files. Init/Deinit/Completion early-return above this point.
-    if !dir_from_cli {
-        crate::warn::warn_if_cwd_in_vault();
-    }
-
+    // iter-213 (UX-1): running from inside the configured vault used to draw a
+    // "do not cd into the vault" scolding, because `.hyalo.toml` was read from
+    // the working directory and nowhere else, so the run really did lose the
+    // config. `config::load_config` now adopts the governing ancestor config
+    // instead (announcing itself when the vault is wider than CWD), which makes
+    // the invocation correct rather than merely tolerated — so the scolding is
+    // gone. The absolute-`--file` half of the misuse warning stays: that one
+    // still fires from `commands::resolve_file_user`.
     // Derive site_prefix with tri-state precedence:
     //
     //   1. CLI --site-prefix flag  (present → use it; empty string = explicit disable)
@@ -1458,7 +1462,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
-            | Commands::Config
+            | Commands::Config { .. }
             | Commands::Madr { .. }
             | Commands::Changelog { .. } => None,
         }
@@ -1527,8 +1531,13 @@ fn run_inner() -> Result<(), AppError> {
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(
-                        "index was built for vault '{hdr_vault}' (prefix {hdr_prefix:?}) but current \
-                         vault is '{vault_dir_str}' (prefix {site_prefix:?}); falling back to disk scan",
+                        "index does not match this run ({}); falling back to disk scan",
+                        crate::config::index_mismatch_summary(
+                            hdr_vault,
+                            &vault_dir_str,
+                            hdr_prefix,
+                            site_prefix,
+                        ),
                     ));
                     None
                 }

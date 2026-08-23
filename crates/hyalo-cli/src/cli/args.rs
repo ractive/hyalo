@@ -75,7 +75,12 @@ pub(crate) struct IndexFlags {
     /// Use the snapshot index at PATH instead of the default `.hyalo-index`.
     ///
     /// Implies `--index`. Relative paths are resolved against the current
-    /// working directory (not the vault dir). Absolute paths are used as-is.
+    /// working directory (not the vault dir); absolute paths are used as-is.
+    ///
+    /// Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+    /// not: on `create-index` / `drop-index` this flag is an alias for the
+    /// output path, and a path outside the vault is refused unless
+    /// `--allow-outside-vault` is also passed.
     ///
     /// Read-only commands skip the disk scan entirely. Mutation commands
     /// patch the index in-place after each write — see `--index` for details.
@@ -309,6 +314,8 @@ pub(crate) struct Cli {
     /// subcommand value takes precedence.
     ///
     /// Relative paths are resolved against the current working directory.
+    /// Reading is unrestricted; writing one outside the vault (`create-index`,
+    /// `drop-index`) additionally needs `--allow-outside-vault`.
     #[arg(long, global = true, value_name = "PATH")]
     pub index_file: Option<PathBuf>,
 
@@ -1015,9 +1022,23 @@ Repeatable (AND).\n\
             FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
             accepted as a synonym for `-o / --output PATH`. If both are provided and\n\
             differ, create-index returns an error.\n\n\
+            VAULT BOUNDARY: an explicit output path must land inside --dir unless\n\
+            --allow-outside-vault is passed; without it the write is refused with exit 1.\n\
+            The path itself is resolved against the current working directory, while the\n\
+            boundary is --dir — from a repo root configured with dir = \"kb\", an in-vault\n\
+            output path is `-o kb/index.bin`, not `-o index.bin`.\n\
+            The boundary applies to the *writers* (create-index, drop-index) only —\n\
+            reading a snapshot with `--index-file` is unrestricted.\n\n\
+            READ-ONLY CORPORA: to index a vault you cannot (or would rather not) write\n\
+            into, keep the snapshot elsewhere and name it on every query:\n\
+            \u{00a0} hyalo create-index --dir /corpus -o ~/.cache/corpus.idx --allow-outside-vault\n\
+            \u{00a0} hyalo find \"query\" --dir /corpus --index-file ~/.cache/corpus.idx\n\
+            The snapshot records the vault it was built for, so a query pointed at a\n\
+            different --dir refuses the index and falls back to a disk scan.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo create-index\n\
-            \u{00a0} hyalo create-index -o /tmp/my-index\n\
+            \u{00a0} hyalo create-index -o .hyalo-index-draft   # in-vault when dir = \".\"\n\
+            \u{00a0} hyalo create-index -o /tmp/my-index --allow-outside-vault\n\
             \u{00a0} hyalo find --property status=draft --index"
     )]
     CreateIndex {
@@ -1547,20 +1568,32 @@ Repeatable (AND).\n\
         name = "config",
         display_order = 899,
         long_about = "Print the effective configuration for the current working directory.\n\n\
-            Shows which .hyalo.toml is active (or none), its raw contents, and the effective\n\
-            values: config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
+            Shows which .hyalo.toml is active (or none) and the effective values:\n\
+            config_path, cwd, dir, format, hints, site_prefix, exempt.\n\n\
+            MALFORMED CONFIG: when a .hyalo.toml exists but could not be parsed, `malformed`\n\
+            is true and `parse_error` carries the diagnostic — every other value shown is a\n\
+            built-in default, not what the file asked for. Detectable from the output alone,\n\
+            without scraping stderr.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo config\n\
+            \u{00a0} hyalo config --raw\n\
             \u{00a0} hyalo config --dir ../other-vault\n\
             \u{00a0} hyalo config --jq '.results.dir'\n\
+            \u{00a0} hyalo config --jq '.results.malformed'\n\
             \u{00a0} hyalo config --format json\n\n\
             OUTPUT: Line-by-line in text format; the standard JSON envelope with --format json —\n\
             the settings live under `results`, and the config's own hints switch is reported as\n\
             `results.hints_enabled` so it does not collide with the envelope's `hints` array.\n\
             --jq filters that envelope like it does for every other command.\n\
+            The raw file text is opt-in via --raw: it is a multi-KB blob that dominated both\n\
+            renderings and buried the resolved values it was printed next to.\n\
             SIDE EFFECTS: None (read-only)."
     )]
-    Config,
+    Config {
+        /// Also print the raw .hyalo.toml text (`results.raw_contents` in JSON)
+        #[arg(long)]
+        raw: bool,
+    },
     /// Generate shell completions for the given shell
     #[command(
         name = "completions",
@@ -1853,16 +1886,28 @@ pub(crate) enum ViewsAction {
     ///
     /// Example: `hyalo views run open-tasks`
     ///          `hyalo views run drafts --tag project`
+    ///          `hyalo views run drafts "search terms"`
     #[command(
         external_subcommand = false,
         long_about = "Run a saved view as if you called `hyalo find --view <NAME>`.\n\n\
             Extra find flags passed after the view name extend or override the saved filters.\n\n\
+            The optional second positional argument is a BM25 PATTERN with exactly the\n\
+            semantics `find` gives it — ranked full-text search, mutually exclusive with -e.\n\
+            It overrides a pattern saved in the view.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo views run drafts\n\
+            \u{00a0} hyalo views run drafts \"search terms\"\n\
+            \u{00a0} hyalo views run drafts --tag project\n\n\
             SIDE EFFECTS: None (read-only find)."
     )]
     Run {
         /// View name to run
         #[arg(value_name = "NAME")]
         name: String,
+        /// BM25 ranked full-text search pattern, same semantics as `find <PATTERN>`.
+        /// Overrides a pattern saved in the view. Mutually exclusive with -e/--regexp
+        #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
+        pattern: Option<String>,
         /// Additional find filters to merge on top of the view
         #[command(flatten)]
         filters: FindFilters,
@@ -2134,8 +2179,11 @@ pub(crate) enum LinksAction {
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
             config says, and --no-first-only turns it off for a single run whatever the config says. \
-            When config exclusions actually remove candidates, the report adds a \
-            config_excluded count so a bare run stays explainable.\n\n\
+            When config exclusions actually remove candidates, the report adds \
+            config_excluded_titles (how many candidate titles the config took away) and \
+            config_excluded_mentions (how many unlinked mentions those titles accounted for), \
+            so a bare run stays explainable — one excluded title routinely suppresses hundreds \
+            of mentions.\n\n\
             Without --apply, prints a dry-run report. Pass --apply to write changes.\n\n\
             OUTPUT: each proposed match carries file, line, col, matched_text and link_target. \
             `line` and `col` are both 1-based, and `col` counts Unicode scalar values (characters), \

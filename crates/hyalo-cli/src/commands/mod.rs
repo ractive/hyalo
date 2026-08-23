@@ -208,6 +208,26 @@ pub enum FilesOrOutcome {
     Outcome(CommandOutcome),
 }
 
+/// Report a file skipped for unparseable frontmatter at the severity the run
+/// will actually exit with.
+///
+/// A batch run continues past the bad file, so `warning:` is honest. A run that
+/// named exactly one file has nothing left to do and exits 1 via
+/// [`single_named_file_unparseable`] — there, `warning:` contradicted the exit
+/// code and the "nothing was modified" error that followed (iter-213, UX-5).
+pub(crate) fn report_unparseable_skip(
+    files: &[String],
+    globs: &[String],
+    rel: &str,
+    detail: &impl std::fmt::Display,
+) {
+    if globs.is_empty() && files.len() == 1 {
+        crate::warn::error(format!("{rel}: {detail}"));
+    } else {
+        crate::warn::warn(format!("skipping {rel}: {detail}"));
+    }
+}
+
 /// L-2 (iter-204): turn "the one file you named is unparseable" into an error.
 ///
 /// A write command pointed at exactly ONE explicitly named (non-glob) file
@@ -234,7 +254,7 @@ pub(crate) fn single_named_file_unparseable(
         format,
         &format!("{rel}: unparseable frontmatter; nothing was modified"),
         None,
-        Some("fix the YAML frontmatter (see the warning above), then re-run"),
+        Some("fix the YAML frontmatter (see the error above), then re-run"),
         None,
     )))
 }

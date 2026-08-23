@@ -810,10 +810,14 @@ pub fn links_auto(
         glob_filter,
     };
 
-    // How many candidate titles the persisted config took away — reported as
-    // `config_excluded` so a bare `links auto` run stays explainable.
-    let config_excluded = if filters.has_config_exclusions() {
-        hyalo_core::auto_link::count_config_excluded_titles(
+    // What the persisted config took away, so a bare `links auto` run stays
+    // explainable. Two numbers, because they differ by orders of magnitude and
+    // only one of them answers "why did this run propose so few links?":
+    // excluding a single title can suppress hundreds of mentions, and until
+    // iter-213 the report said `config_excluded: 1` and left the user to guess
+    // (dogfood BUG-14). The names now say which is which.
+    let (config_excluded_titles, config_excluded_mentions) = if filters.has_config_exclusions() {
+        let titles = hyalo_core::auto_link::count_config_excluded_titles(
             index,
             filters.min_length,
             filters.cli_exclusions(),
@@ -821,12 +825,37 @@ pub fn links_auto(
                 exclude_titles: &exclude_titles,
                 exclude_target_globs: &exclude_target_globs,
             },
-        )?
+        )?;
+        // The mention count needs the body scan the title inventory does not
+        // do, so it costs a second preview pass. Only runs when `[links.auto]`
+        // actually contributes an exclusion, and always in preview mode — the
+        // `--apply` pass below is the one that writes.
+        let mentions = if titles == 0 {
+            0
+        } else {
+            let cli = filters.cli_exclusions();
+            let baseline = hyalo_core::auto_link::auto_link(
+                index,
+                dir,
+                &hyalo_core::auto_link::AutoLinkOptions {
+                    apply: false,
+                    exclude_titles: cli.exclude_titles,
+                    exclude_target_globs: cli.exclude_target_globs,
+                    ..opts
+                },
+            )?;
+            baseline.total
+        };
+        (titles, mentions)
     } else {
-        0
+        (0, 0)
     };
 
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
+    // `baseline.total` counted mentions *before* the config exclusions; the
+    // difference is what they suppressed. Saturating because a future filter
+    // that is not purely subtractive must report 0, never underflow.
+    let config_excluded_mentions = config_excluded_mentions.saturating_sub(report.total);
 
     // iter-197: advisory note when common English words drive the candidates.
     // stderr only (deduped and suppressed by `-q` like every other note), so the
@@ -878,14 +907,18 @@ pub fn links_auto(
         "files_failed": failed_count,
         "apply_outcomes": report.apply_outcomes,
     });
-    // Omitted when zero, matching the `links.out_of_vault` precedent: the key
-    // only appears when `[links.auto]` config actually removed candidates.
-    if config_excluded > 0
+    // Omitted when zero, matching the `links.out_of_vault` precedent: the keys
+    // only appear when `[links.auto]` config actually removed candidates.
+    if config_excluded_titles > 0
         && let Some(obj) = output.as_object_mut()
     {
         obj.insert(
-            "config_excluded".to_owned(),
-            serde_json::json!(config_excluded),
+            "config_excluded_titles".to_owned(),
+            serde_json::json!(config_excluded_titles),
+        );
+        obj.insert(
+            "config_excluded_mentions".to_owned(),
+            serde_json::json!(config_excluded_mentions),
         );
     }
 

@@ -271,7 +271,7 @@ pub fn append(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                crate::warn::warn(format!("skipping {rel_path}: {e}"));
+                super::report_unparseable_skip(files_arg, globs, rel_path, &e);
                 skipped_unparseable.push(rel_path.clone());
                 continue;
             }

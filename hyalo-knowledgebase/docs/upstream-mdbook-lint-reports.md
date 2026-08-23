@@ -214,7 +214,7 @@ Upstream shipped every report in this document. Release
 
 Removal work is [[iterations/iteration-196-mdlint-workaround-strip]].
 
-### One exception still open (not yet filed upstream)
+### One exception still open (filed upstream as #495)
 
 Shipped 0.16.0 `mdbook-lint-rulesets/src/standard/md047.rs` is still
 LF-centric, despite the release note claim that "standard-rule fixes now

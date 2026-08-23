@@ -570,3 +570,145 @@ fn unrecognised_malformed_config_gets_no_invented_fix() {
         "no fix path should be invented: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-213 UX-1 / DEC-079 — ancestor config discovery
+// ---------------------------------------------------------------------------
+
+/// The whole point of adoption: the settings that only exist in the parent
+/// config must still shape a run started from inside the vault. `build_project`
+/// pins `[lint] ignore` and a schema, so a run that lost the config lints
+/// differently.
+#[test]
+fn ancestor_config_governs_a_run_started_inside_the_vault() {
+    let tmp = TempDir::new().unwrap();
+    build_project(&tmp);
+
+    let from_root = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    let from_vault = hyalo_no_hints()
+        .current_dir(tmp.path().join("kb"))
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        String::from_utf8_lossy(&from_root.stdout),
+        String::from_utf8_lossy(&from_vault.stdout),
+        "lint from inside the vault must see the same config as from the root"
+    );
+}
+
+/// `hyalo config` is the command people use to answer "which file applies?",
+/// so it must name the adopted ancestor rather than reporting `(none)`.
+#[test]
+fn config_names_the_adopted_ancestor_file() {
+    let tmp = TempDir::new().unwrap();
+    build_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path().join("kb"))
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+    let json = envelope(&output.stdout, &output.stderr);
+    let config_path = json["results"]["config_path"].as_str().unwrap_or_default();
+    assert!(
+        config_path.ends_with(".hyalo.toml"),
+        "expected the ancestor config path, got: {json}"
+    );
+}
+
+/// An ancestor whose configured vault does not contain CWD does not govern the
+/// run — adopting it would silently widen the scope to an unrelated tree.
+#[test]
+fn ancestor_config_is_not_adopted_from_a_sibling_directory() {
+    let tmp = TempDir::new().unwrap();
+    build_project(&tmp);
+    let sibling = tmp.path().join("elsewhere");
+    fs::create_dir_all(&sibling).unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(&sibling)
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+    let json = envelope(&output.stdout, &output.stderr);
+    assert!(
+        json["results"]["config_path"].is_null(),
+        "a config whose vault excludes CWD must not be adopted: {json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-213 UX-2 — a malformed config is detectable from `hyalo config` alone
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_reports_a_malformed_file_in_its_own_output() {
+    let tmp = TempDir::new().unwrap();
+    build_malformed_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json"])
+        .output()
+        .unwrap();
+    let json = envelope(&output.stdout, &output.stderr);
+    assert_eq!(
+        json["results"]["malformed"].as_bool(),
+        Some(true),
+        "a JSON consumer must see the malformed state: {json}"
+    );
+    assert!(
+        json["results"]["parse_error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("malformed .hyalo.toml"),
+        "expected the parse diagnostic in the payload: {json}"
+    );
+
+    let text = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "text"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        stdout.contains("malformed: true"),
+        "the text rendering must lead with the integrity problem: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-213 UX-5 — the stale diagnostic no longer precedes the note that
+// contradicts it
+// ---------------------------------------------------------------------------
+
+/// `--dir` pointing at a different, healthy vault means the malformed CWD
+/// config does not apply — so it must not be warned about at all.
+#[test]
+fn dir_to_a_healthy_vault_drops_the_malformed_cwd_warning() {
+    let tmp = TempDir::new().unwrap();
+    build_malformed_project(&tmp);
+    let other = TempDir::new().unwrap();
+    write_md(other.path(), "b.md", "---\ntitle: B\n---\n\nBody.\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--dir", other.path().to_str().unwrap(), "lint"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("malformed .hyalo.toml"),
+        "a config --dir switched away from must not be warned about: {stderr}"
+    );
+    assert!(
+        stderr.contains("does not apply"),
+        "the switch itself is still announced: {stderr}"
+    );
+}

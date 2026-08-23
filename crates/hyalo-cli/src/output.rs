@@ -314,11 +314,20 @@ fn format_results_as_text(
             let tag_label = if total == 1 { "tag" } else { "tags" };
             let header = format!("{total} unique {tag_label}");
             let entries = format_value_as_text(results, cache);
-            return if entries.is_empty() {
+            let mut out = if entries.is_empty() {
                 header
             } else {
                 format!("{header}\n{entries}")
             };
+            // `tags --limit N` used to print the full unique-tag count in the
+            // header and then N rows, with nothing saying the list was cut —
+            // the truncation footer every other limited listing carries was
+            // skipped by this early return (iter-213, dogfood UX-5).
+            let shown = arr.len() as u64;
+            if shown < total {
+                let _ = write!(out, "\nshowing {shown} of {total} matches");
+            }
+            return out;
         }
     }
 
@@ -554,11 +563,12 @@ const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No 
 const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\(if .fuzzy > 0 then "\nLow-confidence matches (excluded from plain --apply): \(.fuzzy)" else "" end)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .out_of_vault > 0 then "\nOut of vault (target above vault root): \(.out_of_vault)" else "" end)\(if .templated > 0 then "\nTemplated (dynamic destination, never rewritten): \(.templated)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.unfixable_links | length) > 0 then "\nUnfixable links (no candidate in the vault):\n\(.unfixable_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.unfixable_links | length) > 20 then "\n  … and \((.unfixable_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.out_of_vault_links | length) > 0 then "\nOut-of-vault links (target above vault root, never rewritten):\n\(.out_of_vault_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.out_of_vault_links | length) > 20 then "\n  … and \((.out_of_vault_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "link-case-mismatch")]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)\(if (.templated_links | length) > 0 then "\nTemplated links (dynamic destination, never rewritten):\n\(.templated_links | map("  \(.source) line \(.line): \"\(.target)\" [templated]") | join("\n"))" else "" end)\(if (.fuzzy_fixes | length) > 0 then "\nLow-confidence matches (\(if .fuzzy_applied then "applied at or above confidence \(.fuzzy_min_confidence)" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "fuzzy-match") \((.confidence * 1000 | floor) / 1000)]\(if .below_floor then " — below floor" else "" end)") | join("\n"))\(if .fuzzy_below_floor > 0 then "\n  \(.fuzzy_below_floor) of \(.fuzzy_fixes | length) below the confidence floor \(.fuzzy_min_confidence) — raise or lower it with --min-confidence <0.0-1.0>" else "" end)" else "" end)""#;
 
 /// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, files_applied, files_failed, files_skipped, matches, scanned, total}`
-/// plus an optional `config_excluded` (iter-195a), present only when
+/// plus optional `config_excluded_titles` / `config_excluded_mentions`
+/// (iter-195a, renamed and paired in iter-213), present only when
 /// `[links.auto]` config exclusions removed candidate titles — hence the
-/// `// 0` fallback in the filter.
+/// `// 0` fallbacks in the filter.
 /// Format: summary line + per-match details.
-const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded) title\(if .config_excluded == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
+const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
@@ -653,10 +663,12 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
             Some(LINKS_FIX_FILTER)
         }
         // LinksAuto result (iter-187 adds per-file apply outcome fields for L-11;
-        // iter-195a adds `config_excluded`, present only when `[links.auto]`
-        // config exclusions removed candidates — hence two signatures).
+        // iter-195a adds the config-exclusion attribution, present only when
+        // `[links.auto]` config exclusions removed candidates — hence two
+        // signatures. iter-213 split it into a title count and a mention count,
+        // which always appear together).
         "ambiguous_titles,applied,apply_outcomes,files_applied,files_failed,files_skipped,matches,scanned,total"
-        | "ambiguous_titles,applied,apply_outcomes,config_excluded,files_applied,files_failed,files_skipped,matches,scanned,total" => {
+        | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,files_applied,files_failed,files_skipped,matches,scanned,total" => {
             Some(LINKS_AUTO_FILTER)
         }
         // MvResult
@@ -1415,12 +1427,35 @@ fn format_lint_fix_output_text(map: &serde_json::Map<String, serde_json::Value>)
             }
 
             // Conflicts.
+            //
+            // A rule with several violations in one file can have some fixes
+            // applied and one lose a range overlap, which printed the rule as
+            // both `fixed` and `conflict` two lines apart — read as a
+            // contradiction rather than as two different violations (iter-213,
+            // dogfood UX-5). The `fixed` line is the one that describes what
+            // changed on disk, so the conflict line is dropped when the same
+            // rule already appears there. The JSON keeps both: `conflicts` is
+            // how a consumer learns a fix was skipped, and dropping entries
+            // from it would lose that.
+            let fixed_rules: std::collections::HashSet<&str> = file_entry
+                .get("fixed_groups")
+                .and_then(|g| g.as_array())
+                .map(|groups| {
+                    groups
+                        .iter()
+                        .filter_map(|g| g.get("rule").and_then(serde_json::Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
             if let Some(conflicts) = file_entry.get("conflicts").and_then(|c| c.as_array()) {
                 for conflict in conflicts {
                     let rule = conflict
                         .get("rule")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("?");
+                    if fixed_rules.contains(rule) {
+                        continue;
+                    }
                     let reason = conflict
                         .get("reason")
                         .and_then(serde_json::Value::as_str)
@@ -2142,6 +2177,53 @@ mod tests {
 
     fn scalar(val: &serde_json::Value) -> String {
         format_scalar(val, &mut JaqFilterCache::new())
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-213 UX-5 — a rule is never shown as both fixed and conflicted
+    // -----------------------------------------------------------------------
+
+    fn fix_output(fixed_rule: Option<&str>, conflict_rule: &str) -> String {
+        let fixed_groups = match fixed_rule {
+            Some(rule) => json!([{"rule": rule, "count": 1, "violations": []}]),
+            None => json!([]),
+        };
+        let value = json!({
+            "dry_run": false,
+            "files_checked": 1,
+            "total_fixed": 1,
+            "total_remaining": 0,
+            "total_conflicts": 1,
+            "files": [{
+                "file": "a.md",
+                "fixed_groups": fixed_groups,
+                "remaining_groups": [],
+                "conflicts": [{"rule": conflict_rule, "reason": "range overlap with MD009"}],
+            }],
+        });
+        format_lint_fix_output_text(value.as_object().expect("object"))
+    }
+
+    #[test]
+    fn fix_text_suppresses_a_conflict_for_a_rule_already_shown_as_fixed() {
+        let out = fix_output(Some("MD047"), "MD047");
+        assert!(
+            !out.contains("conflict  MD047"),
+            "a rule shown as fixed must not also be shown as conflicted: {out}"
+        );
+        assert!(
+            out.contains("MD047"),
+            "the fixed line itself must survive: {out}"
+        );
+    }
+
+    #[test]
+    fn fix_text_keeps_a_conflict_for_a_rule_that_was_not_fixed() {
+        let out = fix_output(Some("MD047"), "MD013");
+        assert!(
+            out.contains("conflict  MD013"),
+            "an unrelated rule's conflict is the whole point of the line: {out}"
+        );
     }
 
     // --- error formatting ---

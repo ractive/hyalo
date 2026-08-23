@@ -20,8 +20,21 @@ use crate::output::{CommandOutcome, Format, format_success};
 pub(crate) struct ConfigReport {
     /// Absolute path to the `.hyalo.toml` that was found, or `None`.
     pub config_path: Option<PathBuf>,
-    /// Raw text of `.hyalo.toml` (when `config_path` is `Some`).
+    /// Raw text of `.hyalo.toml` — only when the caller passed `--raw`.
+    ///
+    /// Opt-in since iter-213 (dogfood UX-2): a real `.hyalo.toml` is several
+    /// kilobytes, and as a single JSON string it dwarfed every resolved value
+    /// in `results` — the part of the output people actually came for.
     pub raw_contents: Option<String>,
+    /// The parse/read diagnostic when a `.hyalo.toml` exists but could not be
+    /// used, `None` when the config loaded (or when there is no config file).
+    ///
+    /// When this is `Some`, every other value in the report is a built-in
+    /// default rather than something the file asked for. Reported in both
+    /// renderings so a JSON consumer can detect the state without scraping
+    /// stderr — before iter-213 `hyalo config` exited 0 with populated defaults
+    /// and said nothing (dogfood UX-2).
+    pub malformed: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
     /// Resolved vault directory: the effective directory the CLI would use —
@@ -97,6 +110,7 @@ pub(crate) fn collect_config_report(
     effective: crate::config::EffectiveConfig,
     dir_overridden: bool,
     cli_site_prefix: Option<&str>,
+    raw: bool,
 ) -> anyhow::Result<ConfigReport> {
     let crate::config::EffectiveConfig {
         config: resolved,
@@ -110,16 +124,17 @@ pub(crate) fn collect_config_report(
     let (site_prefix, site_prefix_source) =
         crate::config::resolve_site_prefix(cli_site_prefix, resolved.site_prefix.as_deref(), &dir);
 
-    let raw_contents = match &config_path {
-        Some(path) => Some(
+    let raw_contents = match (raw, &config_path) {
+        (true, Some(path)) => Some(
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
         ),
-        None => None,
+        _ => None,
     };
 
     Ok(ConfigReport {
         config_path,
         raw_contents,
+        malformed: resolved.malformed,
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
@@ -190,6 +205,14 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
     json!({
         "results": {
             "config_path": report.config_path.as_ref().map(|p| p.display().to_string()),
+            // Always present (iter-213, UX-2). `malformed: true` means the
+            // config file exists but could not be parsed, so every sibling
+            // value below is a built-in default; `parse_error` carries the
+            // diagnostic that was previously stderr-only.
+            "malformed": report.malformed.is_some(),
+            "parse_error": report.malformed,
+            // Only present with --raw; `null` otherwise so the key's shape
+            // never changes between invocations.
             "raw_contents": report.raw_contents,
             "cwd": report.cwd.display().to_string(),
             "dir": report.dir.display().to_string(),
@@ -282,6 +305,18 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     }
     let exempt_str = list_or_none(&report.exempt);
 
+    // Lead with the integrity problem: when the config did not parse, every
+    // line below it is a built-in default rather than a configured value, and
+    // reading them as "the effective configuration" is the mistake to prevent.
+    let malformed_str = match report.malformed.as_deref() {
+        Some(diagnostic) => format!(
+            "malformed: true\n  {}\n  note: every value below is a built-in default, \
+             not what the file asked for\n",
+            diagnostic.trim_end().replace('\n', "\n  ")
+        ),
+        None => String::new(),
+    };
+
     // Annotate the dir line when a `--dir` override is in effect, so the report
     // makes the shadow explicit rather than silently reporting the override.
     let dir_suffix = if report.dir_overridden {
@@ -291,7 +326,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+        "{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),

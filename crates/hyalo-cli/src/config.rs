@@ -389,15 +389,104 @@ fn salvage_dir(contents: &str) -> Option<PathBuf> {
     Some(PathBuf::from(dir))
 }
 
-/// Load configuration from `.hyalo.toml` in the current working directory.
+/// Best-effort read of the vault a candidate `.hyalo.toml` points at.
+///
+/// Deliberately lenient: this runs while *probing* ancestors, before hyalo has
+/// committed to a config, so a parse failure must not print anything. An
+/// unreadable or unparseable file yields the config directory itself, which is
+/// the widest plausible vault — adopting it is what makes the malformed file
+/// visible (via the strict load that follows) instead of silently skipped.
+fn candidate_vault(config_dir: &Path) -> PathBuf {
+    let sub = std::fs::read_to_string(config_dir.join(".hyalo.toml"))
+        .ok()
+        .and_then(|contents| salvage_dir(&contents))
+        .unwrap_or_else(|| PathBuf::from("."));
+    config_dir.join(sub)
+}
+
+/// Find the `.hyalo.toml` in an ancestor of `cwd` that governs `cwd`.
+///
+/// UX-1 (iter-213): before this, `.hyalo.toml` was read from the working
+/// directory and nowhere else, so `cd docs && hyalo lint` re-rooted on built-in
+/// defaults — no schema, no `[lint] ignore`, no views — and said nothing.
+/// The `--dir` spelling of the same mistake had warned loudly since iter-201;
+/// the far more common `cd` spelling was silent.
+///
+/// **Nearest config wins**: the walk stops at the first ancestor that has a
+/// `.hyalo.toml`, and adopts it only when its configured vault contains `cwd`.
+/// A nearer config that points somewhere else genuinely does not govern this
+/// run, and walking past it to a further ancestor would make which file applies
+/// depend on the contents of files in between.
+fn discover_ancestor_config(cwd: &Path) -> Option<PathBuf> {
+    let canonical_cwd = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let ancestor = canonical_cwd
+        .ancestors()
+        .skip(1)
+        .find(|a| a.join(".hyalo.toml").is_file())?;
+    let vault = dunce::canonicalize(candidate_vault(ancestor)).ok()?;
+    canonical_cwd
+        .starts_with(&vault)
+        .then(|| ancestor.to_path_buf())
+}
+
+/// Tell the user when an adopted ancestor config widens the run beyond `cwd`.
+///
+/// Adoption is silent in the common case — `cd <vault> && hyalo …`, where the
+/// configured vault *is* the working directory, so nothing about the run
+/// changes except that the settings now apply. From a deeper subdirectory the
+/// vault is genuinely wider than the directory the user is standing in, and
+/// that is worth one line on stderr.
+fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
+    let same = match (dunce::canonicalize(vault), dunce::canonicalize(cwd)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    crate::warn::note(format!(
+        "using {} from a parent directory: the vault is {}, not the current directory \
+         — pass --dir . to scope this run to the current directory",
+        config_dir.join(".hyalo.toml").display(),
+        vault.display()
+    ));
+}
+
+/// Load configuration for the current working directory.
+///
+/// Resolution order:
+/// 1. `.hyalo.toml` in the working directory.
+/// 2. Otherwise the nearest ancestor `.hyalo.toml` whose configured vault
+///    contains the working directory (see [`discover_ancestor_config`]).
+/// 3. Otherwise built-in defaults.
 ///
 /// Missing file → silent, returns hardcoded defaults.
-/// I/O error (not NotFound) → prints a warning, returns defaults.
-/// Malformed TOML or unknown fields → prints a warning, returns defaults.
+/// I/O error (not NotFound) → records a diagnostic, returns defaults.
+/// Malformed TOML or unknown fields → records a diagnostic, returns defaults.
 /// Valid config → merges with defaults (config values take precedence).
 pub(crate) fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
-        Ok(cwd) => load_config_from(&cwd),
+        Ok(cwd) => {
+            if cwd.join(".hyalo.toml").is_file() {
+                return load_config_from(&cwd);
+            }
+            match discover_ancestor_config(&cwd) {
+                Some(ancestor) => {
+                    let mut config = load_config_from(&ancestor);
+                    // `dir` is stored relative to the config file, and the
+                    // process is no longer standing there — everything
+                    // downstream resolves the vault against the *working*
+                    // directory. Absolutize it so the two cannot disagree
+                    // (`config_dir` still points at the adopted file, so
+                    // `views set` and friends keep writing to it).
+                    let vault = ancestor.join(&config.dir);
+                    config.dir = dunce::canonicalize(&vault).unwrap_or(vault);
+                    announce_ancestor_config(&cwd, &ancestor, &config.dir);
+                    config
+                }
+                None => load_config_from(&cwd),
+            }
+        }
         Err(e) => {
             crate::warn::warn(format!(
                 "could not determine current directory to locate .hyalo.toml: {e}"
@@ -492,10 +581,13 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             return ResolvedDefaults::defaults_for(dir);
         }
         Err(e) => {
-            // The file exists but cannot be read — a config-integrity problem,
-            // so the warning is not suppressible by `-q` (iter-201, M-2).
+            // The file exists but cannot be read — a config-integrity problem.
+            // The diagnostic is *recorded*, not printed here: which config is
+            // finally in effect is only known after `--dir` resolution, and
+            // printing at load time announced a file a `--dir` override had
+            // already switched away from (iter-213, UX-5). It is emitted by
+            // `emit_config_diagnostics`, still `-q`-proof (iter-201, M-2).
             let diagnostic = format!("could not read .hyalo.toml: {e}");
-            crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, None);
         }
     };
@@ -508,7 +600,6 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
                 diagnostic.push_str("\n  fix: ");
                 diagnostic.push_str(fix);
             }
-            crate::warn::warn_always(&diagnostic);
             return ResolvedDefaults::unusable_for(dir, diagnostic, salvage_dir(&contents));
         }
     };
@@ -1033,6 +1124,57 @@ pub(crate) fn resolve_site_prefix(
     (derived, SitePrefixSource::Derived)
 }
 
+/// Render an index-vs-run mismatch as the field(s) that actually differ.
+///
+/// UX-3 (iter-213): the old wording printed the vault path twice — once for the
+/// snapshot, once for the run — even when the paths were identical and only the
+/// site prefix differed, and rendered the prefixes with `{:?}` so the reader
+/// got `Some("en-us")` instead of a value. The one differing field was the last
+/// thing you could see. This names only what differs, in `field: index X vs run
+/// Y` form.
+pub(crate) fn index_mismatch_summary(
+    index_vault: &str,
+    run_vault: &str,
+    index_prefix: Option<&str>,
+    run_prefix: Option<&str>,
+) -> String {
+    fn show(value: Option<&str>) -> String {
+        value.map_or_else(|| "(none)".to_owned(), |v| format!("'{v}'"))
+    }
+    let mut parts = Vec::new();
+    if index_vault != run_vault {
+        parts.push(format!("vault: index '{index_vault}' vs run '{run_vault}'"));
+    }
+    if index_prefix != run_prefix {
+        parts.push(format!(
+            "site prefix: index {} vs run {}",
+            show(index_prefix),
+            show(run_prefix)
+        ));
+    }
+    if parts.is_empty() {
+        // Unreachable while `SnapshotIndex::validate` compares exactly these
+        // two fields, but a future header field must not produce an empty
+        // parenthetical.
+        return "header differs".to_owned();
+    }
+    parts.join("; ")
+}
+
+/// Print the config-integrity diagnostic for the configuration that actually
+/// governs this run, if any.
+///
+/// Called once, *after* `--dir` resolution. Before iter-213 the diagnostic was
+/// printed the moment the CWD config failed to parse, which meant
+/// `hyalo lint --dir other-vault` led with a warning about a file it had just
+/// established does not apply — the stale warning even printed *before* the
+/// "does not apply" note that contradicted it (dogfood UX-5).
+pub(crate) fn emit_config_diagnostics(effective: &EffectiveConfig) {
+    if let Some(diagnostic) = effective.config.malformed.as_deref() {
+        crate::warn::warn_always(diagnostic);
+    }
+}
+
 pub(crate) fn dir_override_note(effective: &EffectiveConfig) -> Option<String> {
     if !effective.cwd_config_shadowed {
         return None;
@@ -1180,6 +1322,99 @@ mod tests {
         );
         assert_eq!(salvage_dir("this is not { toml"), None);
         assert_eq!(salvage_dir("nope = 1\n"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // iter-213 — ancestor discovery and the index-mismatch summary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ancestor_discovery_adopts_a_config_whose_vault_contains_cwd() {
+        let project = make_project(); // dir = "kb"
+        let vault = project.path().join("kb");
+        fs::create_dir_all(&vault).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&vault),
+            Some(dunce::canonicalize(project.path()).unwrap()),
+            "a config whose vault is CWD governs the run"
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_reaches_a_deeper_subdirectory() {
+        let project = make_project();
+        let nested = project.path().join("kb/iterations");
+        fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&nested),
+            Some(dunce::canonicalize(project.path()).unwrap())
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_skips_a_config_whose_vault_excludes_cwd() {
+        let project = make_project();
+        let sibling = project.path().join("elsewhere");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::create_dir_all(project.path().join("kb")).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&sibling),
+            None,
+            "a config pointing at another tree does not govern this one"
+        );
+    }
+
+    #[test]
+    fn ancestor_discovery_stops_at_the_nearest_config() {
+        // outer/.hyalo.toml (dir = ".") would contain everything, but the
+        // nearer inner/.hyalo.toml points elsewhere — nearest wins, so nothing
+        // is adopted rather than the walk continuing to the outer file.
+        let outer = make_temp();
+        fs::write(outer.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        let inner = outer.path().join("inner");
+        fs::create_dir_all(inner.join("vault")).unwrap();
+        fs::write(inner.join(".hyalo.toml"), "dir = \"vault\"\n").unwrap();
+        let cwd = inner.join("other");
+        fs::create_dir_all(&cwd).unwrap();
+        assert_eq!(discover_ancestor_config(&cwd), None);
+    }
+
+    #[test]
+    fn ancestor_discovery_adopts_an_unparseable_config_so_it_is_surfaced() {
+        // No usable `dir`, so the config directory itself is the vault — which
+        // contains CWD, so the file is adopted and its diagnostic reported.
+        let project = make_temp();
+        fs::write(project.path().join(".hyalo.toml"), "not = = toml\n").unwrap();
+        let cwd = project.path().join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+        assert_eq!(
+            discover_ancestor_config(&cwd),
+            Some(dunce::canonicalize(project.path()).unwrap())
+        );
+    }
+
+    #[test]
+    fn index_mismatch_summary_names_only_the_differing_field() {
+        assert_eq!(
+            index_mismatch_summary("/v", "/v", Some("en-us"), None),
+            "site prefix: index 'en-us' vs run (none)",
+            "an identical vault path must not be printed twice"
+        );
+        assert_eq!(
+            index_mismatch_summary("/a", "/b", Some("p"), Some("p")),
+            "vault: index '/a' vs run '/b'"
+        );
+        assert_eq!(
+            index_mismatch_summary("/a", "/b", None, Some("p")),
+            "vault: index '/a' vs run '/b'; site prefix: index (none) vs run 'p'"
+        );
+    }
+
+    #[test]
+    fn index_mismatch_summary_never_renders_a_rust_option() {
+        let summary = index_mismatch_summary("/v", "/v", Some("en-us"), None);
+        assert!(!summary.contains("Some("), "{summary}");
+        assert!(!summary.contains("None"), "{summary}");
     }
 
     #[test]
@@ -1570,6 +1805,12 @@ site_prefix = "docs"
             resolved.malformed.is_some(),
             "an unusable config must be flagged so writers can refuse"
         );
+        // The diagnostic is recorded here and printed by
+        // `emit_config_diagnostics` once `--dir` resolution has settled which
+        // config governs the run (iter-213, UX-5).
+        crate::warn::reset_for_test();
+        crate::warn::init(false);
+        emit_config_diagnostics(&resolve_effective(resolved, None));
         assert!(crate::warn::any_tracked_starts_with(
             "malformed .hyalo.toml"
         ));

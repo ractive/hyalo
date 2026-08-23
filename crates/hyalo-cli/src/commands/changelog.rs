@@ -88,6 +88,72 @@ pub(crate) fn resolve_changelog_file(
     Ok(joined)
 }
 
+/// Outcome of resolving `[changelog] path` for a command that is about to use
+/// it (iter-213, BUG-14).
+///
+/// [`resolve_changelog_file`] reports a bad `[changelog] path` as an
+/// `anyhow` error, which surfaces as exit 2 with a single-line message —
+/// while the *runtime* form of the same refusal (a symlinked changelog
+/// resolving out of the repo) exits 1 with the shared two-path wording. Two
+/// exit codes and two message shapes for one class of refusal is not a
+/// contract a CI script can rely on, so command dispatch goes through
+/// [`resolve_changelog_target`] instead and gets the runtime form for both.
+pub(crate) enum ChangelogTarget {
+    /// The resolved changelog path; the command may proceed.
+    Path(std::path::PathBuf),
+    /// The config named a path outside the repository — refuse (exit 1).
+    Refused(CommandOutcome),
+}
+
+/// Resolve the changelog path, turning a config-level escape into the same
+/// user-error refusal a runtime escape produces.
+pub(crate) fn resolve_changelog_target(
+    dir: &Path,
+    config_dir: &Path,
+    config_path: Option<&str>,
+    format: Format,
+) -> ChangelogTarget {
+    if let Ok(path) = resolve_changelog_file(dir, config_dir, config_path) {
+        ChangelogTarget::Path(path)
+    } else {
+        let raw = config_path.unwrap_or_default();
+        // Where the config would have written, lexically — the second path of
+        // the two-path form. `..` is normalized away so the message names a
+        // real location rather than `…/kb/../../etc/passwd`.
+        let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
+        ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
+            format,
+            &hyalo_core::fs_util::outside_vault_message("[changelog] path", Some(&resolved)),
+            Some(raw),
+            Some(
+                "set [changelog] path to a location inside the config directory, \
+                 relative to it (e.g. \"CHANGELOG.md\" or \"docs/CHANGELOG.md\")",
+            ),
+            None,
+        )))
+    }
+}
+
+/// Collapse `.` and `..` components without touching the filesystem.
+///
+/// Used only to *display* where a rejected `[changelog] path` pointed, so it
+/// must work for paths that do not exist (`canonicalize` would fail on them).
+fn lexically_normalize(path: &Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 /// The directory a resolved changelog must stay inside.
 ///
 /// With no `[changelog] path` the changelog is `dir/CHANGELOG.md` and the vault
@@ -752,6 +818,59 @@ mod tests {
         let resolved =
             resolve_changelog_file(dir, config_dir, Some("sub/../CHANGELOG.md")).unwrap();
         assert_eq!(resolved, config_dir.join("sub/../CHANGELOG.md"));
+    }
+
+    #[test]
+    fn lexically_normalize_collapses_traversal_without_touching_disk() {
+        assert_eq!(
+            lexically_normalize(Path::new("/repo/docs/../../CHANGELOG.md")),
+            std::path::PathBuf::from("/CHANGELOG.md")
+        );
+        assert_eq!(
+            lexically_normalize(Path::new("/repo/./a/b/../CHANGELOG.md")),
+            std::path::PathBuf::from("/repo/a/CHANGELOG.md")
+        );
+        // A `..` with nothing left to pop is kept, so the rendered path never
+        // silently claims a location above the filesystem root.
+        assert_eq!(
+            lexically_normalize(Path::new("../CHANGELOG.md")),
+            std::path::PathBuf::from("../CHANGELOG.md")
+        );
+    }
+
+    /// The refusal must carry the two-path form: the resolved destination in
+    /// the message, the raw config value as the error's `path`.
+    #[test]
+    fn resolve_changelog_target_refuses_an_escaping_config_path() {
+        let outcome = resolve_changelog_target(
+            Path::new("/repo/docs"),
+            Path::new("/repo"),
+            Some("../CHANGELOG.md"),
+            Format::Json,
+        );
+        let ChangelogTarget::Refused(CommandOutcome::UserError(rendered)) = outcome else {
+            panic!("an escaping [changelog] path must be refused");
+        };
+        assert!(
+            rendered.contains("resolves outside vault boundary"),
+            "got: {rendered}"
+        );
+        assert!(rendered.contains("/CHANGELOG.md"), "got: {rendered}");
+        assert!(rendered.contains("../CHANGELOG.md"), "got: {rendered}");
+    }
+
+    #[test]
+    fn resolve_changelog_target_passes_a_bounded_path_through() {
+        let outcome = resolve_changelog_target(
+            Path::new("/repo/docs"),
+            Path::new("/repo"),
+            Some("CHANGELOG.md"),
+            Format::Json,
+        );
+        let ChangelogTarget::Path(path) = outcome else {
+            panic!("a bounded [changelog] path must resolve");
+        };
+        assert_eq!(path, std::path::PathBuf::from("/repo/CHANGELOG.md"));
     }
 
     #[test]
