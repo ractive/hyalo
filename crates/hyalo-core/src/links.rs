@@ -739,11 +739,105 @@ fn bare_url_end(line: &str, start: usize) -> Option<usize> {
 /// - whole `[label](destination)` constructs (label *and* destination, so a
 ///   title mention inside a link's own label is left alone);
 /// - whole `[[wikilink]]` constructs;
-/// - autolinks (`<https://…>`) and bare URLs written in prose.
+/// - autolinks (`<https://…>`) and bare URLs written in prose;
+/// - Liquid/Jinja template expressions — `{% … %}` and `{{ … }}` (iter-207,
+///   BUG-2). Injecting a wikilink into `{% data variables.x %}` destroys a
+///   variable reference that renders to prose;
+/// - raw HTML tag spans, including attribute values — `<img src="…" …>`,
+///   `<a name="…">`, HTML comments and processing instructions (iter-207,
+///   BUG-3). Text *between* tags stays linkable: in `<div>prose</div>` only
+///   the two tags are inert.
+///
+/// Unterminated Liquid or HTML markers make the rest of the line inert. That
+/// is deliberate: a missed auto-link candidate costs nothing, a corrupted
+/// file does.
 ///
 /// Ranges are returned in ascending, non-overlapping order. `line` should be
 /// the same text the caller matches against (e.g. the inline-code-blanked
 /// form), since offsets are relative to it.
+/// End offset (exclusive) of a Liquid/Jinja template expression starting at
+/// `start`, which must point at a `{` byte (iter-207, BUG-2).
+///
+/// Recognizes `{% … %}` (tags) and `{{ … }}` (output expressions). An
+/// unterminated marker makes the rest of the line inert — a template
+/// expression that continues onto the next line is still not prose, and
+/// blanking too much only costs a missed auto-link candidate.
+///
+/// Returns `None` when `start` is a lone `{` (not a template marker).
+fn liquid_span_end(line: &str, start: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    debug_assert_eq!(bytes.get(start), Some(&b'{'));
+    let closer: &str = match bytes.get(start + 1)? {
+        b'%' => "%}",
+        b'{' => "}}",
+        _ => return None,
+    };
+    Some(match line[start + 2..].find(closer) {
+        Some(rel) => start + 2 + rel + closer.len(),
+        None => line.len(),
+    })
+}
+
+/// End offset (exclusive) of a raw-HTML span starting at `start`, which must
+/// point at a `<` byte (iter-207, BUG-3).
+///
+/// Covers the four raw-HTML shapes markdown lets through inline: open/close
+/// tags (`<a href="x">`, `</a>`), comments (`<!-- … -->`), declarations
+/// (`<!DOCTYPE …>`) and processing instructions (`<? … ?>`). Quoted attribute
+/// values are scanned through, so a `>` inside `alt="a > b"` does not end the
+/// tag early.
+///
+/// An unterminated tag makes the rest of the line inert (a tag that wraps onto
+/// the next line is still markup). Returns `None` when `<` is ordinary prose
+/// (`a < b`), so comparison operators stay linkable.
+fn html_span_end(line: &str, start: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    debug_assert_eq!(bytes.get(start), Some(&b'<'));
+
+    // `<!-- … -->` comment: closed only by the literal `-->`.
+    if line[start..].starts_with("<!--") {
+        return Some(match line[start + 4..].find("-->") {
+            Some(rel) => start + 4 + rel + 3,
+            None => line.len(),
+        });
+    }
+    // `<? … ?>` processing instruction.
+    if line[start..].starts_with("<?") {
+        return Some(match line[start + 2..].find("?>") {
+            Some(rel) => start + 2 + rel + 2,
+            None => line.len(),
+        });
+    }
+
+    // Open (`<a …>`) or closing (`</a>`) tag, or a `<!DOCTYPE …>` declaration.
+    // All three require a name character right after the opening punctuation;
+    // without one this is prose (`a < b`, `5 <10`).
+    let mut i = start + 1;
+    if matches!(bytes.get(i), Some(b'/' | b'!')) {
+        i += 1;
+    }
+    if !bytes.get(i).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+
+    // Scan to the closing `>`, skipping quoted attribute values.
+    while i < bytes.len() {
+        match bytes[i] {
+            b'>' => return Some(i + 1),
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    // Unterminated: treat the rest of the line as markup.
+    Some(line.len())
+}
+
 #[must_use]
 pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
     let bytes = line.as_bytes();
@@ -784,6 +878,21 @@ pub fn inert_link_zones(line: &str) -> Vec<(usize, usize)> {
                     && bare_url_end(line, i + 1).is_some()
                 {
                     let end = i + 1 + rel + 1;
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                // Raw HTML tag / comment / declaration (iter-207, BUG-3).
+                if let Some(end) = html_span_end(line, i) {
+                    zones.push((i, end));
+                    i = end;
+                    continue;
+                }
+                i += 1;
+            }
+            b'{' => {
+                // Liquid / Jinja expressions (iter-207, BUG-2).
+                if let Some(end) = liquid_span_end(line, i) {
                     zones.push((i, end));
                     i = end;
                     continue;
