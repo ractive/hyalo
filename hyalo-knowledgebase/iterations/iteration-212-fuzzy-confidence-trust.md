@@ -46,7 +46,7 @@ Prerequisite ordering: [[iterations/iteration-210-output-truth]] adds
 per-fix JSON detail; landing 210 first makes this iteration's evaluation
 measurable by script. Not a hard dependency.
 
-## Tasks
+## Tasks [5/5]
 
 - [x] Rework fuzzy scoring to weight the final path segment (the
       basename/slug) far above shared prefixes — e.g. score the basename
@@ -71,7 +71,7 @@ measurable by script. Not a hard dependency.
       config key, and the strategy labels; CHANGELOG entry (behavior
       change for `--apply-fuzzy` users: fewer, better fixes).
 
-## Acceptance criteria
+## Acceptance criteria [5/5]
 
 - [x] The three dogfood example proposals reorder so the correct one
       scores highest
