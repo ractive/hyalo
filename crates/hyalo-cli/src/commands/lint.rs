@@ -1649,7 +1649,12 @@ pub fn lint_files_extended(
         .filter(|r| r.total_violations > 0)
         .count();
     let files_checked_total = all_results.len();
-    let files_truncated = all_results.len() > opts.max_files;
+    // `files_truncated` describes the *listed* files, not the examined ones.
+    // `all_results` is sorted worst-first, so the display cap only ever drops a
+    // violating file once there are more of those than `max_files`. Deriving it
+    // from `files_checked > max_files` (as this did before iter-210 BUG-6)
+    // false-positived on every clean vault larger than the limit.
+    let files_truncated = total_files_with_violations > opts.max_files;
 
     let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
 
@@ -1665,10 +1670,21 @@ pub fn lint_files_extended(
     // caller, so truncation here is a no-op for `--limit 0`).
     all_results.truncate(opts.max_files);
 
-    // Set of distinct rule ids seen across the (display-capped) result set,
-    // used for the `rules_fired` counter. Error/warning totals are taken from
-    // the authoritative pre-truncation pass above, not from these loops.
-    let mut rules_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Whole-run violation total and distinct firing rules, computed over EVERY
+    // result *before* the display cap, exactly like the error/warning totals
+    // above. Deriving them from the capped display loops (pre-iter-210) made
+    // JSON `total` describe a different run than `errors` + `warnings` — on a
+    // large vault the two disagreed by an order of magnitude (BUG-6).
+    let authoritative_total: usize = all_results.iter().map(|r| r.total_violations).sum();
+    let authoritative_rules_fired = {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for r in &all_results {
+            for rule_id in r.violations_by_rule.keys() {
+                seen.insert(rule_id.as_str());
+            }
+        }
+        seen.len()
+    };
 
     let val = if is_fix_mode {
         // -------------------------------------------------------------------
@@ -1803,7 +1819,6 @@ pub fn lint_files_extended(
                         continue;
                     }
                     grand_total_remaining += remaining;
-                    rules_seen.insert(rule_id.clone());
                     let shown = remaining.min(opts.max_per_rule);
                     let truncated = remaining > shown;
                     let body_violations = remaining_owned
@@ -1841,7 +1856,6 @@ pub fn lint_files_extended(
                     continue;
                 }
                 grand_total_remaining += remaining_count;
-                rules_seen.insert(rule_id.clone());
 
                 let autofixable = md_lint_engine
                     .available_rules()
@@ -1902,7 +1916,7 @@ pub fn lint_files_extended(
             total_fixed: grand_total_fixed,
             total_remaining: grand_total_remaining,
             total_conflicts: grand_total_conflicts,
-            rules_fired: rules_seen.len(),
+            rules_fired: authoritative_rules_fired,
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,
@@ -1915,7 +1929,6 @@ pub fn lint_files_extended(
         // -------------------------------------------------------------------
         // Read-only output: unchanged rule_groups shape.
         // -------------------------------------------------------------------
-        let mut total_violations = 0usize;
         let mut output_files: Vec<ExtFileLintResult> = Vec::new();
         let mut all_fix_actions: Vec<FileFixResult> = Vec::new();
 
@@ -1932,8 +1945,6 @@ pub fn lint_files_extended(
             let mut rule_groups: Vec<RuleGroup> = Vec::new();
             for (rule_id, violations) in &r.violations_by_rule {
                 let count = violations.len();
-                total_violations += count;
-                rules_seen.insert(rule_id.clone());
 
                 let autofixable = if rule_id == "SCHEMA" {
                     // The SCHEMA group folds several checks; it is autofixable
@@ -1988,8 +1999,8 @@ pub fn lint_files_extended(
 
         let output = ExtLintOutput {
             files: output_files,
-            total: total_violations,
-            rules_fired: rules_seen.len(),
+            total: authoritative_total,
+            rules_fired: authoritative_rules_fired,
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,
