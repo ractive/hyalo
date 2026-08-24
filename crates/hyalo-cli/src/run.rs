@@ -256,10 +256,9 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
             // key set regardless of whether any file matched. Serializing
             // `ExtLintFixOutput::default()` (review finding #5) instead of a
             // hand-written `json!` literal means this can never drift out of
-            // sync with the real struct's field set, and its own
-            // `#[serde(skip_serializing_if)]` on `dry_run` applies here too
-            // (finding #6) — the key is present only when `*dry_run` is true,
-            // exactly like the non-empty path.
+            // sync with the real struct's field set. `dry_run` is always
+            // serialized (iter-216 D-4), so the empty shape carries it as a
+            // plain `false`/`true`, same as the non-empty path.
             let empty = crate::commands::lint::ExtLintFixOutput {
                 dry_run: *dry_run,
                 ..Default::default()
@@ -1890,7 +1889,6 @@ fn run_inner() -> Result<(), AppError> {
     // hint can fire when the command took longer than SLOW_QUERY_THRESHOLD_MS.
     // We measure here (not inside dispatch) so hint rendering is excluded.
     let dispatch_start = Instant::now();
-    eprintln!("DEBUG files_from_empty={files_from_empty}");
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
         Ok(empty_result_for_command(&cli.command))
