@@ -742,6 +742,42 @@ mod tests {
         assert!(flip_ascii_case("日本語").is_none());
     }
 
+    /// `probe_roundtrip` above deliberately doesn't assert a direction
+    /// because it runs on every platform and the filesystem under the OS
+    /// temp dir varies. On real Windows, though, an NTFS volume is
+    /// case-insensitive by default (per-directory case sensitivity is an
+    /// explicit opt-in feature `tempfile::tempdir()` never sets), so this
+    /// pins the actual expected answer on the one platform where it's a
+    /// known constant — the gap iter-224 T-4 closes for the case-index
+    /// probe (mirrors the M-2 drive-relative/ADS tests added alongside it).
+    #[cfg(windows)]
+    #[test]
+    fn probe_case_insensitive_is_true_on_real_ntfs_tempdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let probed = probe_case_insensitive(tmp.path()).unwrap();
+        assert!(
+            probed,
+            "NTFS is case-insensitive by default; the probe should detect it \
+             on a real Windows temp directory"
+        );
+    }
+
+    /// Same contract as above, exercised through the stat-only probe variant
+    /// (used when the vault already has a usable candidate file, rather than
+    /// writing a throwaway probe file).
+    #[cfg(windows)]
+    #[test]
+    fn stat_probe_is_true_on_real_ntfs_tempdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Note.md"), "x").unwrap();
+        let probed = probe_case_insensitive_stat(tmp.path()).expect("candidate file exists");
+        assert!(
+            probed,
+            "NTFS is case-insensitive by default; the stat probe should \
+             detect it on a real Windows temp directory"
+        );
+    }
+
     #[test]
     fn stat_probe_agrees_with_write_probe() {
         let tmp = tempfile::tempdir().unwrap();
@@ -883,21 +919,34 @@ mod tests {
 
         let _ = probe_case_insensitive(dir).unwrap();
 
-        let after: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.file_name())
-            .filter(|n| {
-                n.to_str()
-                    .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
-            })
-            .collect();
-
-        assert_eq!(
-            before, after,
-            "probe must clean up its own file in the temp dir, leaving no residue"
-        );
+        // Poll instead of asserting immediately: the system temp dir is shared
+        // (sibling tests probe it concurrently), and on NTFS a deleted file
+        // stays visible in directory listings while delete-pending (e.g. a CI
+        // antivirus briefly holds a handle). Residue must *clear*, not be
+        // instantaneously absent.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let after: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name())
+                .filter(|n| {
+                    n.to_str()
+                        .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
+                })
+                .collect();
+            let residue: Vec<_> = after.difference(&before).collect();
+            if residue.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "probe must clean up its own file in the temp dir, leaving no \
+                 residue; still present after 10s: {residue:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     #[test]

@@ -1,0 +1,1 @@
+[[decision-log#DEC-028: Multi-Visitor Scanner Architecture (2026-03-21)]]

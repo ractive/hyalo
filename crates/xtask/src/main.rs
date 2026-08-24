@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod bench_scale;
 mod bundled_skills;
 mod command_reference;
 mod feature_fanout;
@@ -32,6 +33,10 @@ enum Commands {
     CheckDeadPrimitives(stubs::StubArgs),
     /// Stub — not yet implemented (iter-142b).
     CheckTodoAnnotations(stubs::StubArgs),
+    /// On-demand scale regression gate: times `find`/`links fix` against a
+    /// generated ~14k-file synthetic vault (iter-224 T-6, DEC-098). Not run
+    /// in CI — see `crates/xtask/src/bench_scale.rs` for why.
+    BenchScale,
 }
 
 fn main() {
@@ -43,6 +48,7 @@ fn main() {
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
+        Commands::BenchScale => bench_scale::run(),
     };
     match result {
         Ok(true) => {}
