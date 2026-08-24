@@ -2,7 +2,7 @@
 title: "Iteration 221 — config dir boundary (untrusted .hyalo.toml write-scope escape)"
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-221/config-dir-boundary
 tags: [iteration, security, config, write-path]
 related:
@@ -53,35 +53,35 @@ layer (iter-202) is supposed to protect.
 
 ## Tasks
 
-- [ ] For a **project-local** config (discovered in cwd or an ancestor, not
+- [x] For a **project-local** config (discovered in cwd or an ancestor, not
       `--dir`, not the global/XDG config), reject or contain a `dir` that
       resolves above the config directory or is absolute. Decide the exact
       policy (hard refuse vs. clamp-to-config-dir-with-loud-warning) and
       record it in the decision log, explicitly noting how it interacts with
       iter-201's DEC-069/070/071 "no silent discard" stance
-- [ ] Preserve the legitimate cases: an explicit `--dir` (the user's own
+- [x] Preserve the legitimate cases: an explicit `--dir` (the user's own
       choice), the global config, and a `dir` that stays at-or-below the
       config directory must all continue to work unchanged
-- [ ] Whatever the policy, emit a loud stderr `note:`/`warning:` when a
+- [x] Whatever the policy, emit a loud stderr `note:`/`warning:` when a
       config's requested vault root is not at-or-below the config dir,
       mirroring `announce_ancestor_config`'s treatment — never silent
-- [ ] Audit the other config-supplied paths that feed the filesystem
+- [x] Audit the other config-supplied paths that feed the filesystem
       (`site_prefix` is display-only, but re-check `[okf]`, `[scan]`, index
       locations) for the same "config redefines its own boundary" shape
-- [ ] Tests: e2e reproducing the H-1 `dir = ".."` and absolute-path escapes
+- [x] Tests: e2e reproducing the H-1 `dir = ".."` and absolute-path escapes
       and asserting they are refused/contained + warned; regression tests
       that `--dir`, global config, and in-bounds relative `dir` still work;
       a test that the ancestor-adoption containment is unchanged
 
 ## Acceptance criteria
 
-- [ ] The H-1 repro (`dir = ".."` in a cloned repo, then `hyalo mv`) no
+- [x] The H-1 repro (`dir = ".."` in a cloned repo, then `hyalo mv`) no
       longer moves a file outside the config directory
-- [ ] An absolute `dir` in a project-local config is refused or clamped, and
+- [x] An absolute `dir` in a project-local config is refused or clamped, and
       always warned — never silently honored
-- [ ] `--dir <anywhere>` (explicit user intent) and an in-bounds relative
+- [x] `--dir <anywhere>` (explicit user intent) and an in-bounds relative
       `dir` both behave exactly as before
-- [ ] A decision-log entry records the policy and its relationship to
+- [x] A decision-log entry records the policy and its relationship to
       iter-201
 
 ## Non-goals

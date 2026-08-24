@@ -17,6 +17,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every
   mutating command with exit 1 (reads continue on defaults, with a `-q`-proof warning).
+- **A project-local `dir` must stay at-or-below the config directory**: an absolute `dir` or one
+  whose `..` components net above where `.hyalo.toml` lives refuses *every* command (reads
+  included) with a `-q`-proof error naming the file and value — `hyalo config` still reports it
+  (`dir_out_of_bounds`) rather than being refused. Pass `--dir` explicitly if that wider scope is
+  genuinely intended; an in-bounds relative `dir`, including a bounded `sub/../kb` round-trip, is
+  unaffected.
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
   `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`

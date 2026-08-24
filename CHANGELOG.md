@@ -1040,6 +1040,10 @@ and this project adheres to
   walk. Enumeration is now deduplicated by canonical path — first spelling in
   sort order wins, stably across runs — and each skip is warned once per run.
 
+### Security
+
+- BREAKING: a project-local `.hyalo.toml` whose `dir` is absolute or nets above the config directory now refuses every command (iter-221, H-1). Previously honored verbatim, so a cloned repo could point the vault root at its own parent or an absolute path and every downstream boundary gate then defended containment against that attacker-chosen root instead of the real one. An in-bounds relative `dir` (including a bounded `sub/../kb` round-trip) and an explicit `--dir` are unaffected; `hyalo config` still reports the problem (`dir_out_of_bounds`) instead of being refused. See DEC-092.
+
 ## [0.20.0] - 2026-07-19
 
 ### Added
