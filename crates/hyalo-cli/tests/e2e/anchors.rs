@@ -941,3 +941,328 @@ status: draft
         .expect("hyalo find should run");
     assert_eq!(output.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// iter-215 / dogfood UX-6 — every link entry carries its source line
+// ---------------------------------------------------------------------------
+
+/// A vault whose `linker.md` puts each link on a known, distinct line.
+fn setup_line_number_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+
+    write_md(
+        tmp.path(),
+        "Foo.md",
+        md!(r"
+---
+title: Foo
+---
+# Foo
+
+## Real
+"),
+    );
+
+    // Line numbers are load-bearing here — do not reflow this fixture:
+    //   6  → resolvable anchor
+    //   8  → broken anchor (target resolves, heading missing)
+    //   10 → broken target
+    //   12 → same-file anchor, broken
+    write_md(
+        tmp.path(),
+        "linker.md",
+        md!(r"
+---
+title: Linker
+---
+# Linker
+
+Good: [ok](Foo.md#Real).
+
+Bad: [nope](Foo.md#nope).
+
+Dead: [gone](missing.md).
+
+Self: [here](#nowhere).
+"),
+    );
+
+    tmp
+}
+
+/// Locate one link of `file` by its `target` **and** `fragment`, so the two
+/// links sharing a target in `setup_line_number_vault` stay distinguishable.
+fn find_link_by_fragment<'a>(
+    json: &'a serde_json::Value,
+    file: &str,
+    target: &str,
+    fragment: Option<&str>,
+) -> &'a serde_json::Value {
+    json["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .find(|r| r["file"].as_str() == Some(file))
+        .unwrap_or_else(|| panic!("{file} must be in the results: {json}"))["links"]
+        .as_array()
+        .expect("links array")
+        .iter()
+        .find(|l| l["target"].as_str() == Some(target) && l["fragment"].as_str() == fragment)
+        .unwrap_or_else(|| panic!("no link {target}#{fragment:?} in {file}: {json}"))
+}
+
+fn assert_line_matrix(json: &serde_json::Value, label: &str) {
+    for (target, fragment, want) in [
+        ("Foo.md", Some("Real"), 6),
+        ("Foo.md", Some("nope"), 8),
+        ("missing.md", None, 10),
+        // Same-file anchors are indexed separately (`self_anchors`) and carry
+        // an empty target — they get a line like every other entry.
+        ("", Some("nowhere"), 12),
+    ] {
+        let link = find_link_by_fragment(json, "linker.md", target, fragment);
+        assert_eq!(
+            link["line"].as_u64(),
+            Some(want),
+            "[{label}] {target}#{fragment:?} must report line {want}: {link}"
+        );
+    }
+}
+
+#[test]
+fn broken_links_report_carries_source_line_numbers() {
+    let tmp = setup_line_number_vault();
+    assert_line_matrix(&run_broken_links(&tmp, false), "disk");
+}
+
+#[test]
+fn broken_links_line_numbers_match_on_the_index_path() {
+    // The line comes from `IndexEntry::links` / `::self_anchors`, so the two
+    // paths must agree — a snapshot that reported different lines than a disk
+    // scan would send the user to the wrong place.
+    let tmp = setup_line_number_vault();
+    create_index(&tmp);
+    assert_line_matrix(&run_broken_links(&tmp, true), "index");
+}
+
+#[test]
+fn broken_link_line_matches_the_line_lint_reports() {
+    // AC: the line `find --broken-links` reports for a broken link is the same
+    // one HYALO006 reports for it — the two views must not disagree.
+    let tmp = setup_line_number_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args([
+            "--dir", dir, "lint", "--rule", "HYALO006", "--format", "json",
+        ])
+        .output()
+        .expect("hyalo lint should run");
+    let lint: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lint stdout should be valid JSON");
+    let lint_line = lint["results"]["files"]
+        .as_array()
+        .expect("lint files array")
+        .iter()
+        .find(|f| f["file"].as_str() == Some("linker.md"))
+        .expect("linker.md must have a HYALO006 violation")["rule_groups"]
+        .as_array()
+        .expect("rule_groups array")
+        .iter()
+        .flat_map(|g| g["violations"].as_array().cloned().unwrap_or_default())
+        .find_map(|v| v["line"].as_u64())
+        .expect("violation must carry a line");
+
+    let find_line = find_link_by_fragment(
+        &run_broken_links(&tmp, false),
+        "linker.md",
+        "missing.md",
+        None,
+    )["line"]
+        .as_u64()
+        .expect("find must report a line");
+
+    assert_eq!(
+        lint_line, find_line,
+        "lint and find must report the same line for the same broken link"
+    );
+}
+
+#[test]
+fn link_lines_are_rendered_in_text_output() {
+    let tmp = setup_line_number_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir,
+            "find",
+            "--broken-links",
+            "--fields",
+            "links",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo find --broken-links should run");
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.contains("line 8: \"Foo.md#nope\" → \"Foo.md\" (broken anchor)"),
+        "text output must prefix each link with its source line, got:\n{text}"
+    );
+    assert!(
+        text.contains("line 10: \"missing.md\" (unresolved)"),
+        "a broken target must be located too, got:\n{text}"
+    );
+}
+
+#[test]
+fn links_are_listed_in_document_order() {
+    // Same-file anchors used to be appended after every other link, which read
+    // as out-of-order the moment line numbers became visible.
+    let tmp = setup_line_number_vault();
+    let json = run_broken_links(&tmp, false);
+    let lines: Vec<u64> = json["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .find(|r| r["file"].as_str() == Some("linker.md"))
+        .expect("linker.md in results")["links"]
+        .as_array()
+        .expect("links array")
+        .iter()
+        .filter_map(|l| l["line"].as_u64())
+        .collect();
+    assert_eq!(lines, vec![6, 8, 10, 12], "links must be in document order");
+}
+
+// ---------------------------------------------------------------------------
+// iter-215 / DEC-100 — templated headings are never dead anchors
+// ---------------------------------------------------------------------------
+
+fn setup_templated_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+
+    // A Liquid-templated heading: the renderer emits `## GitHub Pro`, anchored
+    // `#github-pro`. hyalo only ever sees the pre-render source.
+    write_md(
+        tmp.path(),
+        "liquid.md",
+        md!(r"
+---
+title: Liquid
+---
+# Liquid
+
+## {% data variables.product.prodname_pro %}
+
+Body.
+"),
+    );
+
+    // No templating anywhere — the control file.
+    write_md(
+        tmp.path(),
+        "plain.md",
+        md!(r"
+---
+title: Plain
+---
+# Plain
+
+## Real
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "into_liquid.md",
+        md!(r"
+---
+title: Into Liquid
+---
+Rendered anchor: [pro](liquid.md#github-pro).
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "templated_fragment.md",
+        md!(r"
+---
+title: Templated Fragment
+---
+Templated fragment: [x](plain.md#{{anchor}}).
+"),
+    );
+
+    write_md(
+        tmp.path(),
+        "into_plain.md",
+        md!(r"
+---
+title: Into Plain
+---
+Genuinely dead: [x](plain.md#nowhere).
+"),
+    );
+
+    tmp
+}
+
+#[test]
+fn templated_heading_is_never_a_dead_anchor() {
+    let tmp = setup_templated_vault();
+    let files = result_files(&run_broken_links(&tmp, false));
+    assert!(
+        !files.contains(&"into_liquid.md".to_string()),
+        "an anchor into a Liquid-templated heading is unknowable, not broken: {files:?}"
+    );
+    assert!(
+        !files.contains(&"templated_fragment.md".to_string()),
+        "a templated FRAGMENT is unknowable too: {files:?}"
+    );
+    // The escape hatch must not become a blanket amnesty: a file with no
+    // templated heading still reports its dead anchors.
+    assert!(
+        files.contains(&"into_plain.md".to_string()),
+        "a dead anchor into an untemplated file must still be reported: {files:?}"
+    );
+}
+
+#[test]
+fn templated_heading_skip_holds_on_the_index_path() {
+    let tmp = setup_templated_vault();
+    create_index(&tmp);
+    let files = result_files(&run_broken_links(&tmp, true));
+    assert!(
+        !files.contains(&"into_liquid.md".to_string()),
+        "[index] templated heading must not be a dead anchor: {files:?}"
+    );
+    assert!(
+        files.contains(&"into_plain.md".to_string()),
+        "[index] a genuinely dead anchor must still be reported: {files:?}"
+    );
+}
+
+#[test]
+fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
+    // `summary`'s broken-anchor count routes through the same matcher
+    // (`count_broken_anchors`), so the DEC-100 skip must move both numbers.
+    let tmp = setup_templated_vault();
+    fs::remove_file(tmp.path().join("into_plain.md")).expect("remove the control file");
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "summary", "--format", "json"])
+        .output()
+        .expect("hyalo summary should run");
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("summary stdout should be valid JSON");
+    assert_eq!(
+        json["results"]["links"]["broken_anchors"]
+            .as_u64()
+            .unwrap_or(0),
+        0,
+        "templated anchors must not inflate the summary broken-anchor count: {json}"
+    );
+}

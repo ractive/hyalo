@@ -388,6 +388,59 @@ mod tests {
         assert!(fragment_matches_headings("   ", &[]));
     }
 
+    // --- DEC-100: templated headings (iter-215) ---
+
+    #[test]
+    fn is_templated_heading_recognizes_the_marker_forms() {
+        assert!(is_templated_heading(
+            "{% data variables.product.prodname_pro %}"
+        ));
+        assert!(is_templated_heading("Upgrade to {{ product.name }}"));
+        assert!(is_templated_heading("${BASE} overview"));
+        assert!(!is_templated_heading("Sub Section"));
+        // A lone brace is not a template marker (mirrors `is_templated_target`).
+        assert!(!is_templated_heading("Set {name} here"));
+    }
+
+    #[test]
+    fn rendered_anchor_into_a_liquid_heading_is_not_broken() {
+        // The headline case: `## {% data variables.product.prodname_pro %}`
+        // renders as `## GitHub Pro` → `#github-pro`, which hyalo cannot derive.
+        let secs = [sec(Some("{% data variables.product.prodname_pro %}"))];
+        assert!(fragment_matches_headings("github-pro", &secs));
+    }
+
+    #[test]
+    fn templated_fragment_is_not_broken() {
+        let secs = [sec(Some("Real"))];
+        assert!(fragment_matches_headings("{{anchor}}", &secs));
+        assert!(fragment_matches_headings("{% raw %}x{% endraw %}", &secs));
+    }
+
+    #[test]
+    fn templated_heading_makes_the_whole_file_permissive() {
+        // Deliberate: any templated heading could be the one a fragment names,
+        // so no fragment in that file can be proven dead.
+        let secs = [sec(Some("Real")), sec(Some("{{ product }}"))];
+        assert!(fragment_matches_headings("anything-at-all", &secs));
+    }
+
+    #[test]
+    fn untemplated_file_still_reports_dead_anchors() {
+        // The escape hatch must not leak into ordinary files.
+        let secs = [sec(Some("Real")), sec(Some("Sub Section"))];
+        assert!(!fragment_matches_headings("nowhere", &secs));
+        assert!(!fragment_matches_headings("!!!", &secs));
+    }
+
+    #[test]
+    fn percent_encoded_template_markers_are_recognized() {
+        // `#%7B%7Banchor%7D%7D` decodes to `{{anchor}}` — the check runs on the
+        // normalized (decoded) fragment, not the raw text.
+        let secs = [sec(Some("Real"))];
+        assert!(fragment_matches_headings("%7B%7Banchor%7D%7D", &secs));
+    }
+
     #[test]
     fn literal_percent_not_decoded() {
         // A heading with a literal stray `%` (no valid escape) is compared
