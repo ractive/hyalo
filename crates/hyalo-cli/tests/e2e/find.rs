@@ -4210,3 +4210,253 @@ fn find_fields_sections_text_preserves_bracket_text_when_there_are_no_tasks() {
         "a non-task heading's bracket text must survive untouched: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-2: BM25 CJK tokenization (deep-analysis-2, DEC-094) — `hyalo find`
+// over CJK content must not silently return zero results.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_cjk_query_matches_live_scan() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "cjk.md",
+        "---\ntitle: CJK note\n---\n日本語のテキストです\n",
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["日本語"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    assert_eq!(
+        arr.len(),
+        1,
+        "expected the CJK file to match via live scan: {arr:?}"
+    );
+    assert_eq!(arr[0]["file"], "cjk.md");
+}
+
+#[test]
+fn find_cjk_query_matches_persisted_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "cjk.md",
+        "---\ntitle: CJK note\n---\n日本語のテキストです\n",
+    );
+
+    let create_index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        create_index_output.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&create_index_output.stderr)
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["日本語", "--index"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    assert_eq!(
+        arr.len(),
+        1,
+        "expected the CJK file to match via the persisted BM25 index: {arr:?}"
+    );
+    assert_eq!(arr[0]["file"], "cjk.md");
+}
+
+#[test]
+fn find_cjk_and_ascii_content_both_searchable_in_same_vault() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "cjk.md",
+        "---\ntitle: CJK note\n---\n日本語のテキストです\n",
+    );
+    write_md(
+        tmp.path(),
+        "en.md",
+        "---\ntitle: English note\n---\nRust programming is great\n",
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["日本語"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(unwrap_results(&json).len(), 1);
+    assert_eq!(unwrap_results(&json)[0]["file"], "cjk.md");
+
+    let (status, json, stderr) = find_json(&tmp, &["Rust programming"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(unwrap_results(&json).len(), 1);
+    assert_eq!(unwrap_results(&json)[0]["file"], "en.md");
+}
+
+// ---------------------------------------------------------------------------
+// F-4: mixed-type `--sort property:<key>` warns and stays deterministic
+// (deep-analysis-2, DEC-094).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_sort_property_mixed_types_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+priority: 9
+---
+"),
+    );
+    write_md(
+        dir.path(),
+        "b.md",
+        md!(r#"
+---
+title: B
+priority: "10"
+---
+"#),
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.path().to_str().unwrap(),
+            "find",
+            "--sort",
+            "property:priority",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "expected success; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("priority") && stderr.contains("mixed types"),
+        "expected a mixed-types warning naming the property in stderr; got: {stderr}"
+    );
+}
+
+#[test]
+fn find_sort_property_single_type_does_not_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+priority: 9
+---
+"),
+    );
+    write_md(
+        dir.path(),
+        "b.md",
+        md!(r"
+---
+title: B
+priority: 10
+---
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.path().to_str().unwrap(),
+            "find",
+            "--sort",
+            "property:priority",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("mixed types"),
+        "single-type property values must not trigger the mixed-types warning: {stderr}"
+    );
+}
+
+#[test]
+fn find_sort_property_mixed_types_groups_strings_before_numbers() {
+    // Cross-type comparison falls back to JSON-text comparison, which groups
+    // by type (every JSON type's text form starts with a distinct character
+    // class) even though it isn't numerically sensible within a group.
+    let dir = tempfile::tempdir().unwrap();
+    write_md(
+        dir.path(),
+        "num-a.md",
+        md!(r"
+---
+title: NumA
+priority: 5
+---
+"),
+    );
+    write_md(
+        dir.path(),
+        "num-b.md",
+        md!(r"
+---
+title: NumB
+priority: 20
+---
+"),
+    );
+    write_md(
+        dir.path(),
+        "str-a.md",
+        md!(r#"
+---
+title: StrA
+priority: "zzz"
+---
+"#),
+    );
+    write_md(
+        dir.path(),
+        "str-b.md",
+        md!(r#"
+---
+title: StrB
+priority: "aaa"
+---
+"#),
+    );
+
+    let (status, json, stderr) = find_json(&dir, &["--sort", "property:priority"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr
+        .iter()
+        .map(|r| r["file"].as_str().expect("file should be a string"))
+        .collect();
+
+    // Strings ("\"aaa\"", "\"zzz\"") sort lexicographically before numbers
+    // ("20", "5") since `"` (0x22) precedes any ASCII digit — a contiguous
+    // string block, then a contiguous number block.
+    let str_positions: Vec<usize> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.starts_with("str-"))
+        .map(|(i, _)| i)
+        .collect();
+    let num_positions: Vec<usize> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.starts_with("num-"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(str_positions, vec![0, 1], "files: {files:?}");
+    assert_eq!(num_positions, vec![2, 3], "files: {files:?}");
+}

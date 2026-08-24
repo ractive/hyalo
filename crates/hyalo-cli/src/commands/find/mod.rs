@@ -12,8 +12,9 @@ use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::bm25::{
-    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, create_stemmer, is_low_discriminative,
-    parse_language, query_is_operator_only, resolve_language, tokenize_document,
+    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, TOKENIZER_VERSION, create_stemmer,
+    is_low_discriminative, parse_language, query_is_operator_only, resolve_language,
+    tokenize_document,
 };
 use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::content_search::ContentSearchVisitor;
@@ -66,6 +67,21 @@ fn strip_case_flag_prefix(msg: &str) -> String {
         out.push_str(line);
     }
     out
+}
+
+/// Short name for a `serde_json::Value`'s type, used only to describe a
+/// mixed-type `--sort property:<key>` result set (F-4). `Null` is excluded
+/// by callers before this is reached, since missing/null already sorts last
+/// consistently and isn't part of the "mixed types" signal.
+fn json_value_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 /// Find files matching the given filters and return them as a JSON array.
@@ -387,9 +403,16 @@ pub fn find(
                 .map(|&idx| scoped_entries[idx].rel_path.as_str())
                 .collect();
 
-            // Fastest path: use the persisted BM25 inverted index when available AND no section
-            // filter is active. Score all docs, then intersect with metadata-passing candidates.
-            if !has_section_filter && let Some(bm25_idx) = index.bm25_index() {
+            // Fastest path: use the persisted BM25 inverted index when available, no section
+            // filter is active, AND it was built by the current tokenizer (DEC-094 / F-2) — a
+            // persisted index from before a `tokenize()` algorithm change (e.g. the CJK-bigram
+            // fix) would silently keep serving results that a fresh tokenize would never
+            // produce until the version check below routes to the live-scan fallback instead.
+            // Score all docs, then intersect with metadata-passing candidates.
+            if !has_section_filter
+                && let Some(bm25_idx) = index.bm25_index()
+                && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
+            {
                 let all_scored = bm25_idx.score(pat, &stemmer);
                 let map: HashMap<String, f64> = all_scored
                     .into_iter()
@@ -437,7 +460,12 @@ pub fn find(
                     // Use pre-tokenized data only when:
                     // 1. The index entry has stored tokens, AND
                     // 2. No section filter is active (section filters require line-level body slicing), AND
-                    // 3. The cached language matches the effective language for this entry.
+                    // 3. The cached language matches the effective language for this entry, AND
+                    // 4. The tokens were produced by the current tokenizer (DEC-094 / F-2):
+                    //    a snapshot written before a `tokenize()` algorithm change (e.g. the
+                    //    CJK-bigram fix) carries tokens a fresh tokenize would never produce,
+                    //    so trusting them would silently keep queries broken until the next
+                    //    `create-index` — re-tokenize from disk instead, same as a language miss.
                     if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
                         let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
                         let effective_lang = resolve_language(fm_lang, language, config_language);
@@ -446,15 +474,18 @@ pub fn find(
                             .as_deref()
                             .and_then(|s| parse_language(s).ok())
                             == Some(effective_lang);
+                        let cached_tokenizer_current =
+                            entry.bm25_tokenizer_version == Some(TOKENIZER_VERSION);
 
-                        if cached_lang_matches {
+                        if cached_lang_matches && cached_tokenizer_current {
                             pre_tok_inputs.push(PreTokenizedInput {
                                 rel_path: entry.rel_path.clone(),
                                 tokens: tokens.clone(),
                             });
                             return;
                         }
-                        // Fall through to disk-read tokenization when language mismatches.
+                        // Fall through to disk-read tokenization when the language or the
+                        // tokenizer version mismatches.
                     }
 
                     // Slow path: read the file from disk.
@@ -1053,6 +1084,43 @@ pub fn find(
         crate::warn::warn(format!(
             "no files have property '{key}' -- sort has no effect"
         ));
+    }
+
+    // F-4: warn when a --sort property key holds more than one JSON type
+    // across the result set. `compare_property_values`'s deliberate total
+    // order (DEC-094) falls back to comparing JSON text representations for
+    // cross-type pairs, which groups by type (every JSON type's text form
+    // starts with a distinct character class: `"` for strings, a digit/`-`
+    // for numbers, `t`/`f` for booleans) but does not order *within* the
+    // numeric group numerically -- e.g. "10" sorts before "9" as text. A
+    // user relying on sort order for a property that mixes types (a common
+    // frontmatter typo: `priority: "10"` vs `priority: 9`) gets a
+    // consistently-grouped but not sensibly-ordered result with no signal
+    // that anything is wrong; this warning is that signal.
+    if let Some(SortField::Property(key)) = effective_sort_ref
+        && !results.is_empty()
+    {
+        let mut distinct_types: Vec<&'static str> = Vec::new();
+        for r in &results {
+            if let Some(v) = r.properties.as_ref().and_then(|p| p.get(key.as_str()))
+                && !v.is_null()
+            {
+                let t = json_value_type_name(v);
+                if !distinct_types.contains(&t) {
+                    distinct_types.push(t);
+                }
+            }
+        }
+        if distinct_types.len() > 1 {
+            distinct_types.sort_unstable();
+            crate::warn::warn(format!(
+                "property '{key}' has mixed types ({}) across results -- sort compares \
+                 raw JSON text for cross-type pairs (numbers sort after strings) rather \
+                 than a sensible cross-type order; use a consistent type in frontmatter \
+                 for a meaningful sort",
+                distinct_types.join(", ")
+            ));
+        }
     }
 
     // Strip internally-computed fields that the user didn't request in --fields.
