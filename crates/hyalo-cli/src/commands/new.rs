@@ -258,7 +258,7 @@ fn synthesise_content(
             Some(PropertyConstraint::DateTimeTz) => PropValue::Str(
                 default_val.unwrap_or_else(|| format!("{}T00:00:00Z", today_iso8601())),
             ),
-            Some(PropertyConstraint::Number) => match default_val {
+            Some(PropertyConstraint::Number { .. }) => match default_val {
                 Some(s) => s
                     .parse::<i64>()
                     .map_or_else(|_| PropValue::Str(s), PropValue::Int),

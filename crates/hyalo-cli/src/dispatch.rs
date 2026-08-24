@@ -2140,20 +2140,33 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 &mut ext_opts,
             )?;
 
-            // Additional config-level lint: check view definitions.
-            // NOTE: in the extended path, view violations are reported separately.
-            // For now we keep the prepend behavior to maintain compatibility.
-            let config_violations = lint_commands::validate_views(ctx.config_dir);
-            let outcome = if let Some(view_result) = config_violations {
-                for v in &view_result.violations {
+            // Additional config-level lint: check view definitions AND that
+            // [schema] itself parses (review round finding 2 — a malformed
+            // [schema] block used to be only a stderr warning, so `lint
+            // --strict` could exit 0 on a vault whose schema validation was
+            // silently disabled). Merged into one `.hyalo.toml` pseudo-file
+            // result so both kinds of config-level problem show up together
+            // rather than as two separate file entries.
+            let mut config_result: Option<lint_commands::FileLintResult> =
+                lint_commands::validate_views(ctx.config_dir);
+            if let Some(schema_result) =
+                lint_commands::validate_schema_config(ctx.config_dir, effective_strict)
+            {
+                match &mut config_result {
+                    Some(existing) => existing.violations.extend(schema_result.violations),
+                    None => config_result = Some(schema_result),
+                }
+            }
+            let outcome = if let Some(config_result) = config_result {
+                for v in &config_result.violations {
                     match v.severity {
                         lint_commands::Severity::Error => counts.errors += 1,
                         lint_commands::Severity::Warn => counts.warnings += 1,
                     }
                 }
                 counts.files_with_issues += 1;
-                // Adapt view result into the new shape — inject as a file with SCHEMA group.
-                let adapted = adapt_view_result_to_ext(&view_result);
+                // Adapt into the new shape — inject as a file with a SCHEMA group.
+                let adapted = adapt_view_result_to_ext(&config_result);
                 inject_ext_file_result(outcome, &adapted)?
             } else {
                 outcome

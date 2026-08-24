@@ -733,13 +733,18 @@ fn directory_error_hint_glob_is_executed_and_matches_files() {
 }
 
 /// A `did you mean X?` suggestion must name a file that exists. Anything else
-/// sends the user to a second not-found error.
+/// sends the user to a second not-found error. Since F3-5 (DEC-094), a bare
+/// "file not found" with no such candidate still carries a *generic*
+/// vault-relative-paths hint — that's not a fabricated suggestion about a
+/// specific file, so it's fine; what must never happen is a "did you mean X?"
+/// naming an X that doesn't exist.
 #[test]
 fn not_found_suggestions_name_a_file_that_exists() {
     let tmp = TempDir::new().unwrap();
     build_fixture(tmp.path());
 
-    // `nosuchdir/` has no candidate at all: no suggestion may be offered.
+    // `nosuchdir/` has no candidate at all: no *did-you-mean* suggestion may
+    // be offered, though the generic F3-5 hint is expected.
     for cmd in [
         ["lint", "nosuchdir/"],
         ["read", "nosuchdir/"],
@@ -747,9 +752,10 @@ fn not_found_suggestions_name_a_file_that_exists() {
     ] {
         let envelope = error_envelope(&cmd, tmp.path());
         assert_eq!(envelope["error"], "file not found", "for {cmd:?}");
+        let hint = envelope["hint"].as_str();
         assert!(
-            envelope["hint"].is_null(),
-            "`hyalo {}` invented a suggestion: {envelope}",
+            hint.is_none_or(|h| !h.contains("did you mean")),
+            "`hyalo {}` invented a did-you-mean suggestion: {envelope}",
             cmd.join(" ")
         );
     }

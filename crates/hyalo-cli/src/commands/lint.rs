@@ -66,6 +66,14 @@ pub const VIOLATION_KIND_MISSING_TYPE: &str = "schema/missing-type";
 pub const VIOLATION_KIND_UNDECLARED_PROPERTY: &str = "schema/undeclared-property";
 /// An explicit `type:` disagrees with the `[schema.bind]` path binding.
 pub const VIOLATION_KIND_BIND_MISMATCH: &str = "schema/bind-mismatch";
+/// The `[schema]` block itself failed to parse (unknown key, invalid field
+/// combination, etc.) — review round finding 2. Distinct from the other
+/// `schema/*` kinds above, which describe a *file* disagreeing with an
+/// otherwise-valid schema; this one means schema validation is silently
+/// disabled vault-wide until the config is fixed, which is a strictly
+/// louder problem and always promoted under `--strict` (see
+/// `validate_schema_config`).
+pub const VIOLATION_KIND_SCHEMA_MALFORMED: &str = "schema/malformed";
 
 /// A required property that is missing/empty AND has no declared `default`, so
 /// `--fix` cannot synthesize a value (mapl BUG-3). Carried on the SCHEMA
@@ -262,6 +270,55 @@ pub fn validate_views(dir: &Path) -> Option<FileLintResult> {
             file: ".hyalo.toml".to_string(),
             violations,
         })
+    }
+}
+
+/// Validate the `[schema]` block in `.hyalo.toml` in isolation and return a
+/// pseudo-file lint result when it fails to parse.
+///
+/// Review round finding 2: `parse_schema_from_toml` (`crates/hyalo-cli/src/config.rs`)
+/// already detects a malformed `[schema]` block (an unknown key from
+/// `deny_unknown_fields`, an invalid field combination, ...) and degrades
+/// gracefully to "no schema validation" — but the only signal was a
+/// `-q`-suppressible stderr warning. That meant one typo'd key in ANY type's
+/// property block silently disabled schema enforcement for the WHOLE vault,
+/// while `lint --strict` printed a clean "no issues" and exited 0 on a file
+/// with a real violation the (silently disabled) schema would have caught.
+///
+/// This independently re-parses `.hyalo.toml` (mirroring [`validate_views`]'s
+/// pattern of representing a config-level problem as a violation on a
+/// `.hyalo.toml` pseudo-file) via the same
+/// [`crate::config::try_parse_schema_from_toml`] used by the runtime config
+/// loader, so the error text — including which key or value is wrong — is
+/// identical to the one already sent to stderr; this just also makes it a
+/// visible lint-result violation. `strict` controls severity directly (not
+/// promoted later like the per-file `schema/*` kinds): `Error` under
+/// `--strict` so `lint --strict` exits non-zero, `Warn` otherwise so
+/// `--format json` output shows the problem in `results` without also
+/// tripping the plain-`lint` exit code — a stricter stance than the
+/// per-file warnings needs, since "validation is silently off" is worse than
+/// any single file's violation it might have caught.
+///
+/// Returns `None` when the schema parses cleanly (including "no `[schema]`
+/// block at all", which is valid — not every vault uses schema validation).
+pub fn validate_schema_config(dir: &Path, strict: bool) -> Option<FileLintResult> {
+    let toml_path = dir.join(".hyalo.toml");
+    let contents = std::fs::read_to_string(&toml_path).ok()?;
+    let table: toml::Table = toml::from_str(&contents).ok()?;
+    match crate::config::try_parse_schema_from_toml(table.get("schema")) {
+        Ok(_) => None,
+        Err(message) => Some(FileLintResult {
+            file: ".hyalo.toml".to_string(),
+            violations: vec![Violation {
+                severity: if strict {
+                    Severity::Error
+                } else {
+                    Severity::Warn
+                },
+                kind: Some(VIOLATION_KIND_SCHEMA_MALFORMED),
+                message,
+            }],
+        }),
     }
 }
 
@@ -1231,12 +1288,37 @@ fn validate_constraint(
             }
             vec![]
         }
-        PropertyConstraint::Number => {
-            if !matches!(value, Value::Number(_)) {
+        PropertyConstraint::Number { minimum, maximum } => {
+            let Value::Number(n) = value else {
                 return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected number, got {value}"),
+                }];
+            };
+            // F3-3: enforce `minimum`/`maximum` when configured. `as_f64`
+            // only returns `None` for a `Number` outside f64's range (not a
+            // realistic frontmatter value); treat that as passing rather
+            // than panic-adjacent unwrap, since it isn't a bound violation.
+            let Some(f) = n.as_f64() else {
+                return vec![];
+            };
+            if let Some(min) = minimum
+                && f < *min
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {f}; minimum is {min}"),
+                }];
+            }
+            if let Some(max) = maximum
+                && f > *max
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {f}; maximum is {max}"),
                 }];
             }
             vec![]
@@ -3417,6 +3499,64 @@ mod tests {
         }
     }
 
+    // --- validate_schema_config (review round finding 2) ---
+
+    #[test]
+    fn validate_schema_config_none_when_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.priority]\ntype = \"number\"\nminimum = 1\nmaximum = 5\n",
+        )
+        .unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+        assert!(validate_schema_config(dir.path(), true).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_none_when_no_schema_block() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_none_when_no_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_warn_severity_without_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.title]\ntype = \"string\"\npatterns = \".*\"\n",
+        )
+        .unwrap();
+        let result = validate_schema_config(dir.path(), false).expect("malformed schema");
+        assert_eq!(result.file, ".hyalo.toml");
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].severity, Severity::Warn);
+        assert_eq!(
+            result.violations[0].kind,
+            Some(VIOLATION_KIND_SCHEMA_MALFORMED)
+        );
+        assert!(result.violations[0].message.contains("patterns"));
+    }
+
+    #[test]
+    fn validate_schema_config_error_severity_under_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.title]\ntype = \"string\"\npatterns = \".*\"\n",
+        )
+        .unwrap();
+        let result = validate_schema_config(dir.path(), true).expect("malformed schema");
+        assert_eq!(result.violations[0].severity, Severity::Error);
+    }
+
     // --- is_iso8601_date ---
 
     #[test]
@@ -3518,7 +3658,10 @@ mod tests {
         let v = vc(
             "priority",
             &Value::Number(5.into()),
-            &PropertyConstraint::Number,
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: None,
+            },
         );
         assert!(v.is_none());
     }
@@ -3528,7 +3671,10 @@ mod tests {
         let v = vc(
             "priority",
             &Value::String("five".into()),
-            &PropertyConstraint::Number,
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: None,
+            },
         );
         assert!(matches!(
             v,
@@ -3537,6 +3683,76 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn number_constraint_minimum_violation() {
+        let v = vc(
+            "priority",
+            &Value::Number(0.into()),
+            &PropertyConstraint::Number {
+                minimum: Some(1.0),
+                maximum: None,
+            },
+        );
+        let viol = v.expect("expected a minimum violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(viol.message.contains("minimum"));
+    }
+
+    #[test]
+    fn number_constraint_maximum_violation() {
+        let v = vc(
+            "priority",
+            &Value::Number(99.into()),
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: Some(5.0),
+            },
+        );
+        let viol = v.expect("expected a maximum violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(viol.message.contains("maximum"));
+    }
+
+    #[test]
+    fn number_constraint_within_min_max_range_is_valid() {
+        let v = vc(
+            "priority",
+            &Value::Number(3.into()),
+            &PropertyConstraint::Number {
+                minimum: Some(1.0),
+                maximum: Some(5.0),
+            },
+        );
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn number_constraint_at_min_max_boundary_is_valid() {
+        // Bounds are inclusive.
+        assert!(
+            vc(
+                "priority",
+                &Value::Number(1.into()),
+                &PropertyConstraint::Number {
+                    minimum: Some(1.0),
+                    maximum: Some(5.0),
+                },
+            )
+            .is_none()
+        );
+        assert!(
+            vc(
+                "priority",
+                &Value::Number(5.into()),
+                &PropertyConstraint::Number {
+                    minimum: Some(1.0),
+                    maximum: Some(5.0),
+                },
+            )
+            .is_none()
+        );
     }
 
     #[test]

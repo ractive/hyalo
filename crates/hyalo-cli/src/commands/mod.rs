@@ -296,6 +296,11 @@ pub fn collect_files(
                     FileResolveError::OutsideVault { .. } => {
                         format!("file resolves outside vault boundary: {path}")
                     }
+                    FileResolveError::ParentTraversal { .. } => {
+                        format!(
+                            "path contains '..' and is rejected: {path} ({PARENT_TRAVERSAL_HINT})"
+                        )
+                    }
                     FileResolveError::InvalidPath { reason, .. } => {
                         format!("invalid path ({reason}): {path}")
                     }
@@ -586,6 +591,25 @@ pub fn unwrap_single_file_result(
     }
 }
 
+/// Hint text for the "file not found" family of errors (F3-5): an empty path
+/// is almost always a shell-quoting accident, while any other not-found path
+/// is most often a cwd-relative habit colliding with hyalo's vault-relative
+/// paths — both get a concrete next step instead of a bare re-statement of
+/// the error.
+fn not_found_hint(path: &str) -> &'static str {
+    if path.is_empty() {
+        "empty path — check shell quoting"
+    } else {
+        "paths are vault-relative; run `hyalo find --file <glob>` to locate it"
+    }
+}
+
+/// Hint text for [`FileResolveError::ParentTraversal`] (F3-4 / F3-5): names
+/// the real no-`..` policy rather than repeating the (potentially false)
+/// "outside vault" framing that lives in the error message itself.
+const PARENT_TRAVERSAL_HINT: &str =
+    "drop the '..' and use a vault-relative path, e.g. \"sub/note.md\" not \"../sub/note.md\"";
+
 /// Convert a `FileResolveError` into a user-facing `CommandOutcome`.
 #[must_use]
 pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
@@ -599,9 +623,16 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
                 None,
             ))
         }
-        FileResolveError::NotFound { path } => CommandOutcome::UserError(
-            crate::output::format_error(format, "file not found", Some(&path), None, None),
-        ),
+        FileResolveError::NotFound { path } => {
+            let hint = not_found_hint(&path);
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                "file not found",
+                Some(&path),
+                Some(hint),
+                None,
+            ))
+        }
         FileResolveError::NotFoundSuggestion { path, suggestion } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,
@@ -629,6 +660,15 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
                 ),
                 Some(&path),
                 None,
+                None,
+            ))
+        }
+        FileResolveError::ParentTraversal { path } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                "path contains '..' and is rejected",
+                Some(&path),
+                Some(PARENT_TRAVERSAL_HINT),
                 None,
             ))
         }

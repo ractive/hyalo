@@ -66,6 +66,15 @@ pub struct IndexEntry {
     /// default). `None` when [`bm25_tokens`] is `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bm25_language: Option<String>,
+    /// [`crate::bm25::TOKENIZER_VERSION`] that produced [`bm25_tokens`]. `None`
+    /// when [`bm25_tokens`] is `None`, or when the snapshot predates this field
+    /// (serde default) — either case reads as "not the current tokenizer",
+    /// which is exactly the fallback condition readers want. Lets `find` detect
+    /// a snapshot tokenized before a `tokenize()` algorithm change (e.g. DEC-094's
+    /// CJK-bigram fix) and re-tokenize from disk instead of silently serving
+    /// stale tokens that can never match a since-fixed query shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bm25_tokenizer_version: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1169,7 +1178,7 @@ pub(crate) fn scan_one_file(
     // Populate BM25 pre-tokenized data during index creation.
     // The body text was accumulated by `BodyCollector` during the scan pass above —
     // no second file read is needed.
-    let (bm25_tokens, bm25_language) = if bm25_tokenize {
+    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize {
         let body = body_collector.into_body();
 
         // Resolve title: frontmatter property > first H1 heading.
@@ -1192,9 +1201,13 @@ pub(crate) fn scan_one_file(
         let stemmer = rust_stemmers::Stemmer::create(lang.to_algorithm());
         let tokens = tokenize(&combined, &stemmer);
 
-        (Some(tokens), Some(lang.canonical_name().to_owned()))
+        (
+            Some(tokens),
+            Some(lang.canonical_name().to_owned()),
+            Some(crate::bm25::TOKENIZER_VERSION),
+        )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let entry = IndexEntry {
@@ -1208,6 +1221,7 @@ pub(crate) fn scan_one_file(
         self_anchors,
         bm25_tokens,
         bm25_language,
+        bm25_tokenizer_version,
     };
 
     Ok((entry, file_links))
@@ -1528,6 +1542,50 @@ See [[a]] for details.
         .unwrap();
         assert!(build.warnings.is_empty());
         assert_eq!(build.index.entries().len(), 2);
+    }
+
+    #[test]
+    fn scanned_index_bm25_tokenize_sets_tokenizer_version_and_cjk_bigrams() {
+        // F-2 / DEC-094: `bm25_tokenizer_version` must be stamped alongside
+        // `bm25_tokens`, and CJK content must tokenize to bigrams rather than
+        // one unmatchable whole-run token.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("cjk.md"),
+            md!(r"
+---
+title: CJK
+---
+日本語のテキストです
+"),
+        )
+        .unwrap();
+        let files = vec![(tmp.path().join("cjk.md"), "cjk.md".to_owned())];
+
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: true,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let entry = build.index.get("cjk.md").expect("entry should exist");
+        assert_eq!(
+            entry.bm25_tokenizer_version,
+            Some(crate::bm25::TOKENIZER_VERSION)
+        );
+        let tokens = entry
+            .bm25_tokens
+            .as_ref()
+            .expect("bm25_tokens should be populated");
+        assert!(
+            tokens.contains(&"日本".to_owned()),
+            "expected a CJK bigram token, got {tokens:?}"
+        );
     }
 
     #[test]
@@ -1883,6 +1941,7 @@ Content.
                 self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
+                bm25_tokenizer_version: None,
             }],
             graph: LinkGraph::default(),
             bm25_index: None,
@@ -2001,6 +2060,7 @@ Content.
                 self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
+                bm25_tokenizer_version: None,
             }],
             graph: LinkGraph::default(),
             bm25_index: Some(bad_bm25),
@@ -2053,6 +2113,7 @@ Content.
                 self_anchors: Vec::new(),
                 bm25_tokens: None,
                 bm25_language: None,
+                bm25_tokenizer_version: None,
             }],
             graph: LinkGraph::default(),
             bm25_index: Some(bad_bm25),

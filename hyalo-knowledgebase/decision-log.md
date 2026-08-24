@@ -2384,3 +2384,289 @@ first cut, now closed or documented:
   `JQ_TIME_LIMIT`'s doc comment rather than left as a silent gap; no fix is
   planned (would require jaq upstream to add its own recursion-depth guard,
   or evaluating on a growable/guarded stack, both out of scope here).
+
+## DEC-094: `task toggle --section` refuses an ambiguous multi-heading match instead of silently applying to all of them (2026-08-24)
+
+**Decision:** [[iterations/iteration-223-query-output-correctness]] closes
+F-1: `resolve_task_lines` (`crates/hyalo-cli/src/commands/tasks.rs`) now
+scans the target file's outline via `SectionScanner` +
+`hyalo_core::heading::build_section_scope` *before* resolving `--section` to
+task lines. When the filter matches more than one distinct heading instance
+(e.g. two `## Tasks` headings under different ADRs), the command bails with
+an error naming every matched heading's line number and suggesting `--line`,
+rather than toggling every task under every match. A single matching
+heading — even one with several tasks under it — is unaffected. This
+applies to all three `--section` consumers that share `resolve_task_lines`
+(`task read`, `task toggle`, `task set`), so the read path also refuses an
+ambiguous selector rather than silently reading from an arbitrary one of the
+matches.
+
+**Why refuse rather than an opt-in flag:** the review offered two options —
+refuse by default, or require an explicit `--all-sections`/`--nth` flag. The
+`links` command already establishes the vault's precedent for a selector
+matching more than one thing: it reports `ambiguous: N` rather than picking
+one silently. `task toggle` writes immediately with no dry-run gate by
+default, so an over-broad `--section` match is not just a wrong *read* but
+an actual mutation of tasks the user never intended to touch — the same
+asymmetry DEC-092 used to justify a stricter stance for writers than
+readers. An opt-in `--all-sections` flag would still require the same
+detection logic to decide when to suggest it, so refusing by default is not
+meaningfully more expensive to implement, and it fails safe: a vault that
+happens to reuse a heading name never has its tasks silently over-toggled,
+even before its owner learns the flag exists.
+
+**Why detect via `build_section_scope` instead of comparing task-section
+text:** the naive fix — count distinct `t.section` strings among matched
+tasks — cannot distinguish two *different* headings that happen to share
+text (the exact case this fix targets) from one heading with many tasks
+under it, since both produce one distinct string. Reusing
+`build_section_scope` (already the mechanism `find --section` uses to turn a
+filter into heading-anchored line ranges) counts *heading occurrences*
+directly — one `SectionRange` per matching heading in the outline,
+regardless of how many or how few tasks sit under each — which is the
+correct unit of ambiguity here.
+
+**Asymmetry with `find --section` (review round, 2026-08-24):** `find
+--section` uses the same `build_section_scope` primitive as this fix but
+does the opposite thing on an ambiguous multi-heading match: it unions every
+matched heading's scope within a file, rather than refusing. This is
+deliberate, not an oversight. `find` is a vault-wide, read-only query —
+different files legitimately have different heading structures, and there
+is no single "the" match to disambiguate against the way there is for a
+selector scoped to one file's mutation. Refusing per-file would mean one
+file with a duplicate heading silently drops out of a `find --section`
+result set entirely (or, worse, aborts a vault-wide query over one
+unrelated file), which is a worse failure mode for a search command than
+the union it already produced correctly before this iteration. The
+asymmetry is intentional: mutation commands (`task toggle`/`read`/`set`)
+refuse because an over-broad match risks writing to (or reading from) the
+wrong place with no dry-run gate; `find` unions because there is no "wrong
+place" for a read spanning the whole vault, only a broader result. A
+one-line stderr summary ("`--section` matched more than one heading in N
+file(s)") was added so the union isn't silent, without a per-file note that
+would spam a large result set. See `find --help` (`FindFilters::sections`
+doc comment and the `FILTERS` section of `find`'s `long_about`) for the
+user-facing statement of this asymmetry.
+
+## DEC-095: BM25 CJK tokenization uses overlapping character bigrams, with a per-index `tokenizer_version` so a stale persisted index falls back to live re-tokenization instead of serving unmatchable results (2026-08-24)
+
+**Decision:** [[iterations/iteration-223-query-output-correctness]] closes
+F-2: `bm25::tokenize` (`crates/hyalo-core/src/bm25.rs`) now detects
+scriptio-continua runs — CJK ideographs (including compatibility/extension
+blocks), Hiragana, Katakana, Hangul syllables, by codepoint range — and
+tokenizes them as overlapping character bigrams instead of one whole-run
+token. Previously `text.split(|c| !c.is_alphanumeric())` treated an entire
+whitespace-free CJK run as a single token, so `hyalo find 日本語` returned
+zero hits on a file containing the query verbatim: the module claimed
+"Unicode-aware" tokenization but was Unicode-*safe*, not CJK-*aware*. The
+same `tokenize()` function tokenizes both documents and queries, so the fix
+is symmetric with no separate query-side change needed; a plain (unquoted)
+multi-bigram CJK query becomes several `Must` clauses ANDed together
+(bag-of-bigrams, not phrase-adjacent), which is looser than true
+segmentation but sufficient to make substring queries match — the
+documented, accepted tradeoff (see Non-goals below).
+
+**Tokenizer versioning:** `bm25::TOKENIZER_VERSION` (currently 2) is a new
+constant bumped whenever `tokenize()`'s output for the same input changes.
+Both `IndexEntry.bm25_tokenizer_version` (per-file pre-tokenized data,
+`crates/hyalo-core/src/index.rs`) and `Bm25InvertedIndex`'s own
+`tokenizer_version` field (the persisted, pre-built inverted index) carry
+this version, defaulted via `#[serde(default)]` so a MessagePack snapshot
+written before either field existed deserializes as version `0` — which
+never equals the current version. `find`'s corpus-building code
+(`crates/hyalo-cli/src/commands/find/mod.rs`) checks both: the "fastest
+path" (`index.bm25_index()`) is only used when its `tokenizer_version()`
+matches current, and the per-entry pre-tokenized fast path is only used
+when `entry.bm25_tokenizer_version` matches current — both gates mirror the
+pre-existing language-mismatch gate that already falls through to a live
+disk read + fresh `tokenize()` call. A snapshot built by a pre-F-2 hyalo
+binary therefore does not need to be manually rebuilt for correctness: BM25
+search transparently degrades to live-scan speed on that snapshot (until
+the next `create-index`), rather than silently continuing to serve results
+computed by a tokenizer that can never match a CJK query. No hard version
+check or forced rebuild was added — the existing snapshot-tolerance
+philosophy (structural fields use `#[serde(default)]`, never a hard load
+failure) extends naturally to a *semantic* version mismatch the same way.
+
+**Why bigrams over the alternatives:** the review's fix ladder was (a)
+bigram indexing, (b) substring fallback when BM25 returns nothing for a CJK
+query, (c) documentation only. Bigram indexing was chosen as the "cheapest
+sufficient" option per the plan: it fixes the index itself rather than
+papering over empty results with a second search pass, needs no additional
+runtime cost on the query path (same `tokenize()` call), and needs no new
+dependency (no CJK segmentation library). Full morphological segmentation
+(MeCab/Jieba-class tooling) was explicitly out of scope (see Non-goals).
+
+**Performance:** the ASCII fast path (`text.is_ascii()` short-circuit,
+checked before any per-run CJK classification) is byte-identical to the
+pre-fix pipeline — verified both by a dedicated unit test
+(`test_tokenize_ascii_fast_path_unaffected_by_cjk_handling`) and by an A/B
+timing run of `hyalo find` against the GitHub Docs corpus (3,710 English
+`.md` files, live body scan, 3 runs each): baseline (pre-fix, via `git
+stash`) 0.94–1.43s real / ~1.0–1.06s user; post-fix 0.99–1.45s real /
+~1.02–1.06s user — within noise, no regression. This matters because
+`bm25_tokenize` was previously a scan-perf hotspot (iter-158's H-8 fix); F-2
+does not reopen that regression for the common (ASCII) case.
+
+**Non-goals (explicit, matching the iteration plan):** full CJK
+morphological segmentation is out of scope — bigrams are an approximation
+that can over-match (two bigrams from unrelated parts of a longer run can
+both appear in an unrelated document) but never under-match a real
+substring query, which is the correct direction to err for a search tool.
+BM25 ranking-math correctness beyond tokenization (IDF/length normalization)
+is unchanged and out of scope, per `deep-analysis-2`'s own scope note that
+the ranking math was separately verified sound. A single-character CJK
+query (e.g. searching for one kanji) cannot match a longer run: bigram
+indexing has no unigram entries except for a run that is itself exactly one
+character, so a one-character query tokenizes to a unigram that was never
+indexed for any longer run containing it. This is a pre-existing limitation
+of bigram-only indexing (not introduced or worsened by this fix — the
+pre-F-2 whole-run-token approach couldn't match single-character queries
+either, just for a different reason) and a real gap since single-kanji
+search is a common query shape in practice; accepted for this iteration,
+not fixed (would require unigram indexing alongside bigrams, which roughly
+doubles the CJK posting-list size for a query shape that's a minority of
+real CJK searches).
+
+**Segmentation-boundary rule and mixed-script fix (review round,
+2026-08-24):** the first cut of this fix classified an entire alphanumeric
+*run* as bigram-mode or word-mode by "does the run contain any
+scriptio-continua character" — checked once per run, not per character.
+That broke on a no-separator mixed run, the ordinary shape of real CJK
+technical writing (`日本語Docker入門ガイドです`, Japanese prose with an
+inline Latin product name and no space around it): the whole run, Latin
+substring included, was forced into character bigrams, fragmenting `Docker`
+into unmatchable pieces (`語D`, `ck`, `er入`) — worse than before the CJK
+fix, which at least kept the whole run as one exact (if CJK-unmatchable)
+token, so `Docker` was findable pre-fix and unfindable immediately after
+it. Fixed by segmenting each run at every scriptio-continua /
+non-scriptio-continua character boundary *before* choosing a tokenization
+strategy, then applying bigrams or the word pipeline to each segment
+independently (`tokenize_run` in `bm25.rs`). The segmentation rule is
+narrow and deliberate: a boundary is drawn only between a scriptio-continua
+character and a non-scriptio-continua one — never between two different
+scriptio-continua scripts (Han vs. Hiragana vs. Katakana vs. Hangul). A
+Kanji run immediately followed by Hiragana (`日本語です`, the ordinary
+shape of a Japanese sentence, since Japanese freely interleaves Kanji and
+Hiragana within one semantic word-run with no internal separator) stays in
+one bigram segment, producing a bigram that straddles the Han/Hiragana
+boundary (`語で`) rather than artificially cutting the segment there. Both
+directions are now tested: `Docker` and `日本語` are each independently
+searchable in the mixed run, and a Han/Hiragana-straddling bigram is
+asserted directly.
+
+## DEC-096: schema `RawPropertyConstraint` denies unknown TOML keys AND implements `minimum`/`maximum` — both, not either/or (BREAKING) (2026-08-24)
+
+**Decision:** [[iterations/iteration-223-query-output-correctness]] closes
+F3-3: `RawPropertyConstraint` (`crates/hyalo-core/src/schema.rs`) now carries
+`#[serde(deny_unknown_fields)]`, and gains `minimum: Option<f64>` /
+`maximum: Option<f64>` fields, restricted to `type = "number"` properties
+(the same rejection pattern already used for `min-length`/`max-length` on
+`string`). `PropertyConstraint::Number` changed from a unit variant to
+`Number { minimum: Option<f64>, maximum: Option<f64> }`; `hyalo lint`'s
+`validate_constraint` enforces both bounds (inclusive) when configured.
+Previously `type = "number"` with `minimum = 1` / `maximum = 5` in
+`.hyalo.toml` silently validated a `priority: 99` file as clean — the keys
+were parsed into nothing, since `RawPropertyConstraint` only captured the
+six fields it happened to define and dropped everything else via ordinary
+serde struct deserialization.
+
+**Why both fixes, not one:** the review offered "implement minimum/maximum"
+OR "deny unknown fields" as alternatives, preferring both. Implementing only
+`minimum`/`maximum` would still silently drop the *next* plausible-but-
+unsupported key (a typo like `patterns` for `pattern`, or `default` inside a
+constraint block instead of the type-level `[schema.types.*.defaults]`).
+Denying unknown fields without implementing `minimum`/`maximum` would turn
+today's silent no-op into a loud error, which is strictly better, but would
+leave the two JSON-Schema-shaped names a config author reaches for first
+still unimplemented — the module's own doc comment already states the
+opposite philosophy ("misconfigured TOML surfaces as an error rather than
+silently discarding the configured values"), so an unenforceable but
+accepted key would be exactly the failure mode being fixed. Doing both
+closes the hole from two directions: real constraints work, and anything
+still unrecognized is a hard error instead of a silent drop.
+
+**Breaking-change handling:** `deny_unknown_fields` rejects any
+`.hyalo.toml` that happened to carry an unused key in a
+`[schema.types.*.properties.*]` block — intentional or accidental. This is
+not a hard failure at the CLI level: `parse_schema_from_toml`
+(`crates/hyalo-cli/src/config.rs`) already treats any `[schema]`
+deserialization error as "malformed config" — it emits a `warn::warn` and
+falls back to an empty `SchemaConfig` (no validation for that run) rather
+than aborting the command, consistent with the existing malformed-schema
+handling for every other kind of TOML mistake in this block (DEC-070's "no
+silent config discard" stance: loud warning, graceful degradation, never a
+silent no-op and never a hard abort for a single misconfigured block). A
+vault carrying a stray key therefore loses schema *validation* on upgrade,
+with a warning naming the problem, rather than losing the command entirely
+— but that is still a real behavior change worth flagging as BREAKING in
+the changelog, since a vault that depended on schema enforcement silently
+loses it until the key is fixed.
+
+**Follow-up: `lint` must surface a malformed schema as a lint-level
+problem, not just a stderr warning (review round, 2026-08-24, finding 2):**
+the graceful-degradation stance above (loud warning, empty `SchemaConfig`,
+command proceeds) had a real gap on `hyalo lint` specifically: the warning
+is `-q`-suppressible, and — worse — `lint --strict` printed a clean "no
+issues" and exited 0 on a file carrying a genuine schema violation the
+(silently disabled) schema would have caught, because *every* type's
+schema is disabled by one bad key anywhere in the `[schema]` block. A CI
+gate relying on `lint --strict` would pass while validation was silently
+off. Fixed by extracting the parse-or-diagnose logic into
+`config::try_parse_schema_from_toml` (returns `Result` instead of
+warning-and-defaulting) and adding `lint::validate_schema_config`, which
+calls it independently and — mirroring the existing `validate_views`
+pattern of representing a config-level problem as a violation on a
+`.hyalo.toml` pseudo-file — turns a parse failure into a visible SCHEMA
+violation in the lint results: `Warn` severity by default (so `--format
+json` shows it in `results` without failing plain `lint`), promoted to
+`Error` directly (not via the later strict-promotion pass the per-file
+`schema/*` violation kinds use) so `lint --strict` exits non-zero and
+names the bad key. This is the review's option (a), the stated minimum
+bar. Option (b) — scoping the degradation to only the offending
+type/property block, so *unaffected* types keep validating — was not
+implemented: the current `RawSchemaConfig`/`TryFrom` architecture
+deserializes and validates the whole `[schema]` block as one atomic step
+(a single `val.clone().try_into::<RawSchemaConfig>()` covering every
+nested type/property), so isolating one bad block would need restructuring
+that deserialization to catch errors per `[schema.types.*]` entry
+independently and keep the successfully-parsed ones — a moderate
+refactor, not the "cheap, do in addition" case the review allowed for.
+Left as a documented follow-up, not attempted here.
+
+## DEC-097: the lexical no-`..` rejection gets an honest, distinct message and error variant instead of reusing "outside vault boundary" (2026-08-24)
+
+**Decision:** [[iterations/iteration-223-query-output-correctness]] closes
+F3-4: `resolve_file_ci` (`crates/hyalo-core/src/discovery.rs`) now checks
+`has_parent_traversal` *separately* from the other lexical escape checks
+(absolute path, `is_absolute()`, Windows drive-relative / NTFS-ADS colon),
+and reports it via a new `FileResolveError::ParentTraversal` variant instead
+of folding it into `OutsideVault`. Previously, from a vault subdirectory,
+`hyalo read ../broken.md` — naming a file squarely *inside* the vault —
+returned "file resolves outside vault boundary", which is false: the path
+was never resolved before being rejected, so the claim about where it
+"resolves" to was never checked. `ParentTraversal`'s `Display` says
+"paths must be vault-relative without '..' components", and
+`resolve_error_to_outcome` (`crates/hyalo-cli/src/commands/mod.rs`) attaches
+a matching hint. The other three lexical conditions, and the genuine
+symlink-escape case (`ensure_within_vault` returning `false` after actually
+canonicalizing), keep `OutsideVault` — those really are "the path resolves
+(or is) outside the vault," an accurate claim in every one of those cases.
+
+**Why a new variant instead of resolve-then-check:** the review offered two
+options — accept in-vault `..` paths by resolving before checking
+(`fs_util::escaping_write_target`-style canonicalize-then-compare), or keep
+the lexical rule and fix the wording. Resolve-then-check was rejected: the
+lexical no-`..` gate is a foundational assumption several rounds of prior
+security hardening were built on top of (iter-202's write-boundary unifier,
+iter-221's ancestor-config `dir` boundary, iter-222's Windows drive-relative
+/ NTFS-ADS closes) — auditing every one of those call sites to confirm none
+of them implicitly depend on "a `..`-bearing path is *always* rejected
+before any resolution happens" was out of scope for a LOW-severity message-
+wording bug, and getting that audit wrong would trade a cosmetic false
+positive for a real boundary weakening. The plan's own guidance named this
+exact tradeoff and preferred the rewording unless resolve-then-check could
+be shown airtight everywhere `resolve_file` is used — it wasn't attempted,
+so rewording is the fix. The *policy* is unchanged: `..` is still never
+accepted, in-vault destination or not; only the explanation of *why* is now
+accurate.

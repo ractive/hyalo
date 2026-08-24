@@ -108,7 +108,17 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
         PropertyConstraint::Date => serde_json::json!({"type": "date"}),
         PropertyConstraint::DateTime => serde_json::json!({"type": "datetime"}),
         PropertyConstraint::DateTimeTz => serde_json::json!({"type": "datetime-tz"}),
-        PropertyConstraint::Number => serde_json::json!({"type": "number"}),
+        PropertyConstraint::Number { minimum, maximum } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_owned(), Value::from("number"));
+            if let Some(min) = minimum {
+                obj.insert("minimum".to_owned(), Value::from(*min));
+            }
+            if let Some(max) = maximum {
+                obj.insert("maximum".to_owned(), Value::from(*max));
+            }
+            Value::Object(obj)
+        }
         PropertyConstraint::Boolean => serde_json::json!({"type": "boolean"}),
         PropertyConstraint::List => serde_json::json!({"type": "list"}),
         PropertyConstraint::Enum { values } => {

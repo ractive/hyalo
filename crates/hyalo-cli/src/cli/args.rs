@@ -362,7 +362,8 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-    /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR)
+    /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
+    /// A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
     #[arg(short, long = "section", value_name = "HEADING")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
@@ -386,7 +387,7 @@ pub(crate) struct FindFilters {
     #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
-    /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property
+    /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property. For 'property:<KEY>', values of different JSON types (e.g. some files have a string, others a number) compare by raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a stderr warning names the property when this happens; use a consistent type in frontmatter for a meaningful sort
     #[arg(long)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
@@ -526,7 +527,13 @@ pub(crate) enum Commands {
             Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr), \
             german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn), portuguese (pt), \
             romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta), turkish (tr). \
-            Language precedence: frontmatter > --language > config > english.\n\n\
+            Language precedence: frontmatter > --language > config > english.\n\
+            CJK: Chinese/Japanese/Korean text (and other scripts written without spaces between \
+            words) is tokenized as overlapping 2-character bigrams rather than whole words, since \
+            there is no dictionary-based segmenter. A query is tokenized the same way, so a CJK \
+            substring query matches, but this is an approximation, not true word segmentation -- it \
+            can occasionally over-match (two bigrams from unrelated parts of a document both present) \
+            but should not under-match a real substring.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
             - --tag T: tag filter (exact or prefix via '/': 'project' matches 'project/backend' but NOT 'projects' — no substring or fuzzy matching)\n\
@@ -535,7 +542,13 @@ pub(crate) enum Commands {
             matching files, restrict tasks and content matches to the section scope; case-insensitive \
             substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
             to pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching). Repeatable (OR). \
-            Nested subsections are included.\n\n\
+            Nested subsections are included. When a file has more than one heading matching --section, \
+            find UNIONS all of them (tasks/content from every matched section are included) -- unlike \
+            `task toggle`/`read`/`set --section`, which refuse an ambiguous multi-heading match. This is \
+            deliberate: find is a vault-wide read-only query where different files legitimately have \
+            different heading sets, so there is no single 'the' match to disambiguate against, unlike a \
+            single-file mutation. A stderr warning names how many result files hit this (not per-file, \
+            to avoid spamming a large result set).\n\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
@@ -2366,7 +2379,7 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
         #[arg(long, conflicts_with_all = ["line", "all"])]
         section: Option<String>,
         /// Select all tasks in the file
@@ -2397,7 +2410,7 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
         #[arg(long, conflicts_with_all = ["line", "all"])]
         section: Option<String>,
         /// Select all tasks in the file
@@ -2433,7 +2446,7 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/)
+        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
         #[arg(long, conflicts_with_all = ["line", "all"])]
         section: Option<String>,
         /// Select all tasks in the file

@@ -3677,3 +3677,252 @@ fn lint_fix_write_failure_on_one_file_does_not_abort_the_batch() {
          violation: {locked_entry}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F3-3: schema `minimum`/`maximum` on number properties, and
+// deny_unknown_fields rejecting unsupported constraint keys
+// (deep-analysis-3-2026-08-23, DEC-094).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_number_maximum_violation_is_reported() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a priority above maximum should be an error"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("maximum"),
+        "expected the maximum-bound violation to be reported: {stdout}"
+    );
+}
+
+#[test]
+fn lint_number_within_min_max_range_is_clean() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: task\npriority: 3\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a priority within [minimum, maximum] should be clean; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn lint_schema_unknown_constraint_key_disables_schema_with_warning() {
+    // F3-3: an unsupported/typo'd key (`patterns` instead of `pattern`) in a
+    // property constraint block must not be silently dropped. `RawPropertyConstraint`
+    // now denies unknown fields, so the TOML fails to deserialize; consistent with
+    // how the rest of `.hyalo.toml` handles malformed config (DEC-070's stance,
+    // `crates/hyalo-cli/src/config.rs::parse_schema_from_toml`), the effect is a
+    // loud warning plus schema validation disabled for the run, not a hard failure.
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: task\n---\nBody\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("schema") || stderr.contains("[schema]"),
+        "expected a malformed-schema warning naming the [schema] block: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Review round finding 2: a malformed [schema] block must be a visible
+// lint-result violation, not just a `-q`-suppressible stderr warning --
+// `lint --strict` must exit non-zero, and non-strict must never print
+// "no issues" while validation is secretly disabled (DEC-096 follow-up).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_malformed_schema_strict_exits_nonzero_naming_the_bad_key() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+
+[schema.types.other.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    // A real violation the (silently disabled) schema would have caught,
+    // to prove the malformed-schema diagnostic isn't just cosmetic.
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Bad\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "bad.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed [schema] under --strict must exit non-zero; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    assert!(
+        json["results"]["errors"].as_u64().unwrap_or(0) > 0,
+        "results.errors must be nonzero: {json}"
+    );
+    let rendered = json.to_string();
+    assert!(
+        rendered.contains("patterns"),
+        "the violation must name the bad key: {rendered}"
+    );
+}
+
+#[test]
+fn lint_malformed_schema_non_strict_never_reports_no_issues() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+
+[schema.types.other.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Bad\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "bad.md"])
+        .output()
+        .unwrap();
+
+    // Non-strict: exit 0 (a warning doesn't fail the plain command)...
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    // ...but results must never claim a clean run while schema validation is
+    // silently disabled: total violations and files_with_violations must be
+    // nonzero, and the malformed-schema key must be visible in the JSON.
+    assert!(
+        json["results"]["total"].as_u64().unwrap_or(0) > 0,
+        "results.total must be nonzero -- 'no issues' must never be reported \
+         while schema validation is silently disabled: {json}"
+    );
+    assert!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "results.files_with_violations must be nonzero: {json}"
+    );
+    let rendered = json.to_string();
+    assert!(
+        rendered.contains("patterns"),
+        "the malformed-schema diagnostic must name the bad key in results: {rendered}"
+    );
+}
+
+#[test]
+fn lint_malformed_schema_text_format_shows_violation_not_no_issues() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: task\n---\nBody\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "a.md"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.to_lowercase().contains("no issues"),
+        "text output must not claim a clean run while schema is malformed: {stdout}"
+    );
+    assert!(
+        stdout.contains(".hyalo.toml") || stdout.contains("patterns"),
+        "text output must surface the malformed-schema violation: {stdout}"
+    );
+}

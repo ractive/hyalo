@@ -360,7 +360,6 @@ pub fn resolve_file_ci(
     // Windows drive-relative (`C:foo`) and NTFS-ADS (`a.md:stream`) cases
     // that `is_absolute()` and `has_parent_traversal()` alone do not (M-2).
     if normalized.starts_with('/')
-        || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
         || has_unsafe_windows_colon(&normalized)
     {
@@ -368,6 +367,17 @@ pub fn resolve_file_ci(
             path: normalized,
             resolved: None,
         });
+    }
+
+    // A `..` component is rejected lexically, before resolution — even when
+    // the path would land back inside the vault (e.g. `../sub/note.md` from
+    // `sub/`). This is a *policy* rejection (no `..` allowed, ever), not a
+    // claim that the path escapes the vault, so it gets its own error variant
+    // rather than reusing `OutsideVault` (F3-4 / DEC-094): the two have
+    // different, non-interchangeable honest messages — see
+    // `FileResolveError`'s `Display` impl.
+    if has_parent_traversal(&normalized) {
+        return Err(FileResolveError::ParentTraversal { path: normalized });
     }
 
     // A trailing slash is directory syntax. It must be trimmed before any hint
@@ -924,8 +934,19 @@ pub enum FileResolveError {
     OutsideVault {
         path: String,
         /// Canonical destination the path escaped to, when resolution (symlink
-        /// following) produced one. `None` for a purely lexical rejection.
+        /// following) produced one. `None` for a purely lexical rejection
+        /// (absolute path, Windows drive-relative, or NTFS ADS marker).
         resolved: Option<String>,
+    },
+    /// The path contains a `..` component and was rejected lexically, before
+    /// any resolution was attempted. Distinct from [`Self::OutsideVault`]
+    /// (F3-4): a `..`-bearing path may well resolve *inside* the vault (e.g.
+    /// `../sub/note.md` from `sub/`), so claiming it "resolves outside vault
+    /// boundary" would be false. The real policy is narrower — no `..`
+    /// component is ever accepted, regardless of where it would land — and
+    /// this variant's `Display` says exactly that instead.
+    ParentTraversal {
+        path: String,
     },
     InvalidPath {
         path: String,
@@ -960,6 +981,15 @@ impl std::fmt::Display for FileResolveError {
                 resolved: None,
             } => {
                 write!(f, "file resolves outside vault boundary: {path}")
+            }
+            Self::ParentTraversal { path } => {
+                write!(
+                    f,
+                    "path contains '..' and is rejected: {path} (paths must be \
+                     vault-relative without '..' components, even when the target \
+                     is inside the vault — use the vault-relative form instead, \
+                     e.g. \"broken.md\" or \"sub/broken.md\", not \"../broken.md\")"
+                )
             }
             Self::InvalidPath { path, reason } => {
                 write!(f, "invalid path ({reason}): {path}")
@@ -2235,16 +2265,17 @@ mod tests {
             Err(FileResolveError::OutsideVault { .. })
         ));
 
-        // Parent directory traversal
+        // Parent directory traversal (F3-4: its own variant, not OutsideVault —
+        // see resolve_file_parent_traversal_message_is_honest_not_outside_vault).
         assert!(matches!(
             resolve_file(tmp.path(), "../secret.md"),
-            Err(FileResolveError::OutsideVault { .. })
+            Err(FileResolveError::ParentTraversal { .. })
         ));
 
         // Embedded traversal
         assert!(matches!(
             resolve_file(tmp.path(), "sub/../../../etc/passwd.md"),
-            Err(FileResolveError::OutsideVault { .. })
+            Err(FileResolveError::ParentTraversal { .. })
         ));
     }
 
@@ -2861,12 +2892,12 @@ mod tests {
 
         assert!(matches!(
             resolve_file(tmp.path(), "../secret.md"),
-            Err(FileResolveError::OutsideVault { .. })
+            Err(FileResolveError::ParentTraversal { .. })
         ));
 
         assert!(matches!(
             resolve_file(tmp.path(), "sub/../../etc/passwd.md"),
-            Err(FileResolveError::OutsideVault { .. })
+            Err(FileResolveError::ParentTraversal { .. })
         ));
     }
 
@@ -3234,14 +3265,47 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn resolve_file_traversal_says_outside_vault() {
+    fn resolve_file_parent_traversal_message_is_honest_not_outside_vault() {
+        // F3-4: `../Cargo.toml` from the vault root would actually resolve
+        // *outside* the vault here, so this specific input can't prove the
+        // false-positive — see
+        // `resolve_file_parent_traversal_from_subdir_does_not_claim_outside_vault`
+        // for the in-vault case. This test only pins the message wording: it
+        // must name the real no-`..` policy, never the (potentially false)
+        // "outside vault boundary" claim.
         let tmp = tempfile::tempdir().unwrap();
 
         let err = resolve_file(tmp.path(), "../Cargo.toml").unwrap_err();
-        assert!(matches!(err, FileResolveError::OutsideVault { .. }));
+        assert!(matches!(err, FileResolveError::ParentTraversal { .. }));
+        let msg = err.to_string();
         assert!(
-            err.to_string().contains("outside vault"),
-            "message should mention 'outside vault', got: {err}",
+            msg.contains("..") && msg.to_lowercase().contains("vault-relative"),
+            "message should name the no-'..' policy, got: {msg}",
+        );
+        assert!(
+            !msg.contains("resolves outside vault boundary"),
+            "message must not claim the path resolves outside the vault — that's \
+             not what was checked (purely lexical rejection): {msg}",
+        );
+    }
+
+    #[test]
+    fn resolve_file_parent_traversal_from_subdir_does_not_claim_outside_vault() {
+        // F3-4's actual false-positive repro: from a vault subdirectory,
+        // `../file.md` names a file squarely inside the vault, yet the
+        // lexical no-`..` gate still refuses it (by policy) — the message
+        // must not claim it "resolves outside vault boundary", since it does
+        // not.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("in-vault.md"), "").unwrap();
+
+        let err = resolve_file(tmp.path(), "sub/../in-vault.md").unwrap_err();
+        assert!(matches!(err, FileResolveError::ParentTraversal { .. }));
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("resolves outside vault boundary"),
+            "in-vault path must not be told it escapes the vault: {msg}"
         );
     }
 

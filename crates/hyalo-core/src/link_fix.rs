@@ -1509,6 +1509,7 @@ mod tests {
                     self_anchors: Vec::new(),
                     bm25_tokens: None,
                     bm25_language: None,
+                    bm25_tokenizer_version: None,
                 })
                 .collect();
             entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -2833,6 +2834,7 @@ See [broken](old-name.md) here.
             self_anchors: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
+            bm25_tokenizer_version: None,
         };
 
         let mut target = make_entry("target.md", Vec::new());
@@ -2880,6 +2882,7 @@ See [broken](old-name.md) here.
             self_anchors: vec![(1, "nope".to_string())],
             bm25_tokens: None,
             bm25_language: None,
+            bm25_tokenizer_version: None,
         };
 
         let index = HeadingsMockIndex(vec![entry]);

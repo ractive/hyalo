@@ -812,7 +812,7 @@ pub fn apply_jq_filter_result(
         .name("hyalo-jq-eval".to_owned())
         .spawn(move || {
             let result = compile_jq_filter(&filter_code)
-                .and_then(|filter| execute_jq_filter(&filter, &value));
+                .and_then(|filter| execute_jq_filter(&filter, &value, &filter_code));
             // The receiver may already have timed out and moved on; a failed
             // send just means nobody is listening anymore, not an error here.
             let _ = tx.send(result);
@@ -922,13 +922,44 @@ fn compile_jq_filter(filter_code: &str) -> Result<jaq_core::compile::Filter<Nati
 /// from causing unbounded memory growth (e.g. exponential-expansion patterns).
 const JQ_OUTPUT_CAP: usize = 10 * 1024 * 1024; // 10 MiB
 
+/// Maximum length (in `char`s) of a diagnostic string embedded in an error
+/// envelope — the jq runtime error message and the filter code that produced
+/// it (F-3, `deep-analysis-2-2026-08-23.md`). jaq's runtime `Display` embeds
+/// the *value* it failed on (e.g. the whole `.results` array for `.results |
+/// .file` on an array), which on a large vault can be megabytes; an
+/// unbounded error also makes `--jq` a content-disclosure vector for any
+/// consumer that logs error output. This is a `char` bound, not a byte
+/// bound, so truncation never splits a multi-byte codepoint.
+const JQ_ERROR_DIAGNOSTIC_CHAR_CAP: usize = 200;
+
+/// Truncate `s` to at most [`JQ_ERROR_DIAGNOSTIC_CHAR_CAP`] characters,
+/// appending `…` when truncation occurred. Character-based (not byte-based)
+/// so a multi-byte codepoint is never split.
+fn truncate_diagnostic(s: &str) -> String {
+    if s.chars().count() <= JQ_ERROR_DIAGNOSTIC_CHAR_CAP {
+        return s.to_owned();
+    }
+    let mut truncated: String = s.chars().take(JQ_ERROR_DIAGNOSTIC_CHAR_CAP).collect();
+    truncated.push('…');
+    truncated
+}
+
 /// Execute a pre-compiled jq filter against a JSON value and return the text output.
+///
+/// `filter_code` is used only to name the filter in error messages — the
+/// filter itself has already been compiled into `filter`.
 fn execute_jq_filter(
     filter: &jaq_core::compile::Filter<Native<D>>,
     value: &serde_json::Value,
+    filter_code: &str,
 ) -> Result<String, String> {
-    let input: Val = serde_json::from_value(value.clone())
-        .map_err(|e| format!("jq input conversion error: {e}"))?;
+    let input: Val = serde_json::from_value(value.clone()).map_err(|e| {
+        format!(
+            "jq input conversion error in filter {}: {}",
+            truncate_diagnostic(filter_code),
+            truncate_diagnostic(&e.to_string())
+        )
+    })?;
     let ctx = Ctx::<D>::new(&filter.lut, Vars::new([]));
 
     let mut out = String::new();
@@ -994,7 +1025,18 @@ fn execute_jq_filter(
                 }
                 out.push_str(&s);
             }
-            Err(e) => return Err(format!("jq runtime error: {e}")),
+            Err(e) => {
+                // jaq's runtime `Display` embeds the value it failed on (e.g. the
+                // whole input array for `.file` applied to an array) — truncate
+                // both the value-bearing message and the filter code so a single
+                // mistyped `--jq` filter on a large vault can't dump megabytes of
+                // vault content into the error envelope (F-3, DEC-094).
+                return Err(format!(
+                    "jq runtime error in filter {}: {}",
+                    truncate_diagnostic(filter_code),
+                    truncate_diagnostic(&e.to_string())
+                ));
+            }
         }
     }
 
@@ -1008,11 +1050,11 @@ fn run_jq_filter_cached(
     cache: &mut JaqFilterCache,
 ) -> Result<String, String> {
     if let Some(filter) = cache.get(filter_code) {
-        return execute_jq_filter(filter, value);
+        return execute_jq_filter(filter, value, filter_code);
     }
     let compiled = compile_jq_filter(filter_code)?;
     let filter = cache.entry(filter_code.to_owned()).or_insert(compiled);
-    execute_jq_filter(filter, value)
+    execute_jq_filter(filter, value, filter_code)
 }
 
 // ---------------------------------------------------------------------------
@@ -2498,6 +2540,78 @@ mod tests {
         let val = json!({"x": 1});
         let result = jq("this is not valid jq %%%", &val);
         assert!(result.is_none());
+    }
+
+    // --- F-3: jq runtime errors are bounded, not whole-input dumps ---
+
+    #[test]
+    fn jq_runtime_error_on_large_input_is_bounded_and_names_the_filter() {
+        // A filter that fails against a large array (e.g. mistakenly indexing
+        // an array with a string, the `--jq '.results | .file'` shape from
+        // deep-analysis-2's F-3) must not embed the whole array — jaq's
+        // runtime Display would otherwise dump every element into the error.
+        let big_array: Vec<serde_json::Value> = (0..5000)
+            .map(|i| json!({"file": format!("file-{i}.md"), "padding": "x".repeat(200)}))
+            .collect();
+        let val = json!(big_array);
+        let err = apply_jq_filter_result(".file", &val).expect_err("indexing an array must fail");
+
+        assert!(
+            err.len() < 1000,
+            "error should be bounded to roughly 2x the char cap, got {} bytes",
+            err.len()
+        );
+        assert!(
+            err.contains(".file"),
+            "error should name the failing filter: {err}"
+        );
+        assert!(
+            !err.contains("file-4999.md"),
+            "error must not embed the tail of the huge input value: {err}"
+        );
+    }
+
+    #[test]
+    fn jq_runtime_error_on_large_object_value_does_not_leak_its_content() {
+        // Array-indexing an object fails at runtime; the object (which holds
+        // a large string field) must not appear verbatim in the error.
+        let mut map = serde_json::Map::new();
+        let needle = "x".repeat(5000);
+        map.insert("huge".to_owned(), serde_json::Value::String(needle.clone()));
+        let val = serde_json::Value::Object(map);
+
+        let err = apply_jq_filter_result(".huge.nope", &val)
+            .expect_err("field-indexing a string value must fail");
+        assert!(
+            err.len() < 1000,
+            "error should be bounded, got {} bytes",
+            err.len()
+        );
+        assert!(
+            !err.contains(&needle),
+            "error must not embed the large field value verbatim"
+        );
+    }
+
+    #[test]
+    fn truncate_diagnostic_appends_ellipsis_only_when_truncated() {
+        let short = "short message";
+        assert_eq!(truncate_diagnostic(short), short);
+
+        let long = "x".repeat(500);
+        let truncated = truncate_diagnostic(&long);
+        assert_eq!(truncated.chars().count(), JQ_ERROR_DIAGNOSTIC_CHAR_CAP + 1);
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_diagnostic_never_splits_a_multibyte_codepoint() {
+        // 300 multi-byte CJK characters — truncation must cut on char
+        // boundaries, not bytes, or this would panic on a split codepoint.
+        let long: String = "日".repeat(300);
+        let truncated = truncate_diagnostic(&long);
+        assert_eq!(truncated.chars().count(), JQ_ERROR_DIAGNOSTIC_CHAR_CAP + 1);
+        assert!(truncated.ends_with('…'));
     }
 
     // --- jq output size cap ---
