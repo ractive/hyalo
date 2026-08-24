@@ -256,11 +256,19 @@ pub fn site_prefix_plausible_resolution_stats(
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
 ) -> (usize, usize) {
+    // PR #251 review N13: `split('/').next()` on any `&str` (including
+    // empty) always yields `Some`, so `filter_map` never actually filters
+    // anything here — `map` says that plainly.
     let top_level: std::collections::HashSet<String> = index
         .entries()
         .iter()
-        .filter_map(|e| e.rel_path.split('/').next())
-        .map(str::to_lowercase)
+        .map(|e| {
+            e.rel_path
+                .split('/')
+                .next()
+                .unwrap_or_default()
+                .to_lowercase()
+        })
         .collect();
 
     let mut absolute = 0usize;
@@ -271,10 +279,20 @@ pub fn site_prefix_plausible_resolution_stats(
             if !normalized.starts_with('/') {
                 continue;
             }
-            absolute += 1;
             let stripped = strip_site_prefix(&normalized, site_prefix);
             let first_segment = stripped.split('/').next().unwrap_or("");
-            if !first_segment.is_empty() && top_level.contains(&first_segment.to_lowercase()) {
+            // PR #251 review L5: a bare `/` (site-root link, e.g. `[home](/)`)
+            // has no path segment at all to check plausibility against —
+            // stripping the leading slash always leaves an empty string,
+            // regardless of `site_prefix`. Counting it in `absolute` only
+            // padded the denominator toward a false "stripped 0 of N"; it
+            // carries no signal either way, so it is excluded entirely
+            // rather than counted as "not plausible".
+            if first_segment.is_empty() {
+                continue;
+            }
+            absolute += 1;
+            if top_level.contains(&first_segment.to_lowercase()) {
                 plausible += 1;
             }
         }
@@ -296,15 +314,20 @@ pub fn site_prefix_plausible_resolution_stats(
 /// `entry.self_anchors`) are not included — this counts only links that
 /// point *at another file's* heading, matching what `links fix`'s target
 /// resolution already covers.
+///
+/// Returns `None` when `dir` cannot be canonicalized (matching
+/// [`detect_broken_links_from_index`]'s own empty-report fallback for the
+/// same failure) — PR #251 review L6: the first cut returned `0` here, which
+/// a caller cannot distinguish from "genuinely checked, found none." `None`
+/// says "could not check" honestly instead of asserting a clean bill for a
+/// vault this function never actually looked at.
 pub fn count_broken_anchors(
     dir: &Path,
     index: &dyn VaultIndex,
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
-) -> usize {
-    let Ok(canonical) = canonicalize_vault_dir(dir) else {
-        return 0;
-    };
+) -> Option<usize> {
+    let canonical = canonicalize_vault_dir(dir).ok()?;
     let mut count = 0usize;
     for entry in index.entries() {
         for (_, link) in &entry.links {
@@ -327,7 +350,7 @@ pub fn count_broken_anchors(
             }
         }
     }
-    count
+    Some(count)
 }
 
 /// Detect broken links from index entries.
@@ -2834,7 +2857,8 @@ See [broken](old-name.md) here.
 
         let count = count_broken_anchors(tmp.path(), &index, None, None);
         assert_eq!(
-            count, 1,
+            count,
+            Some(1),
             "only the dead fragment (#nope) must count, not the resolving one (#Real)"
         );
     }
@@ -2860,7 +2884,25 @@ See [broken](old-name.md) here.
 
         let index = HeadingsMockIndex(vec![entry]);
         let tmp = vault_with_files(&[("source.md", "")]);
-        assert_eq!(count_broken_anchors(tmp.path(), &index, None, None), 0);
+        assert_eq!(
+            count_broken_anchors(tmp.path(), &index, None, None),
+            Some(0)
+        );
+    }
+
+    /// PR #251 review L6: a vault directory that cannot be canonicalized
+    /// must report "could not check" (`None`), not a false `Some(0)` clean
+    /// bill — mirrors `detect_broken_links_from_index`'s own empty-report
+    /// fallback for the identical failure.
+    #[test]
+    fn count_broken_anchors_returns_none_when_dir_cannot_be_canonicalized() {
+        let index = HeadingsMockIndex(Vec::new());
+        let nonexistent = std::path::Path::new("/definitely/does/not/exist/anywhere");
+        assert_eq!(
+            count_broken_anchors(nonexistent, &index, None, None),
+            None,
+            "an uncanonicalizable directory must report 'could not check', not a clean zero"
+        );
     }
 
     /// NEW-13 (dogfood pre3): a bare-stem relocation — the exact path fails,

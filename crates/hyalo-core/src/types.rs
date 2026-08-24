@@ -216,14 +216,42 @@ pub struct LinkHealthSummary {
     /// looked at anchors. Kept as its own field rather than folded into
     /// `broken` since the two are different failure modes with different
     /// fixes. Omitted from JSON when zero, same convention as `out_of_vault`.
-    #[serde(skip_serializing_if = "is_zero")]
-    pub broken_anchors: usize,
+    ///
+    /// PR #251 review M3: only computed when `broken == 0` — checking it
+    /// unconditionally would mean a second full link-resolution pass
+    /// (re-hitting the filesystem for every fragment-bearing link) right
+    /// after the first one `summary` already runs, doubling summary's own
+    /// cost on a fragment-heavy corpus. A vault with both broken targets and
+    /// broken anchors reports `Some(0)` here until the targets are fixed;
+    /// `find --broken-links` is the always-accurate source of truth.
+    ///
+    /// PR #251 review L6: `None` when the vault directory itself could not
+    /// be canonicalized. Deliberately serialized as JSON `null` — NOT
+    /// omitted like a computed/gated `Some(0)` — so a script reading this
+    /// field cannot mistake "could not check" for "checked and it's clean";
+    /// omitting both would make them indistinguishable, which is exactly the
+    /// false-clean-bill this finding exists to prevent.
+    #[serde(skip_serializing_if = "is_zero_broken_anchors")]
+    pub broken_anchors: Option<usize>,
 }
 
 /// Serde helper: skip a `usize` field when it is zero.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(n: &usize) -> bool {
     *n == 0
+}
+
+/// Serde helper for [`LinkHealthSummary::broken_anchors`]: skip only a
+/// computed/gated zero, matching the sibling zero-omission convention —
+/// `None` is deliberately kept (serializes as `null`) so it stays
+/// distinguishable from a zero (PR #251 review L6).
+///
+/// `&Option<usize>` (not `Option<&usize>`) because serde's generated code
+/// calls this with `&self.broken_anchors` — the signature is fixed by the
+/// caller, not a style choice `Option<&T>` could improve.
+#[allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
+fn is_zero_broken_anchors(value: &Option<usize>) -> bool {
+    matches!(value, Some(0))
 }
 
 /// File counts by directory.

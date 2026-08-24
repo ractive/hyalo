@@ -280,6 +280,62 @@ fn dir_to_a_foreign_subdir_adopts_its_own_ancestor_config() {
         Some(false),
         "must not report built-in defaults when an ancestor config exists: {json}"
     );
+    // PR #251 review H1: `announce_ancestor_config` used to fire
+    // unconditionally from inside `load_config_for_dir`, describing the
+    // ancestor's own *configured* vault ("other") as "the vault" even though
+    // this run only ever scans the narrower `--dir` target
+    // ("other/deep/sub") — actively wrong advice ("pass --dir ." made no
+    // sense from this cwd either). The existing assertions above only ever
+    // checked stdout, which is why this slipped through; assert on stderr too.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("from a parent directory"),
+        "an ancestor-adoption note naming the wrong vault must not fire on \
+         the --dir path (no cwd config to shadow, and the vault it would \
+         name is not what this run scans): {stderr}"
+    );
+}
+
+/// PR #251 review H1 (finding 11): when the CWD *also* has its own shadowed
+/// config, the wrong `announce_ancestor_config` note used to fire alongside
+/// `dir_override_note`'s own, correct one — two notes, the first misleading.
+#[test]
+fn dir_to_a_foreign_subdir_with_shadowed_cwd_config_prints_exactly_one_note() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"kb\"\n").unwrap();
+    fs::create_dir_all(tmp.path().join("kb")).unwrap();
+
+    let other = tmp.path().join("other");
+    fs::create_dir_all(other.join("deep/sub")).unwrap();
+    fs::write(other.join(".hyalo.toml"), "site_prefix = \"adopted\"\n").unwrap();
+    write_md(&other, "c.md", "---\ntitle: C\n---\n# C\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "config",
+            "--dir",
+            other.join("deep/sub").to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("note:").count(),
+        1,
+        "exactly one note must fire, not the wrong ancestor-adoption note \
+         plus the correct dir_override_note: {stderr}"
+    );
+    assert!(
+        stderr.contains("does not apply") && stderr.contains("is in effect"),
+        "the surviving note must be the correct one naming the adopted config file: {stderr}"
+    );
+    assert!(
+        !stderr.contains("from a parent directory"),
+        "the wrong ancestor-adoption note must not fire at all: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

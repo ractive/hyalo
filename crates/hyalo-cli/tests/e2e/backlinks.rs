@@ -582,6 +582,9 @@ fn case_mismatched_wikilink_is_counted_once() {
     // own written spelling — `hyalo backlinks note.md` is asking about
     // `note.md` specifically, and every entry necessarily points at it.
     assert_eq!(json["results"]["backlinks"][0]["target"], "note.md");
+    // PR #251 review L8: the per-occurrence case signal must survive under
+    // `written_target` — `target`'s uniform normalization must not erase it.
+    assert_eq!(json["results"]["backlinks"][0]["written_target"], "NOTE");
 }
 
 /// NEW-18 (dogfood pre3): three occurrences of the same real target,
@@ -618,6 +621,20 @@ fn backlinks_target_spelling_is_consistent_across_occurrences() {
         targets,
         vec!["target.md", "target.md", "target.md"],
         "all three spellings must normalize to the same target: {json}"
+    );
+    // PR #251 review L8: `written_target` must preserve what each occurrence
+    // actually said, so the consistent `target` above doesn't erase the
+    // per-entry spelling signal (the third link never typed `.md` at all).
+    let written: Vec<&str> = json["results"]["backlinks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["written_target"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        written,
+        vec!["target.md", "target.md", "target"],
+        "written_target must preserve each occurrence's own spelling: {json}"
     );
 }
 

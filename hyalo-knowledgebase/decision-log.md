@@ -2183,3 +2183,37 @@ number.
 differ in unit from `find`'s own counts — the fix for NEW-15 is that
 neither figure may claim *zero* while the other reports something, not
 that the two numbers must be numerically identical.
+
+## DEC-091: `--dir` ancestor-config discovery extends config trust to a second entry point, boundary deferred to iteration 221 (2026-08-24)
+
+**Decision:** NEW-17's iter-220 fix (`load_config_for_dir`) gives `--dir
+<foreign-tree>` the same ancestor-discovery fallback `cd <foreign-tree> &&
+hyalo …` already had since iter-213 (UX-1): when `<foreign-tree>` has no
+`.hyalo.toml` of its own, hyalo walks up looking for the nearest ancestor
+`.hyalo.toml` whose configured vault contains `<foreign-tree>`, and — if
+found — that file's `[lint]`, `[scan]`, `site_prefix`, and rule settings
+govern the run. This is a deliberate widening of *where* an ancestor config
+can be discovered from (a second entry point, `--dir`, not just the real
+process CWD), not a new trust *rule* — the discovery logic itself
+(`discover_ancestor_config`) is unchanged and iter-213's own containment
+check (the ancestor's configured vault must actually contain the target
+directory) still applies identically on both paths.
+
+**Why this matters and why it is not fixed here (PR #251 review L10):** the
+practical effect is that a `.hyalo.toml` living in *any* ancestor of a
+`--dir` target — not just an ancestor of the real CWD — can now govern a
+run. On a shared machine or a checkout with an untrusted or unexpected
+ancestor directory (e.g. a `/tmp/.hyalo.toml` left by another process or
+user), `--dir /tmp/some/deep/path` could silently inherit `[lint] ignore`,
+`[scan]`, `site_prefix`, or rule overrides from a file the invoking user
+never asked for and may not even know exists. This is the same class of
+concern the `cd`-based path already had since iter-213 — NEW-17 did not
+introduce the *risk*, only a second code path that reaches it — and drawing
+a trust boundary around config discovery (e.g. refusing to adopt an
+ancestor config outside some allowed root, or requiring an explicit opt-in)
+is real design work with its own trade-offs against the discoverability
+`cd <vault> && hyalo …` depends on. That is exactly the subject of
+[[iterations/iteration-221-config-dir-boundary]], already planned before
+this review; iter-220 does not attempt it. This DEC exists so the extension
+is documented and traceable to where the boundary is meant to land, not
+silently widened and forgotten.

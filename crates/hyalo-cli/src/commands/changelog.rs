@@ -627,7 +627,17 @@ fn render_entry(message: &str, wrap: Option<usize>) -> Vec<String> {
         let mut physical_lines = message.lines();
         let first = physical_lines.next().unwrap_or("");
         let mut result = vec![format!("{BULLET_PREFIX}{first}")];
-        result.extend(physical_lines.map(|line| format!("{INDENT}{line}")));
+        // PR #251 review L9: a blank line inside the message must stay
+        // genuinely blank, not `INDENT` alone — an indent-only "  " line is
+        // whitespace masquerading as content (MD009 territory) and no
+        // continuation text to hang-indent in the first place.
+        result.extend(physical_lines.map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("{INDENT}{line}")
+            }
+        }));
         return result;
     };
     let mut lines: Vec<String> = Vec::new();
@@ -815,6 +825,22 @@ mod tests {
                 "  second".to_owned(),
                 "  third".to_owned(),
             ]
+        );
+    }
+
+    /// PR #251 review L9: a blank line inside the message must render as a
+    /// genuinely empty line, not `INDENT` alone (`"  "`) — a whitespace-only
+    /// line masquerading as content.
+    #[test]
+    fn render_entry_keeps_a_blank_line_genuinely_blank_without_wrap() {
+        let lines = render_entry("first\n\nthird", None);
+        assert_eq!(
+            lines,
+            vec!["- first".to_owned(), String::new(), "  third".to_owned(),]
+        );
+        assert!(
+            lines[1].is_empty(),
+            "a blank line must not become an indent-only line: {lines:?}"
         );
     }
 

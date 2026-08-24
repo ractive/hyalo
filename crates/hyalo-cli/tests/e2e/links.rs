@@ -254,6 +254,49 @@ fn summary_reports_broken_anchors_distinctly_from_broken_links() {
     );
 }
 
+/// PR #251 review M3: `summary`'s `broken_anchors` count is gated on
+/// `broken == 0` — it must not run a second full link-resolution pass when
+/// there are already broken targets. The documented trade-off is that a
+/// vault with both reports `0` (omitted) for `broken_anchors` until the
+/// targets are fixed; this pins that behavior so it stays intentional.
+#[test]
+fn summary_broken_anchors_is_gated_when_targets_are_also_broken() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Target\n---\n## Real\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\n---\nSee [dead target](nope.md) and [dead anchor](target.md#nope).\n",
+    );
+
+    let json_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "summary",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo summary should run");
+    assert!(json_output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(
+        json["results"]["links"]["broken"].as_u64(),
+        Some(1),
+        "the dead target must still be counted: {json}"
+    );
+    assert!(
+        json["results"]["links"]["broken_anchors"].is_null(),
+        "broken_anchors must be omitted (gated to 0) while a broken target \
+         exists, not silently re-resolve every link a second time: {json}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // find --broken-links
 // ---------------------------------------------------------------------------
@@ -6061,11 +6104,58 @@ fn fuzzy_fixes_carry_a_column() {
         .unwrap_or_else(|| panic!("expected at least one fuzzy fix: {json}"));
     let entry = &fuzzy[0];
     assert_eq!(entry["line"].as_u64(), Some(4));
-    let expected_col = line.find("correct-nam").unwrap() + 1;
+    let byte_offset = line.find("correct-nam").unwrap();
+    let expected_col = line[..byte_offset].chars().count() + 1;
     assert_eq!(
         entry["col"].as_u64(),
         Some(expected_col as u64),
         "col must point at old_target's own position on the line: {entry}"
+    );
+}
+
+/// PR #251 review M2: `col` must count Unicode scalar values (matching
+/// lint's `column` and `AutoLinkMatch::col`, iter-210), not bytes — a
+/// multibyte character before the match (this repo's own KB prose uses em
+/// dashes and arrows) must not inflate the reported column past what any
+/// editor would show.
+#[test]
+fn fuzzy_fixes_column_counts_characters_not_bytes() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "correct-name.md",
+        "---\ntitle: Correct Name\n---\n",
+    );
+    // "→ " (arrow + space) is 4 bytes but 2 chars; "—" (em dash) is 3 bytes
+    // but 1 char. A byte-offset bug would report a column noticeably past
+    // the true character position.
+    let line = "→ See — [[correct-nam]] for details.\n";
+    write_md(
+        tmp.path(),
+        "index.md",
+        &format!("---\ntitle: Index\n---\n{line}"),
+    );
+
+    let json = links_fix_json(tmp.path(), &["--dry-run"]);
+    let fuzzy = json["fuzzy_fixes"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .unwrap_or_else(|| panic!("expected at least one fuzzy fix: {json}"));
+    let entry = &fuzzy[0];
+    let byte_offset = line.find("correct-nam").unwrap();
+    let char_col = line[..byte_offset].chars().count() + 1;
+    assert_eq!(
+        entry["col"].as_u64(),
+        Some(char_col as u64),
+        "col must count characters, not bytes: {entry}"
+    );
+    // The byte offset would be strictly larger than the char count here
+    // (multibyte chars precede the match), so this also pins that the two
+    // must differ in this fixture — otherwise the assertion above would be
+    // vacuously true even with the byte-offset bug.
+    assert!(
+        byte_offset + 1 > char_col,
+        "fixture must actually exercise a byte/char divergence"
     );
 }
 

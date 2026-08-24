@@ -2305,6 +2305,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         reverse,
                         limit,
                         broken_links,
+                        strict,
                         orphan,
                         dead_end,
                         title,
@@ -2472,7 +2473,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 true,
                                 resolved.as_snapshot(),
                             );
-                            find_commands::find(
+                            let outcome = find_commands::find(
                                 resolved.as_index(),
                                 dir,
                                 site_prefix,
@@ -2500,7 +2501,25 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 language.as_deref(),
                                 ctx.config_language,
                                 ci.as_ref(),
-                            )
+                            )?;
+                            // PR #251 review M4: `views run` used to silently
+                            // drop `--strict` (the destructure above fell
+                            // into `..`) — `views set gate --broken-links
+                            // --strict` persisted `strict: true` into the
+                            // saved view, but `views run gate` still exited 0
+                            // forever while `find --view gate` correctly
+                            // exited 1: a CI gate that silently stopped
+                            // gating the moment it was saved as a view. Same
+                            // exit-code logic as `Commands::Find` (UX-2).
+                            if strict
+                                && let CommandOutcome::Success {
+                                    total: Some(total), ..
+                                } = &outcome
+                                && *total > 0
+                            {
+                                ctx.exit_code_override = Some(1);
+                            }
+                            Ok(outcome)
                         }
                         IndexResolution::Outcome(outcome) => Ok(outcome),
                     }

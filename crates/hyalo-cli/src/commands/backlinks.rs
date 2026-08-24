@@ -12,6 +12,20 @@ struct BacklinkItem {
     source: String,
     line: usize,
     target: String,
+    /// The link's own target text, exactly as `LinkGraph::build` left it —
+    /// relative path components resolved (so `../target.md` reports
+    /// `target.md`, not the raw `../` the author wrote) but casing and `.md`
+    /// presence untouched.
+    ///
+    /// PR #251 review L8: `target` reports the query's own canonical path
+    /// uniformly across every entry (see its own comment below) — necessary
+    /// for a consistent spelling, but it erases exactly the signal someone
+    /// chasing a case mismatch needs: whether THIS occurrence was written
+    /// `[[NOTE]]` or `[[note]]`. Kept under a separate key rather than folded
+    /// back into `target` so both questions ("what file does every entry
+    /// really point at" and "how did each occurrence spell it") stay
+    /// answerable without re-adding the inconsistency the NEW-18 fix removed.
+    written_target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
 }
@@ -83,6 +97,7 @@ pub fn backlinks(
             source: e.source.to_string_lossy().replace('\\', "/"),
             line: e.line,
             target: rel.clone(),
+            written_target: e.link.target.clone(),
             label: e.link.label.clone(),
         })
         .collect();

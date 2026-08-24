@@ -685,6 +685,43 @@ fn changelog_add_multiline_message_indents_continuation_and_targets_unreleased()
     );
 }
 
+/// PR #251 review L9: a blank line inside a multi-line `--message` must stay
+/// genuinely blank in the written file — not a whitespace-only "  " line.
+#[test]
+fn changelog_add_multiline_message_blank_line_stays_genuinely_blank() {
+    let tmp = TempDir::new().unwrap();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n",
+    );
+    let (_json, output) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "first\n\nthird",
+            "--apply",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+    assert!(
+        content.contains("- first\n\n  third"),
+        "the blank line between paragraphs must stay empty, not \"  \" (indent-only):\n{content:?}"
+    );
+    assert!(
+        !content.lines().any(|l| l == "  "),
+        "no line in the file may be indent-only whitespace:\n{content:?}"
+    );
+}
+
 #[test]
 fn changelog_add_wrap_too_narrow_is_user_error() {
     let tmp = TempDir::new().unwrap();

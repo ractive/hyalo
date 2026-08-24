@@ -456,6 +456,44 @@ See [jump](#section) — the file's only link is to itself.
     );
 }
 
+/// PR #251 review L7: a genuine self-referential FILE link (`[me](self.md)`,
+/// a real link the author wrote, not a same-file anchor jump) IS a real
+/// outbound edge and must not be excluded from orphan/dead-end detection —
+/// `has_real_outbound`'s exclusion is scoped to the self-anchor marker
+/// (empty `target`) specifically, not "resolves to this file".
+#[test]
+fn genuine_self_referential_file_link_still_counts_as_outbound() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "self.md",
+        md!(r"
+---
+title: Self
+---
+See [me](self.md) for details.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--orphan", "--format", "json"])
+        .output()
+        .expect("hyalo find --orphan should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["file"].as_str())
+        .collect();
+    assert!(
+        !files.contains(&"self.md"),
+        "a genuine self-referential link is a real outbound edge; the file \
+         must NOT be reported as an orphan: {files:?}"
+    );
+}
+
 /// Text output renders the fragment on the target and marks a missing
 /// heading as `(broken anchor)` — in the nested `links:` section of find
 /// results, not just the standalone LinkInfo shape the doc tests cover.

@@ -993,12 +993,21 @@ pub fn find(
         // edge to another file — it must not count as an outbound link for
         // orphan/dead-end purposes, or a file whose only "link" is a jump to
         // its own heading would stop being reported as an orphan.
+        //
+        // PR #251 review L7: narrowed to the self-anchor marker specifically
+        // (`target` is empty — see the `self_anchors` chain above, the only
+        // place that constructs a `LinkInfo` with an empty target) rather
+        // than "resolves to this file", which also matched a genuine
+        // self-referential link the author actually wrote (`[me](self.md)`)
+        // — that IS a real outbound edge (NEW-12's own scope is "same-file
+        // heading jump", not every link whose target happens to be the file
+        // itself), and excluding it too was broader than intended and untested.
         let has_real_outbound = || {
             obj.links
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .any(|l| l.path.as_deref() != Some(entry.rel_path.as_str()))
+                .any(|l| !l.target.is_empty())
         };
 
         // --- Apply orphan filter (no inbound AND no outbound links) ---

@@ -492,6 +492,19 @@ const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-he
 /// checkbox changed. Strips any such trailing bracket count from the heading
 /// before appending the one hyalo actually computed, so it renders once and
 /// is always current.
+///
+/// PR #251 review N15: this filter only ever runs on a section that DOES
+/// have `.tasks` (see the `code_blocks,heading,level,line,links,tasks`
+/// dispatch key below), so the strip always fires — there is no "no tasks,
+/// keep the text" branch here the way `build_file_object_filter`'s inline
+/// sections filter has. A heading that ends in bracket text shaped like
+/// `[n/m]` for a reason *other* than a task count (`## Aspect Ratio [16/9]`,
+/// and it happens to have a task list under it) loses that text: the strip
+/// is a plain regex match on shape, not semantics, and cannot tell "this is
+/// a stale task count" from "this looks like one." Accepted trade-off — the
+/// doubled/stale-count case this filter exists to fix is far more common
+/// than a coincidental `[n/m]`-shaped heading suffix on a section that also
+/// contains a task list.
 const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \((.heading // "(pre-heading)") | sub("\\s*\\[[0-9]+/[0-9]+\\]\\s*$"; "")) [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `TaskInfo`: `{done, line, status, text}`

@@ -174,7 +174,11 @@ and this project adheres to
   `featuredLinks` shape) as `"text"`, the same label a plain string gets
   — `hyalo properties` and `find --fields properties-typed` now report
   `"map"` so a scalar property is distinguishable from a mapping one
-  without inspecting the raw value.
+  without inspecting the raw value. **Migration note:** a script keying on
+  `type == "text"` to detect nested-mapping properties changes behavior —
+  `infer_type` feeds only reporting output (`hyalo properties`, `find
+  --fields properties-typed`), never schema validation, so `[schema]
+  required`/type-checking is unaffected.
 - **a hand-written `[n/m]` task count in a heading no longer doubles with
   the computed one in text output** (iter-220, dogfood NEW-16). `## Tasks
   [6/6]` with 1 of 2 checkboxes actually open used to render as `## Tasks
@@ -184,6 +188,39 @@ and this project adheres to
   `[n/m]`-shaped bracket group in the heading text rather than appending
   a second one; a heading with no task section (nothing to replace it
   with) keeps its own bracket text exactly as written.
+- **path relocations (`FixStrategy::ShortestPath`) no longer count as
+  `case_mismatches`** (iter-220, dogfood NEW-13). `[a](target.md)` resolving
+  via bare-stem lookup to `sub/target.md` is a move, not a casing fix — it
+  used to be counted and listed under "Case mismatches" alongside genuine
+  `LinkCaseMismatch` fixes, understating what actually changed. `links fix`
+  gains a separate `relocations`/`relocation_fixes` bucket and a matching
+  "Relocations: N" text section; both buckets are still written by plain
+  `--apply`, only the reporting changed. **Migration note:** `BrokenLinkReport`
+  (hyalo-core) gains a new public field, `relocations: Vec<FixPlan>` — a
+  source-breaking change for any external consumer constructing the struct
+  by literal (all in-tree construction sites are updated).
+- **`--dir` at a config root no longer prints a self-contradictory note, and
+  `--dir <foreign-tree>` gets the same ancestor-config discovery `cd` already
+  had** (iter-220, dogfood NEW-17). `--dir .` at the directory a `.hyalo.toml`
+  itself lives in used to print `./.hyalo.toml does not apply, ./.hyalo.toml
+  is in effect` — the identical literal path claiming both halves of one
+  contradictory sentence — because the "does not apply" half was a hardcoded
+  string rather than the actual shadowed config path; it now names the file
+  from data and says "still in effect" when it really is the same file.
+  Separately, `--dir <foreign-tree>` used to check only that exact directory
+  for a `.hyalo.toml`, so a subdirectory of an otherwise-configured tree
+  reported "no .hyalo.toml — built-in defaults" where `cd <foreign-tree> &&
+  hyalo …` would have silently adopted the ancestor config; both entry points
+  now resolve identically. See DEC-091 for the config-trust implication of
+  extending ancestor discovery to `--dir`.
+- **`hyalo config` no longer double-prints the malformed-config diagnostic,
+  and the ancestor-adoption note already respected `-q`** (iter-220, dogfood
+  UX-3). The malformed diagnostic used to appear once on stderr and again as
+  the lead line of `hyalo config`'s own report body; the stderr copy is now
+  skipped for that one command, since its report already carries it. Every
+  other command still prints it on stderr, since their own output doesn't
+  surface `malformed` at all. The ancestor-adoption note itself was verified
+  to already honor `--quiet` — not a bug.
 
 ### Changed
 

@@ -474,6 +474,11 @@ fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
 ///    contains `start_dir` (see [`discover_ancestor_config`]).
 /// 3. Otherwise built-in defaults.
 ///
+/// Returns the resolved config plus the ancestor directory it was adopted
+/// from, when resolution went through step 2 (`None` for steps 1 and 3) —
+/// callers decide whether and how to announce that on their own terms; this
+/// function never prints anything itself.
+///
 /// NEW-17 (dogfood pre3): originally inlined into [`load_config`] for the
 /// real process working directory only. `resolve_effective`'s `--dir
 /// <foreign-tree>` branch used to call [`load_config_from`] directly instead
@@ -482,9 +487,24 @@ fn announce_ancestor_config(cwd: &Path, config_dir: &Path, vault: &Path) {
 /// `cd sub/deep && hyalo …` would have silently adopted the repo-root config.
 /// Which `.hyalo.toml` governs a directory must not depend on how the caller
 /// named it.
-fn load_config_for_dir(start_dir: &Path) -> ResolvedDefaults {
+///
+/// PR #251 review H1: this used to call [`announce_ancestor_config`] itself,
+/// unconditionally, for *every* caller. On the `--dir <foreign-tree>` path
+/// that produced a wrong, actively misleading note: `announce_ancestor_config`
+/// names the *ancestor's own configured vault* as "the vault" (correct for
+/// [`load_config`], where the caller stands *inside* that vault), but
+/// `resolve_effective` sets `EffectiveConfig::dir` to the literal `--dir`
+/// value, which is typically a narrower subdirectory of that vault, not equal
+/// to it — so `hyalo config --dir other/deep/sub` announced "the vault is
+/// .../other, not the current directory — pass --dir ." while the run only
+/// ever scanned `other/deep/sub`. Worse, when the CWD *also* had its own
+/// shadowed config, this fired *alongside* `dir_override_note`'s own
+/// (correct) announcement — two notes, the first one wrong. Moving the
+/// announcement out lets each caller use the wording that actually matches
+/// what it does with the result.
+fn load_config_for_dir(start_dir: &Path) -> (ResolvedDefaults, Option<PathBuf>) {
     if start_dir.join(".hyalo.toml").is_file() {
-        return load_config_from(start_dir);
+        return (load_config_from(start_dir), None);
     }
     match discover_ancestor_config(start_dir) {
         Some(ancestor) => {
@@ -496,10 +516,9 @@ fn load_config_for_dir(start_dir: &Path) -> ResolvedDefaults {
             // adopted file, so `views set` and friends keep writing to it).
             let vault = ancestor.join(&config.dir);
             config.dir = dunce::canonicalize(&vault).unwrap_or(vault);
-            announce_ancestor_config(start_dir, &ancestor, &config.dir);
-            config
+            (config, Some(ancestor))
         }
-        None => load_config_from(start_dir),
+        None => (load_config_from(start_dir), None),
     }
 }
 
@@ -512,7 +531,17 @@ fn load_config_for_dir(start_dir: &Path) -> ResolvedDefaults {
 /// Valid config → merges with defaults (config values take precedence).
 pub(crate) fn load_config() -> ResolvedDefaults {
     match std::env::current_dir() {
-        Ok(cwd) => load_config_for_dir(&cwd),
+        Ok(cwd) => {
+            let (config, ancestor) = load_config_for_dir(&cwd);
+            // The real process CWD stands *inside* whatever vault applies —
+            // `announce_ancestor_config`'s "the vault is X, not the current
+            // directory" wording is accurate here, unlike the `--dir` path
+            // (see `load_config_for_dir`'s doc comment, PR #251 review H1).
+            if let Some(ancestor) = ancestor {
+                announce_ancestor_config(&cwd, &ancestor, &config.dir);
+            }
+            config
+        }
         Err(e) => {
             crate::warn::warn(format!(
                 "could not determine current directory to locate .hyalo.toml: {e}"
@@ -1075,7 +1104,15 @@ pub(crate) fn resolve_effective(
     // <dir> && hyalo …` would — otherwise this branch could wrongly report
     // "no .hyalo.toml — built-in defaults" for a directory whose *ancestor*
     // config actually governs it.
-    let target = load_config_for_dir(cli_dir);
+    //
+    // PR #251 review H1: deliberately silent about *how* the config was
+    // found (the discarded `Option<PathBuf>` ancestor). `dir_override_note`
+    // below already announces the adopted file correctly, naming the real
+    // effective vault (`cli_dir`) — a second, ancestor-discovery-specific
+    // announcement here would either duplicate it or (worse) describe the
+    // ancestor's own configured vault as "the vault", which is wrong once
+    // `--dir` narrows the run to a subdirectory of it.
+    let (target, _adopted_from) = load_config_for_dir(cli_dir);
     // The config actually governing `target` may live in an ancestor of
     // `cli_dir`, not `cli_dir` itself — read it from `target.config_dir`
     // (which `load_config_for_dir` sets to wherever the file was actually

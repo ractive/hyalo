@@ -93,9 +93,10 @@ fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::V
         .collect()
 }
 
-/// 1-based byte column of `needle`'s first occurrence on `line` (1-based) of
-/// `dir/source`, or `None` when the file/line is unreadable or the target no
-/// longer appears there.
+/// 1-based column (counted in Unicode scalar values, matching lint's
+/// `column` and `AutoLinkMatch::col` — iter-210) of `needle`'s first
+/// occurrence on `line` (1-based) of `dir/source`, or `None` when the
+/// file/line is unreadable or the target no longer appears there.
 ///
 /// NEW-18 (dogfood pre3): `fuzzy_fixes` entries carried `line` but no `col`
 /// (iter-210 task text asked for it) — a proposal on a long line still made
@@ -106,6 +107,12 @@ fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::V
 /// bucket, not just this one advisory field on the smallest — fuzzy —
 /// bucket); this seeks only the one line a proposal is already reporting,
 /// streaming rather than reading the whole file.
+///
+/// PR #251 review M2: the first cut returned a 1-based *byte* offset,
+/// contradicting hyalo's own documented convention — `col` counts characters
+/// everywhere else in the JSON output, specifically so a multibyte character
+/// before the match (this repo's own KB prose uses em dashes and arrows)
+/// doesn't report a column no editor agrees with.
 fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<usize> {
     use std::io::BufRead as _;
     if needle.is_empty() || line == 0 {
@@ -113,7 +120,8 @@ fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<us
     }
     let file = std::fs::File::open(dir.join(source)).ok()?;
     let text = std::io::BufReader::new(file).lines().nth(line - 1)?.ok()?;
-    text.find(needle).map(|byte_offset| byte_offset + 1)
+    let byte_offset = text.find(needle)?;
+    Some(text.get(..byte_offset)?.chars().count() + 1)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -140,15 +148,25 @@ pub fn links_fix(
     // the prefix itself was the problem. Warn the moment every site-absolute
     // link fails the cheap plausibility check, naming the prefix so the fix
     // (`--site-prefix` / `.hyalo.toml`) is one line away.
-    let (site_absolute_links, plausibly_resolved) =
-        hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
-    if site_absolute_links > 0 && plausibly_resolved == 0 {
-        let prefix_desc = site_prefix.map_or_else(|| "(none)".to_owned(), |p| format!("'{p}'"));
-        crate::warn::warn(format!(
-            "site_prefix {prefix_desc} stripped 0 of {site_absolute_links} site-absolute link(s) \
-             to a plausible vault path — check --site-prefix or `site_prefix` in .hyalo.toml \
-             (see `hyalo config` for where the effective value came from)"
-        ));
+    //
+    // PR #251 review L5: only when there IS an effective prefix to blame.
+    // `site_prefix: None` covers two legitimate cases neither of which is a
+    // misconfiguration: `--site-prefix ""` explicitly disables prefix
+    // stripping (OKF bundle-root resolution — the user does not want one),
+    // and auto-derivation can itself yield `None` (e.g. running from a
+    // directory with no nameable last path component). Telling either of
+    // those users to "check site_prefix (none)" names a value they never
+    // set and, in the disabled case, contradicts their own explicit choice.
+    if let Some(prefix) = site_prefix {
+        let (site_absolute_links, plausibly_resolved) =
+            hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
+        if site_absolute_links > 0 && plausibly_resolved == 0 {
+            crate::warn::warn(format!(
+                "site_prefix '{prefix}' stripped 0 of {site_absolute_links} site-absolute \
+                 link(s) to a plausible vault path — check --site-prefix or `site_prefix` in \
+                 .hyalo.toml (see `hyalo config` for where the effective value came from)"
+            ));
+        }
     }
 
     // Compute the set of in-scope source files when --glob is provided.
@@ -213,10 +231,17 @@ pub fn links_fix(
     // clean (matching the exact condition it exists to catch), which also
     // means the extra resolution pass never runs on a vault that already has
     // broken targets — the common case on a large, imperfect corpus.
-    let broken_anchor_count = if broken.is_empty() {
+    // PR #251 review L6: `count_broken_anchors` returns `None` when the
+    // vault directory could not be canonicalized — serialized as JSON `null`
+    // (not `0`) below, so a caller checking `broken_anchors == 0` cannot
+    // mistake "could not check" for "genuinely clean". The `Some(0)` in the
+    // gated-off branch is a real, computed zero: no anchor check ran because
+    // targets are already broken (see the NEW-15/UX-2 gate comment above the
+    // JSON block), which is different from "we tried and failed to look."
+    let broken_anchor_count: Option<usize> = if broken.is_empty() {
         hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index)
     } else {
-        0
+        Some(0)
     };
 
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
@@ -436,10 +461,12 @@ pub fn links_fix(
     let output = serde_json::json!({
         "broken": broken.len(),
         // NEW-15 / UX-2 (dogfood pre3): counted only when `broken` is empty
-        // (see above) — 0 either means genuinely no dead anchors, or that
-        // targets are broken too and this run didn't check (targets take
-        // priority; fix those first). `find --broken-links` remains the
-        // source of truth for the full picture including this case.
+        // (see above) — `Some(0)` either means genuinely no dead anchors, or
+        // that targets are broken too and this run didn't check (targets
+        // take priority; fix those first). `find --broken-links` remains the
+        // source of truth for the full picture including this case. `null`
+        // (PR #251 review L6) means the vault directory itself could not be
+        // canonicalized — a real "could not check", not a clean bill.
         "broken_anchors": broken_anchor_count,
         // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
         // plain `--apply` writes. Fuzzy matches are reported exclusively in

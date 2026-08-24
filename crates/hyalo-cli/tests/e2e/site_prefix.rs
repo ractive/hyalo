@@ -396,6 +396,62 @@ fn links_fix_warns_when_site_prefix_strips_nothing_plausible() {
     );
 }
 
+/// PR #251 review L5: a bare `/` (site-root) link has no path segment to
+/// check plausibility against — it must not pad the denominator toward a
+/// false "stripped 0 of N" alongside a genuinely external-looking link.
+#[test]
+fn links_fix_bare_root_link_does_not_inflate_the_site_prefix_warning() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\n[home](/) and [blog](/blog/post)\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--site-prefix", "t3"])
+        .args(["links", "fix", "--dry-run", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("stripped 0 of 1"),
+        "the bare `/` link must not count toward the denominator: {stderr}"
+    );
+    assert!(
+        !stderr.contains("stripped 0 of 2"),
+        "must not count the site-root link as a second unresolved site-absolute link: {stderr}"
+    );
+}
+
+/// PR #251 review L5: `site_prefix: None` covers two legitimate,
+/// non-misconfiguration cases — `--site-prefix ""` (explicit bundle-root
+/// resolution) and derivation itself yielding nothing — neither of which the
+/// warning should fire for, since there is no prefix value to point the user
+/// at fixing.
+#[test]
+fn links_fix_does_not_warn_when_site_prefix_is_explicitly_disabled() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "src.md",
+        "---\ntitle: Src\n---\n[nowhere](/does/not/exist)\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--site-prefix", ""])
+        .args(["links", "fix", "--dry-run", "--format", "text"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("site_prefix"),
+        "an explicitly disabled prefix must never be blamed: {stderr}"
+    );
+}
+
 /// `hyalo config` warns that a derived prefix is only ever one segment, so the
 /// MDN case is discoverable rather than silently wrong.
 #[test]

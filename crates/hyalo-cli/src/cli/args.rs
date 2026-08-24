@@ -712,10 +712,14 @@ pub(crate) enum Commands {
             Builds an in-memory link graph by scanning all .md files in the vault, \
             then returns every file that contains a [[wikilink]] or [markdown](link) \
             pointing to the target file.\n\n\
-            OUTPUT: JSON object with file, backlinks array (source, line, target, label), and total count.\n\
-            `target` is the queried file's own canonical resolved path, reported identically on\n\
-            every entry — not each occurrence's own written spelling, which could differ by `.md`\n\
-            presence or relative-path form even though every entry points at the same file (NEW-18).\n\
+            OUTPUT: JSON object with file, backlinks array (source, line, target, written_target,\n\
+            label), and total count. `target` is the queried file's own canonical resolved path,\n\
+            reported identically on every entry — not each occurrence's own written spelling,\n\
+            which could differ by `.md` presence or relative-path form even though every entry\n\
+            points at the same file (NEW-18). `written_target` is that per-occurrence spelling —\n\
+            path resolved but casing and `.md` presence exactly as the author typed — so a case\n\
+            mismatch (`[[NOTE]]` vs `[[note]]`) stays visible even though `target` is uniform\n\
+            (PR #251 review L8).\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo backlinks decision-log.md\n\
@@ -1219,7 +1223,7 @@ Repeatable (AND).\n\
             relocations is a bare-stem link (no directory in the written target) whose stem \
             resolved to a file in a different directory — a move, not a casing fix, so it is \
             reported apart from case_mismatches (both are written by plain --apply).\n\
-            ANCHORS: broken_anchors (and its stderr-adjacent text note) is populated only when \
+            ANCHORS: broken_anchors (and its one-line note in --format text output) is populated only when \
             broken is 0 — a link whose target resolves but whose #fragment names no heading is \
             not a broken *link* in this command's sense, and the count only runs the extra check \
             when targets are otherwise clean. `find --broken-links --strict` is the CI gate for \
