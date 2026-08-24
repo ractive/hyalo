@@ -58,6 +58,43 @@ pub fn top_level_subcommand<'a>(args: &'a [String], cmd: &clap::Command) -> Opti
     None
 }
 
+/// Extract the long-flag name from a clap `UnknownArgument` error.
+///
+/// Returns the flag without leading dashes and without any `=value`
+/// suffix (e.g. `hyalo find --status=planned` → `Some("status")`).
+/// Short flags (single-dash) and `--` return `None` — the property hint
+/// only makes sense for long flags that read like property names.
+pub fn unknown_long_flag_name(err: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+    err.context().find_map(|(kind, value)| {
+        if kind != ContextKind::InvalidArg {
+            return None;
+        }
+        let ContextValue::String(s) = value else {
+            return None;
+        };
+        let name = s.strip_prefix("--")?;
+        if name.is_empty() || name.starts_with('-') {
+            return None;
+        }
+        Some(name.split('=').next().unwrap_or(name).to_owned())
+    })
+}
+
+/// Whether `name` is a property declared in the effective schema:
+/// any type's `properties`, `required`, or `defaults` keys — or the
+/// `[schema.default]` type's. This powers the `--status` →
+/// `--property status=…` unknown-flag hint: only flags that name a real
+/// property get the suggestion; everything else keeps clap's normal error.
+pub fn is_schema_property(schema: &hyalo_core::schema::SchemaConfig, name: &str) -> bool {
+    let check = |ts: &hyalo_core::schema::TypeSchema| {
+        ts.properties.contains_key(name)
+            || ts.required.iter().any(|r| r == name)
+            || ts.defaults.contains_key(name)
+    };
+    check(&schema.default) || schema.types.values().any(check)
+}
+
 /// Given the raw CLI args and the clap Command tree, detect when an unknown
 /// `--flag` matches a known subcommand name and return a corrected command suggestion.
 ///

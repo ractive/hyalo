@@ -313,3 +313,108 @@ fn alias_output_matches_canonical_verb() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// unknown --<property> flag → suggest --property K=V
+// ---------------------------------------------------------------------------
+//
+// Models and users reach for natural-language flags (`hyalo find --status
+// planned`) even though the help teaches `--property status=planned`. When
+// the unknown long flag names a property declared in the effective schema,
+// the CLI says so; when it doesn't, clap's normal error stays untouched.
+
+/// Helper: run `hyalo <args>` with CWD set to a temp vault holding `config`.
+/// CWD-based (not `--dir`) because config discovery is CWD-anchored — this
+/// mirrors the real scenario (`cd vault && hyalo find --status …`).
+fn run_with_config(config: &str, args: &[&str]) -> (Option<i32>, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join(".hyalo.toml"), config).unwrap();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(args)
+        .output()
+        .unwrap();
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+const SCHEMA_WITH_STATUS: &str = "\
+[schema.default]
+required = [\"title\", \"type\"]
+
+[schema.types.note.properties.status]
+type = \"string\"
+";
+
+#[test]
+fn unknown_flag_naming_a_schema_property_suggests_property_flag() {
+    let (code, stderr) = run_with_config(SCHEMA_WITH_STATUS, &["find", "--status", "planned"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        stderr.contains("'status' is a frontmatter property"),
+        "expected the property hint; got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--property status="),
+        "expected the corrected flag form; got: {stderr}"
+    );
+    // The misleading clap tip must be gone.
+    assert!(
+        !stderr.contains("as a value"),
+        "clap's '--status as a value' tip must be replaced; got: {stderr}"
+    );
+}
+
+#[test]
+fn unknown_flag_with_equals_form_also_gets_the_hint() {
+    let (code, stderr) = run_with_config(SCHEMA_WITH_STATUS, &["find", "--status=planned"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        stderr.contains("--property status="),
+        "the --flag=value form should hit the same hint; got: {stderr}"
+    );
+}
+
+#[test]
+fn unknown_flag_for_undeclared_property_keeps_clap_error() {
+    // No [schema.types.note.properties.banana] — no hint, clap's normal error.
+    let (code, stderr) = run_with_config(SCHEMA_WITH_STATUS, &["find", "--banana"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        !stderr.contains("frontmatter property"),
+        "no property hint for an undeclared name; got: {stderr}"
+    );
+}
+
+#[test]
+fn unknown_flag_without_any_schema_types_keeps_clap_error() {
+    // Config with no [schema] section at all: `--status` is just unknown.
+    let (code, stderr) = run_with_config("dir = \".\"\n", &["find", "--status", "planned"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        !stderr.contains("frontmatter property"),
+        "no schema → no property hint; got: {stderr}"
+    );
+}
+
+#[test]
+fn required_and_default_properties_also_trigger_the_hint() {
+    // `milestone` is only in [schema.default].required — still a known
+    // property. (Not `title`/`type`: `--title` is a real find flag, so it
+    // never reaches the unknown-arg path.)
+    let config = "\
+[schema.default]
+required = [\"title\", \"milestone\"]
+
+[schema.types.note.properties.status]
+type = \"string\"
+";
+    let (code, stderr) = run_with_config(config, &["find", "--milestone"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        stderr.contains("'milestone' is a frontmatter property"),
+        "required properties should trigger the hint too; got: {stderr}"
+    );
+}
