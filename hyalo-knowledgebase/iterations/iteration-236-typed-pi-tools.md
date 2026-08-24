@@ -10,7 +10,7 @@ tags:
   - agent-ergonomics
   - extension
 related:
-  - "[[iterations/iteration-227-agent-ergonomics]]"
+  - "[[iterations/iteration-235-agent-cli-ergonomics]]"
   - "[[research/agent-ergonomics-ralph-loop-port-2026-08-24]]"
 ---
 
