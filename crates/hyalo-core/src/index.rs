@@ -932,11 +932,35 @@ fn write_snapshot(
     // place) instead of a hand-rolled `NamedTempFile` + `persist` pair, so
     // index writes give the same answer as every other atomic write in
     // hyalo for the same input (L-1, adversarial-review-2026-08-23.md). This
-    // also picks up `atomic_write`'s kernel-assigned temp-file name in the
-    // same directory as the target (the same symlink-substitution defense
-    // the old code commented on), permission preservation, and parent-dir
-    // fsync for free.
-    crate::fs_util::atomic_write(path, &bytes).context("failed to write index")?;
+    // also picks up the kernel-assigned temp-file name in the same directory
+    // as the target (the same symlink-substitution defense the old code
+    // commented on), permission preservation, and parent-dir fsync for free.
+    //
+    // MUST be `atomic_write_within`, not the unguarded `atomic_write`: the
+    // first cut of this fix used `atomic_write`, which follows a symlink
+    // chain with NO boundary check — `atomic_write`'s own doc comment says
+    // as much ("this entry point has no vault context — so callers must
+    // have already validated the path"). `path` here is never validated
+    // that way (it's an index destination, not a `resolve_file`-checked
+    // vault file), so a symlinked index (`.hyalo-index -> ../../secret.txt`)
+    // let every mutating command that patches the index — `save_to`,
+    // reached from `mutation.rs`/`tasks.rs`/`properties.rs`/`tags.rs` —
+    // silently clobber a file *outside* the vault with MessagePack bytes.
+    // `vault_dir` is the trustworthy boundary to check against here: it is
+    // always a canonicalized path (`create_index.rs`'s
+    // `std::fs::canonicalize(dir)...`), carried unchanged through
+    // `SnapshotHeader` on every subsequent `save_to` of a loaded snapshot.
+    // `atomic_write_within` only re-canonicalizes when `path` actually is a
+    // symlink (the common non-symlink case pays no extra cost and is
+    // unaffected), and an index destination that is legitimately outside
+    // the vault — accepted upfront via `create-index --allow-outside-vault`
+    // — still writes there directly as long as it is not itself a symlink;
+    // a symlink chain redirecting even an allowed-outside destination
+    // somewhere else again is refused with a clear error rather than
+    // silently followed (verified: adversarial review Finding 1 repro no
+    // longer touches the outside target's content).
+    crate::fs_util::atomic_write_within(Path::new(vault_dir), path, &bytes)
+        .context("failed to write index")?;
     Ok(())
 }
 

@@ -752,6 +752,25 @@ fn apply_jq_filter(
 /// pathological cost: a 3s deadline turns `[range(3e8)]`'s real 8.7s/4.8 GB
 /// into an error after 3s and however much the abandoned thread allocated in
 /// that window, not the full amount.
+///
+/// A single pathological *value* (not a huge intermediate collection) is
+/// additionally checked by raw byte length before it is ever copied out of
+/// the interpreter — see the pre-check in [`execute_jq_filter`] — since that
+/// case (`"x" * 2000000000`, ~4.0 GB peak RSS in ~1.5s, comfortably under
+/// this deadline) would otherwise slip past both output caps by finishing
+/// before either check could catch it, and used to be measured only *after*
+/// being duplicated into a second multi-GB copy just to learn it was too
+/// big.
+///
+/// **Known residual gap, not covered by anything here:** unbounded *native
+/// stack* recursion — `def f: [f]; f` — overflows the OS thread stack and
+/// hits Rust's SIGSEGV-to-`abort()` guard page, killing the whole process
+/// immediately (verified: `exit 134`, well under this deadline) rather than
+/// erroring cleanly through it. This is not a regression from this
+/// mitigation — the same filter would abort a non-threaded evaluator's
+/// stack identically on unpatched jaq — and there is no user-space hook to
+/// catch a native stack overflow before it happens. Documented rather than
+/// silently claimed to be covered; see DEC-093.
 const JQ_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Maximum number of output values a `--jq` filter may emit, independent of
@@ -922,6 +941,32 @@ fn execute_jq_filter(
                 if value_count > JQ_MAX_OUTPUT_VALUES {
                     return Err(format!(
                         "jq filter output exceeds {JQ_MAX_OUTPUT_VALUES} values"
+                    ));
+                }
+                // Check a string value's raw byte length BEFORE copying it
+                // (Finding 2, review round on PR #254): a single pathological
+                // value — `"x" * 2000000000` measured at ~4.0 GB peak RSS in
+                // 1.49s, comfortably under JQ_TIME_LIMIT — used to be
+                // measured only *after* `.to_owned()`/`from_utf8_lossy()`
+                // duplicated it into a second multi-GB buffer just to learn
+                // it was too big. `s` here still borrows from `val`, so this
+                // costs nothing beyond the length check already available on
+                // the byte slice jaq handed us.
+                //
+                // No equivalent pre-check exists for non-string values
+                // (`other.to_string()` below): jaq's `Display` impl builds
+                // the whole formatted string in one call with no length
+                // preview, so a single huge *non-string* value (e.g. a large
+                // array/object formatted directly, without a `length`/count
+                // reduction) is bounded only by JQ_TIME_LIMIT, not by either
+                // output cap — documented on `JQ_TIME_LIMIT`'s doc comment
+                // and in DEC-093 rather than silently claimed to be covered.
+                if let Val::TStr(ref s) | Val::BStr(ref s) = val
+                    && s.len() > JQ_OUTPUT_CAP
+                {
+                    return Err(format!(
+                        "jq filter output exceeds {} MiB limit",
+                        JQ_OUTPUT_CAP / (1024 * 1024)
                     ));
                 }
                 let s = match val {
@@ -2481,6 +2526,30 @@ mod tests {
         // ".[]" emits each element as a separate output value.
         let result = apply_jq_filter_result(".[]", &val);
         assert!(result.is_err(), "expected cap error but got Ok output");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("exceeds") && err.contains("MiB"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn jq_single_huge_string_value_rejected_via_raw_length_before_copying() {
+        // Finding 2 (review round on PR #254): a single value already over
+        // JQ_OUTPUT_CAP on its own must be rejected using its *existing*
+        // borrowed bytes, not measured only after being duplicated into an
+        // owned copy. Uses an 11 MiB *input* string (cheap to build in a
+        // unit test) piped through the identity filter `.` — this emits it
+        // as a single `Val::TStr`, exercising the exact single-value
+        // pre-check path the real repro (`"x" * 2000000000`, ~4 GB
+        // unmitigated) hits, without needing gigabytes in a fast test.
+        let big_string = "a".repeat(11 * 1024 * 1024);
+        let val = serde_json::Value::String(big_string);
+        let result = apply_jq_filter_result(".", &val);
+        assert!(
+            result.is_err(),
+            "a single value over the byte cap must be rejected"
+        );
         let err = result.unwrap_err();
         assert!(
             err.contains("exceeds") && err.contains("MiB"),

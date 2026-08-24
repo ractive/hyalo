@@ -673,42 +673,79 @@ fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<
     Ok(())
 }
 
-/// Remove lines between `<!-- hyalo:start -->` and `<!-- hyalo:end -->` (inclusive).
-/// Returns `(new_content, was_stripped)`.
-fn strip_managed_section(content: &str) -> (String, bool) {
+/// Remove the first valid `<!-- hyalo:start -->`..`<!-- hyalo:end -->` pair
+/// (inclusive) found at or after 0-based line `from_line`, if any.
+///
+/// The end marker is searched only strictly after the start marker (and
+/// both only at or after `from_line`), so a stray `<!-- hyalo:end -->`
+/// mention in prose can't be mistaken for a pair's closer. Returns `None`
+/// when no valid pair exists in that range, leaving `content` conceptually
+/// unchanged (callers that need the identical `String` back, not just "no
+/// change happened", check `None` themselves — see `strip_managed_section`).
+///
+/// `from_line` lets a caller that just spliced in a fresh section skip past
+/// it when collapsing any *further* stale pairs, without re-matching the
+/// pair it just wrote (`upsert_managed_section`).
+fn strip_one_managed_section_from(content: &str, from_line: usize) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
-    let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
-    // Search for the end marker only after the start marker, so a stray
-    // `<!-- hyalo:end -->` in user content before the managed section
-    // doesn't confuse the match.
-    let end_idx = start_idx.and_then(|s| {
-        lines
-            .iter()
-            .skip(s + 1)
-            .position(|l| l.contains(SECTION_END))
-            .map(|rel| s + 1 + rel)
-    });
+    let start_idx = lines
+        .iter()
+        .enumerate()
+        .skip(from_line)
+        .find(|(_, l)| l.contains(SECTION_START))
+        .map(|(i, _)| i)?;
+    let end_idx = lines
+        .iter()
+        .enumerate()
+        .skip(start_idx + 1)
+        .find(|(_, l)| l.contains(SECTION_END))
+        .map(|(i, _)| i)?;
 
-    if let (Some(s), Some(e)) = (start_idx, end_idx) {
-        let mut result = String::new();
-        for line in &lines[..s] {
-            result.push_str(line);
-            result.push('\n');
-        }
-        for line in &lines[e + 1..] {
-            result.push_str(line);
-            result.push('\n');
-        }
-        // Trim trailing blank lines that were separating the section.
-        let trimmed = result.trim_end_matches('\n').to_owned();
-        let final_content = if trimmed.is_empty() {
-            String::new()
-        } else {
-            format!("{trimmed}\n")
-        };
-        return (final_content, true);
+    let mut result = String::new();
+    for line in &lines[..start_idx] {
+        result.push_str(line);
+        result.push('\n');
     }
-    (content.to_owned(), false)
+    for line in &lines[end_idx + 1..] {
+        result.push_str(line);
+        result.push('\n');
+    }
+    // Trim trailing blank lines that were separating the section.
+    let trimmed = result.trim_end_matches('\n').to_owned();
+    Some(if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("{trimmed}\n")
+    })
+}
+
+/// Remove EVERY valid managed-section pair from `content`, not just the
+/// first. Returns `(new_content, pairs_removed)`.
+///
+/// Finding 3 (review round on PR #254, following F3-2): a file that already
+/// carries two complete pairs — the exact legacy-corruption state F3-2 was
+/// about, where a pre-fix `init --claude` appended a duplicate section next
+/// to a stray-marker-confused original — used to have `deinit` strip only
+/// the *first* pair and report "stripped managed section" with exit 0,
+/// silently leaving the second pair (and its content) behind. Looping here
+/// makes that claim actually true: `deinit` (via [`strip_managed_section`])
+/// now removes every pair before reporting success.
+fn strip_all_managed_sections(content: &str) -> (String, usize) {
+    let mut current = content.to_owned();
+    let mut removed = 0usize;
+    while let Some(next) = strip_one_managed_section_from(&current, 0) {
+        current = next;
+        removed += 1;
+    }
+    (current, removed)
+}
+
+/// Remove lines between `<!-- hyalo:start -->` and `<!-- hyalo:end -->`
+/// (inclusive), for every pair present. Returns `(new_content, was_stripped)`
+/// where `was_stripped` is `true` if at least one pair was removed.
+fn strip_managed_section(content: &str) -> (String, bool) {
+    let (stripped, removed) = strip_all_managed_sections(content);
+    (stripped, removed > 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -951,6 +988,22 @@ fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str
             result.push_str(line);
             result.push('\n');
         }
+
+        // Collapse any FURTHER complete pairs into nothing, so a file that
+        // already carried two+ pairs (the exact legacy-corruption state
+        // F3-2 itself could produce pre-fix) converges to exactly one
+        // up-to-date section instead of leaving stale ones behind (Finding
+        // 3, review round on PR #254). The search starts right after the
+        // fresh section we just spliced in — `section`'s own line count —
+        // so it can never mistake the pair we just wrote for a stale one;
+        // everything before that boundary is untouched by the removal, so
+        // the boundary stays valid across repeated calls as the tail
+        // shrinks.
+        let search_from = s + section.lines().count();
+        while let Some(next) = strip_one_managed_section_from(&result, search_from) {
+            result = next;
+        }
+
         return (result, "replaced managed section");
     }
 
@@ -1325,6 +1378,75 @@ mod tests {
             !stripped.contains(CLAUDE_MD_HINT),
             "managed hint content fully removed, no orphan"
         );
+    }
+
+    #[test]
+    fn strip_managed_section_removes_both_pairs_of_a_two_pair_file() {
+        // Finding 3 (review round on PR #254): a file that already carries
+        // TWO complete pairs (the exact legacy-corruption state F3-2 fixed
+        // upsert's production of) must have `deinit` remove BOTH, not just
+        // the first — and only then may it claim success.
+        let content = format!(
+            "# Before\n\n{SECTION_START}\nfirst\n{SECTION_END}\n\nbetween\n\n{SECTION_START}\nsecond\n{SECTION_END}\n\n# After\n"
+        );
+        let (stripped, was_stripped) = strip_managed_section(&content);
+        assert!(was_stripped, "at least one pair was removed");
+        assert!(
+            !stripped.contains(SECTION_START) && !stripped.contains(SECTION_END),
+            "no marker of either pair may remain: {stripped:?}"
+        );
+        assert!(!stripped.contains("first"), "first pair's content removed");
+        assert!(
+            !stripped.contains("second"),
+            "second pair's content removed"
+        );
+        assert!(stripped.contains("# Before"), "leading prose preserved");
+        assert!(
+            stripped.contains("between"),
+            "prose between pairs preserved"
+        );
+        assert!(stripped.contains("# After"), "trailing prose preserved");
+    }
+
+    #[test]
+    fn upsert_managed_section_converges_two_pair_file_to_exactly_one() {
+        // Finding 3 (review round on PR #254): `init --claude` on a file
+        // that already carries two complete pairs must collapse them to
+        // exactly one up-to-date section, not touch only the first and
+        // leave the second stale forever.
+        let section = make_section();
+        let content = format!(
+            "# Before\n\n{SECTION_START}\nfirst (stale)\n{SECTION_END}\n\nbetween\n\n{SECTION_START}\nsecond (also stale)\n{SECTION_END}\n\n# After\n"
+        );
+        let (result, action) = upsert_managed_section(&content, &section);
+        assert_eq!(action, "replaced managed section");
+        assert_eq!(
+            result.matches(SECTION_START).count(),
+            1,
+            "exactly one start marker survives: {result:?}"
+        );
+        assert_eq!(
+            result.matches(SECTION_END).count(),
+            1,
+            "exactly one end marker survives: {result:?}"
+        );
+        assert!(!result.contains("first (stale)"), "first stale pair gone");
+        assert!(
+            !result.contains("second (also stale)"),
+            "second stale pair gone"
+        );
+        assert!(result.contains(CLAUDE_MD_HINT), "fresh content present");
+        assert!(result.contains("# Before"), "leading prose preserved");
+        assert!(result.contains("between"), "prose between pairs preserved");
+        assert!(result.contains("# After"), "trailing prose preserved");
+
+        // And a subsequent `deinit` must remove the converged section
+        // cleanly, with no orphan left over.
+        let (stripped, was_stripped) = strip_managed_section(&result);
+        assert!(was_stripped);
+        assert!(!stripped.contains(CLAUDE_MD_HINT));
+        assert!(!stripped.contains(SECTION_START));
+        assert!(!stripped.contains(SECTION_END));
     }
 
     #[test]

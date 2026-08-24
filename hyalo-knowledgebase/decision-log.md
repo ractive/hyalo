@@ -2354,3 +2354,33 @@ not attacker/user input — and are called once per rendered item, so they
 were deliberately left on the existing cached, unthreaded path
 (`apply_jq_filter`/`run_jq_filter_cached`); wrapping every one of those in a
 thread spawn would be a real per-item perf cost for no security benefit.
+
+**Follow-up from the PR #254 review round (2026-08-24):** two gaps in the
+first cut, now closed or documented:
+
+- A single pathological *value* — `"x" * 2000000000`, ~4.0 GB peak RSS in
+  ~1.5s — finished well inside the 3s deadline while defeating both output
+  caps, because `execute_jq_filter` only measured a value's size *after*
+  `.to_owned()`/`from_utf8_lossy()` had already duplicated it into a second
+  multi-GB buffer. Fixed by checking a `Val::TStr`/`Val::BStr`'s raw byte
+  length against `JQ_OUTPUT_CAP` before any copy — the value still borrows
+  from the interpreter's own `Val` at that point, so the check is free.
+  Measured: peak RSS for the same repro dropped from ~4.0 GB to ~2.0 GB
+  (jaq's own internal string-repeat allocation is the residual cost; nothing
+  on our side can intercept construction *inside* a single interpreter
+  step, per the reasoning above). No equivalent pre-check exists for a
+  large *non-string* value (`Display`'s `to_string()` gives no length
+  preview before building the whole formatted string) — that residual case
+  is bounded only by `JQ_TIME_LIMIT`, documented as such rather than
+  silently claimed to be covered.
+- **Known, accepted, unfixed gap:** `def f: [f]; f` overflows the native
+  thread stack and hits Rust's abort-on-stack-overflow guard (`exit 134`),
+  killing the whole process before the deadline (or anything else) ever
+  gets a chance to run. This is not a regression introduced by running the
+  filter on a separate thread — the identical filter overflows any thread's
+  stack, worker or main, since jaq's recursive evaluation has no depth
+  limit either — and there is no user-space hook that intercepts a stack
+  overflow before the OS/runtime aborts the process. Documented on
+  `JQ_TIME_LIMIT`'s doc comment rather than left as a silent gap; no fix is
+  planned (would require jaq upstream to add its own recursion-depth guard,
+  or evaluating on a growable/guarded stack, both out of scope here).

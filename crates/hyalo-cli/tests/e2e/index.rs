@@ -202,15 +202,19 @@ fn create_index_custom_output_path() {
 }
 
 #[test]
-fn create_index_output_follows_symlink_and_keeps_it_a_symlink() {
+fn create_index_output_follows_in_vault_symlink_and_keeps_it_a_symlink() {
     // L-1 (adversarial-review-2026-08-23.md): `write_snapshot` used to bypass
     // `fs_util`'s shared write policy (DEC-062) with a raw
     // `NamedTempFile::new_in` + `persist`, which replaces a symlinked
     // `--output` destination with a regular file instead of following it —
     // diverging from every other atomic write in hyalo for the same input.
+    // The symlink's target is intentionally kept INSIDE the vault: an
+    // outside target is a different, security-relevant case, covered
+    // separately by `create_index_refuses_to_follow_symlink_outside_vault`
+    // (a first cut of this fix used the unguarded `atomic_write` here, which
+    // followed an outside-vault symlink target too — see that test).
     let tmp = setup_vault();
-    let outside_dir = TempDir::new().unwrap();
-    let real_target = outside_dir.path().join("real-index.bin");
+    let real_target = tmp.path().join("real-index.bin");
     let link_path = tmp.path().join("idx-link");
     unix_fs::symlink(&real_target, &link_path).unwrap();
 
@@ -238,6 +242,50 @@ fn create_index_output_follows_symlink_and_keeps_it_a_symlink() {
     assert!(
         real_target.metadata().unwrap().len() > 0,
         "the index content must have landed at the real target"
+    );
+}
+
+#[test]
+fn create_index_refuses_to_follow_symlink_outside_vault() {
+    // HIGH regression (review round on PR #254, Finding 1): the first cut
+    // of the L-1 fix routed `write_snapshot` through the UNGUARDED
+    // `fs_util::atomic_write`, which follows a symlink chain with no
+    // boundary check at all. A `.hyalo-index` symlinked to a file outside
+    // the vault meant every mutating command that patches the snapshot
+    // (`set`/`mv`/`task toggle`/... via `SnapshotIndex::save_to`) silently
+    // clobbered that outside file with MessagePack bytes. This exact repro
+    // — default `.hyalo-index` location symlinked to a file one directory
+    // above the vault — must now be refused, and the outside file's content
+    // must be byte-for-byte unchanged.
+    let tmp = setup_vault();
+    let outside_dir = TempDir::new().unwrap();
+    let secret = outside_dir.path().join("secret.txt");
+    std::fs::write(&secret, "SECRET DATA - DO NOT TOUCH").unwrap();
+    let link_path = tmp.path().join(".hyalo-index");
+    unix_fs::symlink(&secret, &link_path).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "create-index onto a symlink pointing outside the vault must be \
+         refused, not silently followed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&secret).unwrap(),
+        "SECRET DATA - DO NOT TOUCH",
+        "the outside-vault symlink target must be byte-for-byte unchanged"
+    );
+    let meta = std::fs::symlink_metadata(&link_path).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the symlink itself must be left alone, not replaced"
     );
 }
 
@@ -830,6 +878,85 @@ fn set_with_index_updates_index_for_subsequent_find() {
                 .as_bool()
                 .map(|_| "true")),
         Some("true"),
+    );
+}
+
+#[test]
+fn set_with_symlinked_index_outside_vault_does_not_clobber_it() {
+    // HIGH regression (review round on PR #254, Finding 1) — blast-radius
+    // check: it isn't just `create-index` that reaches `write_snapshot`.
+    // Every mutating command that patches a loaded snapshot in place
+    // (`set`/`mv`/`task toggle`/`remove`/`append`/...) goes through
+    // `SnapshotIndex::save_to` -> `write_snapshot` too
+    // (`crates/hyalo-cli/src/commands/mutation.rs::save_index_if_dirty`).
+    // A tampered `--index-file` pointing outside the vault must be refused
+    // there as well, not just at `create-index` time — and the outside
+    // file's pre-existing valid index content must survive byte-for-byte,
+    // proving the refusal fires on the *write* path (this index loads fine
+    // first; the boundary check is what stops the save).
+    let tmp = setup_vault();
+    let outside_dir = TempDir::new().unwrap();
+    let outside_index = outside_dir.path().join("planted-index.bin");
+
+    // A real, valid index — written to an explicitly-authorized outside
+    // location — so the subsequent `set` can load it successfully and reach
+    // the save path (a garbage/undeserializable target would only prove the
+    // *load* fails, not that the *write* boundary check works).
+    let build_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "create-index",
+            "--output",
+            outside_index.to_str().unwrap(),
+            "--allow-outside-vault",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        build_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+    let original_bytes = std::fs::read(&outside_index).unwrap();
+    assert!(!original_bytes.is_empty());
+
+    // Plant the tampered index: the vault's default `.hyalo-index` location
+    // is a symlink to that outside file.
+    let link_path = tmp.path().join(".hyalo-index");
+    unix_fs::symlink(&outside_index, &link_path).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "set",
+            "--index-file",
+            link_path.to_str().unwrap(),
+            "--property",
+            "reviewed=true",
+            "--file",
+            "alpha.md",
+        ])
+        .output()
+        .unwrap();
+
+    // The `set` mutation to alpha.md's frontmatter is a normal in-vault
+    // write and must still succeed even though the index flush fails or is
+    // refused — only the index save is affected, not the intended file edit
+    // (the command may still exit non-zero if it treats the index-flush
+    // failure as fatal; either way the outside file must be untouched).
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = output.status.success(); // documented, not asserted either way
+
+    assert_eq!(
+        std::fs::read(&outside_index).unwrap(),
+        original_bytes,
+        "the outside-vault index file must be byte-for-byte unchanged \
+         (stderr: {stderr})"
+    );
+    let meta = std::fs::symlink_metadata(&link_path).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "the planted symlink itself must be left alone, not replaced"
     );
 }
 
