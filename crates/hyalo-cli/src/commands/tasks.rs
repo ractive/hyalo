@@ -3,8 +3,9 @@ use anyhow::{Result, bail};
 use std::path::Path;
 
 use crate::commands::resolve_error_to_outcome;
+use crate::commands::section_scanner::SectionScanner;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::heading::{SectionFilter, parse_atx_heading};
+use hyalo_core::heading::{SectionFilter, build_section_scope, parse_atx_heading};
 use hyalo_core::index::{SnapshotIndex, format_modified};
 use hyalo_core::types::{TaskDryRunResult, TaskInfo, TaskReadResult};
 
@@ -33,6 +34,32 @@ fn resolve_task_lines(
     if let Some(section_str) = section {
         let filter = SectionFilter::parse(section_str)
             .map_err(|e| anyhow::anyhow!("invalid --section: {e}"))?;
+
+        // Refuse when --section matches more than one distinct heading
+        // instance (e.g. two "## Tasks" headings under different ADRs) —
+        // mirrors the `links` ambiguous-target precedent (DEC-094): a
+        // selector that silently spans multiple matches is unsafe for a
+        // mutating command, which writes with no dry-run by default.
+        let mut ss = SectionScanner::new();
+        hyalo_core::scanner::scan_file_multi(full_path, &mut [&mut ss])?;
+        let sections = ss.into_sections();
+        let matched_headings =
+            build_section_scope(&sections, std::slice::from_ref(&filter), usize::MAX);
+        if matched_headings.len() > 1 {
+            let lines = matched_headings
+                .iter()
+                .map(|r| r.start.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "--section {section_str:?} matches {} distinct headings (lines {lines}); \
+                 refusing to select tasks under all of them — use --line to target specific \
+                 tasks, or a more specific --section (e.g. \"## Tasks\" to pin a level, or a \
+                 /regex/ that only matches one heading)",
+                matched_headings.len()
+            );
+        }
+
         let tasks = hyalo_core::tasks::find_task_lines(full_path)?;
         let matched: Vec<usize> = tasks
             .iter()
