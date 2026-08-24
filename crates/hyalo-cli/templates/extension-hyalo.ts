@@ -128,7 +128,7 @@ const hyaloToolParams = Type.Object({
   args: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Additional arguments for the subcommand, e.g. ['\"search terms\"', '--tag', 'iteration', '--property', 'status=planned']",
+        "Additional arguments for the subcommand. Property filters use '--property K=V' (e.g. '--property', 'status=planned'); there is NO --status/--type/--priority flag — status is not a flag, it is a property. Other common flags: '--tag T', '--task todo|done|any', '--section H', '--count', '--limit N'.",
     }),
   ),
   formatText: Type.Optional(
@@ -164,6 +164,7 @@ export default function (pi: ExtensionAPI) {
     promptGuidelines: [
       "For .md files with YAML frontmatter in a knowledgebase/vault, prefer the hyalo tool over read/edit/grep: use `hyalo find` to search or filter by content/tags/properties, `hyalo read` to read, and `hyalo set`/`hyalo task` to bulk-mutate instead of many edit calls.",
       "hyalo output includes drill-down hints (lines starting with `->`) — follow them to refine queries; hints marked `=>` with `[writes]` modify the vault.",
+      "hyalo flags map to the tool's args array: e.g. `hyalo find --property status=planned --tag iteration` → subcommand 'find', args ['--property', 'status=planned', '--tag', 'iteration']. Filter by a property with '--property K=V' — there are no per-property flags like --status.",
     ],
     parameters: hyaloToolParams,
     async execute(_toolCallId, params: Static<typeof hyaloToolParams>, signal) {
