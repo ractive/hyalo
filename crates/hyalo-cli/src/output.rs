@@ -603,7 +603,7 @@ const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\(if .broken_anchors 
 /// `[links.auto]` config exclusions removed candidate titles — hence the
 /// `// 0` fallbacks in the filter.
 /// Format: summary line + per-match details.
-const LINKS_AUTO_FILTER: &str = r#""\(.total) unlinked mention\(if .total == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)\(if .matched_text == .link_target then "" else "|\(.matched_text)" end)]]") | join("\n"))" else "" end)""#;
+const LINKS_AUTO_FILTER: &str = r#""\(.matched) unlinked mention\(if .matched == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)\(if .matched_text == .link_target then "" else "|\(.matched_text)" end)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
@@ -697,18 +697,21 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         }
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value) — with or without optional `note` field
-        "dry_run,modified,property,scanned,skipped,total,value"
-        | "dry_run,modified,note,property,scanned,skipped,total,value" => {
+        // (iter-216 D-1 added `skipped_count` to all three shapes.)
+        "dry_run,modified,property,scanned,skipped,skipped_count,total,value"
+        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value" => {
             Some(PROPERTY_VALUE_MUTATION_FILTER)
         }
         // Mutation results with property only (RemovePropertyResult without value)
-        "dry_run,modified,property,scanned,skipped,total" => Some(PROPERTY_MUTATION_FILTER),
+        "dry_run,modified,property,scanned,skipped,skipped_count,total" => {
+            Some(PROPERTY_MUTATION_FILTER)
+        }
         // Mutation results with tag (SetTagResult, RemoveTagResult)
-        "dry_run,modified,scanned,skipped,tag,total" => Some(TAG_MUTATION_FILTER),
+        "dry_run,modified,scanned,skipped,skipped_count,tag,total" => Some(TAG_MUTATION_FILTER),
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)
-        "ambiguous,ambiguous_links,applied,applied_fixes,broken,broken_anchors,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_below_floor,fuzzy_fixes,fuzzy_min_confidence,ignored,out_of_vault,out_of_vault_links,relocation_fixes,relocations,templated,templated_links,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
+        "ambiguous,ambiguous_links,applied,applied_fixes,broken,broken_anchors,case_mismatch_fixes,case_mismatches,dry_run,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_below_floor,fuzzy_fixes,fuzzy_min_confidence,ignored,out_of_vault,out_of_vault_links,relocation_fixes,relocations,templated,templated_links,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
         // LinksAuto result (iter-187 adds per-file apply outcome fields for L-11;
@@ -716,8 +719,8 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // `[links.auto]` config exclusions removed candidates — hence two
         // signatures. iter-213 split it into a title count and a mention count,
         // which always appear together).
-        "ambiguous_titles,applied,apply_outcomes,files_applied,files_failed,files_skipped,matches,scanned,total"
-        | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,files_applied,files_failed,files_skipped,matches,scanned,total" => {
+        "ambiguous_titles,applied,apply_outcomes,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned"
+        | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned" => {
             Some(LINKS_AUTO_FILTER)
         }
         // MvResult

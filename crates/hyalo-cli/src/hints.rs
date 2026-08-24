@@ -1987,12 +1987,21 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
 fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
-    let is_dry_run = !data
-        .get("applied")
+    // iter-216 D-4: prefer the explicit `dry_run` key. `applied` is false both
+    // for a preview and for an `--apply` run that found nothing, so inverting
+    // it alone mislabels the latter.
+    let is_dry_run = data
+        .get("dry_run")
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or_else(|| {
+            !data
+                .get("applied")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        });
+    // iter-216 D-3: `matched` (was `total`).
     let total = data
-        .get("total")
+        .get("matched")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
 
@@ -3445,7 +3454,8 @@ mod tests {
     fn links_auto_apply_failures_suggest_checking_apply_outcomes() {
         let c = ctx(HintSource::LinksAuto);
         let data = json!({
-            "total": 5,
+            "matched": 5,
+            "dry_run": false,
             "applied": true,
             "files_applied": 3,
             "files_skipped": 0,
@@ -3465,7 +3475,8 @@ mod tests {
     fn links_auto_no_failures_omits_apply_outcomes_hint() {
         let c = ctx(HintSource::LinksAuto);
         let data = json!({
-            "total": 5,
+            "matched": 5,
+            "dry_run": false,
             "applied": true,
             "files_applied": 5,
             "files_skipped": 0,
@@ -3632,7 +3643,7 @@ mod tests {
         let c = ctx(HintSource::Lint);
         let data = json!({
             "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "missing required property"}]}],
-            "total": 1,
+            "violations": 1,
         });
         let hints = generate_hints(&c, &data, None);
         assert!(!hints.is_empty());
@@ -3649,7 +3660,7 @@ mod tests {
         c.lint_is_fix = true; // --dry-run requires --fix per CLI spec
         let data = json!({
             "files": [],
-            "total": 0,
+            "violations": 0,
             "total_fixed": 3,
             "total_remaining": 0,
             "fixes": [{"file": "test.md", "actions": [{"kind": "insert-default", "property": "status", "new": "draft"}]}],
@@ -3667,7 +3678,7 @@ mod tests {
     #[test]
     fn lint_hints_always_suggest_types_list() {
         let c = ctx(HintSource::Lint);
-        let data = json!({"files": [], "total": 0});
+        let data = json!({"files": [], "violations": 0});
         let hints = generate_hints(&c, &data, None);
         assert!(
             hints.iter().any(|h| h.cmd.contains("types list")),
@@ -3680,7 +3691,7 @@ mod tests {
         let c = ctx(HintSource::Lint);
         let data = json!({
             "files": [{"file": "test.md", "violations": [{"severity": "error", "message": "x", "type": "iteration"}]}],
-            "total": 5,
+            "violations": 5,
         });
         let hints = generate_hints(&c, &data, None);
         assert!(hints.len() <= MAX_HINTS);
@@ -4522,7 +4533,7 @@ mod tests {
             "files": {"total": 10, "by_directory": []},
             "properties": [], "tags": {"tags": [], "total": 0},
             "status": [], "tasks": {"total": 0, "done": 0}, "recent_files": [],
-            "schema": {"errors": 5, "warnings": 12, "files_with_issues": 8}
+            "schema": {"errors": 5, "warnings": 12, "files_with_violations": 8}
         });
         let hints = generate_hints(&c, &data, None);
         let schema_hint = hints
