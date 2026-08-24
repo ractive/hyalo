@@ -1,7 +1,10 @@
-import type { ExtensionAPI, ToolContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
+
+const HYALO_TIMEOUT_MS = 60_000;
 
 interface HyaloToolArgs {
-  /** The hyalo subcommand (find, read, set, etc.) */
+  /** The hyalo subcommand (find, read, set, summary, lint, etc.) */
   subcommand: string;
   /** Arguments to pass to hyalo */
   args?: string[];
@@ -9,97 +12,99 @@ interface HyaloToolArgs {
   formatText?: boolean;
   /** Use --jq filter (mutually exclusive with formatText) */
   jq?: string;
-  /** Use snapshot index for performance */
-  useIndex?: boolean;
+  /** Path to a snapshot index created with `hyalo create-index` */
+  indexFile?: string;
 }
 
+function buildCommand(params: HyaloToolArgs): string[] {
+  const { subcommand, args: extraArgs = [], formatText = true, jq, indexFile } = params;
+  const cmdArgs = [subcommand];
+
+  if (formatText && !jq) {
+    cmdArgs.push("--format", "text");
+  }
+  if (jq) {
+    cmdArgs.push("--jq", jq);
+  }
+  if (indexFile) {
+    cmdArgs.push("--index-file", indexFile);
+  }
+  cmdArgs.push(...extraArgs);
+  return cmdArgs;
+}
+
+const hyaloToolParams = Type.Object({
+  subcommand: Type.String({
+    description: "Hyalo subcommand (find, read, set, summary, lint, task, backlinks, config, ...)",
+  }),
+  args: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Additional arguments for the subcommand, e.g. ['\"search terms\"', '--tag', 'iteration', '--property', 'status=planned']",
+    }),
+  ),
+  formatText: Type.Optional(
+    Type.Boolean({
+      description:
+        "Use --format text for compact LLM-friendly output (default: true; ignored when jq is set)",
+    }),
+  ),
+  jq: Type.Optional(
+    Type.String({
+      description:
+        "Apply a jq filter to the JSON envelope, e.g. '.results[].file' or '.total' (overrides formatText)",
+    }),
+  ),
+  indexFile: Type.Optional(
+    Type.String({
+      description:
+        "Path to a snapshot index (created via `hyalo create-index`) for fast queries on large vaults",
+    }),
+  ),
+});
+
 export default function (pi: ExtensionAPI) {
-  // Register hyalo tool
   pi.registerTool({
     name: "hyalo",
-    description: "Run hyalo commands for markdown knowledgebase operations",
-    parameters: {
-      type: "object",
-      properties: {
-        subcommand: {
-          type: "string",
-          description: "Hyalo subcommand (find, read, set, summary, lint, etc.)",
-        },
-        args: {
-          type: "array",
-          items: { type: "string" },
-          description: "Additional arguments to pass to hyalo",
-        },
-        formatText: {
-          type: "boolean",
-          description: "Use --format text for compact LLM-friendly output (default: true)",
-        },
-        jq: {
-          type: "string",
-          description: "JQ filter to apply to JSON output (mutually exclusive with formatText)",
-        },
-        useIndex: {
-          type: "boolean",
-          description: "Use snapshot index for performance (recommended for large vaults)",
-        },
-      },
-      required: ["subcommand"],
-    },
-    async execute(args: HyaloToolArgs, ctx: ToolContext) {
-      const { subcommand, args: extraArgs = [], formatText = true, jq, useIndex = false } = args;
-      
-      // Build command line
-      const cmdArgs = [subcommand];
-      
-      // Add --format text unless jq is specified
-      if (formatText && !jq) {
-        cmdArgs.push("--format", "text");
-      }
-      
-      // Add jq if specified
-      if (jq) {
-        cmdArgs.push("--jq", jq);
-      }
-      
-      // Add index flag if requested
-      if (useIndex) {
-        cmdArgs.push("--index");
-      }
-      
-      // Add extra arguments
-      cmdArgs.push(...extraArgs);
-      
+    label: "Hyalo",
+    description:
+      "Run hyalo commands to search, read, and mutate a markdown knowledgebase " +
+      "(YAML frontmatter, tags, tasks, wikilinks). Subcommands: find, read, set, " +
+      "append, remove, task, summary, properties, tags, lint, backlinks, config, ...",
+    promptSnippet:
+      "hyalo: structured search/mutation of markdown knowledgebases (frontmatter, tags, tasks, links)",
+    promptGuidelines: [
+      "For .md files with YAML frontmatter in a knowledgebase/vault, prefer the hyalo tool over read/edit/grep: use `hyalo find` to search or filter by content/tags/properties, `hyalo read` to read, and `hyalo set`/`hyalo task` to bulk-mutate instead of many edit calls.",
+      "hyalo output includes drill-down hints (lines starting with `->`) — follow them to refine queries; hints marked `=>` with `[writes]` modify the vault.",
+    ],
+    parameters: hyaloToolParams,
+    async execute(_toolCallId, params: Static<typeof hyaloToolParams>, signal) {
+      const cmdArgs = buildCommand(params);
       try {
-        // Run hyalo
-        const { stdout, stderr, code } = await pi.exec("hyalo", cmdArgs);
-        
+        const { stdout, stderr, code } = await pi.exec("hyalo", cmdArgs, {
+          signal,
+          timeout: HYALO_TIMEOUT_MS,
+        });
+
         if (code !== 0) {
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Hyalo command failed with exit code ${code}`,
+                text: `hyalo ${params.subcommand} failed with exit code ${code}`,
               },
-              ...(stderr ? [{
-                type: "text" as const,
-                text: `Stderr:\n${stderr}`,
-              }] : []),
-              ...(stdout ? [{
-                type: "text" as const,
-                text: `Stdout:\n${stdout}`,
-              }] : []),
+              ...(stderr
+                ? [{ type: "text" as const, text: `Stderr:\n${stderr}` }]
+                : []),
+              ...(stdout
+                ? [{ type: "text" as const, text: `Stdout:\n${stdout}` }]
+                : []),
             ],
           };
         }
-        
-        // Success
+
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: stdout || "(no output)",
-            },
-          ],
+          content: [{ type: "text" as const, text: stdout || "(no output)" }],
         };
       } catch (error) {
         return {
@@ -113,32 +118,34 @@ export default function (pi: ExtensionAPI) {
       }
     },
   });
-  
+
   // Register commands for common hyalo operations
-  pi.registerCommand({
-    name: "hyalo-help",
+  pi.registerCommand("hyalo-help", {
     description: "Show hyalo help",
-    async execute(ctx) {
+    handler: async (_args, ctx) => {
       const { stdout } = await pi.exec("hyalo", ["--help"]);
-      ctx.ui.print(stdout);
+      ctx.ui.notify(stdout, "info");
     },
   });
-  
-  pi.registerCommand({
-    name: "hyalo-summary",
+
+  pi.registerCommand("hyalo-summary", {
     description: "Show knowledgebase summary",
-    async execute(ctx) {
+    handler: async (_args, ctx) => {
       const { stdout } = await pi.exec("hyalo", ["summary", "--format", "text"]);
-      ctx.ui.print(stdout);
+      ctx.ui.notify(stdout, "info");
     },
   });
-  
-  pi.registerCommand({
-    name: "hyalo-lint",
+
+  pi.registerCommand("hyalo-lint", {
     description: "Run hyalo lint on knowledgebase",
-    async execute(ctx) {
-      const { stdout } = await pi.exec("hyalo", ["lint", "--strict", "--format", "text"]);
-      ctx.ui.print(stdout);
+    handler: async (_args, ctx) => {
+      const { stdout } = await pi.exec("hyalo", [
+        "lint",
+        "--strict",
+        "--format",
+        "text",
+      ]);
+      ctx.ui.notify(stdout, "info");
     },
   });
 }
