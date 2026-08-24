@@ -837,12 +837,12 @@ pub fn find(
         };
 
         // --- Build links field from pre-indexed link data ---
-        let links = if fields.links || sort_needs_links {
+        let mut links = if fields.links || sort_needs_links {
             Some(
                 entry
                     .links
                     .iter()
-                    .map(|(_, link)| {
+                    .map(|(line, link)| {
                         // iter-188 task 0: route every "does this link exist?"
                         // resolution through the single shared entry point
                         // (`ResolveMode::Exists`) instead of the per-callsite
@@ -887,6 +887,11 @@ pub fn find(
                             target: link.target.clone(),
                             path,
                             label: link.label.clone(),
+                            // iter-215 (dogfood UX-6): the 1-based source line,
+                            // already carried by the index entry, so a
+                            // `--broken-links` report points at the link
+                            // instead of leaving the user to grep for it.
+                            line: *line,
                             fragment: link.fragment.clone(),
                             broken_anchor,
                             out_of_vault,
@@ -909,10 +914,11 @@ pub fn find(
                     // entries (`path == entry.rel_path`) are excluded from
                     // the `--orphan`/`--dead-end` outbound-edge count below so
                     // this does not change those verdicts.
-                    .chain(entry.self_anchors.iter().map(|(_, fragment)| LinkInfo {
+                    .chain(entry.self_anchors.iter().map(|(line, fragment)| LinkInfo {
                         target: String::new(),
                         path: Some(entry.rel_path.clone()),
                         label: None,
+                        line: *line,
                         fragment: Some(fragment.clone()),
                         broken_anchor: !hyalo_core::anchor::fragment_matches_headings(
                             fragment,
@@ -925,6 +931,15 @@ pub fn find(
         } else {
             None
         };
+        // iter-215: now that every entry carries its source line, present them
+        // in document order. Without this the same-file anchors chained above
+        // always trailed the file's other links, so a `--broken-links` listing
+        // read `line 3, line 9, line 5` — confusing the moment the line
+        // numbers are visible. Stable, so links sharing one line keep the
+        // extraction order (`entry.links` before `self_anchors`).
+        if let Some(links) = links.as_mut() {
+            links.sort_by_key(|l| l.line);
+        }
 
         // --- Build properties fields ---
         let properties = if fields.properties {

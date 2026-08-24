@@ -73,6 +73,24 @@ pub struct LinkInfo {
     pub target: String,
     pub path: Option<String>,
     pub label: Option<String>,
+    /// 1-based source line the link was written on (iter-215, dogfood UX-6).
+    ///
+    /// `find --broken-links` used to list every link of a matching file with no
+    /// location, so finding the reported broken link meant grepping the file.
+    /// The line is the same one `hyalo lint` (HYALO006) and `backlinks` report
+    /// for the same link, and comes straight from the index
+    /// (`IndexEntry::links` / `IndexEntry::self_anchors` already store it), so
+    /// no extra file read is involved.
+    ///
+    /// Named `line` to match every other line-bearing shape in `.results`
+    /// (`BacklinkInfo`, `OutlineSection`, `ContentMatch`, `TaskInfo`) — always
+    /// a 1-based source line, never an index or an offset. Always serialized:
+    /// unlike `fragment` / `broken_anchor` / `out_of_vault` this is not a
+    /// verdict that may be absent, it is a location every link has.
+    /// `#[serde(default)]` only covers deserializing JSON written by an older
+    /// hyalo, where it reads back as `0`.
+    #[serde(default)]
+    pub line: usize,
     /// The `#fragment` (heading anchor) the link carried, without the leading
     /// `#`. `None` for links with no fragment. Skipped from JSON when absent so
     /// non-anchored links keep today's shape (L-21, iter-190).

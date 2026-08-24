@@ -45,6 +45,17 @@
 //! deliberately permissive — this check exists to catch dead anchors, and a
 //! false positive costs a user far more than a missed exotic spelling.
 //!
+//! ## DEC-100 — templated headings are never dead anchors (iter-215)
+//!
+//! A heading containing a Liquid/Jinja expression (`## {% data
+//! variables.product.prodname_pro %}`) renders to something hyalo cannot
+//! compute, so its real anchor (`#github-pro`) can never be derived from the
+//! source text. When neither convention above matches and *either* side of the
+//! comparison is templated — the fragment, or any heading in the target file —
+//! the fragment is treated as matching rather than reported broken. See
+//! [`is_templated_heading`]; this is the heading-side twin of iter-207's
+//! `link_fix::is_templated_target` zone-skip for link destinations.
+//!
 //! `^block-id` fragments (fragment starting with `^`) are Obsidian block
 //! references. hyalo does not index block ids, so these are **skipped** — never
 //! reported broken.
@@ -56,6 +67,27 @@ use crate::types::OutlineSection;
 #[must_use]
 pub fn is_block_ref(fragment: &str) -> bool {
     fragment.starts_with('^')
+}
+
+/// Whether heading (or fragment) text carries a *template expression* rather
+/// than literal prose — iter-215, the heading-side twin of iter-207's
+/// [`crate::link_fix::is_templated_target`].
+///
+/// GitHub Docs and every other Liquid/Jinja-templated corpus writes headings
+/// like `## {% data variables.product.prodname_pro %}`, which the renderer
+/// turns into `## GitHub Pro` and anchors as `#github-pro`. hyalo sees only
+/// the pre-render source, so [`github_slug`] produces `-data-variables…` —
+/// a slug no author ever writes and nothing can ever match. The link
+/// `[x](f.md#github-pro)` is then reported as a dead anchor even though it is
+/// perfectly correct in the rendered site.
+///
+/// Deliberately the *same* marker set as `is_templated_target` (`{%`, `{{`,
+/// `${`), delegating to it so the two cannot drift: the question is identical
+/// ("is this text something a template engine will rewrite?"), only the
+/// subject differs.
+#[must_use]
+pub fn is_templated_heading(text: &str) -> bool {
+    crate::link_fix::is_templated_target(text)
 }
 
 /// Normalize a fragment or heading for comparison: percent-decode (if it
@@ -163,10 +195,33 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     }
     // DEC-075: GitHub-rendered slug, with duplicate suffixes.
     let needle_slug = github_slug(&needle);
-    if needle_slug.is_empty() {
-        return false;
+    if !needle_slug.is_empty() && heading_slugs(sections).contains(&needle_slug) {
+        return true;
     }
-    heading_slugs(sections).contains(&needle_slug)
+    // DEC-100 (iter-215): nothing matched literally — but if either side is
+    // *templated*, hyalo is comparing pre-render source against a fragment
+    // written for the rendered output and cannot know whether they agree.
+    //
+    // Either side, because the mismatch can come from either direction: a
+    // templated heading (`## {% data variables.product.prodname_pro %}`,
+    // rendered `## GitHub Pro`, linked as `#github-pro`) or a templated
+    // fragment (`[x](f.md#{{ anchor }})`).
+    //
+    // The heading test is file-wide rather than per-heading on purpose: a
+    // templated heading's rendered slug is unknowable, so *any* templated
+    // heading in the target file could be the one this fragment names. Being
+    // conservative here costs a missed dead anchor in files that use
+    // templating; the alternative cost is every anchor into such a file
+    // reported broken, which is what made hyalo unusable on the GitHub Docs
+    // corpus (6 of 7 checkable anchors were false positives before DEC-075,
+    // and the templated remainder after it). Consistent with the module's
+    // stated bias: a false positive costs a user far more than a miss.
+    if is_templated_heading(&needle) {
+        return true;
+    }
+    sections
+        .iter()
+        .any(|s| s.heading.as_deref().is_some_and(is_templated_heading))
 }
 
 #[cfg(test)]
