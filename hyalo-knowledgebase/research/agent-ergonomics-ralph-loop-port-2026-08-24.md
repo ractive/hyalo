@@ -54,9 +54,18 @@ from the original Claude skill where the same traps were documented after real
 failures. When a consumer skill must warn against a tool's defaults repeatedly,
 the defaults are wrong for that consumer class.
 
-**Proposal:** a compact agent-oriented format, e.g. `--format paths` (one path per
-line) or `--format tsv` with stable columns. Cheap to add, removes a whole class
-of documented footguns.
+**Proposal:** a find-specific projection flag, `--filenames-only` (grep `-l`
+precedent): `hyalo find --property status=planned --filenames-only` prints
+one raw file path per line. Not a new `--format` value — `--format` is a
+cross-cutting text/json concern, and "paths only" only makes sense for
+result-list commands; a find-local flag keeps the API honest. Should conflict
+with `--jq`/`--format json` (pick one projection). Sibling flag `--filenames0`
+(NUL-delimited) optional for `xargs -0` composability. Zero results → empty
+output, exit 0.
+
+Note the mutation side already solved this: `hyalo set --glob ... --where-property ...`
+batches mutations with filters in one command — no `xargs` piping needed. Only
+the read side (`find`) lacks the compact projection.
 
 ### 2. Title-vs-filename mismatch makes title search a trap (high)
 
@@ -114,7 +123,7 @@ benefit humans.
 
 ## Suggested iteration candidates (in priority order)
 
-1. `--format paths` (or tsv) compact output for `find` — unblocks finding #1.
+1. `find --filenames-only` projection flag — unblocks finding #1.
 2. Iteration natural-key addressing: `find --iteration N` / `set --iteration N`
    — unblocks findings #2 and #5.
 3. Vault-boundary error message with effective dir + fix hint — finding #3.

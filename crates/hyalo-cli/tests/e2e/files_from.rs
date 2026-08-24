@@ -331,12 +331,18 @@ fn lint_fix_files_from_empty_emits_fix_mode_shape() {
         );
     }
     assert!(
-        results.get("total").is_none() && results.get("errors").is_none(),
+        results.get("violations").is_none() && results.get("errors").is_none(),
         "must not carry the read-only shape's keys: {envelope}"
     );
-    assert!(
-        results.get("dry_run").is_none(),
-        "dry_run must be absent (not `false`) without --dry-run: {envelope}"
+    // iter-216 D-4: `dry_run` is a top-level results key, so it is always
+    // present — `false` here, not absent. `set`/`remove`/`append`/`mv` have
+    // always emitted it that way; `lint` used to skip it when false, which
+    // meant a caller reading `.dry_run` got `null` from one command and
+    // `false` from the other for the same state.
+    assert_eq!(
+        results.get("dry_run").and_then(serde_json::Value::as_bool),
+        Some(false),
+        "dry_run must be present and false without --dry-run: {envelope}"
     );
 
     let mut dry_run_cmd = hyalo_no_hints();

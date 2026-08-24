@@ -504,8 +504,8 @@ fn summary_shows_lint_count_when_schema_configured() {
         "expected warnings count in schema summary"
     );
     assert!(
-        schema_field["files_with_issues"].is_number(),
-        "expected files_with_issues in schema summary"
+        schema_field["files_with_violations"].is_number(),
+        "expected files_with_violations in schema summary"
     );
 }
 
@@ -3781,7 +3781,7 @@ patterns = ".*"
     // nonzero, and the malformed-schema key must be visible in the JSON.
     assert!(
         results.violations > 0,
-        "results.total must be nonzero -- 'no issues' must never be reported \
+        "results.violations must be nonzero -- 'no issues' must never be reported \
          while schema validation is silently disabled: {results:?}"
     );
     assert!(

@@ -1874,9 +1874,9 @@ We held a Sprint Review last week.
 
     let results = run_links_auto(tmp.path(), &["--format", "json"]);
 
-    let total = results["total"]
+    let total = results["matched"]
         .as_u64()
-        .expect("results.total should be a number");
+        .expect("results.matched should be a number");
     assert!(
         total >= 1,
         "expected at least 1 unlinked mention, got {total}"
@@ -1932,9 +1932,9 @@ We held a Sprint Review last week.
         .expect("results.applied should be a bool");
     assert!(applied, "links auto --apply should report applied=true");
 
-    let total = results["total"]
+    let total = results["matched"]
         .as_u64()
-        .expect("results.total should be a number");
+        .expect("results.matched should be a number");
     assert!(total >= 1, "expected at least 1 applied replacement");
 
     let meetings_content = fs::read_to_string(tmp.path().join("meetings.md"))
@@ -2130,9 +2130,9 @@ This Sprint Review process is important.
 
     let results = run_links_auto(tmp.path(), &["--format", "json"]);
 
-    let total = results["total"]
+    let total = results["matched"]
         .as_u64()
-        .expect("results.total should be a number");
+        .expect("results.matched should be a number");
     assert_eq!(
         total, 0,
         "a file should not generate a self-link, got total={total}"
@@ -2375,9 +2375,9 @@ See Common Title here.
 
     let results = run_links_auto(tmp.path(), &["--format", "json"]);
 
-    let total = results["total"]
+    let total = results["matched"]
         .as_u64()
-        .expect("results.total should be a number");
+        .expect("results.matched should be a number");
     assert_eq!(
         total, 0,
         "ambiguous title should produce no matches, got total={total}"
@@ -4233,7 +4233,7 @@ fn links_auto_config_first_only_behaves_like_the_flag() {
 
     // guide.md mentions Permissions twice and Daily twice; first-only keeps one each.
     assert_eq!(
-        results["total"], 3,
+        results["matched"], 3,
         "first_only from config should keep one mention per target: {results}"
     );
     assert!(
@@ -4248,13 +4248,13 @@ fn links_auto_flag_first_only_wins_over_config_false() {
 
     let without_flag = run_links_auto_in_vault(tmp.path(), &[]);
     assert_eq!(
-        without_flag["total"], 5,
+        without_flag["matched"], 5,
         "first_only = false should link every mention: {without_flag}"
     );
 
     let with_flag = run_links_auto_in_vault(tmp.path(), &["--first-only"]);
     assert_eq!(
-        with_flag["total"], 3,
+        with_flag["matched"], 3,
         "an explicit --first-only wins for this run: {with_flag}"
     );
 }
@@ -4266,7 +4266,7 @@ fn links_auto_config_and_flag_first_only_compose() {
     let results = run_links_auto_in_vault(tmp.path(), &["--first-only"]);
 
     assert_eq!(
-        results["total"], 3,
+        results["matched"], 3,
         "flag plus config is still first-only: {results}"
     );
 }
@@ -4282,7 +4282,7 @@ fn links_auto_no_first_only_overrides_config_first_only() {
     // Baseline: the persisted key collapses the duplicate mentions.
     let persisted = run_links_auto_in_vault(tmp.path(), &[]);
     assert_eq!(
-        persisted["total"], 3,
+        persisted["matched"], 3,
         "config first_only should keep one mention per target: {persisted}"
     );
 
@@ -4290,7 +4290,7 @@ fn links_auto_no_first_only_overrides_config_first_only() {
     // touching .hyalo.toml.
     let overridden = run_links_auto_in_vault(tmp.path(), &["--no-first-only"]);
     assert_eq!(
-        overridden["total"], 5,
+        overridden["matched"], 5,
         "--no-first-only should link every mention despite the config: {overridden}"
     );
 }
@@ -4306,7 +4306,7 @@ fn links_auto_no_first_only_applies_every_mention() {
         "write path honours it too: {results}"
     );
     assert_eq!(
-        results["total"], 5,
+        results["matched"], 5,
         "every mention is written, not just the first: {results}"
     );
 
@@ -4331,9 +4331,9 @@ fn links_auto_no_first_only_without_config_is_a_no_op() {
     let plain = run_links_auto_in_vault(tmp.path(), &[]);
     let flagged = run_links_auto_in_vault(tmp.path(), &["--no-first-only"]);
 
-    assert_eq!(plain["total"], 5, "baseline links every mention: {plain}");
+    assert_eq!(plain["matched"], 5, "baseline links every mention: {plain}");
     assert_eq!(
-        flagged["total"], plain["total"],
+        flagged["matched"], plain["matched"],
         "--no-first-only changes nothing when first_only is already off: {flagged}"
     );
 }

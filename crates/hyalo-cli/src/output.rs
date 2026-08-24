@@ -3033,6 +3033,7 @@ mod tests {
             "property": "status",
             "scanned": 2,
             "skipped": [],
+            "skipped_count": 0,
             "total": 2,
             "value": "done"
         });
@@ -3054,6 +3055,7 @@ mod tests {
             "property": "priority",
             "scanned": 1,
             "skipped": ["note-a.md"],
+            "skipped_count": 1,
             "total": 1,
             "value": "high"
         });
@@ -3072,6 +3074,7 @@ mod tests {
             "property": "status",
             "scanned": 5,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1,
             "value": "done"
         });
@@ -3089,6 +3092,7 @@ mod tests {
             "property": "status",
             "scanned": 1,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1,
             "value": "done"
         });
@@ -3109,6 +3113,7 @@ mod tests {
             "property": "draft",
             "scanned": 1,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1
         });
         let out = jq(PROPERTY_MUTATION_FILTER, &val).unwrap();
@@ -3130,6 +3135,7 @@ mod tests {
             "property": "draft",
             "scanned": 7,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1
         });
         let out = jq(PROPERTY_MUTATION_FILTER, &val).unwrap();
@@ -3146,6 +3152,7 @@ mod tests {
             "modified": ["a.md", "b.md"],
             "scanned": 3,
             "skipped": ["c.md"],
+            "skipped_count": 1,
             "tag": "rust",
             "total": 3
         });
@@ -3169,6 +3176,7 @@ mod tests {
             "modified": ["a.md"],
             "scanned": 10,
             "skipped": [],
+            "skipped_count": 0,
             "tag": "rust",
             "total": 1
         });
@@ -3185,6 +3193,7 @@ mod tests {
             "modified": [],
             "scanned": 1,
             "skipped": ["note.md"],
+            "skipped_count": 1,
             "tag": "cli",
             "total": 1
         });
@@ -3203,6 +3212,7 @@ mod tests {
             "property": "status",
             "scanned": 1,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1,
             "value": "done"
         });
@@ -3220,6 +3230,7 @@ mod tests {
             "modified": ["note.md"],
             "scanned": 1,
             "skipped": [],
+            "skipped_count": 0,
             "tag": "rust",
             "total": 1
         });
@@ -3238,6 +3249,7 @@ mod tests {
             "property": "status",
             "scanned": 1,
             "skipped": [],
+            "skipped_count": 0,
             "total": 1,
             "value": "done"
         });
