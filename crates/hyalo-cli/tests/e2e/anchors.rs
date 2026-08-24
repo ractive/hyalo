@@ -1137,7 +1137,7 @@ fn links_are_listed_in_document_order() {
 }
 
 // ---------------------------------------------------------------------------
-// iter-215 / DEC-100 — templated headings are never dead anchors
+// iter-215 / DEC-099 — templated headings are never dead anchors
 // ---------------------------------------------------------------------------
 
 fn setup_templated_vault() -> TempDir {
@@ -1248,7 +1248,7 @@ fn templated_heading_skip_holds_on_the_index_path() {
 #[test]
 fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
     // `summary`'s broken-anchor count routes through the same matcher
-    // (`count_broken_anchors`), so the DEC-100 skip must move both numbers.
+    // (`count_broken_anchors`), so the DEC-099 skip must move both numbers.
     let tmp = setup_templated_vault();
     fs::remove_file(tmp.path().join("into_plain.md")).expect("remove the control file");
     let dir = tmp.path().to_str().expect("utf-8 path");

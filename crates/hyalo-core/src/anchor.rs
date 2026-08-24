@@ -45,7 +45,7 @@
 //! deliberately permissive — this check exists to catch dead anchors, and a
 //! false positive costs a user far more than a missed exotic spelling.
 //!
-//! ## DEC-100 — templated headings are never dead anchors (iter-215)
+//! ## DEC-099 — templated headings are never dead anchors (iter-215)
 //!
 //! A heading containing a Liquid/Jinja expression (`## {% data
 //! variables.product.prodname_pro %}`) renders to something hyalo cannot
@@ -198,7 +198,7 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     if !needle_slug.is_empty() && heading_slugs(sections).contains(&needle_slug) {
         return true;
     }
-    // DEC-100 (iter-215): nothing matched literally — but if either side is
+    // DEC-099 (iter-215): nothing matched literally — but if either side is
     // *templated*, hyalo is comparing pre-render source against a fragment
     // written for the rendered output and cannot know whether they agree.
     //
@@ -388,7 +388,7 @@ mod tests {
         assert!(fragment_matches_headings("   ", &[]));
     }
 
-    // --- DEC-100: templated headings (iter-215) ---
+    // --- DEC-099: templated headings (iter-215) ---
 
     #[test]
     fn is_templated_heading_recognizes_the_marker_forms() {
