@@ -441,21 +441,30 @@ const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag
 const TAG_SUMMARY_ENTRY_FILTER: &str =
     r#""\(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
-/// `LinkInfo` — just target: `{target}`
-/// Format: `  "target" (unresolved)`
-const LINK_INFO_TARGET_FILTER: &str = r#""  \"\(.target)\" (unresolved)""#;
+// Every `LinkInfo` text rendering opens with its source line (iter-215,
+// dogfood UX-6): `  line 12: …`. `.line` is always present on a `LinkInfo`,
+// but JSON written by a pre-215 hyalo (or a hand-built fixture) may omit it,
+// so the `// 0` fallbacks in each filter keep those renderable instead of
+// failing. `line 0` is the "unknown" rendering — no real source line is 0,
+// they are 1-based.
 
-/// `LinkInfo` with path: `{path, target}`
-/// Format: `  "target" → "path"`
-const LINK_INFO_PATH_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\"""#;
+/// `LinkInfo` — just target: `{line, target}`
+/// Format: `  line 12: "target" (unresolved)`
+const LINK_INFO_TARGET_FILTER: &str = r#""  line \(.line // 0): \"\(.target)\" (unresolved)""#;
 
-/// `LinkInfo` with label: `{label, target}`
-/// Format: `  "target" (unresolved) [label]`
-const LINK_INFO_LABEL_FILTER: &str = r#""  \"\(.target)\" (unresolved) [\(.label)]""#;
+/// `LinkInfo` with path: `{line, path, target}`
+/// Format: `  line 12: "target" → "path"`
+const LINK_INFO_PATH_FILTER: &str = r#""  line \(.line // 0): \"\(.target)\" → \"\(.path)\"""#;
 
-/// `LinkInfo` with path and label: `{label, path, target}`
-/// Format: `  "target" → "path" [label]`
-const LINK_INFO_FULL_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\" [\(.label)]""#;
+/// `LinkInfo` with label: `{label, line, target}`
+/// Format: `  line 12: "target" (unresolved) [label]`
+const LINK_INFO_LABEL_FILTER: &str =
+    r#""  line \(.line // 0): \"\(.target)\" (unresolved) [\(.label)]""#;
+
+/// `LinkInfo` with path and label: `{label, line, path, target}`
+/// Format: `  line 12: "target" → "path" [label]`
+const LINK_INFO_FULL_FILTER: &str =
+    r#""  line \(.line // 0): \"\(.target)\" → \"\(.path)\" [\(.label)]""#;
 
 /// `LinkInfo` carrying a `#fragment` (L-21, iter-190).
 ///
@@ -467,7 +476,7 @@ const LINK_INFO_FULL_FILTER: &str = r#""  \"\(.target)\" → \"\(.path)\" [\(.la
 ///   (resolved) path, so it reads distinctly from a broken TARGET
 ///   `(unresolved)`;
 /// - a `[label]` suffix is appended when present.
-const LINK_INFO_ANCHORED_FILTER: &str = r#""  \"\(.target)#\(.fragment)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)""#;
+const LINK_INFO_ANCHORED_FILTER: &str = r#""  line \(.line // 0): \"\(.target)#\(.fragment)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)""#;
 
 /// `LinkInfo` whose target resolves above the vault root (iter-193).
 ///
@@ -475,7 +484,7 @@ const LINK_INFO_ANCHORED_FILTER: &str = r#""  \"\(.target)#\(.fragment)\"\(if .p
 /// `fragment` and `label` are optional and read as `null` when missing.
 /// Renders `(out of vault)` rather than `(unresolved)` so a target that is
 /// merely out of scope never reads as a broken link.
-const LINK_INFO_OUT_OF_VAULT_FILTER: &str = r##""  \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\" (out of vault)\(if .label then " [\(.label)]" else "" end)""##;
+const LINK_INFO_OUT_OF_VAULT_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\" (out of vault)\(if .label then " [\(.label)]" else "" end)""##;
 
 /// `TaskCount`: `{done, total}`
 const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
@@ -632,15 +641,25 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "tags,total" => Some(TAG_SUMMARY_FILTER),
         // TagSummaryEntry
         "count,name" => Some(TAG_SUMMARY_ENTRY_FILTER),
-        // LinkInfo variants (optional path and label → 4 combos)
-        "target" => Some(LINK_INFO_TARGET_FILTER),
-        "path,target" => Some(LINK_INFO_PATH_FILTER),
-        "label,target" => Some(LINK_INFO_LABEL_FILTER),
-        "label,path,target" => Some(LINK_INFO_FULL_FILTER),
+        // LinkInfo variants (optional path and label → 4 combos).
+        // iter-215 added the always-present `line`; the pre-215 signatures stay
+        // listed so a `LinkInfo` deserialized from an older snapshot or a
+        // hand-written fixture still renders (the filters fall back to
+        // `line 0`) rather than dropping to generic key/value formatting.
+        "line,target" | "target" => Some(LINK_INFO_TARGET_FILTER),
+        "line,path,target" | "path,target" => Some(LINK_INFO_PATH_FILTER),
+        "label,line,target" | "label,target" => Some(LINK_INFO_LABEL_FILTER),
+        "label,line,path,target" | "label,path,target" => Some(LINK_INFO_FULL_FILTER),
         // LinkInfo carrying a `#fragment` (L-21): fragment is present, plus any
         // combination of optional path/label, and broken_anchor only when true
         // (which implies path+fragment). One unified filter handles them all.
-        "fragment,target"
+        "fragment,line,target"
+        | "fragment,line,path,target"
+        | "fragment,label,line,target"
+        | "fragment,label,line,path,target"
+        | "broken_anchor,fragment,line,path,target"
+        | "broken_anchor,fragment,label,line,path,target"
+        | "fragment,target"
         | "fragment,path,target"
         | "fragment,label,target"
         | "fragment,label,path,target"
@@ -648,7 +667,11 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         | "broken_anchor,fragment,label,path,target" => Some(LINK_INFO_ANCHORED_FILTER),
         // LinkInfo whose target escapes the vault root (iter-193). `path` is
         // never present; `fragment` / `label` are optional.
-        "out_of_vault,target"
+        "line,out_of_vault,target"
+        | "label,line,out_of_vault,target"
+        | "fragment,line,out_of_vault,target"
+        | "fragment,label,line,out_of_vault,target"
+        | "out_of_vault,target"
         | "label,out_of_vault,target"
         | "fragment,out_of_vault,target"
         | "fragment,label,out_of_vault,target" => Some(LINK_INFO_OUT_OF_VAULT_FILTER),
@@ -1137,13 +1160,18 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
         parts.push(r#""  score: \(.score)""#.to_owned());
     }
 
-    // Links: header then each as "    \"target\" → \"path\"" or "    \"target\" (unresolved)".
+    // Links: header then each as "    line N: \"target\" → \"path\"" or
+    // "    line N: \"target\" (unresolved)".
     // Anchored links (L-21) append "#fragment" to the target and, when the
     // heading is missing, " (broken anchor)" after the path — keep in sync
     // with LINK_INFO_ANCHORED_FILTER, which renders the standalone shape.
+    // iter-215 (dogfood UX-6): the `line N:` prefix is what makes a
+    // `find --broken-links` report actionable — it names the line the broken
+    // link is written on, the same one `lint`/`backlinks` report. `// 0`
+    // guards JSON from a pre-215 hyalo that has no `.line`.
     if map.contains_key("links") {
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else (if .out_of_vault then " (out of vault)" else " (unresolved)" end) end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else (if .out_of_vault then " (out of vault)" else " (unresolved)" end) end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 

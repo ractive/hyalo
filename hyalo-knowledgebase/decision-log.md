@@ -2708,3 +2708,74 @@ breakdowns or memory usage; anything below an order-of-magnitude regression,
 by design (the headroom that keeps this flake-free on a slow runner also
 means it can't catch a 2x slowdown). `bench-e2e.sh` remains the tool for
 detailed A/B comparisons against a real-world vault.
+
+## DEC-099: a templated heading makes every anchor into that file unknowable, not broken (2026-08-24)
+
+**Decision:** [[iterations/iteration-215-anchor-and-broken-links-followups]]
+extends `anchor::fragment_matches_headings` with a final escape hatch: when
+neither DEC-060 (raw heading text) nor DEC-075 (rendered GitHub slug) matches
+a fragment, and *either* side of the comparison carries a template marker
+(`{%`, `{{`, `${`), the fragment is treated as matching rather than reported
+as a dead anchor. "Either side" means the fragment itself
+(`[x](f.md#{{anchor}})`) **or any heading in the target file**. The marker
+test is `anchor::is_templated_heading`, a delegating wrapper over iter-207's
+`link_fix::is_templated_target`, so the heading-side and destination-side
+rules cannot drift apart.
+
+**Why:** a Liquid heading — `## {% data variables.product.prodname_pro %}` —
+renders to `## GitHub Pro` and anchors as `#github-pro`. hyalo only ever sees
+the pre-render source, so `github_slug` produces `-data-variables…`: a slug no
+author ever writes and no fragment can ever match. Every *correct* anchor into
+such a heading was therefore reported broken. iter-211 fixed the same class of
+false positive for slug spellings (DEC-075) and recorded this remainder as a
+known limitation; on the GitHub Docs corpus it is the residual noise that
+survived DEC-075.
+
+**Why file-wide, not per-heading:** a templated heading's rendered slug is
+unknowable, so *any* templated heading in the target file could be the one a
+given fragment names — there is no way to pair a specific fragment with a
+specific templated heading. Scoping the skip to the file is the only sound
+option short of rendering Liquid, which hyalo will not do. The cost is a
+missed dead anchor in files that use templating; the alternative cost is every
+anchor into such a file reported broken, which is what made hyalo unusable on
+templated corpora. This follows the module's stated bias, unchanged since
+DEC-060: a false positive costs a user far more than a missed exotic spelling.
+A file with no templated heading is completely unaffected.
+
+**Blast radius:** every caller routes through the one matcher, so
+`find --broken-links`, `summary`'s `links.broken_anchors`
+(`link_fix::count_broken_anchors`) and the `links fix` broken-anchor note move
+together — the NEW-15/UX-2 agreement between those numbers is preserved by
+construction.
+
+## DEC-100: `LinkInfo` carries `line`, and links are emitted in document order (2026-08-24)
+
+**Decision:** [[iterations/iteration-215-anchor-and-broken-links-followups]]
+adds an always-present `line: usize` (1-based) to `LinkInfo`, the shape behind
+`find --fields links` and `find --broken-links`. The field is named `line` —
+the same name and the same meaning every other line-bearing shape in
+`.results` already uses (`BacklinkInfo`, `OutlineSection`, `ContentMatch`,
+`TaskInfo`): a 1-based source line, never an index or a byte offset. The
+per-file link list is sorted by line, so same-file anchors (chained from
+`IndexEntry::self_anchors`, previously always appended last) now interleave in
+document order.
+
+**Why:** dogfood UX-6 — `find --broken-links` listed every link of a matching
+file with no location, so locating the one that was actually broken meant
+grepping the file. `hyalo lint` (HYALO006) and `backlinks` already reported a
+line for the same links; `find` was the outlier. The value is taken from
+`IndexEntry::links` / `::self_anchors`, which already stored it, so there is
+no extra file read and the `--index` and disk paths agree by construction.
+
+**Why not a new name (`source_line`, `at`):** the plan explicitly required not
+silently reusing a name already used differently elsewhere in `.results` —
+`line` is used identically everywhere it appears, so reuse is the consistent
+choice rather than the risky one.
+
+**Shape impact:** this is an additive JSON change on a field that is always
+present, which shifts `LinkInfo`'s key signature and therefore its text-output
+filter dispatch in `output.rs`. Both the pre- and post-215 signatures are
+listed there, and the filters fall back to `line 0` (no real line is 0), so a
+`LinkInfo` deserialized from an older snapshot still renders instead of
+dropping to generic key/value formatting. Text output gained a `line N:`
+prefix on each link.

@@ -10,6 +10,7 @@ tags:
   - json
 related:
   - "[[iterations/iteration-213-config-ux-polish]]"
+  - "[[iterations/iteration-215-anchor-and-broken-links-followups]]"
 ---
 
 # Iteration 216 — results JSON shape consistency
@@ -32,6 +33,14 @@ own design pass." That iteration fixed one instance of a shape problem
 vault-wide survey. This is a design/research iteration first — do not
 assume every inconsistency found is worth fixing; some divergence is
 justified by genuinely different semantics per command.
+
+Also carries the other half of dogfood UX-6, left unfiled by
+[[iterations/iteration-215-anchor-and-broken-links-followups]]: that
+iteration fixed the "no line numbers" half of UX-6 (`LinkInfo.line`,
+DEC-100) but explicitly scoped out "`.results` JSON shape varying by
+command" as the larger cross-cutting concern this iteration exists to
+cover. The inventory task below should treat UX-6's shape-variance
+observation as one input alongside iter-213's non-goal.
 
 ## Tasks
 

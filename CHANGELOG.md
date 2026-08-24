@@ -11,6 +11,20 @@ and this project adheres to
 
 ### Fixed
 
+- **A heading containing a template expression is never reported as a dead
+  anchor** (iter-215, carried over from iter-211's known limitation). A
+  Liquid/Jinja heading (`## {% data variables.product.prodname_pro %}`)
+  renders to `## GitHub Pro` and anchors as `#github-pro`, which hyalo cannot
+  derive from the pre-render source — so every correct anchor into such a
+  heading was reported broken on templated corpora like GitHub Docs. When
+  neither the raw-text (DEC-060) nor the GitHub-slug (DEC-075) convention
+  matches and *either* side carries a template marker (`{%`, `{{`, `${`) —
+  the fragment, or any heading in the target file — the anchor is now treated
+  as unknowable rather than broken. Same marker set as iter-207's
+  `links fix` zone-skip, and it moves `find --broken-links`, `summary`'s
+  `links.broken_anchors`, and the `links fix` anchor note together. A file
+  with no templated heading still reports its dead anchors exactly as before.
+  See DEC-099.
 - **`append`/`remove <key>=<value>` touch only the appended or removed list
   item, not the whole list** (iter-219, dogfood NEW-5). Extends iter-214's
   minimal-diff guarantee inside a key's own span: appending one item to a
@@ -288,6 +302,20 @@ and this project adheres to
   `warning:` on stderr names the file and the reason. See DEC-080/DEC-081.
 
 ### Added
+
+- **Every link in `find --broken-links` / `--fields links` now carries its
+  source `line`** (iter-215, dogfood UX-6). The report listed every link of a
+  matching file with no location, so finding the one that was actually broken
+  meant grepping the file. Each entry now has a 1-based `line` — the same one
+  `hyalo lint` (HYALO006) and `backlinks` report for that link — and text
+  output prefixes each line with `line N:`. Links are listed in document
+  order, so same-file anchors no longer trail the rest of the file's links.
+  The line comes from the index (`IndexEntry::links` / `::self_anchors`
+  already stored it), so no extra file read is involved and the `--index` and
+  disk paths agree. `find --broken-links --jq '.results[] as $f | $f.links[]
+  | select((.path == null and (.out_of_vault | not)) or .broken_anchor)
+  | "\($f.file):\(.line) \(.target)"'` now produces a `file:line` list an
+  editor can jump to.
 
 - **`hyalo config --raw`, and a machine-readable malformed-config signal**
   (iter-213, dogfood UX-2). `hyalo config` exited 0 with a full set of

@@ -406,7 +406,12 @@ pub(crate) struct FindFilters {
     /// flagged `out_of_vault` on the link and do not qualify a file here.
     /// A `#fragment` matches either the raw heading text or the rendered GitHub slug
     /// (`#sub-section` for `### Sub Section`); same-file fragments (`[b](#nope)`) are
-    /// checked against the file's own headings and reported with an empty target
+    /// checked against the file's own headings and reported with an empty target.
+    /// A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`)
+    /// renders to an anchor hyalo cannot compute, so anchors into such a file are never
+    /// reported broken.
+    /// Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
+    /// reports, and links are listed in document order
     #[arg(long)]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
