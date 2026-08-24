@@ -40,7 +40,7 @@ echo "pi package: $PI_PKG ($(node -p "require('$PI_PKG/package.json').version"))
 
 # --- layer 1: static type-check -----------------------------------------
 echo
-echo "== [1/2] type-checking template against installed pi types =="
+echo "== [1/3] type-checking template against installed pi types =="
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hyalo-pi-check.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -70,7 +70,7 @@ echo "type-check OK"
 
 # --- layer 2: live e2e with builtin tools disabled ----------------------
 echo
-echo "== [2/2] live e2e: forcing the hyalo tool (no bash fallback possible) =="
+echo "== [2/3] live e2e: forcing the hyalo tool (no bash fallback possible) =="
 # Query must return a plain count. Vault contents change, but the term
 # "iteration" always matches in hyalo's own knowledgebase and test vaults
 # that run this script; --count output is a bare number.
@@ -83,5 +83,31 @@ COUNT="$(tr -d '[:space:]' <<<"$OUT")"
 [[ "$COUNT" -gt 0 ]] || fail "tool ran but returned count 0 — suspicious for term 'iteration'"
 
 echo "e2e OK: hyalo tool returned count=$COUNT"
+
+# --- layer 3: post-write lint guardrail ---------------------------------
+#
+# Verify the tool_result guardrail still fires: with only the `write` tool
+# enabled, the model writes a deliberately non-conforming vault file; the
+# extension must append hyalo lint findings to the write tool's result.
+# Catches drift in BOTH the pi event API and hyalo's config/lint output
+# shapes (e.g. the JSON envelope changing would break vault resolution).
 echo
-echo "PASS: template is compatible with installed pi and the tool path works"
+echo "== [3/3] guardrail e2e: lint findings appended to write result =="
+GUARD_FILE="hyalo-knowledgebase/.pi-e2e-guard.md"
+rm -f "$GUARD_FILE"
+OUT="$(pi -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
+---
+title: Guardrail test
+---
+body
+
+Then report verbatim any lint warnings or extra notes that appeared in the write tool's result. Do not fix anything.")" \
+    || fail "pi guardrail run failed"
+rm -f "$GUARD_FILE"
+
+if ! grep -q "hyalo lint" <<<"$OUT"; then
+    fail "guardrail did not fire: expected hyalo lint findings in the write result, got: $OUT"
+fi
+echo "guardrail e2e OK: lint findings were appended to the write result"
+echo
+echo "PASS: template is compatible with installed pi; tool path and lint guardrail work"

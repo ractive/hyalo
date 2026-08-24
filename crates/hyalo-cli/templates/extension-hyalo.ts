@@ -46,31 +46,49 @@ function buildCommand(params: HyaloToolArgs): string[] {
  * the session; files outside the vault (or a failed config lookup) skip
  * the check entirely, so non-hyalo projects pay zero cost.
  */
-async function findVaultDir(pi: ExtensionAPI): Promise<string | null> {
-  const cached = findVaultDir.cache;
+/** Parsed `hyalo config --format json` — the bits the extension needs. */
+interface HyaloConfigInfo {
+  /** Vault directory name, or null when no vault is configured. */
+  vaultDir: string | null;
+  /** Effective `[pi] session_summary` (opt-in LLM context injection). */
+  sessionSummary: boolean;
+}
+
+async function loadHyaloConfig(pi: ExtensionAPI): Promise<HyaloConfigInfo | null> {
+  const cached = loadHyaloConfig.cache;
   if (cached !== undefined) return cached;
   try {
     const { stdout, code } = await pi.exec("hyalo", ["config", "--format", "json"], {
       timeout: 10_000,
     });
     if (code !== 0) {
-      findVaultDir.cache = null;
+      loadHyaloConfig.cache = null;
       return null;
     }
-    // config's JSON is a flat object; .dir is the vault directory name
-    // (e.g. "hyalo-knowledgebase"), absent/null when no vault is configured.
-    const dir = JSON.parse(stdout)?.dir;
-    const resolved = typeof dir === "string" && dir ? dir : null;
-    findVaultDir.cache = resolved;
+    // The JSON is an envelope with a top-level `dir` compat key (older
+    // hyalo versions printed the flat object without an envelope — both
+    // shapes carry the top-level `dir`). `pi` lives under `.results.pi`.
+    const parsed = JSON.parse(stdout);
+    const dir = parsed?.dir ?? parsed?.results?.dir;
+    const sessionSummary = parsed?.results?.pi?.session_summary === true;
+    const resolved: HyaloConfigInfo = {
+      vaultDir: typeof dir === "string" && dir ? dir : null,
+      sessionSummary,
+    };
+    loadHyaloConfig.cache = resolved;
     return resolved;
   } catch {
     // hyalo not installed or no config: no vault, no guardrail.
-    findVaultDir.cache = null;
+    loadHyaloConfig.cache = null;
     return null;
   }
 }
 // Module-level cache slot (survives across event handler invocations).
-findVaultDir.cache = undefined as string | null | undefined;
+loadHyaloConfig.cache = undefined as HyaloConfigInfo | null | undefined;
+
+async function findVaultDir(pi: ExtensionAPI): Promise<string | null> {
+  return (await loadHyaloConfig(pi))?.vaultDir ?? null;
+}
 
 async function lintVaultFile(
   pi: ExtensionAPI,
@@ -181,6 +199,38 @@ export default function (pi: ExtensionAPI) {
         };
       }
     },
+  });
+
+  // Opt-in vault summary injection: with `[pi] session_summary = true` in
+  // .hyalo.toml, inject a `hyalo summary` snapshot into the LLM context at
+  // session start (custom message, not displayed in the TUI). Injected at
+  // most once per pi process — a fork/new session in the same process keeps
+  // the summary already present in the transcript or skips a duplicate.
+  let summaryInjected = false;
+  pi.on("session_start", async () => {
+    if (summaryInjected) return;
+    const config = await loadHyaloConfig(pi);
+    if (!config?.sessionSummary || !config.vaultDir) return;
+    summaryInjected = true;
+    try {
+      const { stdout, code } = await pi.exec(
+        "hyalo",
+        ["summary", "--format", "text", "--no-hints"],
+        { timeout: 30_000 },
+      );
+      if (code !== 0 || !stdout.trim()) return;
+      pi.sendMessage({
+        customType: "hyalo-vault-summary",
+        content:
+          `Knowledgebase snapshot (${config.vaultDir}/) for this session:\n\n` +
+          stdout.trim() +
+          "\n\nUse this to orient yourself; refine with the hyalo tool.",
+        display: false,
+        details: undefined,
+      });
+    } catch {
+      // summary unavailable: skip injection silently
+    }
   });
 
   // Post-write lint guardrail: append hyalo lint findings to write/edit
