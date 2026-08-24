@@ -32,15 +32,21 @@ cargo install cargo-fuzz --locked
 
 ## Running
 
-From the `fuzz/` directory (each target reads/writes `corpus/<target>/` by
-default, which is gitignored — the tracked, curated seeds live in
-`seeds/<target>/` and are not mutated by fuzzing runs):
+From the `fuzz/` directory. Each target reads/writes `corpus/<target>/`,
+which is gitignored; the tracked, curated seeds live in `seeds/<target>/`.
+libFuzzer writes new inputs into the **first** corpus directory it is given,
+so always list `corpus/<target>` before `seeds/<target>` — passing only
+`seeds/<target>` would grow thousands of hash-named files into the tracked
+seed set:
 
 ```sh
 cd fuzz
 
-# Short smoke run (a few seconds), useful after touching parser code:
-cargo +nightly fuzz run frontmatter_splice -- -max_total_time=15 seeds/frontmatter_splice
+# Short smoke run (a few seconds), useful after touching parser code.
+# ORDER MATTERS: libFuzzer writes newly-discovered inputs into the FIRST
+# corpus directory listed — always put the gitignored corpus/<target> first
+# so the tracked seeds/<target> stays a curated, read-only seed set:
+cargo +nightly fuzz run frontmatter_splice corpus/frontmatter_splice seeds/frontmatter_splice -- -max_total_time=15
 
 # A real fuzzing session — runs until stopped (Ctrl-C), growing corpus/<target>/
 # and seeding from both the auto-grown corpus and the tracked seeds:
@@ -48,7 +54,7 @@ cargo +nightly fuzz run scanner corpus/scanner seeds/scanner
 
 # All four targets, one after another, capped:
 for t in frontmatter_splice scanner link_parser snapshot_loader; do
-    cargo +nightly fuzz run "$t" -- -max_total_time=60 "seeds/$t"
+    cargo +nightly fuzz run "$t" "corpus/$t" "seeds/$t" -- -max_total_time=60
 done
 ```
 
