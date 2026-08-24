@@ -201,6 +201,7 @@ fn create_index_custom_output_path() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn create_index_output_follows_in_vault_symlink_and_keeps_it_a_symlink() {
     // L-1 (adversarial-review-2026-08-23.md): `write_snapshot` used to bypass
@@ -245,6 +246,7 @@ fn create_index_output_follows_in_vault_symlink_and_keeps_it_a_symlink() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn create_index_refuses_to_follow_symlink_outside_vault() {
     // HIGH regression (review round on PR #254, Finding 1): the first cut
@@ -881,6 +883,7 @@ fn set_with_index_updates_index_for_subsequent_find() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn set_with_symlinked_index_outside_vault_does_not_clobber_it() {
     // HIGH regression (review round on PR #254, Finding 1) — blast-radius
