@@ -1,19 +1,19 @@
 ---
 type: iteration
-title: Iteration 228 — remove dead LintOutput / lint_files_with_options
+title: Iteration 234 — remove dead LintOutput / lint_files_with_options
 date: 2026-08-25
 status: planned
 tags:
   - iteration
   - cleanup
   - tech-debt
-branch: iter-228/lint-dead-output-cleanup
+branch: iter-234/lint-dead-output-cleanup
 related:
   - "[[iterations/iteration-216-results-shape-consistency]]"
   - "[[research/results-json-shape-inventory]]"
 ---
 
-# Iteration 228 — remove dead LintOutput / lint_files_with_options
+# Iteration 234 — remove dead LintOutput / lint_files_with_options
 
 ## Goal
 
