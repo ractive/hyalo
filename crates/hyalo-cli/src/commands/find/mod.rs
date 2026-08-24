@@ -853,31 +853,31 @@ pub fn find(
                     // iter-211 / BUG-8: same-file anchors (`[b](#nope)`,
                     // `[[#nope]]`) have no target file, so they are indexed
                     // separately from `entry.links` and were never checked at
-                    // all. Surface the *broken* ones as links that resolve to
-                    // this very file, so `--broken-links` catches them and the
-                    // per-link output shows where they point. Valid same-file
-                    // anchors are deliberately not emitted: they would inflate
-                    // every file's outbound-link list and silently change the
-                    // `--orphan` / `--dead-end` verdicts.
-                    .chain(
-                        entry
-                            .self_anchors
-                            .iter()
-                            .filter(|(_, fragment)| {
-                                !hyalo_core::anchor::fragment_matches_headings(
-                                    fragment,
-                                    &entry.sections,
-                                )
-                            })
-                            .map(|(_, fragment)| LinkInfo {
-                                target: String::new(),
-                                path: Some(entry.rel_path.clone()),
-                                label: None,
-                                fragment: Some(fragment.clone()),
-                                broken_anchor: true,
-                                out_of_vault: false,
-                            }),
-                    )
+                    // all. Surface them as links that resolve to this very
+                    // file, so `--broken-links` catches the broken ones and
+                    // the per-link output shows where they point.
+                    //
+                    // NEW-12 (dogfood pre3): this used to filter to only the
+                    // *broken* ones — `[a](#part-two)` where `#part-two`
+                    // exists was silently absent from the inventory while
+                    // `[b](#nope)` was present, so completeness depended on
+                    // the verdict. `broken_anchor` is already a field on
+                    // every entry; that is where the verdict belongs, not in
+                    // whether the entry appears at all. Self-referential
+                    // entries (`path == entry.rel_path`) are excluded from
+                    // the `--orphan`/`--dead-end` outbound-edge count below so
+                    // this does not change those verdicts.
+                    .chain(entry.self_anchors.iter().map(|(_, fragment)| LinkInfo {
+                        target: String::new(),
+                        path: Some(entry.rel_path.clone()),
+                        label: None,
+                        fragment: Some(fragment.clone()),
+                        broken_anchor: !hyalo_core::anchor::fragment_matches_headings(
+                            fragment,
+                            &entry.sections,
+                        ),
+                        out_of_vault: false,
+                    }))
                     .collect::<Vec<_>>(),
             )
         } else {
@@ -989,9 +989,30 @@ pub fn find(
             }
         }
 
+        // A same-file anchor (`path == entry.rel_path`, NEW-12) is not an
+        // edge to another file — it must not count as an outbound link for
+        // orphan/dead-end purposes, or a file whose only "link" is a jump to
+        // its own heading would stop being reported as an orphan.
+        //
+        // PR #251 review L7: narrowed to the self-anchor marker specifically
+        // (`target` is empty — see the `self_anchors` chain above, the only
+        // place that constructs a `LinkInfo` with an empty target) rather
+        // than "resolves to this file", which also matched a genuine
+        // self-referential link the author actually wrote (`[me](self.md)`)
+        // — that IS a real outbound edge (NEW-12's own scope is "same-file
+        // heading jump", not every link whose target happens to be the file
+        // itself), and excluding it too was broader than intended and untested.
+        let has_real_outbound = || {
+            obj.links
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|l| !l.target.is_empty())
+        };
+
         // --- Apply orphan filter (no inbound AND no outbound links) ---
         if orphan {
-            let has_outbound = !obj.links.as_deref().unwrap_or(&[]).is_empty();
+            let has_outbound = has_real_outbound();
             let has_inbound = !obj.backlinks.as_deref().unwrap_or(&[]).is_empty();
             if has_outbound || has_inbound {
                 continue;
@@ -1000,7 +1021,7 @@ pub fn find(
 
         // --- Apply dead-end filter (has inbound, no outbound links) ---
         if dead_end {
-            let has_outbound = !obj.links.as_deref().unwrap_or(&[]).is_empty();
+            let has_outbound = has_real_outbound();
             let has_inbound = !obj.backlinks.as_deref().unwrap_or(&[]).is_empty();
             if has_outbound || !has_inbound {
                 continue;

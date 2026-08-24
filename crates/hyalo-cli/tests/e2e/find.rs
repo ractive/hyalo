@@ -4149,3 +4149,64 @@ fn find_property_regex_parse_error_shows_engine_detail() {
         "expected the regex engine detail (caret/position), got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// NEW-16 (dogfood pre3): a stale hand-written `[n/m]` in a heading must not
+// double up with the computed count in text output.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_fields_sections_text_replaces_a_stale_hand_written_task_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n## Tasks [6/6]\n\n- [x] one\n- [ ] two\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "find", "--file", "a.md", "--fields", "sections", "--format", "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Tasks [1/2]"),
+        "expected the computed count to replace the stale one: {stdout}"
+    );
+    assert!(
+        !stdout.contains("[6/6]"),
+        "the stale hand-written count must not survive: {stdout}"
+    );
+}
+
+/// A heading with no task section (no checkboxes under it) keeps bracket text
+/// exactly as written — there is no computed count to replace it with, and
+/// stripping unconditionally would corrupt an unrelated heading that merely
+/// happens to end in something bracket-shaped.
+#[test]
+fn find_fields_sections_text_preserves_bracket_text_when_there_are_no_tasks() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\n---\n## Ratio [3/4]\n\nJust prose, no checkboxes.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "find", "--file", "a.md", "--fields", "sections", "--format", "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Ratio [3/4]"),
+        "a non-task heading's bracket text must survive untouched: {stdout}"
+    );
+}

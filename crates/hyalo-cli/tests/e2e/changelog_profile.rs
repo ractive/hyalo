@@ -625,6 +625,103 @@ fn changelog_add_wrap_breaks_long_message_into_hanging_indent() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// CHG-1 (found during iter-217): a multi-line `--message` without `--wrap`
+// used to render its continuation lines flush-left instead of hanging-indented,
+// and the missing category subsection is created directly under
+// `[Unreleased]` rather than left orphaned or appended to a released section.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn changelog_add_multiline_message_indents_continuation_and_targets_unreleased() {
+    let tmp = TempDir::new().unwrap();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n\
+         ## [Unreleased]\n\n\
+         ### Changed\n\n\
+         - existing changed entry\n\n\
+         ## [0.20.0] - 2026-07-19\n\n\
+         ### Fixed\n\n\
+         - old release fixed entry\n\n\
+         [Unreleased]: https://x/compare/v0.20.0...HEAD\n\
+         [0.20.0]: https://x/tag/v0.20.0\n",
+    );
+    let (_json, output) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "new l1\nnew l2",
+            "--apply",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+
+    let unreleased_pos = content.find("## [Unreleased]").expect("Unreleased present");
+    let released_pos = content
+        .find("## [0.20.0]")
+        .expect("released section present");
+    assert!(
+        content[unreleased_pos..released_pos].contains("### Fixed"),
+        "the missing ### Fixed subsection must be created under [Unreleased], \
+         not left only under the released section:\n{content}"
+    );
+    assert!(
+        content.contains("- new l1\n  new l2"),
+        "the continuation line must be hanging-indented under the bullet:\n{content}"
+    );
+    assert!(
+        content.contains("- old release fixed entry"),
+        "the pre-existing released-section entry must be untouched:\n{content}"
+    );
+}
+
+/// PR #251 review L9: a blank line inside a multi-line `--message` must stay
+/// genuinely blank in the written file — not a whitespace-only "  " line.
+#[test]
+fn changelog_add_multiline_message_blank_line_stays_genuinely_blank() {
+    let tmp = TempDir::new().unwrap();
+    write_changelog(
+        tmp.path(),
+        "# Changelog\n\n## [Unreleased]\n\n[Unreleased]: https://x/compare/v1.0.0...HEAD\n",
+    );
+    let (_json, output) = run(
+        tmp.path(),
+        &[
+            "changelog",
+            "add",
+            "--category",
+            "Fixed",
+            "--message",
+            "first\n\nthird",
+            "--apply",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(tmp.path().join("CHANGELOG.md")).unwrap();
+    assert!(
+        content.contains("- first\n\n  third"),
+        "the blank line between paragraphs must stay empty, not \"  \" (indent-only):\n{content:?}"
+    );
+    assert!(
+        !content.lines().any(|l| l == "  "),
+        "no line in the file may be indent-only whitespace:\n{content:?}"
+    );
+}
+
 #[test]
 fn changelog_add_wrap_too_narrow_is_user_error() {
     let tmp = TempDir::new().unwrap();

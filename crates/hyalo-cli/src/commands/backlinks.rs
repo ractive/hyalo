@@ -12,6 +12,20 @@ struct BacklinkItem {
     source: String,
     line: usize,
     target: String,
+    /// The link's own target text, exactly as `LinkGraph::build` left it —
+    /// relative path components resolved (so `../target.md` reports
+    /// `target.md`, not the raw `../` the author wrote) but casing and `.md`
+    /// presence untouched.
+    ///
+    /// PR #251 review L8: `target` reports the query's own canonical path
+    /// uniformly across every entry (see its own comment below) — necessary
+    /// for a consistent spelling, but it erases exactly the signal someone
+    /// chasing a case mismatch needs: whether THIS occurrence was written
+    /// `[[NOTE]]` or `[[note]]`. Kept under a separate key rather than folded
+    /// back into `target` so both questions ("what file does every entry
+    /// really point at" and "how did each occurrence spell it") stay
+    /// answerable without re-adding the inconsistency the NEW-18 fix removed.
+    written_target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
 }
@@ -65,13 +79,25 @@ pub fn backlinks(
 
     let total = entries.len() as u64;
     let take_n = limit.filter(|n| *n > 0).unwrap_or(usize::MAX);
+    // NEW-18 (dogfood pre3): `target` used to report each occurrence's own
+    // written text (`e.link.target`) as normalized by `LinkGraph::build` —
+    // which resolves relative path components (`../target.md` → `target.md`)
+    // but leaves the `.md` suffix exactly as the author happened to type it
+    // (present, absent, or a bare stem), so two entries pointing at the same
+    // file could report different spellings. Every entry here necessarily
+    // points at `rel` (that is what was queried), so report it uniformly —
+    // the consistently-normalized form this finding's second option allows,
+    // cheaper and lower-risk than threading the raw pre-normalization text
+    // through `Link`/`BacklinkEntry` (a snapshot-serialized struct used far
+    // beyond this one command) to recover the true authored spelling.
     let items: Vec<BacklinkItem> = entries
         .iter()
         .take(take_n)
         .map(|e| BacklinkItem {
             source: e.source.to_string_lossy().replace('\\', "/"),
             line: e.line,
-            target: e.link.target.clone(),
+            target: rel.clone(),
+            written_target: e.link.target.clone(),
             label: e.link.label.clone(),
         })
         .collect();

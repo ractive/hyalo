@@ -484,7 +484,28 @@ const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
 const OUTLINE_SECTION_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)")\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `OutlineSection` with tasks: `{code_blocks, heading, level, line, links, tasks}`
-const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \(.heading // "(pre-heading)") [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
+///
+/// NEW-16 (dogfood pre3): `.heading` is the raw markdown text, which may
+/// itself already carry a hand-written `[n/m]` count (`## Tasks [6/6]`) —
+/// unconditionally appending the computed one doubled it (`## Tasks [6/6]
+/// [1/2]`), with the hand-written half free to go stale the moment a task
+/// checkbox changed. Strips any such trailing bracket count from the heading
+/// before appending the one hyalo actually computed, so it renders once and
+/// is always current.
+///
+/// PR #251 review N15: this filter only ever runs on a section that DOES
+/// have `.tasks` (see the `code_blocks,heading,level,line,links,tasks`
+/// dispatch key below), so the strip always fires — there is no "no tasks,
+/// keep the text" branch here the way `build_file_object_filter`'s inline
+/// sections filter has. A heading that ends in bracket text shaped like
+/// `[n/m]` for a reason *other* than a task count (`## Aspect Ratio [16/9]`,
+/// and it happens to have a task list under it) loses that text: the strip
+/// is a plain regex match on shape, not semantics, and cannot tell "this is
+/// a stale task count" from "this looks like one." Accepted trade-off — the
+/// doubled/stale-count case this filter exists to fix is far more common
+/// than a coincidental `[n/m]`-shaped heading suffix on a section that also
+/// contains a task list.
+const OUTLINE_SECTION_WITH_TASKS_FILTER: &str = r##""\("#" * .level) \((.heading // "(pre-heading)") | sub("\\s*\\[[0-9]+/[0-9]+\\]\\s*$"; "")) [\(.tasks.done)/\(.tasks.total)]\(if (.links | length) > 0 then "\n\(.links | map("  → \"\(.)\"") | join("\n"))" else "" end)""##;
 
 /// `TaskInfo`: `{done, line, status, text}`
 const TASK_INFO_FILTER: &str =
@@ -502,7 +523,7 @@ const TASK_DRY_RUN_RESULT_FILTER: &str =
 
 /// `VaultSummary`: `{dir, dead_ends, files, links, orphans, properties, recent_files, status, tags, tasks}`
 /// Compact single-line-per-section format (~20-30 lines regardless of vault size).
-const VAULT_SUMMARY_FILTER: &str = r#""kb dir: \(.dir)\nFiles: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\(if .links.out_of_vault > 0 then ", \(.links.out_of_vault) out of vault" else "" end)\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+const VAULT_SUMMARY_FILTER: &str = r#""kb dir: \(.dir)\nFiles: \(.files.total)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\(if .links.broken_anchors > 0 then ", \(.links.broken_anchors) broken anchor\(if .links.broken_anchors == 1 then "" else "s" end)" else "" end)\(if .links.out_of_vault > 0 then ", \(.links.out_of_vault) out of vault" else "" end)\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -541,8 +562,8 @@ const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" en
 /// Empty case: `No backlinks found for "file"`.
 const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
 
-/// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, case_mismatch_fixes, case_mismatches, failed, failed_fixes, fixable, fixes, ignored, unapplied, unapplied_fixes, unfixable, unfixable_links}`
-/// Format: summary line with fix status. Includes case-mismatch and ambiguous counts when non-zero.
+/// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, broken_anchors, case_mismatch_fixes, case_mismatches, failed, failed_fixes, fixable, fixes, ignored, relocation_fixes, relocations, unapplied, unapplied_fixes, unfixable, unfixable_links}`
+/// Format: summary line with fix status. Includes case-mismatch, relocation, and ambiguous counts when non-zero.
 /// On `--apply`, the per-fix detail lines show only fixes that were actually
 /// written to disk (`applied_fixes`); on dry-run they show the full plan
 /// (`fixes`), since nothing has been attempted yet. A non-zero `unapplied`
@@ -560,7 +581,12 @@ const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No 
 ///    the actionable buckets stay readable on a vault with thousands.
 /// 3. the fuzzy per-fix listing moved to the **end** of the report. It is the
 ///    longest section by far and used to bury every actionable bucket under it.
-const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\nFixable: \(.fixable)\(if .fuzzy > 0 then "\nLow-confidence matches (excluded from plain --apply): \(.fuzzy)" else "" end)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .out_of_vault > 0 then "\nOut of vault (target above vault root): \(.out_of_vault)" else "" end)\(if .templated > 0 then "\nTemplated (dynamic destination, never rewritten): \(.templated)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.unfixable_links | length) > 0 then "\nUnfixable links (no candidate in the vault):\n\(.unfixable_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.unfixable_links | length) > 20 then "\n  … and \((.unfixable_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.out_of_vault_links | length) > 0 then "\nOut-of-vault links (target above vault root, never rewritten):\n\(.out_of_vault_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.out_of_vault_links | length) > 20 then "\n  … and \((.out_of_vault_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "link-case-mismatch")]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)\(if (.templated_links | length) > 0 then "\nTemplated links (dynamic destination, never rewritten):\n\(.templated_links | map("  \(.source) line \(.line): \"\(.target)\" [templated]") | join("\n"))" else "" end)\(if (.fuzzy_fixes | length) > 0 then "\nLow-confidence matches (\(if .fuzzy_applied then "applied at or above confidence \(.fuzzy_min_confidence)" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "fuzzy-match") \((.confidence * 1000 | floor) / 1000)]\(if .below_floor then " — below floor" else "" end)") | join("\n"))\(if .fuzzy_below_floor > 0 then "\n  \(.fuzzy_below_floor) of \(.fuzzy_fixes | length) below the confidence floor \(.fuzzy_min_confidence) — raise or lower it with --min-confidence <0.0-1.0>" else "" end)" else "" end)""#;
+///
+/// NEW-13 (dogfood pre3) adds a `Relocations` count/section, separate from
+/// `Case mismatches`: a bare-stem link resolved to a different directory is a
+/// move, not a casing fix, and had been silently folded into the case-mismatch
+/// count.
+const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\(if .broken_anchors > 0 then "\n\(.broken_anchors) broken anchor(s) — see `find --broken-links`" else "" end)\nFixable: \(.fixable)\(if .fuzzy > 0 then "\nLow-confidence matches (excluded from plain --apply): \(.fuzzy)" else "" end)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .relocations > 0 then "\nRelocations: \(.relocations)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .out_of_vault > 0 then "\nOut of vault (target above vault root): \(.out_of_vault)" else "" end)\(if .templated > 0 then "\nTemplated (dynamic destination, never rewritten): \(.templated)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.unfixable_links | length) > 0 then "\nUnfixable links (no candidate in the vault):\n\(.unfixable_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.unfixable_links | length) > 20 then "\n  … and \((.unfixable_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.out_of_vault_links | length) > 0 then "\nOut-of-vault links (target above vault root, never rewritten):\n\(.out_of_vault_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.out_of_vault_links | length) > 20 then "\n  … and \((.out_of_vault_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "link-case-mismatch")]") | join("\n"))" else "" end)\(if (.relocation_fixes | length) > 0 then "\nRelocation fixes:\n\(.relocation_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "shortest-path")]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)\(if (.templated_links | length) > 0 then "\nTemplated links (dynamic destination, never rewritten):\n\(.templated_links | map("  \(.source) line \(.line): \"\(.target)\" [templated]") | join("\n"))" else "" end)\(if (.fuzzy_fixes | length) > 0 then "\nLow-confidence matches (\(if .fuzzy_applied then "applied at or above confidence \(.fuzzy_min_confidence)" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "fuzzy-match") \((.confidence * 1000 | floor) / 1000)]\(if .below_floor then " — below floor" else "" end)") | join("\n"))\(if .fuzzy_below_floor > 0 then "\n  \(.fuzzy_below_floor) of \(.fuzzy_fixes | length) below the confidence floor \(.fuzzy_min_confidence) — raise or lower it with --min-confidence <0.0-1.0>" else "" end)" else "" end)""#;
 
 /// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, files_applied, files_failed, files_skipped, matches, scanned, total}`
 /// plus optional `config_excluded_titles` / `config_excluded_mentions`
@@ -659,7 +685,7 @@ fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)
-        "ambiguous,ambiguous_links,applied,applied_fixes,broken,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_below_floor,fuzzy_fixes,fuzzy_min_confidence,ignored,out_of_vault,out_of_vault_links,templated,templated_links,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
+        "ambiguous,ambiguous_links,applied,applied_fixes,broken,broken_anchors,case_mismatch_fixes,case_mismatches,failed,failed_fixes,fixable,fixes,fuzzy,fuzzy_applied,fuzzy_below_floor,fuzzy_fixes,fuzzy_min_confidence,ignored,out_of_vault,out_of_vault_links,relocation_fixes,relocations,templated,templated_links,unapplied,unapplied_fixes,unfixable,unfixable_links" => {
             Some(LINKS_FIX_FILTER)
         }
         // LinksAuto result (iter-187 adds per-file apply outcome fields for L-11;
@@ -898,9 +924,15 @@ fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) ->
 
     // Sections: header then each as "    ## Heading [done/total]" or "    ## Heading"
     // Note: uses r##"..."## because the jq filter contains the sequence "#" (hash-quoted).
+    // NEW-16 (dogfood pre3): when a computed count is about to be appended,
+    // strip a trailing hand-written `[n/m]` from `.heading` first — see
+    // OUTLINE_SECTION_WITH_TASKS_FILTER's doc comment for why. Only stripped
+    // when `.tasks` is present: a heading with no task section keeps its text
+    // exactly as written, even if it happens to end in bracket text that
+    // merely looks like a count.
     if map.contains_key("sections") {
         parts.push(
-            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(.heading // "(pre-heading)")\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.sections | length) > 0 then "  sections:\n\(.sections | map("    \("#" * .level) \(if .tasks then ((.heading // "(pre-heading)") | sub("\\s*\\[[0-9]+/[0-9]+\\]\\s*$"; "")) else (.heading // "(pre-heading)") end)\(if .tasks then " [\(.tasks.done)/\(.tasks.total)]" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 
@@ -1281,6 +1313,18 @@ fn format_lint_output_text(map: &serde_json::Map<String, serde_json::Value>) -> 
             s,
             "{files_checked} {files_label} checked, {files_with_issues} with issues ({error_count} {errors_label}, {warn_count} {warns_label})",
         );
+    }
+    // UX-1 (dogfood pre3): a bare sweep silently dropped every `[lint]
+    // ignore`-matched file with no visible trace — "68 files checked, no
+    // issues" on a 386-file vault read as a clean bill of health, not "68 of
+    // 386 were actually looked at." The named-file / glob-all-ignored cases
+    // already get their own stderr notice; this is the everything-else case.
+    let files_ignored: u64 = map
+        .get("files_ignored")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if files_ignored > 0 {
+        let _ = write!(s, " ({files_ignored} ignored by [lint] ignore)");
     }
 
     let fix_count: usize = map
@@ -2492,6 +2536,35 @@ mod tests {
         assert!(out.contains("##"));
         assert!(out.contains("Tasks"));
         assert!(out.contains("[2/4]"));
+    }
+
+    /// NEW-16 (dogfood pre3): a hand-written `[n/m]` already in the heading
+    /// text must render once — the computed count replaces it rather than
+    /// appending a second bracket group (`## Tasks [6/6] [2/4]`).
+    #[test]
+    fn outline_section_with_tasks_filter_replaces_a_stale_hand_written_count() {
+        let val = json!({
+            "code_blocks": [],
+            "heading": "Tasks [6/6]",
+            "level": 2,
+            "line": 10,
+            "links": [],
+            "tasks": {"done": 2, "total": 4}
+        });
+        let out = jq(OUTLINE_SECTION_WITH_TASKS_FILTER, &val).unwrap();
+        assert!(
+            out.contains("Tasks [2/4]"),
+            "expected the computed count, got: {out}"
+        );
+        assert!(
+            !out.contains("[6/6]"),
+            "the stale hand-written count must not survive: {out}"
+        );
+        assert_eq!(
+            out.matches('[').count(),
+            1,
+            "exactly one bracket group must render: {out}"
+        );
     }
 
     // --- FindTaskInfo filter ---

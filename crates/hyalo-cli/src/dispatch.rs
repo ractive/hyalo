@@ -539,6 +539,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 reverse,
                 limit,
                 broken_links,
+                strict,
                 orphan,
                 dead_end,
                 title,
@@ -716,7 +717,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         needs_stem_map,
                         resolved.as_snapshot(),
                     );
-                    find_commands::find(
+                    let outcome = find_commands::find(
                         resolved.as_index(),
                         dir,
                         site_prefix,
@@ -740,7 +741,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         language.as_deref(),
                         ctx.config_language,
                         ci.as_ref(),
-                    )
+                    )?;
+                    // UX-2 (dogfood pre3): `--strict` gives any `find` query
+                    // (most commonly `--broken-links`) a CI-gateable exit
+                    // code — before this, `find --broken-links` always
+                    // exited 0 even when it reported findings, so a vault
+                    // whose only defect was a dead heading anchor passed CI
+                    // silently.
+                    if strict
+                        && let CommandOutcome::Success {
+                            total: Some(total), ..
+                        } = &outcome
+                        && *total > 0
+                    {
+                        ctx.exit_code_override = Some(1);
+                    }
+                    Ok(outcome)
                 }
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }
@@ -1886,6 +1902,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // excluded by `[lint] ignore` it must produce a visible notice, not
             // a silent `0 files checked` (df-scale silent-drop family).
             let explicit_named = !files_arg.is_empty();
+            // UX-1 (dogfood pre3): how many files `[lint] ignore` dropped from
+            // this run, regardless of scope. Zero when there is no `[lint]
+            // ignore` at all (the branch below never runs).
+            let mut lint_ignored_count: usize = 0;
             let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
                 file_pairs
             } else {
@@ -1914,24 +1934,44 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 } else {
                     builder.build().ok()
                 };
+                // UX-1 (dogfood pre3): a `--glob` sweep is just as "explicit"
+                // as `--file` when it comes to the *all-matches-ignored* case
+                // — the user asked for a specific set of files by name or by
+                // pattern either way, and getting back an empty, vacuously
+                // green lint run with no explanation is the same silent-drop
+                // trap regardless of which form they used.
+                let explicit_glob = !effective_glob.is_empty();
                 match set {
                     Some(set) => {
                         let mut ignored_named: Vec<String> = Vec::new();
+                        let before = file_pairs.len();
                         let kept: Vec<_> = file_pairs
                             .into_iter()
                             .filter(|(_, rel)| {
                                 let norm = rel.replace('\\', "/");
                                 let matched = set.is_match(&norm);
-                                if matched && explicit_named {
+                                if matched && (explicit_named || explicit_glob) {
                                     ignored_named.push(norm);
                                 }
                                 !matched
                             })
                             .collect();
-                        // Notice for explicitly named files silently excluded by
-                        // `[lint] ignore` — otherwise the run reports `0 files
-                        // checked, no issues` with no hint why.
-                        if !ignored_named.is_empty() {
+                        // UX-1: unconditional count, regardless of how the
+                        // file set was scoped — feeds the bare-sweep summary
+                        // line ("N files checked (M ignored by [lint]
+                        // ignore)") so a full-vault run stops hiding how much
+                        // of the vault it silently skipped.
+                        lint_ignored_count = before - kept.len();
+                        // Notice for an explicit scope (named files, or a
+                        // --glob whose matches are *entirely* ignored)
+                        // silently excluded by `[lint] ignore` — otherwise the
+                        // run reports `0 files checked, no issues` with no
+                        // hint why. A --glob that only partially matches the
+                        // ignore list stays quiet here: the bare-sweep count
+                        // above already makes the exclusion visible without
+                        // the noise of naming every match.
+                        let glob_all_ignored = explicit_glob && !explicit_named && kept.is_empty();
+                        if !ignored_named.is_empty() && (explicit_named || glob_all_ignored) {
                             let list = ignored_named.join(", ");
                             let plural = if ignored_named.len() == 1 {
                                 "file"
@@ -2089,6 +2129,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 // filesystems (macOS/Windows default).
                 case_insensitive: mode_enabled(ctx.case_insensitive_mode, dir),
                 link_lint_ctx,
+                files_ignored: lint_ignored_count,
             };
 
             let (outcome, mut counts) = lint_commands::lint_files_extended(
@@ -2264,6 +2305,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         reverse,
                         limit,
                         broken_links,
+                        strict,
                         orphan,
                         dead_end,
                         title,
@@ -2431,7 +2473,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 true,
                                 resolved.as_snapshot(),
                             );
-                            find_commands::find(
+                            let outcome = find_commands::find(
                                 resolved.as_index(),
                                 dir,
                                 site_prefix,
@@ -2459,7 +2501,25 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                                 language.as_deref(),
                                 ctx.config_language,
                                 ci.as_ref(),
-                            )
+                            )?;
+                            // PR #251 review M4: `views run` used to silently
+                            // drop `--strict` (the destructure above fell
+                            // into `..`) — `views set gate --broken-links
+                            // --strict` persisted `strict: true` into the
+                            // saved view, but `views run gate` still exited 0
+                            // forever while `find --view gate` correctly
+                            // exited 1: a CI gate that silently stopped
+                            // gating the moment it was saved as a view. Same
+                            // exit-code logic as `Commands::Find` (UX-2).
+                            if strict
+                                && let CommandOutcome::Success {
+                                    total: Some(total), ..
+                                } = &outcome
+                                && *total > 0
+                            {
+                                ctx.exit_code_override = Some(1);
+                            }
+                            Ok(outcome)
                         }
                         IndexResolution::Outcome(outcome) => Ok(outcome),
                     }

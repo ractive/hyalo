@@ -113,6 +113,114 @@ and this project adheres to
   Docs corpus wrote 1,492 such links that `hyalo links` then reported as
   ambiguous. Ambiguity is now also checked against the emitted stem, so
   either file's title is skipped. See DEC-083.
+- **`changelog add` continuation lines are hanging-indented, and a missing
+  category subsection is created under `[Unreleased]`, not left implicit**
+  (iter-220, dogfood CHG-1, found during iter-217). A multi-line `--message`
+  without `--wrap` used to carry its second and later lines as a literal `\n`
+  inside one logical entry, which wrote them out flush-left instead of
+  indented under the bullet.
+- **`find --fields links` inventory no longer depends on the broken/ok
+  verdict** (iter-220, dogfood NEW-12). A resolvable same-file fragment
+  link (`[a](#part-two)` where `#part-two` exists) used to be silently
+  absent from the inventory while a broken one (`[b](#nope)`) was
+  listed — completeness was backwards. Resolvable same-file anchors now
+  always appear, with `broken_anchor` (present-when-true) carrying the
+  verdict. Same-file entries are excluded from the `--orphan`/
+  `--dead-end` outbound-edge count, since a same-file heading jump is
+  not an edge to another file — a file whose only "link" is to its own
+  heading still counts as an orphan.
+- **`summary` and `links fix` no longer silently hide broken anchors**
+  (iter-220, dogfood NEW-15). `summary` gains a distinct `links.broken_anchors`
+  figure (omitted from JSON when zero) instead of folding anchors into
+  `links.broken` or ignoring them — a vault whose only defect was a dead
+  heading anchor used to report "Links: N total, 0 broken" while
+  `find --broken-links` reported findings for it. `links fix` gains a
+  one-line note ("N broken anchor(s) — see `find --broken-links`") when
+  anchors are broken but targets are clean; the check only runs in that
+  case, so it never adds a second resolution pass to a vault that already
+  has broken targets.
+- **bare `hyalo lint` no longer hides how much of the vault `[lint] ignore`
+  dropped** (iter-220, dogfood UX-1). "68 files checked, no issues" on a
+  386-file vault used to read as a clean bill of health even though 318
+  files were silently config-ignored; the summary line now appends
+  "(N ignored by [lint] ignore)" and the JSON envelope carries the same
+  figure as `files_ignored`. A `--glob` whose matches are entirely
+  ignored now prints the same exclusion notice the named-file form
+  already did, instead of a silently vacuous "0 files checked, no
+  issues" — a `--glob` matching a mix of ignored and kept files stays
+  quiet (only the summary-line count), so a large partial sweep isn't
+  buried in per-file noise.
+- **four hint dead ends closed, and `fuzzy_fixes`/`backlinks` gained fields
+  their JSON was missing** (iter-220, dogfood NEW-18). `views run <name>`
+  now gets full hint parity with `find --view <name>` — previously zero
+  hints where `find --view` emitted several. `lint-rules show <ID>` gets
+  scoped-lint and toggle/revert hints instead of none. `task read --all`
+  / `--section` on a file whose tasks are all already done now points at
+  `find --task todo` instead of dead-ending. `fuzzy_fixes` entries carry
+  `col` (1-based byte column of `old_target` on its line, omitted when
+  stale) alongside `line` — asked for in iter-210's own task text but
+  never delivered. `backlinks` JSON now reports `target` as the queried
+  file's own canonical resolved path, identically on every entry, instead
+  of each occurrence's own written spelling (which could disagree in
+  `.md` presence or relative-path form for the exact same target file).
+- **`hyalo read --format json` hints when `--frontmatter` was omitted, and
+  nested mapping properties are typed `map` instead of `text`** (iter-220,
+  dogfood UX-4). `read`'s JSON envelope silently drops the `frontmatter`
+  key entirely without `--frontmatter`, so `--jq '.results.frontmatter.x'`
+  read as `null` indistinguishably from "the property doesn't exist" —
+  a hint now names the flag, and disappears once it was actually passed.
+  Separately, `hyalo_core::frontmatter::infer_type` classified a nested
+  YAML mapping (`versions: {fpt: ..., ghec: ...}`, GitHub Docs'
+  `featuredLinks` shape) as `"text"`, the same label a plain string gets
+  — `hyalo properties` and `find --fields properties-typed` now report
+  `"map"` so a scalar property is distinguishable from a mapping one
+  without inspecting the raw value. **Migration note:** a script keying on
+  `type == "text"` to detect nested-mapping properties changes behavior —
+  `infer_type` feeds only reporting output (`hyalo properties`, `find
+  --fields properties-typed`), never schema validation, so `[schema]
+  required`/type-checking is unaffected.
+- **a hand-written `[n/m]` task count in a heading no longer doubles with
+  the computed one in text output** (iter-220, dogfood NEW-16). `## Tasks
+  [6/6]` with 1 of 2 checkboxes actually open used to render as `## Tasks
+  [6/6] [1/2]` — the stale hand-written count appended right next to the
+  correct computed one — in both `find --fields sections` and the
+  single-section jq filter. The computed count now replaces a trailing
+  `[n/m]`-shaped bracket group in the heading text rather than appending
+  a second one; a heading with no task section (nothing to replace it
+  with) keeps its own bracket text exactly as written.
+- **path relocations (`FixStrategy::ShortestPath`) no longer count as
+  `case_mismatches`** (iter-220, dogfood NEW-13). `[a](target.md)` resolving
+  via bare-stem lookup to `sub/target.md` is a move, not a casing fix — it
+  used to be counted and listed under "Case mismatches" alongside genuine
+  `LinkCaseMismatch` fixes, understating what actually changed. `links fix`
+  gains a separate `relocations`/`relocation_fixes` bucket and a matching
+  "Relocations: N" text section; both buckets are still written by plain
+  `--apply`, only the reporting changed. **Migration note:** `BrokenLinkReport`
+  (hyalo-core) gains a new public field, `relocations: Vec<FixPlan>` — a
+  source-breaking change for any external consumer constructing the struct
+  by literal (all in-tree construction sites are updated).
+- **`--dir` at a config root no longer prints a self-contradictory note, and
+  `--dir <foreign-tree>` gets the same ancestor-config discovery `cd` already
+  had** (iter-220, dogfood NEW-17). `--dir .` at the directory a `.hyalo.toml`
+  itself lives in used to print `./.hyalo.toml does not apply, ./.hyalo.toml
+  is in effect` — the identical literal path claiming both halves of one
+  contradictory sentence — because the "does not apply" half was a hardcoded
+  string rather than the actual shadowed config path; it now names the file
+  from data and says "still in effect" when it really is the same file.
+  Separately, `--dir <foreign-tree>` used to check only that exact directory
+  for a `.hyalo.toml`, so a subdirectory of an otherwise-configured tree
+  reported "no .hyalo.toml — built-in defaults" where `cd <foreign-tree> &&
+  hyalo …` would have silently adopted the ancestor config; both entry points
+  now resolve identically. See DEC-091 for the config-trust implication of
+  extending ancestor discovery to `--dir`.
+- **`hyalo config` no longer double-prints the malformed-config diagnostic,
+  and the ancestor-adoption note already respected `-q`** (iter-220, dogfood
+  UX-3). The malformed diagnostic used to appear once on stderr and again as
+  the lead line of `hyalo config`'s own report body; the stderr copy is now
+  skipped for that one command, since its report already carries it. Every
+  other command still prints it on stderr, since their own output doesn't
+  surface `malformed` at all. The ancestor-adoption note itself was verified
+  to already honor `--quiet` — not a bug.
 
 ### Changed
 
@@ -305,6 +413,21 @@ and this project adheres to
   `--no-warn-common-titles`, or `[links.auto] warn_common_titles = false`
   silence it. The word list is bundled in `hyalo-core::common_words` — no new
   dependency.
+- **`links fix` warns when the effective `site_prefix` stripped 0 of N
+  site-absolute links to a plausible vault path** (iter-220, dogfood NEW-9).
+  On a real MDN checkout, the auto-derived single-segment prefix (`en-us`)
+  case-insensitively stripped the `en-US/` segment from every
+  `/en-US/docs/...` link but left a `docs/...` remainder that names no
+  real top-level vault entry, silently turning a 110-second run into
+  49,762 broken links with no signal the prefix itself was the problem.
+  The warning names the effective prefix and points at `--site-prefix` /
+  `.hyalo.toml` / `hyalo config`.
+- **`find --strict` — a general CI-gate flag: exit 1 if a query returns any
+  results, 0 if empty** (iter-220, dogfood UX-2). Composes with any filter
+  combination; the primary motivation is `find --broken-links --strict` to
+  fail a build on a dead heading anchor (before this, `find --broken-links`
+  always exited 0 regardless of findings). See DEC-090 for why this was
+  chosen over a new lint rule.
 
 ### Changed
 

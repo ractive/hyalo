@@ -68,6 +68,43 @@ priority: 1
     assert_eq!(status_entry["count"], 1);
 }
 
+/// UX-4 (dogfood pre3): a nested mapping property (`versions:` with sub-keys,
+/// the GitHub Docs `featuredLinks` shape) used to be typed `text` — the same
+/// label a plain string gets — so `hyalo properties` couldn't distinguish a
+/// scalar property from a mapping one without inspecting the raw value.
+#[test]
+fn properties_types_nested_map_distinctly() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        md!(r"
+---
+title: A
+versions:
+  fpt: '*'
+  ghec: '*'
+---
+# A
+"),
+    );
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["properties", "summary"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = json["results"].as_array().expect("expected results array");
+
+    let versions_entry = arr
+        .iter()
+        .find(|v| v["name"] == "versions")
+        .expect("'versions' property should be present");
+    assert_eq!(versions_entry["type"], "map");
+}
+
 #[test]
 fn properties_empty_dir() {
     let tmp = TempDir::new().unwrap();

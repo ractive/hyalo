@@ -47,7 +47,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
                [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
-               [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [--reverse] [-n/--limit N]
+               [-f/--file F | -g/--glob G] [--fields ...] [--sort ...] [--reverse] [--strict] [-n/--limit N]
 
   Read (display file body content, read-only):
     hyalo read FILE [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]

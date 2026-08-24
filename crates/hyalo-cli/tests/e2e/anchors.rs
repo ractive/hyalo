@@ -108,8 +108,12 @@ Broken md anchor: [t](Foo.md#missing).
     );
 
     // Fragment-only same-file links resolve against THIS file's own headings
-    // (iter-211 / BUG-8). They are never file links, so they must not appear
-    // as outbound links — but a *dead* one must still be caught.
+    // (iter-211 / BUG-8). Since NEW-12 (dogfood pre3) resolvable ones DO
+    // appear in the general `find --fields links` inventory (see
+    // find_fields_links_inventory_includes_resolvable_same_file_anchors) —
+    // but never as `--orphan`/`--dead-end` outbound edges, since a same-file
+    // jump is not a link to another file. A *dead* same-file anchor must
+    // still be caught by `--broken-links`.
     write_md(
         tmp.path(),
         "same_file.md",
@@ -229,10 +233,12 @@ fn assert_matrix(json: &serde_json::Value, label: &str) {
     );
 
     // same_file.md — every same-file anchor names a real heading here, in both
-    // the raw-text and slug spellings → NOT surfaced.
+    // the raw-text and slug spellings → NOT surfaced under --broken-links
+    // (nothing here is broken). They DO appear in the unfiltered `links`
+    // inventory — see find_fields_links_inventory_includes_resolvable_same_file_anchors.
     assert!(
         !files.contains(&"same_file.md".to_string()),
-        "[{label}] valid same-file anchors must not be reported: {files:?}"
+        "[{label}] valid same-file anchors must not be reported as broken: {files:?}"
     );
 
     // same_file_broken.md — `[b](#nope)` names no heading in this file
@@ -352,6 +358,140 @@ fn anchor_matrix_indexed() {
     create_index(&tmp);
     let json = run_broken_links(&tmp, true);
     assert_matrix(&json, "index");
+}
+
+/// NEW-12 (dogfood pre3): the general `find --fields links` inventory (no
+/// `--broken-links` filter) must include a *resolvable* same-file anchor —
+/// completeness must not depend on the broken/ok verdict. Also verifies the
+/// verdict itself (`broken_anchor: false`) is what a consumer checks, not
+/// the entry's mere presence.
+#[test]
+fn find_fields_links_inventory_includes_resolvable_same_file_anchors() {
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir,
+            "find",
+            "--fields",
+            "links",
+            "--file",
+            "same_file.md",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let links = json["results"][0]["links"]
+        .as_array()
+        .expect("links array present");
+
+    // `same_file.md` writes three resolvable same-file anchors: a wikilink
+    // (`[[#Real]]`), a markdown link (`[t](#Real)`), and a rendered-slug
+    // spelling (`[t](#real)`) — all three must be inventoried now.
+    let real_fragment_entries: Vec<_> = links
+        .iter()
+        .filter(|l| {
+            l["fragment"]
+                .as_str()
+                .is_some_and(|f| f.eq_ignore_ascii_case("real"))
+        })
+        .collect();
+    assert_eq!(
+        real_fragment_entries.len(),
+        3,
+        "every resolvable same-file anchor must be inventoried, not just broken ones: {links:?}"
+    );
+    for entry in &real_fragment_entries {
+        // `broken_anchor: false` is skipped from JSON by design (L-21) — a
+        // resolvable anchor is distinguished from a broken one by the key's
+        // *absence*, not by an explicit `false`. The point under test is
+        // that the entry appears at all; a present-and-true would be the bug.
+        assert_ne!(
+            entry["broken_anchor"].as_bool(),
+            Some(true),
+            "a resolvable same-file anchor must not carry broken_anchor: {entry:?}"
+        );
+        assert_eq!(entry["path"].as_str(), Some("same_file.md"));
+    }
+}
+
+/// NEW-12 follow-on: including resolvable same-file anchors in the inventory
+/// must not turn a same-file-only file into a non-orphan — same-file jumps
+/// are not edges to another file.
+#[test]
+fn same_file_anchor_alone_still_counts_as_orphan() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "alone.md",
+        md!(r"
+---
+title: Alone
+---
+## Section
+
+See [jump](#section) — the file's only link is to itself.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--orphan", "--format", "json"])
+        .output()
+        .expect("hyalo find --orphan should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["file"].as_str())
+        .collect();
+    assert!(
+        files.contains(&"alone.md"),
+        "a file whose only link is a same-file anchor must still be an orphan: {files:?}"
+    );
+}
+
+/// PR #251 review L7: a genuine self-referential FILE link (`[me](self.md)`,
+/// a real link the author wrote, not a same-file anchor jump) IS a real
+/// outbound edge and must not be excluded from orphan/dead-end detection —
+/// `has_real_outbound`'s exclusion is scoped to the self-anchor marker
+/// (empty `target`) specifically, not "resolves to this file".
+#[test]
+fn genuine_self_referential_file_link_still_counts_as_outbound() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "self.md",
+        md!(r"
+---
+title: Self
+---
+See [me](self.md) for details.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--orphan", "--format", "json"])
+        .output()
+        .expect("hyalo find --orphan should run");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["file"].as_str())
+        .collect();
+    assert!(
+        !files.contains(&"self.md"),
+        "a genuine self-referential link is a real outbound edge; the file \
+         must NOT be reported as an orphan: {files:?}"
+    );
 }
 
 /// Text output renders the fragment on the target and marks a missing
@@ -698,4 +838,106 @@ fn rebuilt_index_repopulates_fragments() {
     create_index(&tmp);
     let json = run_broken_links(&tmp, true);
     assert_matrix(&json, "rebuilt-index");
+}
+
+// ---------------------------------------------------------------------------
+// UX-2 (dogfood pre3): `find --broken-links --strict` is a CI gate — a vault
+// whose only defect is a dead heading anchor must fail the build, not just
+// print a warning that a script can ignore.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn broken_links_strict_exits_nonzero_when_findings_exist() {
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--strict", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a vault with a dead anchor must fail under --strict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn broken_links_strict_exits_zero_on_a_clean_vault() {
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "clean.md",
+        md!(r"
+---
+title: Clean
+---
+# Clean
+Nothing broken here.
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--strict", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a clean vault must not fail under --strict: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn broken_links_without_strict_stays_zero_exit() {
+    // Precedent: `find --broken-links` alone must keep exiting 0 even when it
+    // reports findings — --strict is opt-in, not a silent behavior change.
+    let tmp = setup_anchor_vault();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["find", "--broken-links", "--format", "json"])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "--broken-links alone (no --strict) must not change its exit code: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn find_strict_gates_any_query_not_just_broken_links() {
+    // --strict is a general find primitive, not special-cased to
+    // --broken-links — any query that returns results fails under --strict.
+    let tmp = TempDir::new().expect("tempdir");
+    write_md(
+        tmp.path(),
+        "draft.md",
+        md!(r"
+---
+title: Draft
+status: draft
+---
+# Draft
+"),
+    );
+    let dir = tmp.path().to_str().expect("utf-8 path");
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args([
+            "find",
+            "--property",
+            "status=draft",
+            "--strict",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("hyalo find should run");
+    assert_eq!(output.status.code(), Some(1));
 }

@@ -347,6 +347,40 @@ pub fn summary(
     let link_health = {
         // Summary always uses Obsidian-compatible short-form handling (expand_short_form=false).
         let report = detect_broken_links_from_index(dir, index, site_prefix, case_index, false);
+        // NEW-15 (dogfood pre3): a distinct figure so `summary` and
+        // `find --broken-links` agree on what "broken" counts.
+        //
+        // PR #251 review M3: `count_broken_anchors` re-resolves every
+        // fragment-bearing link's target from scratch (a second full
+        // filesystem-hitting pass) right after `detect_broken_links_from_index`
+        // already resolved every link once. Gated on `report.broken.is_empty()`
+        // for the same reason `links fix`'s identical call is (NEW-15/UX-2,
+        // links.rs) — folding the anchor check into the existing pass instead
+        // isn't straightforward: `classify_link_from_source`'s "resolved
+        // target" is only reliably a lookup-able vault-relative path for
+        // markdown-style links; for a resolved short-form wikilink
+        // (`[[Corina]]` → `sub/Corina.md`) it is the bare stem the author
+        // wrote, not the canonical path, so it can't index straight into
+        // `VaultIndex::get` for headings without re-deriving the real target
+        // — which is exactly what the second pass already does cheaply
+        // relative to `detect_broken_links_from_index` itself. The trade-off
+        // this gate accepts: a vault with both broken targets and broken
+        // anchors reports 0 broken_anchors until the targets are fixed —
+        // `find --broken-links` remains the always-accurate source of truth.
+        //
+        // PR #251 review L6: `count_broken_anchors` returns `None` when the
+        // vault directory itself could not be canonicalized — a real
+        // "could not check". `LinkHealthSummary::broken_anchors` is `Option`
+        // so that case is omitted from JSON entirely rather than reported as
+        // a false, confident zero; `Some(0)` covers both the gated-off case
+        // above and a genuinely computed zero — `summary` never claimed to
+        // distinguish those two from each other, only "we checked and it's
+        // clean (or gated)" from "we could not check at all".
+        let broken_anchors = if report.broken.is_empty() {
+            hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index)
+        } else {
+            Some(0)
+        };
         // Ambiguous short-form links are unresolvable without manual
         // intervention, so include them in the broken count so the summary
         // reflects the total number of links that need attention.
@@ -355,6 +389,7 @@ pub fn summary(
             broken: report.broken.len() + report.ambiguous.len(),
             // Targets above the vault root are out of scope, not broken.
             out_of_vault: report.out_of_vault.len(),
+            broken_anchors,
         }
     };
 

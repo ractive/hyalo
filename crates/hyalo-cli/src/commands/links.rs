@@ -93,6 +93,37 @@ fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::V
         .collect()
 }
 
+/// 1-based column (counted in Unicode scalar values, matching lint's
+/// `column` and `AutoLinkMatch::col` — iter-210) of `needle`'s first
+/// occurrence on `line` (1-based) of `dir/source`, or `None` when the
+/// file/line is unreadable or the target no longer appears there.
+///
+/// NEW-18 (dogfood pre3): `fuzzy_fixes` entries carried `line` but no `col`
+/// (iter-210 task text asked for it) — a proposal on a long line still made
+/// the reader scan the whole thing to find what was actually being guessed
+/// at. `FixPlan` itself stays column-free (it is built by the detection
+/// pipeline, long before any file is re-read, and threading a column through
+/// every strategy would touch the scanner/extraction layer for every fix
+/// bucket, not just this one advisory field on the smallest — fuzzy —
+/// bucket); this seeks only the one line a proposal is already reporting,
+/// streaming rather than reading the whole file.
+///
+/// PR #251 review M2: the first cut returned a 1-based *byte* offset,
+/// contradicting hyalo's own documented convention — `col` counts characters
+/// everywhere else in the JSON output, specifically so a multibyte character
+/// before the match (this repo's own KB prose uses em dashes and arrows)
+/// doesn't report a column no editor agrees with.
+fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<usize> {
+    use std::io::BufRead as _;
+    if needle.is_empty() || line == 0 {
+        return None;
+    }
+    let file = std::fs::File::open(dir.join(source)).ok()?;
+    let text = std::io::BufReader::new(file).lines().nth(line - 1)?.ok()?;
+    let byte_offset = text.find(needle)?;
+    Some(text.get(..byte_offset)?.chars().count() + 1)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -109,6 +140,34 @@ pub fn links_fix(
 ) -> Result<(CommandOutcome, Vec<String>, bool)> {
     let report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
+
+    // NEW-9 (dogfood pre3): a `site_prefix` that demonstrably strips nothing
+    // useful turns a misconfiguration into a wall of "broken" links with no
+    // hint why — a real MDN checkout with the auto-derived `en-us` prefix
+    // reported every single `/en-US/docs/...` link broken with no signal that
+    // the prefix itself was the problem. Warn the moment every site-absolute
+    // link fails the cheap plausibility check, naming the prefix so the fix
+    // (`--site-prefix` / `.hyalo.toml`) is one line away.
+    //
+    // PR #251 review L5: only when there IS an effective prefix to blame.
+    // `site_prefix: None` covers two legitimate cases neither of which is a
+    // misconfiguration: `--site-prefix ""` explicitly disables prefix
+    // stripping (OKF bundle-root resolution — the user does not want one),
+    // and auto-derivation can itself yield `None` (e.g. running from a
+    // directory with no nameable last path component). Telling either of
+    // those users to "check site_prefix (none)" names a value they never
+    // set and, in the disabled case, contradicts their own explicit choice.
+    if let Some(prefix) = site_prefix {
+        let (site_absolute_links, plausibly_resolved) =
+            hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
+        if site_absolute_links > 0 && plausibly_resolved == 0 {
+            crate::warn::warn(format!(
+                "site_prefix '{prefix}' stripped 0 of {site_absolute_links} site-absolute \
+                 link(s) to a plausible vault path — check --site-prefix or `site_prefix` in \
+                 .hyalo.toml (see `hyalo config` for where the effective value came from)"
+            ));
+        }
+    }
 
     // Compute the set of in-scope source files when --glob is provided.
     // The same scope applies to broken, case_mismatches, and ambiguous so
@@ -165,6 +224,26 @@ pub fn links_fix(
         (filtered, ignored)
     };
 
+    // NEW-15 / UX-2 (dogfood pre3): `links` never looked at anchors at all,
+    // so a vault whose only defect was a dead heading anchor reported
+    // "Broken links: 0" — a summary an agent will trust. Gated on
+    // `broken.is_empty()`: the note only fires when targets are otherwise
+    // clean (matching the exact condition it exists to catch), which also
+    // means the extra resolution pass never runs on a vault that already has
+    // broken targets — the common case on a large, imperfect corpus.
+    // PR #251 review L6: `count_broken_anchors` returns `None` when the
+    // vault directory could not be canonicalized — serialized as JSON `null`
+    // (not `0`) below, so a caller checking `broken_anchors == 0` cannot
+    // mistake "could not check" for "genuinely clean". The `Some(0)` in the
+    // gated-off branch is a real, computed zero: no anchor check ran because
+    // targets are already broken (see the NEW-15/UX-2 gate comment above the
+    // JSON block), which is different from "we tried and failed to look."
+    let broken_anchor_count: Option<usize> = if broken.is_empty() {
+        hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index)
+    } else {
+        Some(0)
+    };
+
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
     let fix_report = plan_fixes(&broken, &matcher);
 
@@ -207,6 +286,16 @@ pub fn links_fix(
         .filter(|f| in_scope(f.source.as_str()))
         .collect();
     let case_mismatch_count = case_mismatches.len();
+    // NEW-13 (dogfood pre3): bare-stem relocations to a different directory
+    // are their own bucket, not folded into `case_mismatches` — a relocation
+    // is not a cosmetic casing fix. Still applied by plain `--apply` (same
+    // certainty as before), just reported and counted honestly.
+    let relocations: Vec<_> = report
+        .relocations
+        .into_iter()
+        .filter(|f| in_scope(f.source.as_str()))
+        .collect();
+    let relocation_count = relocations.len();
     // Ambiguous short-form links — reported but never auto-fixed.
     let ambiguous: Vec<_> = report
         .ambiguous
@@ -220,6 +309,7 @@ pub fn links_fix(
     // everything in this bucket, so a bare-stem *relocation*
     // (`[[note]]` → `sub/note`) was presented to the user as a casing fix.
     let case_mismatch_json = fixes_with_rule(&case_mismatches);
+    let relocation_json = fixes_with_rule(&relocations);
     // iter-212: the fuzzy bucket mixes genuine path-similarity guesses with
     // `basename-fallback` relocations. The text renderer printed `[fuzzy N]`
     // for both, so the honest strategy name never reached the user; carry each
@@ -231,6 +321,12 @@ pub fn links_fix(
                 "below_floor".to_owned(),
                 serde_json::json!(f.confidence < fuzzy.floor()),
             );
+            // NEW-18 (dogfood pre3): only when it can be found — a stale
+            // proposal whose on-disk text has already changed (or a read
+            // failure) simply omits `col` rather than reporting a wrong one.
+            if let Some(col) = find_column(dir, &f.source, f.line, &f.old_target) {
+                obj.insert("col".to_owned(), serde_json::json!(col));
+            }
         }
     }
 
@@ -257,6 +353,7 @@ pub fn links_fix(
     let mut all_fixes = certain_fixes.clone();
     all_fixes.extend(applicable_fuzzy.iter().cloned());
     all_fixes.extend(case_mismatches.iter().cloned());
+    all_fixes.extend(relocations.iter().cloned());
 
     if dry_run {
         if !all_fixes.is_empty() {
@@ -327,6 +424,7 @@ pub fn links_fix(
             .iter()
             .chain(applicable_fuzzy.iter())
             .chain(case_mismatches.iter())
+            .chain(relocations.iter())
             .filter(|f| {
                 !excluded_keys.contains(&(
                     f.source.as_str(),
@@ -362,6 +460,14 @@ pub fn links_fix(
 
     let output = serde_json::json!({
         "broken": broken.len(),
+        // NEW-15 / UX-2 (dogfood pre3): counted only when `broken` is empty
+        // (see above) — `Some(0)` either means genuinely no dead anchors, or
+        // that targets are broken too and this run didn't check (targets
+        // take priority; fix those first). `find --broken-links` remains the
+        // source of truth for the full picture including this case. `null`
+        // (PR #251 review L6) means the vault directory itself could not be
+        // canonicalized — a real "could not check", not a clean bill.
+        "broken_anchors": broken_anchor_count,
         // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
         // plain `--apply` writes. Fuzzy matches are reported exclusively in
         // the `fuzzy`/`fuzzy_fixes` bucket below — counting them here too
@@ -382,6 +488,11 @@ pub fn links_fix(
         "failed_fixes": failed_fixes,
         "case_mismatches": case_mismatch_count,
         "case_mismatch_fixes": case_mismatch_json,
+        // NEW-13 (dogfood pre3): bare-stem relocations to a different
+        // directory, split out of `case_mismatches` — see
+        // `BrokenLinkReport::relocations`.
+        "relocations": relocation_count,
+        "relocation_fixes": relocation_json,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
         // iter-193: targets resolving above the vault root are out of scope,

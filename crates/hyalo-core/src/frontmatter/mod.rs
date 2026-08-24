@@ -204,6 +204,16 @@ No closing delimiter.
         assert_eq!(infer_type(&Value::Null), "null");
     }
 
+    /// UX-4 (dogfood pre3): a nested mapping used to infer as `"text"` — the
+    /// same label a plain string gets — so nothing downstream could tell a
+    /// scalar property from a mapping one without inspecting the raw value.
+    #[test]
+    fn infer_type_map() {
+        let mut map = serde_json::Map::new();
+        map.insert("fpt".to_owned(), Value::String("*".into()));
+        assert_eq!(infer_type(&Value::Object(map)), "map");
+    }
+
     #[test]
     fn roundtrip_preserves_body() {
         let content = md!(r"

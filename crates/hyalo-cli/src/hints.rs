@@ -108,6 +108,9 @@ pub enum HintSource {
     /// `hyalo lint-rules list` (iter-210). Same dead end — the catalog told
     /// you a rule exists but not how to inspect, disable or lint with it.
     LintRulesList,
+    /// `hyalo lint-rules show <ID>` (NEW-18, dogfood pre3). Was also a dead
+    /// end despite inspecting one specific, actionable rule.
+    LintRulesShow,
 }
 
 /// Which snapshot index a `find` query used, for re-emission in derived hints.
@@ -345,6 +348,7 @@ pub fn generate_hints_with_counters(
         HintSource::Types { .. } => hints_for_types(ctx, data),
         HintSource::ViewsList => hints_for_views_list(ctx, data),
         HintSource::LintRulesList => hints_for_lint_rules_list(ctx, data),
+        HintSource::LintRulesShow => hints_for_lint_rules_show(ctx, data),
         HintSource::New { file } => hints_for_new(ctx, file),
         HintSource::OkfIndex => hints_for_okf_index(ctx, data),
         HintSource::OkfLog => hints_for_okf_log(ctx),
@@ -1582,6 +1586,19 @@ fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
             "See what links to this file",
             build_command_with_file(ctx, &["backlinks"], file, &[]),
         ));
+        // UX-4 (dogfood pre3): `read --format json` without `--frontmatter`
+        // silently omits the `frontmatter` key entirely — `--jq
+        // '.results.frontmatter.x'` reads that as `null` indistinguishably
+        // from "the property doesn't exist," costing a round trip to
+        // discover the flag was the actual gap. Only worth saying when the
+        // key really is missing (a caller who already asked for it needs no
+        // reminder).
+        if data.get("frontmatter").is_none() && hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                "Include frontmatter in the output",
+                build_command_with_file(ctx, &["read"], file, &["--frontmatter"]),
+            ));
+        }
     }
 
     hints
@@ -1711,6 +1728,16 @@ fn hints_for_task_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
                         ),
                     ));
                 }
+            } else {
+                // NEW-18 (dogfood pre3): a bulk read (`--all` / `--section`)
+                // whose tasks are all already done had nothing to toggle and
+                // fell straight through to an empty hint list — a listing
+                // command that answered "nothing here" was still a
+                // navigation dead end instead of pointing anywhere else.
+                hints.push(Hint::new(
+                    "Find files with open tasks",
+                    build_command_no_glob(ctx, &["find", "--task", "todo"]),
+                ));
             }
         }
         // For "all" and "section:" selectors, return early — the bulk hints are sufficient.
@@ -1911,16 +1938,31 @@ fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint>
         )));
     }
 
-    // Case-mismatch repairs are written by plain `--apply` but are *not* part
-    // of `fixable`, so a vault whose only problem is casing produced no "Apply"
-    // hint at all — the fix was available and unadvertised (iter-210).
+    // Case-mismatch and relocation repairs are written by plain `--apply` but
+    // are *not* part of `fixable`, so a vault whose only problem was one of
+    // these produced no "Apply" hint at all — the fix was available and
+    // unadvertised (iter-210). NEW-13 (dogfood pre3) split relocations out of
+    // `case_mismatches` into their own bucket; both still land here since
+    // both are written by plain `--apply`.
     let case_mismatches = data
         .get("case_mismatches")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    if is_dry_run && case_mismatches > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+    let relocations = data
+        .get("relocations")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let case_and_relocation_fixes = case_mismatches + relocations;
+    if is_dry_run && case_and_relocation_fixes > 0 && applicable == 0 && hints.len() < MAX_HINTS {
+        let label = if case_mismatches > 0 && relocations > 0 {
+            format!("Apply {case_mismatches} case-mismatch and {relocations} relocation fixes")
+        } else if relocations > 0 {
+            format!("Apply {relocations} relocation fixes")
+        } else {
+            format!("Apply {case_mismatches} case-mismatch fixes")
+        };
         hints.push(Hint::new(
-            format!("Apply {case_mismatches} case-mismatch fixes"),
+            label,
             build_command_with_glob(ctx, &["links", "fix", "--apply"]),
         ));
     }
@@ -2550,6 +2592,56 @@ fn hints_for_lint_rules_list(ctx: &HintContext, data: &serde_json::Value) -> Vec
                 "Run the markdown lint rules against the vault",
                 build_command_no_glob(ctx, &["lint"]),
             )),
+        }
+    }
+
+    hints
+}
+
+/// Drill-downs for `hyalo lint-rules show <ID>` (NEW-18, dogfood pre3).
+///
+/// Was a hint dead end despite inspecting one specific, actionable rule — the
+/// natural next steps are running lint scoped to just that rule, and either
+/// toggling it or dropping an existing override.
+fn hints_for_lint_rules_show(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+
+    let id = data
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .or(ctx.lint_rule.as_deref());
+    let Some(id) = id else {
+        return hints;
+    };
+
+    hints.push(Hint::new(
+        format!("Run just {id} against the vault"),
+        build_command_no_glob(ctx, &["lint", "--rule", id]),
+    ));
+
+    let has_override = data.get("override").is_some_and(|o| !o.is_null());
+    if has_override {
+        if hints.len() < MAX_HINTS {
+            hints.push(Hint::new(
+                format!("Drop the {id} override and go back to the default"),
+                build_command_no_glob(ctx, &["lint-rules", "remove", id]),
+            ));
+        }
+    } else if hints.len() < MAX_HINTS {
+        let effective_enabled = data
+            .get("effective_enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        if effective_enabled {
+            hints.push(Hint::new(
+                format!("Turn {id} off for this vault"),
+                build_command_no_glob(ctx, &["lint-rules", "set", id, "--enabled", "false"]),
+            ));
+        } else {
+            hints.push(Hint::new(
+                format!("Turn {id} on for this vault"),
+                build_command_no_glob(ctx, &["lint-rules", "set", id, "--enabled", "true"]),
+            ));
         }
     }
 

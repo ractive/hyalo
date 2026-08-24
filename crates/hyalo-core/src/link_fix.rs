@@ -69,6 +69,15 @@ pub struct BrokenLinkReport {
     ///   a full path). Detected via the stem index, which is always active
     ///   regardless of case-insensitive-path mode.
     pub case_mismatches: Vec<FixPlan>,
+    /// Links whose exact path failed to resolve but whose bare stem matched a
+    /// file somewhere else in the vault — [`FixStrategy::ShortestPath`].
+    ///
+    /// NEW-13 (dogfood pre3): before this bucket existed these landed in
+    /// [`Self::case_mismatches`] alongside genuine [`FixStrategy::LinkCaseMismatch`]
+    /// casing fixes. A user reading "Case mismatches: N" reasonably assumes a
+    /// cosmetic count; a relocation (`target.md` → `sub/target.md`) is a
+    /// different kind of change and gets its own bucket and section.
+    pub relocations: Vec<FixPlan>,
     /// Short-form wikilinks (no `/`) whose stem matches ≥2 files in the vault.
     /// These are left untouched by `--apply` because the correct target is
     /// ambiguous and auto-picking would be wrong.
@@ -226,6 +235,124 @@ pub struct FailedFix {
 // Broken link detection
 // ---------------------------------------------------------------------------
 
+/// Count how many links in `index` are site-absolute (`/foo/bar`) and how
+/// many of those look plausibly resolvable — after `site_prefix` stripping,
+/// the remaining path's first segment names a real top-level entry in the
+/// vault — versus ones that don't.
+///
+/// NEW-9 (dogfood pre3): a `site_prefix` that strips *something* but not
+/// *enough* looks, from a naive "did the string change" check, identical to
+/// one that worked. On a real MDN checkout the auto-derived prefix (`en-us`,
+/// the last path segment of `--dir`) case-insensitively strips the `en-US/`
+/// segment from every `/en-US/docs/Web/...` link (iter-204 made that match
+/// case-insensitive) — but MDN's on-disk layout has no top-level `docs/`
+/// directory at all, only `web/`, `mdn/`, `glossary/`, etc., so the result
+/// (`docs/Web/...`) still resolves nowhere. Comparing against the vault's own
+/// top-level entries catches this in one pass over the index, without a
+/// second full link-resolution run: measured against this repo's real MDN
+/// checkout, the derived prefix leaves ~0% of site-absolute links
+/// plausible, the correct two-segment `en-US/docs` prefix ~100%.
+pub fn site_prefix_plausible_resolution_stats(
+    index: &dyn VaultIndex,
+    site_prefix: Option<&str>,
+) -> (usize, usize) {
+    // PR #251 review N13: `split('/').next()` on any `&str` (including
+    // empty) always yields `Some`, so `filter_map` never actually filters
+    // anything here — `map` says that plainly.
+    let top_level: std::collections::HashSet<String> = index
+        .entries()
+        .iter()
+        .map(|e| {
+            e.rel_path
+                .split('/')
+                .next()
+                .unwrap_or_default()
+                .to_lowercase()
+        })
+        .collect();
+
+    let mut absolute = 0usize;
+    let mut plausible = 0usize;
+    for entry in index.entries() {
+        for (_, link) in &entry.links {
+            let normalized = link.target.replace('\\', "/");
+            if !normalized.starts_with('/') {
+                continue;
+            }
+            let stripped = strip_site_prefix(&normalized, site_prefix);
+            let first_segment = stripped.split('/').next().unwrap_or("");
+            // PR #251 review L5: a bare `/` (site-root link, e.g. `[home](/)`)
+            // has no path segment at all to check plausibility against —
+            // stripping the leading slash always leaves an empty string,
+            // regardless of `site_prefix`. Counting it in `absolute` only
+            // padded the denominator toward a false "stripped 0 of N"; it
+            // carries no signal either way, so it is excluded entirely
+            // rather than counted as "not plausible".
+            if first_segment.is_empty() {
+                continue;
+            }
+            absolute += 1;
+            if top_level.contains(&first_segment.to_lowercase()) {
+                plausible += 1;
+            }
+        }
+    }
+    (absolute, plausible)
+}
+
+/// Count links whose TARGET resolves to a real vault file but whose
+/// `#fragment` does not name any heading there — a broken *anchor*, distinct
+/// from a broken target ([`detect_broken_links_from_index`] never reports
+/// these; it only checks whether the target file exists).
+///
+/// NEW-15 / UX-2 (dogfood pre3): `summary` and `find --broken-links` used to
+/// disagree on what "broken" counts — `summary` said "0 broken" on a vault
+/// `find --broken-links` reported 3 files for, because `summary`'s notion of
+/// broken never looked at anchors at all. Mirrors `find`'s own
+/// `LinkInfo::broken_anchor` computation so every caller counts the same
+/// thing. Same-file fragments (`[b](#nope)`, indexed separately as
+/// `entry.self_anchors`) are not included — this counts only links that
+/// point *at another file's* heading, matching what `links fix`'s target
+/// resolution already covers.
+///
+/// Returns `None` when `dir` cannot be canonicalized (matching
+/// [`detect_broken_links_from_index`]'s own empty-report fallback for the
+/// same failure) — PR #251 review L6: the first cut returned `0` here, which
+/// a caller cannot distinguish from "genuinely checked, found none." `None`
+/// says "could not check" honestly instead of asserting a clean bill for a
+/// vault this function never actually looked at.
+pub fn count_broken_anchors(
+    dir: &Path,
+    index: &dyn VaultIndex,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<usize> {
+    let canonical = canonicalize_vault_dir(dir).ok()?;
+    let mut count = 0usize;
+    for entry in index.entries() {
+        for (_, link) in &entry.links {
+            let Some(fragment) = &link.fragment else {
+                continue;
+            };
+            let resolved = crate::discovery::resolve_link_from_source(
+                &canonical,
+                &entry.rel_path,
+                link.kind,
+                &link.target,
+                site_prefix,
+                case_index,
+            );
+            if let Some(target_path) = resolved
+                && let Some(target_entry) = index.get(&target_path)
+                && !crate::anchor::fragment_matches_headings(fragment, &target_entry.sections)
+            {
+                count += 1;
+            }
+        }
+    }
+    Some(count)
+}
+
 /// Detect broken links from index entries.
 ///
 /// Each [`IndexEntry`](crate::index::IndexEntry) has
@@ -251,6 +378,7 @@ pub fn detect_broken_links_from_index(
             total_links: 0,
             broken: Vec::new(),
             case_mismatches: Vec::new(),
+            relocations: Vec::new(),
             ambiguous: Vec::new(),
             out_of_vault: Vec::new(),
         };
@@ -265,6 +393,7 @@ pub fn detect_broken_links_from_index(
     let mut total_links = 0usize;
     let mut broken: Vec<BrokenLinkInfo> = Vec::new();
     let mut case_mismatches: Vec<FixPlan> = Vec::new();
+    let mut relocations: Vec<FixPlan> = Vec::new();
     let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
     let mut out_of_vault: Vec<BrokenLinkInfo> = Vec::new();
 
@@ -305,7 +434,12 @@ pub fn detect_broken_links_from_index(
                     // DEC-076: the written target carried no directory (that
                     // is the only way the stem fallback fires), so this is the
                     // documented short-form rule, not a guess.
-                    case_mismatches.push(FixPlan {
+                    //
+                    // NEW-13 (dogfood pre3): reported in its own `relocations`
+                    // bucket, not `case_mismatches` — a relocation is not a
+                    // cosmetic casing fix, and lumping the two made the "Case
+                    // mismatches" count lie about what changed.
+                    relocations.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
                         old_target: link.target.clone(),
@@ -352,6 +486,7 @@ pub fn detect_broken_links_from_index(
 
     broken.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     case_mismatches.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    relocations.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     out_of_vault.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
@@ -359,6 +494,7 @@ pub fn detect_broken_links_from_index(
         total_links,
         broken,
         case_mismatches,
+        relocations,
         ambiguous,
         out_of_vault,
     }
@@ -2584,6 +2720,244 @@ See [broken](old-name.md) here.
             total_classified <= 1,
             "each link must appear at most once across broken + case_mismatches"
         );
+    }
+
+    // --- NEW-9 (dogfood pre3): site_prefix plausible-resolution stats ---
+
+    /// Mirrors the real MDN repro: on-disk layout has a top-level `web/` (no
+    /// `docs/`), links are spelled `/en-US/docs/Web/...`. The single-segment
+    /// derived prefix `en-us` case-insensitively strips `en-US/` (iter-204),
+    /// leaving `docs/Web/...` — `docs` is not a real top-level entry, so this
+    /// must not count as plausibly resolved even though the string changed.
+    #[test]
+    fn site_prefix_plausible_resolution_distinguishes_under_and_correctly_stripped() {
+        use crate::links::{Link, LinkKind};
+
+        let link = |target: &str| Link {
+            target: target.to_string(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: None,
+            query: None,
+        };
+        let index = mock_index(
+            "source.md",
+            vec![
+                (1, link("/en-US/docs/Web/A")),
+                (2, link("/en-US/docs/Web/B")),
+                (3, link("relative.md")),
+            ],
+            &["web/a.md", "web/b.md"],
+        );
+
+        // Under-stripped: `docs` is not a real top-level vault entry.
+        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        assert_eq!(absolute, 2, "two site-absolute links, one relative");
+        assert_eq!(
+            plausible, 0,
+            "the single-segment prefix leaves a `docs` segment nothing in the vault has"
+        );
+
+        // The correct multi-segment prefix leaves `Web/...`, which matches
+        // the real top-level `web/` entry case-insensitively.
+        let (absolute, plausible) =
+            site_prefix_plausible_resolution_stats(&index, Some("en-US/docs"));
+        assert_eq!(absolute, 2);
+        assert_eq!(plausible, 2);
+    }
+
+    #[test]
+    fn site_prefix_plausible_resolution_zero_absolute_links_is_not_a_misconfiguration() {
+        use crate::links::{Link, LinkKind};
+
+        let index = mock_index(
+            "source.md",
+            vec![(
+                1,
+                Link {
+                    target: "relative.md".to_string(),
+                    label: None,
+                    kind: LinkKind::Markdown,
+                    fragment: None,
+                    query: None,
+                },
+            )],
+            &[],
+        );
+        let (absolute, plausible) = site_prefix_plausible_resolution_stats(&index, Some("en-us"));
+        assert_eq!(
+            absolute, 0,
+            "a vault with no site-absolute links must not be flagged"
+        );
+        assert_eq!(plausible, 0);
+    }
+
+    // --- NEW-15 / UX-2 (dogfood pre3): count_broken_anchors ---
+
+    /// A minimal [`VaultIndex`] over hand-built entries, for tests that need
+    /// real `sections`/`self_anchors` data `mock_index` does not expose.
+    struct HeadingsMockIndex(Vec<crate::index::IndexEntry>);
+    impl VaultIndex for HeadingsMockIndex {
+        fn entries(&self) -> &[crate::index::IndexEntry] {
+            &self.0
+        }
+        fn get(&self, rel_path: &str) -> Option<&crate::index::IndexEntry> {
+            self.0.iter().find(|e| e.rel_path == rel_path)
+        }
+        fn link_graph(&self) -> &crate::link_graph::LinkGraph {
+            unreachable!("not exercised by count_broken_anchors tests")
+        }
+    }
+
+    /// A link whose target resolves but whose `#fragment` names no heading
+    /// there must be counted; a link to a real heading must not.
+    #[test]
+    fn count_broken_anchors_counts_only_dead_fragments_on_resolving_targets() {
+        use crate::links::{Link, LinkKind};
+
+        let link = |target: &str, fragment: &str| Link {
+            target: target.to_string(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: Some(fragment.to_string()),
+            query: None,
+        };
+        let make_entry = |rel_path: &str, links: Vec<(usize, Link)>| crate::index::IndexEntry {
+            rel_path: rel_path.to_string(),
+            modified: String::new(),
+            properties: indexmap::IndexMap::default(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links,
+            self_anchors: Vec::new(),
+            bm25_tokens: None,
+            bm25_language: None,
+        };
+
+        let mut target = make_entry("target.md", Vec::new());
+        target.sections = vec![crate::types::OutlineSection {
+            level: 1,
+            heading: Some("Real".to_string()),
+            line: 1,
+            links: Vec::new(),
+            tasks: None,
+            code_blocks: Vec::new(),
+        }];
+        let source = make_entry(
+            "source.md",
+            vec![
+                (1, link("target.md", "Real")),
+                (2, link("target.md", "nope")),
+            ],
+        );
+
+        let index = HeadingsMockIndex(vec![source, target]);
+        let tmp = vault_with_files(&[("source.md", ""), ("target.md", "")]);
+
+        let count = count_broken_anchors(tmp.path(), &index, None, None);
+        assert_eq!(
+            count,
+            Some(1),
+            "only the dead fragment (#nope) must count, not the resolving one (#Real)"
+        );
+    }
+
+    #[test]
+    fn count_broken_anchors_ignores_same_file_fragments() {
+        // Same-file fragments live in `entry.self_anchors`, never
+        // `entry.links` — count_broken_anchors only walks `entry.links`, so a
+        // dead same-file anchor (find's own broken_anchor concern) must not
+        // be double-counted here regardless of how many self_anchors exist.
+        let entry = crate::index::IndexEntry {
+            rel_path: "source.md".to_string(),
+            modified: String::new(),
+            properties: indexmap::IndexMap::default(),
+            tags: Vec::new(),
+            sections: Vec::new(),
+            tasks: Vec::new(),
+            links: Vec::new(),
+            self_anchors: vec![(1, "nope".to_string())],
+            bm25_tokens: None,
+            bm25_language: None,
+        };
+
+        let index = HeadingsMockIndex(vec![entry]);
+        let tmp = vault_with_files(&[("source.md", "")]);
+        assert_eq!(
+            count_broken_anchors(tmp.path(), &index, None, None),
+            Some(0)
+        );
+    }
+
+    /// PR #251 review L6: a vault directory that cannot be canonicalized
+    /// must report "could not check" (`None`), not a false `Some(0)` clean
+    /// bill — mirrors `detect_broken_links_from_index`'s own empty-report
+    /// fallback for the identical failure.
+    #[test]
+    fn count_broken_anchors_returns_none_when_dir_cannot_be_canonicalized() {
+        let index = HeadingsMockIndex(Vec::new());
+        let nonexistent = std::path::Path::new("/definitely/does/not/exist/anywhere");
+        assert_eq!(
+            count_broken_anchors(nonexistent, &index, None, None),
+            None,
+            "an uncanonicalizable directory must report 'could not check', not a clean zero"
+        );
+    }
+
+    /// NEW-13 (dogfood pre3): a bare-stem relocation — the exact path fails,
+    /// the stem resolves to a *different directory* — must land in
+    /// `relocations`, not `case_mismatches`. Before the fix both were counted
+    /// as "Case mismatches", presenting a move as a cosmetic casing fix.
+    #[test]
+    fn detect_broken_links_stem_relocation_is_not_a_case_mismatch() {
+        use crate::case_index::CaseInsensitiveIndex;
+        use crate::links::{Link, LinkKind};
+
+        // On-disk: `sub/target.md`. Link written as bare `target.md` — the
+        // exact path (`target.md` at vault root) does not exist, so
+        // resolution falls back to the bare-stem lookup and finds it in a
+        // different directory: a relocation, not a casing difference.
+        let tmp = vault_with_files(&[("sub/target.md", ""), ("source.md", "[a](target.md)")]);
+
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("sub/target.md");
+
+        let index = mock_index(
+            "source.md",
+            vec![(
+                1,
+                Link {
+                    target: "target.md".to_string(),
+                    label: Some("a".to_string()),
+                    kind: LinkKind::Markdown,
+                    fragment: None,
+                    query: None,
+                },
+            )],
+            &["sub/target.md"],
+        );
+
+        let report = detect_broken_links_from_index(tmp.path(), &index, None, Some(&idx), false);
+
+        assert_eq!(
+            report.case_mismatches.len(),
+            0,
+            "a directory relocation must not be counted as a case mismatch; report: {report:#?}"
+        );
+        assert_eq!(
+            report.relocations.len(),
+            1,
+            "the relocation must appear in its own bucket; report: {report:#?}"
+        );
+        let fix = &report.relocations[0];
+        assert!(
+            matches!(fix.strategy, FixStrategy::ShortestPath),
+            "relocation must use the ShortestPath strategy, got: {:?}",
+            fix.strategy
+        );
+        assert_eq!(fix.old_target, "target.md");
+        assert_eq!(fix.new_target, "sub/target.md");
     }
 
     #[test]

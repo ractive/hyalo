@@ -2134,3 +2134,86 @@ about the whole batch; it now reads "at least one matched file previously
 stored this property as a string ... (other matched files may differ)" so
 the advisory doesn't imply a guarantee about files it never actually
 inspected.
+
+## DEC-090: CI gate for broken anchors is `find --strict`, not a new lint rule (2026-08-23)
+
+**Decision:** UX-2's CI-gate finding ("a vault whose only defect is a dead
+heading anchor exits 0") is closed with a general `--strict` flag on `find`
+— exit 1 when the query returns any results, 0 when empty — rather than a
+new HYALO00N lint rule alongside HYALO006 (broken-link, target only).
+`find --broken-links --strict` is the anchor-gating command; the flag also
+composes with any other `find` filter (`find --property status=draft
+--strict`, `find --orphan --strict`, ...), so the same primitive covers
+every "fail CI if this query finds anything" use case, not just anchors.
+
+**Why not a new lint rule:** HYALO006's vault-wide context
+(`LinkLintContext`, built once per `hyalo lint` invocation) tracks only a
+case/stem index for target *existence* — it has no per-file heading data at
+all. Anchor checking needs the target file's headings, which `find`
+already has for free (`IndexEntry.sections`, populated for every file by
+the same scan that builds the index) but `hyalo lint`'s vault-wide context
+does not. Adding it would mean either a second full disk scan inside
+`hyalo lint` just for this one rule, or threading a shared sections cache
+through the lint dispatch/rayon-worker plumbing HYALO006 was carefully
+built around (see the `LinkLintContext` doc comments) — real, but
+disproportionate infrastructure work for a small-batch item, when `find`
+already does the exact check for `--broken-links`/`--fields links` and
+only needed an exit-code path bolted on.
+
+**`links fix` gets a narrower, budget-conscious version instead of the same
+machinery:** `links` (dogfood NEW-15) still needed *some* anchor signal —
+"Broken links: 0" was misleading a reader into trusting a vault that
+actually had dead anchors. `hyalo_core::link_fix::count_broken_anchors`
+mirrors `find`'s own anchor check (`resolve_link_from_source` +
+`anchor::fragment_matches_headings`) but is gated to run only when
+`broken.is_empty()` — the note it feeds ("N broken anchors — see `find
+--broken-links`") is only meaningful when targets are otherwise clean, and
+gating on that condition means the extra resolution pass never runs on a
+vault that already has broken targets, the common case on a large,
+imperfect corpus (GH Docs, MDN) where the perf cost would have mattered
+most. `summary`'s own `broken_anchors` figure (NEW-15) is NOT gated the
+same way — `summary` is a deliberate full vault-health report, not a
+fix-loop's advisory note, so it always pays the cost for an accurate
+number.
+
+**Numbers are not expected to match 1:1 across commands:** `summary`'s
+`broken_anchors` counts *links*; `find --broken-links`'s `total` counts
+*files*. A file with two dead anchors contributes 1 to the file count and
+2 to the link count. This mirrors how `broken`/`out_of_vault` already
+differ in unit from `find`'s own counts — the fix for NEW-15 is that
+neither figure may claim *zero* while the other reports something, not
+that the two numbers must be numerically identical.
+
+## DEC-091: `--dir` ancestor-config discovery extends config trust to a second entry point, boundary deferred to iteration 221 (2026-08-24)
+
+**Decision:** NEW-17's iter-220 fix (`load_config_for_dir`) gives `--dir
+<foreign-tree>` the same ancestor-discovery fallback `cd <foreign-tree> &&
+hyalo …` already had since iter-213 (UX-1): when `<foreign-tree>` has no
+`.hyalo.toml` of its own, hyalo walks up looking for the nearest ancestor
+`.hyalo.toml` whose configured vault contains `<foreign-tree>`, and — if
+found — that file's `[lint]`, `[scan]`, `site_prefix`, and rule settings
+govern the run. This is a deliberate widening of *where* an ancestor config
+can be discovered from (a second entry point, `--dir`, not just the real
+process CWD), not a new trust *rule* — the discovery logic itself
+(`discover_ancestor_config`) is unchanged and iter-213's own containment
+check (the ancestor's configured vault must actually contain the target
+directory) still applies identically on both paths.
+
+**Why this matters and why it is not fixed here (PR #251 review L10):** the
+practical effect is that a `.hyalo.toml` living in *any* ancestor of a
+`--dir` target — not just an ancestor of the real CWD — can now govern a
+run. On a shared machine or a checkout with an untrusted or unexpected
+ancestor directory (e.g. a `/tmp/.hyalo.toml` left by another process or
+user), `--dir /tmp/some/deep/path` could silently inherit `[lint] ignore`,
+`[scan]`, `site_prefix`, or rule overrides from a file the invoking user
+never asked for and may not even know exists. This is the same class of
+concern the `cd`-based path already had since iter-213 — NEW-17 did not
+introduce the *risk*, only a second code path that reaches it — and drawing
+a trust boundary around config discovery (e.g. refusing to adopt an
+ancestor config outside some allowed root, or requiring an explicit opt-in)
+is real design work with its own trade-offs against the discoverability
+`cd <vault> && hyalo …` depends on. That is exactly the subject of
+[[iterations/iteration-221-config-dir-boundary]], already planned before
+this review; iter-220 does not attempt it. This DEC exists so the extension
+is documented and traceable to where the boundary is meant to land, not
+silently widened and forgotten.

@@ -953,3 +953,43 @@ fn views_run_rejects_pattern_together_with_regexp() {
         "PATTERN and -e must conflict on views run"
     );
 }
+
+/// PR #251 review M4: `--strict` saved into a view via `views set` used to
+/// be silently dropped by `views run` — `views set gate --broken-links
+/// --strict` persisted `strict: true`, but `views run gate` still exited 0
+/// forever while `find --view gate` correctly exited 1. A CI gate that
+/// silently stopped gating the moment it was saved as a view.
+#[test]
+fn views_run_honors_strict_persisted_by_views_set() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nSee [b](#nope).\n");
+
+    let set = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "set", "gate", "--broken-links", "--strict"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "views set failed: {set:?}");
+
+    let run = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["views", "run", "gate", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        run.status.code(),
+        Some(1),
+        "a view with --strict persisted must still gate on findings: {run:?}"
+    );
+
+    let via_find = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--view", "gate", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        run.status.code(),
+        via_find.status.code(),
+        "views run and find --view must agree on the exit code for the same query"
+    );
+}

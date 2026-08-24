@@ -969,6 +969,80 @@ fn lint_rules_list_hints_focus_the_overridden_rule() {
     }
 }
 
+/// NEW-18 (dogfood pre3): `lint-rules show <ID>` was a hint dead end despite
+/// inspecting one specific, actionable rule.
+#[test]
+fn lint_rules_show_is_not_a_navigation_dead_end() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+
+    let hints = harvest_in(tmp.path(), &["lint-rules", "show", "MD022"]);
+    assert!(
+        !hints.is_empty(),
+        "`hyalo lint-rules show MD022` emitted no hints"
+    );
+    assert!(
+        hints.iter().any(|h| h.cmd.contains("lint --rule MD022")),
+        "expected a scoped-lint hint, got {:?}",
+        hints.iter().map(|h| &h.cmd).collect::<Vec<_>>()
+    );
+    for h in &hints {
+        assert_hint_runs(h);
+    }
+}
+
+/// NEW-18 (dogfood pre3): `views run <name>` used to emit zero hints where
+/// `find --view <name>` emitted several — incomplete parity against iter-213's
+/// own AC. Both forms of the same query must produce the same hint set.
+#[test]
+fn views_run_has_hint_parity_with_find_view() {
+    let tmp = TempDir::new().unwrap();
+    build_fixture(tmp.path());
+    let saved = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["views", "set", "drafts", "--property", "status=draft"])
+        .output()
+        .unwrap();
+    assert!(saved.status.success(), "views set failed: {saved:?}");
+
+    let via_find = harvest_in(tmp.path(), &["find", "--view", "drafts"]);
+    let via_run = harvest_in(tmp.path(), &["views", "run", "drafts"]);
+    assert!(
+        !via_run.is_empty(),
+        "`hyalo views run drafts` emitted no hints"
+    );
+    let find_cmds: Vec<&str> = via_find.iter().map(|h| h.cmd.as_str()).collect();
+    let run_cmds: Vec<&str> = via_run.iter().map(|h| h.cmd.as_str()).collect();
+    assert_eq!(
+        find_cmds, run_cmds,
+        "views run and find --view must emit identical hints for the same query"
+    );
+    for h in &via_run {
+        assert_hint_runs(h);
+    }
+}
+
+/// NEW-18 (dogfood pre3): `task read --all` on a file whose tasks are all
+/// already done had nothing to toggle and fell through to zero hints.
+#[test]
+fn task_read_all_done_still_points_somewhere() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "done.md",
+        "---\ntitle: Done\n---\n## Tasks\n- [x] one\n- [x] two\n",
+    );
+
+    let hints = harvest_in(tmp.path(), &["task", "read", "--file", "done.md", "--all"]);
+    assert!(
+        !hints.is_empty(),
+        "`hyalo task read --all` on an all-done file emitted no hints"
+    );
+    for h in &hints {
+        assert_hint_runs(h);
+    }
+}
+
 /// A vault with no broken links still has to lead somewhere. `links` on a clean
 /// vault emitted nothing at all.
 #[test]
