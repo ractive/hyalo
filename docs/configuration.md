@@ -273,6 +273,31 @@ truth:
 | **0.8 (default)** | **2,253** | **15** | **99.3%** |
 | 0.9 | 312 | 0 | 100% |
 
+## Agent integration (`[pi]`)
+
+Hyalo ships a pi coding-agent extension (`hyalo init --pi`) that registers a
+`hyalo` tool, slash commands, and a post-write lint guardrail: when pi's
+`write`/`edit` tools touch a `.md` file inside the vault, the extension runs
+`hyalo lint <file>` on it and appends any violations to the tool result, so
+schema drift cannot land silently.
+
+The `[pi]` section configures the extension:
+
+```toml
+[pi]
+session_summary = true   # inject a vault summary into the LLM context at session start
+```
+
+- **`session_summary`** (default `false`) — on session start, run
+  `hyalo summary` once and inject the snapshot (file counts by directory,
+  link health, task and status totals) into the agent's context as a hidden
+  message. The agent starts every session already knowing the vault's shape
+  instead of spending tool calls rediscovering it. Costs a few hundred
+  tokens of context per session, which is why it is opt-in.
+
+`hyalo config` reports the effective values as `pi.session_summary` (text)
+and under `results.pi` (JSON).
+
 ## Schemas
 
 Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list` — with regex patterns, enum values, and length bounds), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.

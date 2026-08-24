@@ -646,3 +646,74 @@ fn config_rejects_an_out_of_range_fuzzy_confidence_floor() {
         "and the built-in default must take over: {stdout}"
     );
 }
+
+/// iter-230: `[pi] session_summary` opts the pi extension into injecting a
+/// `hyalo summary` snapshot into the LLM context at session start. The
+/// extension reads the effective value from `hyalo config --format json`,
+/// so the report must expose it — false by default, true when configured —
+/// in both text and JSON renderings.
+#[test]
+fn config_reports_pi_session_summary() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+
+    // Default: off, but still reported (never "absent" vs "off").
+    let stdout = fuzzy_config_stdout(tmp.path(), "text");
+    assert!(
+        stdout.contains("pi.session_summary: false"),
+        "the built-in default must be reported, not omitted: {stdout}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&fuzzy_config_stdout(tmp.path(), "json"))
+        .expect("config --format json should emit JSON");
+    assert_eq!(
+        json["results"]["pi"]["session_summary"].as_bool(),
+        Some(false),
+        "{json}"
+    );
+
+    // Opt-in via [pi] session_summary = true.
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[pi]\nsession_summary = true\n",
+    )
+    .expect("config write should succeed");
+
+    let stdout = fuzzy_config_stdout(tmp.path(), "text");
+    assert!(
+        stdout.contains("pi.session_summary: true"),
+        "the configured value must win: {stdout}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&fuzzy_config_stdout(tmp.path(), "json"))
+        .expect("config --format json should emit JSON");
+    assert_eq!(
+        json["results"]["pi"]["session_summary"].as_bool(),
+        Some(true),
+        "{json}"
+    );
+}
+
+/// `[pi]` rejects unknown keys (`deny_unknown_fields`), same as every other
+/// config section — a typo like `session_summaries` must not pass silently.
+/// The rejection surfaces as `malformed: true` + `parse_error` in the
+/// `hyalo config` JSON report (not stderr — stderr is only for hard errors).
+#[test]
+fn config_rejects_unknown_pi_keys() {
+    let tmp = TempDir::new().expect("tempdir creation should succeed");
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[pi]\nsession_summaries = true\n",
+    )
+    .expect("config write should succeed");
+
+    let json: serde_json::Value = serde_json::from_str(&fuzzy_config_stdout(tmp.path(), "json"))
+        .expect("config --format json should emit JSON");
+    assert_eq!(
+        json["results"]["malformed"].as_bool(),
+        Some(true),
+        "an unknown [pi] key must mark the config malformed: {json}"
+    );
+    let parse_error = json["results"]["parse_error"].as_str().unwrap_or("");
+    assert!(
+        parse_error.contains("session_summaries"),
+        "the parse error must name the unknown key: {json}"
+    );
+}

@@ -85,6 +85,16 @@ struct ChangelogConfig {
     path: Option<String>,
 }
 
+/// Agent-integration configuration from `[pi]` in `.hyalo.toml`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PiConfig {
+    /// When `true`, the pi extension injects a `hyalo summary` snapshot into
+    /// the LLM context at session start (opt-in; the extension reads this
+    /// via `hyalo config --format json`).
+    session_summary: Option<bool>,
+}
+
 /// Vault-walker configuration from `[scan]` in `.hyalo.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -210,6 +220,8 @@ struct ConfigFile {
     schema: Option<toml::Value>,
     /// Default output limit for list commands (0 = unlimited).
     default_limit: Option<usize>,
+    /// Agent-integration configuration (`[pi]` section).
+    pi: Option<PiConfig>,
 }
 
 /// Resolved configuration with all defaults applied.
@@ -255,6 +267,9 @@ pub(crate) struct ResolvedDefaults {
     /// `Some(0)` = unlimited.
     /// `Some(n)` = limit to n.
     pub(crate) default_limit: Option<usize>,
+    /// When `true` (via `[pi] session_summary`), the pi extension injects a
+    /// `hyalo summary` snapshot into the LLM context at session start.
+    pub(crate) pi_session_summary: bool,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub(crate) case_insensitive_mode: CaseInsensitiveMode,
     /// Titles `hyalo links auto` never links, from `[links.auto] exclude_titles`.
@@ -341,6 +356,7 @@ impl PartialEq for ResolvedDefaults {
             && self.validate_on_write == other.validate_on_write
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
+            && self.pi_session_summary == other.pi_session_summary
             && self.case_insensitive_mode == other.case_insensitive_mode
             && self.fuzzy_min_confidence == other.fuzzy_min_confidence
     }
@@ -364,6 +380,7 @@ impl ResolvedDefaults {
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
             default_limit: None,
+            pi_session_summary: false,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
             auto_link_exclude_titles: Vec::new(),
             auto_link_exclude_target_globs: Vec::new(),
@@ -977,6 +994,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         okf_ignore: cfg.okf.map(|o| o.ignore).unwrap_or_default(),
         scan_include: cfg.scan.map(|s| s.include).unwrap_or_default(),
         changelog_path: cfg.changelog.and_then(|c| c.path),
+        pi_session_summary: cfg
+            .pi
+            .as_ref()
+            .and_then(|p| p.session_summary)
+            .unwrap_or(false),
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
         default_limit: cfg.default_limit,
