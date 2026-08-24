@@ -2077,6 +2077,37 @@ mod tests {
         assert!(!has_unsafe_windows_colon("a.md"));
     }
 
+    /// T-4 (iter-224): a wider shape table than the single `a.md:stream`
+    /// case above, run on every platform via the same `cfg!(windows)`
+    /// pinning — pure string-level checks, so unlike a `Path`-based test
+    /// (whose `Prefix`/`RootDir` component parsing is itself platform-
+    /// specific) these exercise the same lexical decision on every host.
+    #[test]
+    fn has_unsafe_windows_colon_shape_table() {
+        let unsafe_shapes = [
+            "C:foo.md",         // drive-relative, no separator after colon
+            "a.md:stream",      // NTFS Alternate Data Stream marker
+            "sub/a.md:stream",  // ADS marker on a nested path
+            "C:foo/bar.md",     // drive-relative with a nested remainder
+            "notes:archive.md", // colon inside an ordinary-looking component
+        ];
+        for shape in unsafe_shapes {
+            assert_eq!(
+                has_unsafe_windows_colon(shape),
+                cfg!(windows),
+                "shape {shape:?} should be flagged exactly on Windows"
+            );
+        }
+
+        let safe_shapes = ["notes/a.md", "a.md", "sub/dir/note.md", "a-b_c.md"];
+        for shape in safe_shapes {
+            assert!(
+                !has_unsafe_windows_colon(shape),
+                "shape {shape:?} contains no colon and must never be flagged"
+            );
+        }
+    }
+
     /// `C:foo` (no `\` after the colon) is drive-*relative*, not absolute:
     /// `Path::is_absolute()` returns `false` for it on Windows (unlike the
     /// already-rejected `C:\foo`), so it must be caught by the dedicated

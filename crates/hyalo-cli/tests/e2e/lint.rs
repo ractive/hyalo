@@ -1,4 +1,5 @@
-use super::common::{hyalo_no_hints, md, write_md};
+use super::common::{hyalo_no_hints, md, typed_results, write_md};
+use hyalo_cli::commands::lint::{ExtLintFixOutput, ExtLintOutput};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -284,36 +285,18 @@ fn lint_json_output() {
         .output()
         .unwrap();
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout)
-        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
-
     // The pipeline wraps the lint output in the standard envelope:
     // {"results": {"files": [...], "total": N}, "hints": [...]}
-    let inner = &val["results"];
-    assert!(inner.is_object(), "expected results object in envelope");
-    assert!(inner["files"].is_array(), "expected files array");
-    assert!(inner["total"].is_number(), "expected total field");
-
-    let files = inner["files"].as_array().unwrap();
-    assert!(!files.is_empty());
-    let first = &files[0];
-    assert!(first["file"].is_string(), "expected file field");
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    assert!(!results.files.is_empty());
+    let first = &results.files[0];
     // New shape: violations grouped by rule
     assert!(
-        first["rule_groups"].is_array(),
-        "expected rule_groups array"
+        !first.rule_groups.is_empty(),
+        "expected at least one rule group"
     );
-
-    let rule_groups = first["rule_groups"].as_array().unwrap();
-    assert!(!rule_groups.is_empty(), "expected at least one rule group");
-    let g = &rule_groups[0];
-    assert!(g["rule"].is_string(), "expected rule field");
-    assert!(g["severity"].is_string(), "expected severity field");
-    let violations = g["violations"].as_array().unwrap();
-    assert!(!violations.is_empty(), "expected at least one violation");
-    let v = &violations[0];
-    assert!(v["message"].is_string(), "expected message field");
+    let g = &first.rule_groups[0];
+    assert!(!g.violations.is_empty(), "expected at least one violation");
 }
 
 #[test]
@@ -595,24 +578,18 @@ type = "date"
         .output()
         .unwrap();
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value =
-        serde_json::from_str(stdout).unwrap_or_else(|e| panic!("JSON parse: {e}\n{stdout}"));
-
-    let results = &val["results"];
-    let total = results["total"].as_u64().expect("total should be a number");
-    let files_checked = results["files_checked"]
-        .as_u64()
-        .expect("files_checked should be a number");
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let total = results.total;
+    let files_checked = results.files_checked;
 
     // 2 violations (one error per bad file), 3 files checked
     assert_eq!(
         total, 2,
-        "total should count violations, not files: {results}"
+        "total should count violations, not files: {total} vs files_checked {files_checked}"
     );
     assert_eq!(
         files_checked, 3,
-        "files_checked should count all scanned files: {results}"
+        "files_checked should count all scanned files: {total} vs files_checked {files_checked}"
     );
     // Sanity: they must be different (this was the original bug)
     assert_ne!(
@@ -635,20 +612,14 @@ fn lint_json_excludes_clean_files() {
         .output()
         .unwrap();
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout)
-        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
-
-    let inner = &val["results"];
-    let files = inner["files"].as_array().unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
 
     // Every file in the output should have at least one rule group (= at least one violation).
-    for f in files {
-        let rule_groups = f["rule_groups"].as_array().unwrap();
+    for f in &results.files {
         assert!(
-            !rule_groups.is_empty(),
+            !f.rule_groups.is_empty(),
             "clean files should not appear in output: {}",
-            f["file"]
+            f.file
         );
     }
 }
@@ -670,41 +641,26 @@ fn lint_limit_caps_output() {
         .output()
         .unwrap();
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout)
-        .unwrap_or_else(|e| panic!("expected JSON output, got: {stdout}\nerr: {e}"));
-
-    let inner = &val["results"];
-    let files = inner["files"].as_array().unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert!(
-        files.len() <= 1,
+        results.files.len() <= 1,
         "expected at most 1 file in output, got {}",
-        files.len()
+        results.files.len()
     );
     // total should still reflect ALL violations (not just the limited output)
-    assert!(
-        inner["total"].as_u64().unwrap() >= 1,
-        "total should reflect all violations"
-    );
+    assert!(results.total >= 1, "total should reflect all violations");
     // files_truncated flag should be present and true
-    assert_eq!(
-        inner["files_truncated"].as_bool(),
-        Some(true),
+    assert!(
+        results.files_truncated,
         "expected files_truncated=true when output was truncated"
     );
     // errors/warnings/files_with_violations should reflect all files, not just the limited slice
+    // (errors/warnings are plain usize fields on ExtLintOutput, so their mere
+    // presence is guaranteed by the type; only the count below is asserted)
     assert!(
-        inner["errors"].as_u64().is_some(),
-        "expected errors field in ExtLintOutput"
-    );
-    assert!(
-        inner["warnings"].as_u64().is_some(),
-        "expected warnings field in ExtLintOutput"
-    );
-    let files_with_violations = inner["files_with_violations"].as_u64().unwrap();
-    assert!(
-        files_with_violations > 1,
-        "expected files_with_violations > 1 (full count, not limited), got {files_with_violations}"
+        results.files_with_violations > 1,
+        "expected files_with_violations > 1 (full count, not limited), got {}",
+        results.files_with_violations
     );
 }
 
@@ -772,12 +728,10 @@ required = ["title"]
     );
 
     // The JSON should show errors > 0.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    let errors = json["results"]["errors"].as_u64().unwrap_or(0);
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert!(
-        errors > 0,
-        "--strict: errors should be > 0 in JSON output; got: {stdout}"
+        results.errors > 0,
+        "--strict: errors should be > 0 in JSON output; got: {results:?}"
     );
 }
 
@@ -863,14 +817,11 @@ fn lint_hyalo003_clean_date_no_violation() {
 
     // Should be clean — exit 0
     assert!(output.status.success(), "expected exit 0 for clean date");
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    let results: ExtLintOutput = typed_results(&output.stdout);
     // results.files_with_violations should be 0
-    let with_violations = json["results"]["files_with_violations"]
-        .as_u64()
-        .unwrap_or(0);
     assert_eq!(
-        with_violations, 0,
-        "expected no violations for valid date, got: {json}"
+        results.files_with_violations, 0,
+        "expected no violations for valid date, got: {results:?}"
     );
 }
 
@@ -897,25 +848,23 @@ fn lint_hyalo003_bad_date_emits_warning() {
         "expected exit 0 for warn-level HYALO003"
     );
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let results: ExtLintOutput = typed_results(&output.stdout);
 
     // results.files is the array of file results
-    let files = json["results"]["files"]
-        .as_array()
-        .expect("results.files array");
     assert!(
-        !files.is_empty(),
-        "expected HYALO003 violation, stdout: {stdout}"
+        !results.files.is_empty(),
+        "expected HYALO003 violation, results: {results:?}"
     );
 
     // Check that HYALO003 appears in the rule_groups of the first file
-    let found = files.iter().any(|f| {
-        f["rule_groups"]
-            .as_array()
-            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO003"))
-    });
-    assert!(found, "expected HYALO003 in rule_groups, stdout: {stdout}");
+    let found = results
+        .files
+        .iter()
+        .any(|f| f.rule_groups.iter().any(|rg| rg.rule == "HYALO003"));
+    assert!(
+        found,
+        "expected HYALO003 in rule_groups, results: {results:?}"
+    );
 }
 
 /// HYALO003 is promoted to error under `--strict`.
@@ -964,34 +913,21 @@ fn lint_hyalo003_checks_all_date_keys() {
         .output()
         .unwrap();
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    let files = json["results"]["files"]
-        .as_array()
-        .expect("results.files array");
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert!(
-        !files.is_empty(),
-        "expected HYALO003 violations, stdout: {stdout}"
+        !results.files.is_empty(),
+        "expected HYALO003 violations, results: {results:?}"
     );
 
     // Collect all HYALO003 violation messages from rule_groups
-    let all_messages: Vec<String> = files
+    let all_messages: Vec<String> = results
+        .files
         .iter()
         .flat_map(|f| {
-            f["rule_groups"]
-                .as_array()
-                .unwrap_or(&vec![])
+            f.rule_groups
                 .iter()
-                .filter(|rg| rg["rule"] == "HYALO003")
-                .flat_map(|rg| {
-                    rg["violations"]
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|v| v["message"].as_str().map(str::to_owned))
-                        .collect::<Vec<_>>()
-                })
+                .filter(|rg| rg.rule == "HYALO003")
+                .flat_map(|rg| rg.violations.iter().map(|v| v.message.clone()))
                 .collect::<Vec<_>>()
         })
         .collect();
@@ -1042,11 +978,8 @@ type = "datetime"
         .output()
         .unwrap();
     assert!(output.status.success(), "expected clean run");
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
-    let with_violations = json["results"]["files_with_violations"]
-        .as_u64()
-        .unwrap_or(0);
-    assert_eq!(with_violations, 0);
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    assert_eq!(results.files_with_violations, 0);
 }
 
 /// A date-only value in a schema-declared `datetime` property fires HYALO004.
@@ -1075,31 +1008,24 @@ type = "datetime"
         .args(["lint", "--rule", "HYALO004", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
-    let files = json["results"]["files"]
-        .as_array()
-        .expect("results.files array");
-    let found = files.iter().any(|f| {
-        f["rule_groups"]
-            .as_array()
-            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO004"))
-    });
-    assert!(found, "expected HYALO004 in output, stdout: {stdout}");
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let found = results
+        .files
+        .iter()
+        .any(|f| f.rule_groups.iter().any(|rg| rg.rule == "HYALO004"));
+    assert!(found, "expected HYALO004 in output, results: {results:?}");
 
     // The message should name the offending property.
-    let any_msg = files.iter().any(|f| {
-        f["rule_groups"]
-            .as_array()
-            .unwrap_or(&vec![])
+    let any_msg = results.files.iter().any(|f| {
+        f.rule_groups
             .iter()
-            .filter(|rg| rg["rule"] == "HYALO004")
-            .flat_map(|rg| rg["violations"].as_array().unwrap_or(&vec![]).clone())
-            .any(|v| v["message"].as_str().is_some_and(|m| m.contains("when")))
+            .filter(|rg| rg.rule == "HYALO004")
+            .flat_map(|rg| rg.violations.iter())
+            .any(|v| v.message.contains("when"))
     });
     assert!(
         any_msg,
-        "expected `when` in violation message, stdout: {stdout}"
+        "expected `when` in violation message, results: {results:?}"
     );
 }
 
@@ -1564,10 +1490,9 @@ fn lint_fix_md047_converges_in_one_run() {
         .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
-    assert_eq!(val["results"]["total_fixed"], 1);
-    assert_eq!(val["results"]["total_remaining"], 0);
+    let results: ExtLintFixOutput = typed_results(&output.stdout);
+    assert_eq!(results.total_fixed, 1);
+    assert_eq!(results.total_remaining, 0);
 
     let content = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
     assert!(
@@ -1581,10 +1506,9 @@ fn lint_fix_md047_converges_in_one_run() {
         .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
         .output()
         .unwrap();
-    let stdout2 = std::str::from_utf8(&output2.stdout).unwrap();
-    let val2: serde_json::Value = serde_json::from_str(stdout2).unwrap();
-    assert_eq!(val2["results"]["total_fixed"], 0);
-    assert_eq!(val2["results"]["files"].as_array().unwrap().len(), 0);
+    let results2: ExtLintFixOutput = typed_results(&output2.stdout);
+    assert_eq!(results2.total_fixed, 0);
+    assert_eq!(results2.files.len(), 0);
 }
 
 #[test]
@@ -1643,11 +1567,10 @@ fn lint_fix_idempotent_second_run_is_a_no_op() {
         .args(["lint", "--fix", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    let results: ExtLintFixOutput = typed_results(&output.stdout);
     assert_eq!(
-        val["results"]["total_fixed"], 0,
-        "second --fix run should find nothing left to fix, got: {stdout}"
+        results.total_fixed, 0,
+        "second --fix run should find nothing left to fix, got: {results:?}"
     );
 
     let after_second = std::fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -1709,10 +1632,9 @@ fn lint_oversized_file_is_skipped_with_warning() {
         "an oversized-file skip is a warning, not an error"
     );
 
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-    let val: serde_json::Value = serde_json::from_str(stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert_eq!(
-        val["results"]["files_with_violations"], 1,
+        results.files_with_violations, 1,
         "the skipped file must be reported as not-clean, not silently dropped"
     );
 }
@@ -1781,12 +1703,9 @@ fn lint_okf_bundle_zero_false_positives() {
         "OKF bundle should lint clean under --strict; stdout: {stdout}, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert_eq!(
-        json["results"]["files_with_violations"]
-            .as_u64()
-            .unwrap_or(99),
-        0,
+        results.files_with_violations, 0,
         "expected zero violations; stdout: {stdout}"
     );
 }
@@ -1808,17 +1727,14 @@ fn lint_okf_datetime_tz_rejects_naive() {
         .args(["lint", "--rule", "HYALO004", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    let files = json["results"]["files"].as_array().expect("files array");
-    let found = files.iter().any(|f| {
-        f["rule_groups"]
-            .as_array()
-            .is_some_and(|rgs| rgs.iter().any(|rg| rg["rule"] == "HYALO004"))
-    });
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let found = results
+        .files
+        .iter()
+        .any(|f| f.rule_groups.iter().any(|rg| rg.rule == "HYALO004"));
     assert!(
         found,
-        "naive value in datetime-tz property should fire HYALO004; stdout: {stdout}"
+        "naive value in datetime-tz property should fire HYALO004; results: {results:?}"
     );
 }
 
@@ -2151,17 +2067,13 @@ fn lint_corrupt_frontmatter_surfaces_hyalo005_all_formats() {
         .output()
         .unwrap();
     assert_eq!(json.status.code().unwrap(), 1);
-    let v: serde_json::Value = serde_json::from_slice(&json.stdout).expect("lint json parses");
-    let results = &v["results"];
-    assert_eq!(results["errors"].as_u64().unwrap(), 1, "one error counted");
+    let results: ExtLintOutput = typed_results(&json.stdout);
+    assert_eq!(results.errors, 1, "one error counted");
     assert_eq!(
-        results["files_checked"].as_u64().unwrap(),
-        1,
+        results.files_checked, 1,
         "corrupt file still counts in files_checked"
     );
-    let rule = results["files"][0]["rule_groups"][0]["rule"]
-        .as_str()
-        .unwrap();
+    let rule = &results.files[0].rule_groups[0].rule;
     assert_eq!(rule, "HYALO005", "rule id is stable HYALO005");
 
     // github
@@ -2191,9 +2103,9 @@ fn lint_full_vault_counts_corrupt_file() {
         .output()
         .unwrap();
     assert_eq!(out.status.code().unwrap(), 1, "corrupt in vault -> exit 1");
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["results"]["errors"].as_u64().unwrap(), 1);
-    assert_eq!(v["results"]["files_checked"].as_u64().unwrap(), 2);
+    let results: ExtLintOutput = typed_results(&out.stdout);
+    assert_eq!(results.errors, 1);
+    assert_eq!(results.files_checked, 2);
 }
 
 /// HYALO005 is listed by `lint-rules list`, default-on, error by default.
@@ -2231,16 +2143,18 @@ fn lint_limit_zero_is_unlimited_not_empty() {
         1,
         "--limit 0 must still exit 1 when errors exist"
     );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&out.stdout);
     assert_eq!(
-        v["results"]["errors"].as_u64().unwrap(),
-        2,
+        results.errors, 2,
         "--limit 0 must report all errors, not zero"
     );
-    let files = v["results"]["files"].as_array().unwrap();
-    assert_eq!(files.len(), 2, "--limit 0 must show all files, not empty");
+    assert_eq!(
+        results.files.len(),
+        2,
+        "--limit 0 must show all files, not empty"
+    );
     assert!(
-        !v["results"]["files_truncated"].as_bool().unwrap(),
+        !results.files_truncated,
         "--limit 0 lifts the cap, so files_truncated is false"
     );
 }
@@ -2259,12 +2173,12 @@ fn lint_limit_n_caps_display_but_counts_stay_honest() {
         .output()
         .unwrap();
     assert_eq!(out.status.code().unwrap(), 1);
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&out.stdout);
     // Error count reflects ALL corrupt files, not just the shown one.
-    assert_eq!(v["results"]["errors"].as_u64().unwrap(), 3);
-    assert_eq!(v["results"]["files_checked"].as_u64().unwrap(), 3);
-    assert_eq!(v["results"]["files"].as_array().unwrap().len(), 1);
-    assert!(v["results"]["files_truncated"].as_bool().unwrap());
+    assert_eq!(results.errors, 3);
+    assert_eq!(results.files_checked, 3);
+    assert_eq!(results.files.len(), 1);
+    assert!(results.files_truncated);
 }
 
 /// `--format github` never truncates annotations: with more files than the
@@ -2548,8 +2462,8 @@ fn lint_bare_sweep_summary_appends_ignored_count() {
         .args(["lint", "--format", "json"])
         .output()
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&json_out.stdout).unwrap();
-    assert_eq!(json["results"]["files_ignored"].as_u64(), Some(1));
+    let results: ExtLintOutput = typed_results(&json_out.stdout);
+    assert_eq!(results.files_ignored, 1);
 }
 
 /// UX-1: a `--glob` whose matches are *entirely* ignored prints the same
@@ -2723,12 +2637,9 @@ fn lint_exempt_glob_case_insensitive_true_exempts_uppercase_index() {
         "INDEX.md must be exempt under case_insensitive = true; stdout: {stdout}, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert_eq!(
-        json["results"]["files_with_violations"]
-            .as_u64()
-            .unwrap_or(99),
-        0,
+        results.files_with_violations, 0,
         "expected zero violations for exempt INDEX.md; stdout: {stdout}"
     );
 }
@@ -2759,12 +2670,9 @@ fn lint_exempt_glob_case_insensitive_false_does_not_exempt_uppercase_index() {
         !output.status.success(),
         "INDEX.md must NOT be exempt under case_insensitive = false; stdout: {stdout}"
     );
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert_eq!(
-        json["results"]["files_with_violations"]
-            .as_u64()
-            .unwrap_or(0),
-        1,
+        results.files_with_violations, 1,
         "expected the missing-type violation on INDEX.md; stdout: {stdout}"
     );
 
@@ -2820,15 +2728,13 @@ fn lint_okf_profile_case_insensitive_true_index_skips_citations_present() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
 
-    let rule_ids: Vec<&str> = json["results"]["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|f| f["rule_groups"].as_array())
-        .flatten()
-        .filter_map(|g| g["rule"].as_str())
+    let rule_ids: Vec<&str> = results
+        .files
+        .iter()
+        .flat_map(|f| f.rule_groups.iter())
+        .map(|g| g.rule.as_str())
         .collect();
 
     assert!(
@@ -2864,15 +2770,13 @@ fn lint_okf_profile_case_insensitive_false_index_keeps_citations_present() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let results: ExtLintOutput = typed_results(&output.stdout);
 
-    let rule_ids: Vec<&str> = json["results"]["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|f| f["rule_groups"].as_array())
-        .flatten()
-        .filter_map(|g| g["rule"].as_str())
+    let rule_ids: Vec<&str> = results
+        .files
+        .iter()
+        .flat_map(|f| f.rule_groups.iter())
+        .map(|g| g.rule.as_str())
         .collect();
 
     assert!(
@@ -3269,7 +3173,7 @@ required = ["title"]
     tmp
 }
 
-fn lint_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+fn lint_json(dir: &std::path::Path, extra: &[&str]) -> ExtLintOutput {
     let mut args = vec!["lint", "--format", "json"];
     args.extend_from_slice(extra);
     let out = hyalo_no_hints()
@@ -3277,9 +3181,7 @@ fn lint_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
         .args(&args)
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("lint {extra:?} did not emit JSON: {stdout} ({e})"))
+    typed_results(&out.stdout)
 }
 
 /// On a 61-file vault with a single violating file, `total` must equal the
@@ -3290,33 +3192,28 @@ fn lint_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
 fn lint_json_counters_describe_whole_run_on_large_clean_vault() {
     let tmp = setup_counter_vault(60, 1);
 
-    let val = lint_json(tmp.path(), &[]);
-    let results = &val["results"];
-    let num = |k: &str| {
-        results[k]
-            .as_u64()
-            .unwrap_or_else(|| panic!("missing {k}: {val}"))
-    };
+    let results = lint_json(tmp.path(), &[]);
 
-    assert_eq!(num("files_checked"), 61, "all 61 files are examined: {val}");
     assert_eq!(
-        num("files_with_violations"),
-        1,
-        "only the dirty file violates: {val}"
+        results.files_checked, 61,
+        "all 61 files are examined: {results:?}"
     );
     assert_eq!(
-        num("total"),
-        num("errors") + num("warnings"),
-        "`total` must describe the same run as errors+warnings: {val}"
+        results.files_with_violations, 1,
+        "only the dirty file violates: {results:?}"
     );
     assert_eq!(
-        results["files_truncated"],
-        serde_json::Value::Bool(false),
-        "nothing was truncated — 1 listed file < 50-file cap: {val}"
+        results.total,
+        results.errors + results.warnings,
+        "`total` must describe the same run as errors+warnings: {results:?}"
     );
     assert!(
-        num("rules_fired") >= 2,
-        "the dirty file trips several rules: {val}"
+        !results.files_truncated,
+        "nothing was truncated — 1 listed file < 50-file cap: {results:?}"
+    );
+    assert!(
+        results.rules_fired >= 2,
+        "the dirty file trips several rules: {results:?}"
     );
 }
 
@@ -3330,17 +3227,17 @@ fn lint_json_rules_fired_is_limit_independent() {
     let capped = lint_json(tmp.path(), &["--limit", "1"]);
 
     assert_eq!(
-        unlimited["results"]["rules_fired"], capped["results"]["rules_fired"],
-        "rules_fired must not shrink with --limit: {unlimited} vs {capped}"
+        unlimited.rules_fired, capped.rules_fired,
+        "rules_fired must not shrink with --limit: {unlimited:?} vs {capped:?}"
     );
     assert_eq!(
-        unlimited["results"]["total"], capped["results"]["total"],
-        "total must not shrink with --limit: {unlimited} vs {capped}"
+        unlimited.total, capped.total,
+        "total must not shrink with --limit: {unlimited:?} vs {capped:?}"
     );
     assert_eq!(
-        capped["results"]["files"].as_array().map(Vec::len),
-        Some(1),
-        "the display list itself is still capped: {capped}"
+        capped.files.len(),
+        1,
+        "the display list itself is still capped: {capped:?}"
     );
 }
 
@@ -3351,23 +3248,19 @@ fn lint_json_files_truncated_tracks_list_truncation() {
     let tmp = setup_counter_vault(0, 60);
 
     let capped = lint_json(tmp.path(), &["--limit", "10"]);
-    let listed = u64::try_from(capped["results"]["files"].as_array().map_or(0, Vec::len))
-        .expect("listed file count fits in u64");
-    let with_violations = capped["results"]["files_with_violations"]
-        .as_u64()
-        .unwrap_or_default();
-    assert_eq!(listed, 10, "display list is capped at 10: {capped}");
+    let listed = capped.files.len();
+    let with_violations = capped.files_with_violations;
+    assert_eq!(listed, 10, "display list is capped at 10: {capped:?}");
     assert_eq!(
-        capped["results"]["files_truncated"],
-        serde_json::Value::Bool(listed < with_violations),
-        "files_truncated must equal (listed < files_with_violations): {capped}"
+        capped.files_truncated,
+        listed < with_violations,
+        "files_truncated must equal (listed < files_with_violations): {capped:?}"
     );
 
     let unlimited = lint_json(tmp.path(), &["--limit", "0"]);
-    assert_eq!(
-        unlimited["results"]["files_truncated"],
-        serde_json::Value::Bool(false),
-        "`--limit 0` lists everything, so nothing is truncated: {unlimited}"
+    assert!(
+        !unlimited.files_truncated,
+        "`--limit 0` lists everything, so nothing is truncated: {unlimited:?}"
     );
 }
 
@@ -3409,7 +3302,7 @@ fn setup_fix_counter_vault(dirty: usize) -> TempDir {
     tmp
 }
 
-fn lint_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+fn lint_fix_json(dir: &std::path::Path, extra: &[&str]) -> ExtLintFixOutput {
     let mut args = vec!["lint", "--fix", "--dry-run", "--format", "json"];
     args.extend_from_slice(extra);
     let out = hyalo_no_hints()
@@ -3417,9 +3310,7 @@ fn lint_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
         .args(&args)
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("lint --fix {extra:?} did not emit JSON: {stdout} ({e})"))
+    typed_results(&out.stdout)
 }
 
 /// `lint --fix --dry-run` totals (`total_fixed`/`total_remaining`/
@@ -3438,32 +3329,39 @@ fn lint_fix_totals_invariant_across_limit_on_conflict_vault() {
     let at_50 = lint_fix_json(tmp.path(), &["--limit", "50"]);
     let at_100000 = lint_fix_json(tmp.path(), &["--limit", "100000"]);
 
-    for key in ["total_fixed", "total_remaining", "total_conflicts"] {
-        assert_eq!(
-            at_1["results"][key], at_50["results"][key],
-            "{key} must not depend on --limit (1 vs 50): {at_1} vs {at_50}"
-        );
-        assert_eq!(
-            at_50["results"][key], at_100000["results"][key],
-            "{key} must not depend on --limit (50 vs 100000): {at_50} vs {at_100000}"
-        );
-    }
     assert_eq!(
-        at_1["results"]["total_conflicts"].as_u64(),
-        Some(1),
+        (at_1.total_fixed, at_1.total_remaining, at_1.total_conflicts),
+        (
+            at_50.total_fixed,
+            at_50.total_remaining,
+            at_50.total_conflicts
+        ),
+        "totals must not depend on --limit (1 vs 50): {at_1:?} vs {at_50:?}"
+    );
+    assert_eq!(
+        (
+            at_50.total_fixed,
+            at_50.total_remaining,
+            at_50.total_conflicts
+        ),
+        (
+            at_100000.total_fixed,
+            at_100000.total_remaining,
+            at_100000.total_conflicts
+        ),
+        "totals must not depend on --limit (50 vs 100000): {at_50:?} vs {at_100000:?}"
+    );
+    assert_eq!(
+        at_1.total_conflicts, 1,
         "the conflict file's MD009/MD010 overlap must be counted even though \
-         --limit 1 excludes it from the displayed files[] list: {at_1}"
+         --limit 1 excludes it from the displayed files[] list: {at_1:?}"
     );
     // Sanity: the display list itself really is capped at each limit.
+    assert_eq!(at_1.files.len(), 1, "display list capped at 1: {at_1:?}");
     assert_eq!(
-        at_1["results"]["files"].as_array().map(Vec::len),
-        Some(1),
-        "display list capped at 1: {at_1}"
-    );
-    assert_eq!(
-        at_50["results"]["files"].as_array().map(Vec::len),
-        Some(50),
-        "display list capped at 50: {at_50}"
+        at_50.files.len(),
+        50,
+        "display list capped at 50: {at_50:?}"
     );
 }
 
@@ -3476,7 +3374,21 @@ fn lint_fix_totals_invariant_across_limit_on_conflict_vault() {
 fn lint_fix_json_uses_remaining_errors_warnings_keys() {
     let tmp = setup_fix_counter_vault(2);
 
-    let val = lint_fix_json(tmp.path(), &[]);
+    // Deliberately bypasses the `lint_fix_json` helper (and `ExtLintFixOutput`)
+    // here: this test asserts that `errors`/`warnings` keys are *entirely
+    // absent* from the JSON, not merely absent from the struct. A typed
+    // deserialize would silently swallow a stray `errors`/`warnings` key that
+    // crept back into production output (`#[serde(deny_unknown_fields)]` is
+    // not set), so this needs the raw `serde_json::Value` to actually observe
+    // the wire shape.
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint --fix did not emit JSON: {stdout} ({e})"));
     let results = &val["results"];
     assert!(
         results.get("errors").is_none() && results.get("warnings").is_none(),
@@ -3537,21 +3449,16 @@ fn lint_reports_invalid_utf8_file_and_lints_the_rest() {
         "the bad file is reported once on stderr: {stderr}"
     );
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let val: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("lint did not emit JSON: {stdout} ({e})"));
-    let files = val["results"]["files"]
-        .as_array()
-        .expect("files array present");
-    let paths: Vec<&str> = files.iter().filter_map(|f| f["file"].as_str()).collect();
+    let results: ExtLintOutput = typed_results(&out.stdout);
+    let paths: Vec<&str> = results.files.iter().map(|f| f.file.as_str()).collect();
     assert!(
         paths.contains(&"invalid.md"),
-        "the unreadable file itself appears in results with its violation: {stdout}"
+        "the unreadable file itself appears in results with its violation: {results:?}"
     );
     assert!(
         paths.contains(&"dirty.md"),
         "the rest of the vault is still linted — dirty.md's own \
-         violation must still be reported: {stdout}"
+         violation must still be reported: {results:?}"
     );
 }
 
@@ -3656,25 +3563,20 @@ fn lint_fix_write_failure_on_one_file_does_not_abort_the_batch() {
          (unfixed) content on disk: {locked_content:?}"
     );
 
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let val: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("lint --fix did not emit JSON: {stdout} ({e})"));
-    let files = val["results"]["files"]
-        .as_array()
-        .expect("files array present");
-    let locked_entry = files
+    let results: ExtLintFixOutput = typed_results(&out.stdout);
+    let locked_entry = results
+        .files
         .iter()
-        .find(|f| f["file"].as_str() == Some("locked/bad.md"))
-        .unwrap_or_else(|| panic!("locked/bad.md missing from results: {stdout}"));
-    let has_file_error = locked_entry["remaining_groups"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|g| g["rule"].as_str() == Some("FILE"));
+        .find(|f| f.file == "locked/bad.md")
+        .unwrap_or_else(|| panic!("locked/bad.md missing from results: {results:?}"));
+    let has_file_error = locked_entry
+        .remaining_groups
+        .iter()
+        .any(|g| g.rule == "FILE");
     assert!(
         has_file_error,
         "locked/bad.md's write failure must be reported as a FILE-rule \
-         violation: {locked_entry}"
+         violation: {locked_entry:?}"
     );
 }
 
@@ -3828,14 +3730,12 @@ patterns = ".*"
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    let results: ExtLintOutput = typed_results(&output.stdout);
     assert!(
-        json["results"]["errors"].as_u64().unwrap_or(0) > 0,
-        "results.errors must be nonzero: {json}"
+        results.errors > 0,
+        "results.errors must be nonzero: {results:?}"
     );
-    let rendered = json.to_string();
+    let rendered = format!("{results:?}");
     assert!(
         rendered.contains("patterns"),
         "the violation must name the bad key: {rendered}"
@@ -3872,25 +3772,20 @@ patterns = ".*"
 
     // Non-strict: exit 0 (a warning doesn't fail the plain command)...
     assert_eq!(output.status.code(), Some(0));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value =
-        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    let results: ExtLintOutput = typed_results(&output.stdout);
     // ...but results must never claim a clean run while schema validation is
     // silently disabled: total violations and files_with_violations must be
     // nonzero, and the malformed-schema key must be visible in the JSON.
     assert!(
-        json["results"]["total"].as_u64().unwrap_or(0) > 0,
+        results.total > 0,
         "results.total must be nonzero -- 'no issues' must never be reported \
-         while schema validation is silently disabled: {json}"
+         while schema validation is silently disabled: {results:?}"
     );
     assert!(
-        json["results"]["files_with_violations"]
-            .as_u64()
-            .unwrap_or(0)
-            > 0,
-        "results.files_with_violations must be nonzero: {json}"
+        results.files_with_violations > 0,
+        "results.files_with_violations must be nonzero: {results:?}"
     );
-    let rendered = json.to_string();
+    let rendered = format!("{results:?}");
     assert!(
         rendered.contains("patterns"),
         "the malformed-schema diagnostic must name the bad key in results: {rendered}"

@@ -1,0 +1,51 @@
+[package]
+name = "hyalo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Deliberately its own workspace root (not a member of the parent
+# workspace): cargo-fuzz needs nightly + libfuzzer-sys, which the rest of
+# the project does not, and this crate must never be pulled into
+# `cargo build/test/clippy --workspace` (see fuzz/README.md and iter-224).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+indexmap = "2"
+serde_json = "1.0.149"
+tempfile = "3"
+
+[dependencies.hyalo-core]
+path = "../crates/hyalo-core"
+
+[[bin]]
+name = "frontmatter_splice"
+path = "fuzz_targets/frontmatter_splice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scanner"
+path = "fuzz_targets/scanner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_parser"
+path = "fuzz_targets/link_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_loader"
+path = "fuzz_targets/snapshot_loader.rs"
+test = false
+doc = false
+bench = false

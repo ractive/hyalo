@@ -1,6 +1,47 @@
 use assert_cmd::Command;
+use serde::de::DeserializeOwned;
 use std::fs;
 use std::path::Path;
+
+/// The standard `{"results": ..., "hints": [...], "total": ...}` envelope
+/// every JSON command output is wrapped in (`output.rs::build_envelope_value`).
+///
+/// T-3 (iter-224): e2e assertions historically parsed into a raw
+/// `serde_json::Value` and indexed it by string key
+/// (`json["results"]["links"]["total"]`), so an output-shape regression
+/// surfaced as a generic `expect`/index panic rather than tying the test to
+/// the actual typed output structs (DEC-025's `crates/hyalo-core/src/types.rs`
+/// family, plus per-command structs like `lint`'s `LintOutput`). Deserializing
+/// into `Envelope<T>` for a real `T` makes a field rename in production a
+/// compile error in the converted suites instead of a silent `Value::Null`
+/// a stringly-keyed lookup would tolerate.
+#[derive(Debug, serde::Deserialize)]
+#[allow(dead_code)]
+pub struct Envelope<T> {
+    pub results: T,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub hints: Vec<serde_json::Value>,
+}
+
+/// Parse `stdout` as the standard envelope and return its typed `results`.
+///
+/// Panics with the raw JSON on any parse failure, matching the existing
+/// `unwrap_or_else`-with-context convention used throughout the e2e suite for
+/// untyped `serde_json::Value` parses — a shape mismatch (or a genuine CLI
+/// error whose output isn't the envelope at all) fails loudly with the
+/// offending bytes attached rather than an opaque serde error.
+#[allow(dead_code)]
+pub fn typed_results<T: DeserializeOwned>(stdout: &[u8]) -> T {
+    let envelope: Envelope<T> = serde_json::from_slice(stdout).unwrap_or_else(|e| {
+        panic!(
+            "failed to deserialize typed results: {e}\nstdout: {}",
+            String::from_utf8_lossy(stdout)
+        )
+    });
+    envelope.results
+}
 
 /// Strip the leading newline from a raw string so the content aligns at column 0.
 macro_rules! md {

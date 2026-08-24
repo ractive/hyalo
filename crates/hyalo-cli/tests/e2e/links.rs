@@ -1,7 +1,77 @@
 use std::fs;
 
-use super::common::{hyalo_no_hints, md, write_md};
+use super::common::{hyalo_no_hints, md, typed_results, write_md};
+use serde::Deserialize;
 use tempfile::TempDir;
+
+/// T-3/T-5 (iter-224): typed mirror of `hyalo links fix`'s JSON `results`
+/// shape (`crates/hyalo-cli/src/commands/links.rs`, the `serde_json::json!`
+/// literal building `output`). Not a production type — that literal builds
+/// several fields dynamically (`fixes_with_rule` post-processes a `FixPlan`
+/// serialization to attach a computed `rule` field), so turning it into a
+/// real `#[derive(Serialize)]` struct is a larger refactor left as follow-on.
+/// This still gets the compile-time benefit T-3 is after: every field here
+/// is required (no `#[serde(default)]`), and the `json!` macro always emits
+/// every one of these keys unconditionally, so a production rename or
+/// removal fails every converted test's `serde_json::from_value` at test
+/// runtime with a named "missing field" error — not a silently-`Null`
+/// stringly-keyed index a `.contains()`/`["..."]` chain would tolerate.
+///
+/// Deliberately typed, not blindly `Value`, for the fix-plan arrays too
+/// (`Vec<serde_json::Value>`): the per-element shape varies by fix strategy,
+/// so those stay dynamic, but callers that only need `.len()` or an existing
+/// `serde_json::Value` API keep working exactly as before.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct LinksFixResults {
+    broken: usize,
+    broken_anchors: Option<usize>,
+    fixable: usize,
+    unfixable: usize,
+    ignored: usize,
+    fixes: Vec<serde_json::Value>,
+    unfixable_links: Vec<serde_json::Value>,
+    applied: bool,
+    applied_fixes: Vec<serde_json::Value>,
+    unapplied: usize,
+    unapplied_fixes: Vec<serde_json::Value>,
+    failed: usize,
+    failed_fixes: Vec<serde_json::Value>,
+    case_mismatches: usize,
+    case_mismatch_fixes: Vec<serde_json::Value>,
+    relocations: usize,
+    relocation_fixes: Vec<serde_json::Value>,
+    ambiguous: usize,
+    ambiguous_links: Vec<serde_json::Value>,
+    out_of_vault: usize,
+    out_of_vault_links: Vec<serde_json::Value>,
+    templated: usize,
+    templated_links: Vec<serde_json::Value>,
+    fuzzy: usize,
+    fuzzy_fixes: Vec<serde_json::Value>,
+    fuzzy_applied: bool,
+    fuzzy_min_confidence: f64,
+    fuzzy_below_floor: usize,
+}
+
+/// `hyalo summary`'s `results` object, typed just enough for the link-health
+/// assertions below.
+///
+/// NOT `hyalo_core::types::VaultSummary` directly: `VaultSummary::dir` is a
+/// required (non-`#[serde(default)]`) field, but `output.rs::build_envelope_value`
+/// (NEW-5) unconditionally hoists `results.dir` up to the envelope's
+/// top-level `dir` key and *removes* it from `results` before serializing —
+/// deliberate, documented behavior, not a bug. The upshot is `VaultSummary`
+/// can never actually deserialize a real `summary --format json` `results`
+/// object: `serde_json::from_value::<VaultSummary>(results)` always fails
+/// with "missing field `dir`", discovered empirically while converting these
+/// tests (T-3/T-5, iter-224) — `results.dir` simply isn't there. This local
+/// struct reuses the real `LinkHealthSummary` type for the part that *is*
+/// present and type-checked, without claiming a field that never arrives.
+#[derive(Debug, Deserialize)]
+struct SummaryResults {
+    links: hyalo_core::types::LinkHealthSummary,
+}
 
 // ---------------------------------------------------------------------------
 // Vault fixture
@@ -99,25 +169,23 @@ fn summary_includes_link_health() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    let results: SummaryResults = super::common::typed_results(&output.stdout);
 
     // links.total counts all links across the vault
-    let total = json["results"]["links"]["total"]
-        .as_u64()
-        .expect("links.total should be a number");
+    let total = results.links.total;
     assert!(total > 0, "expected at least one link, got {total}");
 
     // links.broken >= 1 because b.md has [[nonexistent]] and d.md has [[Authnticaton]]
-    let broken = json["results"]["links"]["broken"]
-        .as_u64()
-        .expect("links.broken should be a number");
     assert_eq!(
-        broken, 2,
+        results.links.broken, 2,
         "expected 2 broken links: [[nonexistent]] from b.md and [[Authnticaton]] from d.md"
     );
 
-    // broken_links array was removed; summary only reports counts now.
+    // broken_links array was removed; summary only reports counts now. This
+    // assertion is inherently about the absence of a key from a dynamic map,
+    // so it stays on an untyped parse rather than the typed struct above.
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
     let links_obj = json["results"]["links"]
         .as_object()
         .expect("results.links should be an object");
@@ -144,15 +212,11 @@ fn summary_broken_links_count_includes_nonexistent() {
         .expect("hyalo summary should run");
     assert!(output.status.success());
 
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
+    let results: SummaryResults = super::common::typed_results(&output.stdout);
 
     // b.md has [[nonexistent]] — the broken count must reflect it
-    let broken = json["results"]["links"]["broken"]
-        .as_u64()
-        .expect("links.broken should be a number");
     assert_eq!(
-        broken, 2,
+        results.links.broken, 2,
         "expected 2 broken links: [[nonexistent]] from b.md and [[Authnticaton]] from d.md"
     );
 }
@@ -225,16 +289,15 @@ fn summary_reports_broken_anchors_distinctly_from_broken_links() {
         .output()
         .expect("hyalo summary should run");
     assert!(json_output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    let results: SummaryResults = super::common::typed_results(&json_output.stdout);
     assert_eq!(
-        json["results"]["links"]["broken"].as_u64(),
-        Some(0),
-        "the target resolves — nothing is broken by that definition: {json}"
+        results.links.broken, 0,
+        "the target resolves — nothing is broken by that definition: {results:?}"
     );
     assert_eq!(
-        json["results"]["links"]["broken_anchors"].as_u64(),
+        results.links.broken_anchors,
         Some(1),
-        "the dead #nope anchor must be visible as its own figure: {json}"
+        "the dead #nope anchor must be visible as its own figure: {results:?}"
     );
 
     let text_output = hyalo_no_hints()
@@ -284,16 +347,15 @@ fn summary_broken_anchors_is_gated_when_targets_are_also_broken() {
         .output()
         .expect("hyalo summary should run");
     assert!(json_output.status.success());
-    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    let results: SummaryResults = super::common::typed_results(&json_output.stdout);
     assert_eq!(
-        json["results"]["links"]["broken"].as_u64(),
-        Some(1),
-        "the dead target must still be counted: {json}"
+        results.links.broken, 1,
+        "the dead target must still be counted: {results:?}"
     );
     assert!(
-        json["results"]["links"]["broken_anchors"].is_null(),
+        results.links.broken_anchors.is_none(),
         "broken_anchors must be omitted (gated to 0) while a broken target \
-         exists, not silently re-resolve every link a second time: {json}"
+         exists, not silently re-resolve every link a second time: {results:?}"
     );
 }
 
@@ -448,6 +510,16 @@ fn find_broken_links_combined_with_glob_filter() {
 // flagged as broken, and must resolve correctly for `backlinks`.
 #[test]
 fn find_broken_links_ignores_angle_bracket_destination_with_spaces() {
+    /// `hyalo backlinks`'s `results` object (`crates/hyalo-cli/src/commands/backlinks.rs`),
+    /// not `hyalo_core::types::BacklinkInfo` directly — that command's private
+    /// `BacklinkItem` also carries `target`/`written_target`, which
+    /// `BacklinkInfo` doesn't declare, so this wraps `results.backlinks` at
+    /// the actual envelope shape rather than assuming `results` is the array.
+    #[derive(Debug, serde::Deserialize)]
+    struct BacklinksResults {
+        backlinks: Vec<hyalo_core::types::BacklinkInfo>,
+    }
+
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     write_md(tmp.path(), "my dest.md", "# My Dest\n");
     write_md(
@@ -497,10 +569,12 @@ fn find_broken_links_ignores_angle_bracket_destination_with_spaces() {
         .output()
         .expect("hyalo backlinks should run");
     assert!(output.status.success());
+
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
     assert_eq!(json["total"], 1, "backlinks JSON: {json}");
-    assert_eq!(json["results"]["backlinks"][0]["source"], "source.md");
+    let results: BacklinksResults = super::common::typed_results(&output.stdout);
+    assert_eq!(results.backlinks[0].source, "source.md");
 }
 
 // ---------------------------------------------------------------------------
@@ -5086,7 +5160,7 @@ fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
 
 /// Run `hyalo links fix` in `dir` with the given extra args and return the
 /// parsed `results` object.
-fn links_fix_results(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+fn links_fix_results(dir: &std::path::Path, extra: &[&str]) -> LinksFixResults {
     let mut cmd = hyalo_no_hints();
     cmd.args([
         "--dir",
@@ -5103,9 +5177,7 @@ fn links_fix_results(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value
         "links fix exited non-zero: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
-    json["results"].clone()
+    typed_results(&output.stdout)
 }
 
 #[test]
@@ -5126,10 +5198,10 @@ See [AUTOTITLE](/how-tos/old-home/moved-page) for details.
     // The target moved directories, so the only evidence is the basename —
     // a guess, hence behind the fuzzy gate (M-1).
     let before = links_fix_results(tmp.path(), &[]);
-    assert_eq!(before["broken"].as_u64(), Some(1), "{before}");
+    assert_eq!(before.broken, 1, "{before:?}");
 
     let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
-    assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
+    assert_eq!(applied.applied_fixes.len(), 1);
 
     let written = fs::read_to_string(tmp.path().join("docs").join("page.md"))
         .expect("page.md should be readable");
@@ -5140,8 +5212,8 @@ See [AUTOTITLE](/how-tos/old-home/moved-page) for details.
 
     // The whole point: a re-run sees nothing left to do.
     let after = links_fix_results(tmp.path(), &[]);
-    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
-    assert_eq!(after["fixable"].as_u64(), Some(0), "{after}");
+    assert_eq!(after.broken, 0, "{after:?}");
+    assert_eq!(after.fixable, 0, "{after:?}");
 }
 
 #[test]
@@ -5165,14 +5237,14 @@ See [x](../c/target.md) here.
 
     let plain = links_fix_results(tmp.path(), &["--apply"]);
     assert_eq!(
-        plain["applied_fixes"].as_array().map(Vec::len),
-        Some(0),
-        "a written directory makes this a guess, not a certain fix: {plain}"
+        plain.applied_fixes.len(),
+        0,
+        "a written directory makes this a guess, not a certain fix: {plain:?}"
     );
     assert_eq!(
-        plain["fuzzy_fixes"][0]["strategy"].as_str(),
+        plain.fuzzy_fixes[0]["strategy"].as_str(),
         Some("BasenameFallback"),
-        "and it must be reported under the honest strategy: {plain}"
+        "and it must be reported under the honest strategy: {plain:?}"
     );
 
     // iter-212 adds a second gate on top of the opt-in: `a/c/` (what
@@ -5181,9 +5253,9 @@ See [x](../c/target.md) here.
     // still refuses it.
     let default_floor = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
     assert_eq!(
-        default_floor["applied_fixes"].as_array().map(Vec::len),
-        Some(0),
-        "a cross-tree basename guess is below the default confidence floor: {default_floor}"
+        default_floor.applied_fixes.len(),
+        0,
+        "a cross-tree basename guess is below the default confidence floor: {default_floor:?}"
     );
 
     // Opening the floor writes it, still in the author's source-relative style.
@@ -5191,7 +5263,7 @@ See [x](../c/target.md) here.
         tmp.path(),
         &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
     );
-    assert_eq!(applied["applied_fixes"].as_array().map(Vec::len), Some(1));
+    assert_eq!(applied.applied_fixes.len(), 1);
 
     let written =
         fs::read_to_string(tmp.path().join("a").join("b").join("page.md")).expect("readable");
@@ -5201,7 +5273,7 @@ See [x](../c/target.md) here.
     );
 
     let after = links_fix_results(tmp.path(), &[]);
-    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
+    assert_eq!(after.broken, 0, "{after:?}");
 }
 
 #[test]
@@ -5222,13 +5294,13 @@ See [x](target.md) here.
 
     let applied = links_fix_results(tmp.path(), &["--apply"]);
     assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(1),
-        "a bare-stem repair stays a certain fix: {applied}"
+        applied.applied_fixes.len(),
+        1,
+        "a bare-stem repair stays a certain fix: {applied:?}"
     );
 
     let after = links_fix_results(tmp.path(), &[]);
-    assert_eq!(after["broken"].as_u64(), Some(0), "{after}");
+    assert_eq!(after.broken, 0, "{after:?}");
 }
 
 #[test]
@@ -5248,12 +5320,12 @@ See [GitHub Actions](/actions) for details.
     write_md(tmp.path(), "graphql/reference/actions.md", "# GraphQL\n");
 
     let report = links_fix_results(tmp.path(), &[]);
-    assert_eq!(report["broken"].as_u64(), Some(0), "{report}");
-    assert_eq!(report["fixable"].as_u64(), Some(0), "{report}");
+    assert_eq!(report.broken, 0, "{report:?}");
+    assert_eq!(report.fixable, 0, "{report:?}");
     assert_eq!(
-        report["fuzzy_fixes"].as_array().map(Vec::len),
-        Some(0),
-        "a resolving link must not appear as a fuzzy candidate: {report}"
+        report.fuzzy_fixes.len(),
+        0,
+        "a resolving link must not appear as a fuzzy candidate: {report:?}"
     );
 
     // A plain --apply leaves the file alone.
@@ -5282,24 +5354,19 @@ See [GitHub Actions](/actions) for details.
 
     let report = links_fix_results(tmp.path(), &[]);
     assert_eq!(
-        report["case_mismatches"].as_u64(),
-        Some(0),
-        "a cross-directory basename guess is not a case mismatch: {report}"
+        report.case_mismatches, 0,
+        "a cross-directory basename guess is not a case mismatch: {report:?}"
     );
     assert_eq!(
-        report["fixable"].as_u64(),
-        Some(0),
-        "the guess must not sit in the default apply bucket: {report}"
+        report.fixable, 0,
+        "the guess must not sit in the default apply bucket: {report:?}"
     );
-    let fuzzy = report["fuzzy_fixes"]
-        .as_array()
-        .expect("fuzzy_fixes array")
-        .clone();
-    assert_eq!(fuzzy.len(), 1, "{report}");
+    let fuzzy = report.fuzzy_fixes.clone();
+    assert_eq!(fuzzy.len(), 1, "{report:?}");
     assert_eq!(fuzzy[0]["strategy"].as_str(), Some("BasenameFallback"));
     assert!(
         fuzzy[0]["confidence"].as_f64().unwrap_or(1.0) < 1.0,
-        "a guess must not claim confidence 1.0: {report}"
+        "a guess must not claim confidence 1.0: {report:?}"
     );
 
     // A plain --apply leaves the file alone.
@@ -5568,24 +5635,20 @@ Real typo: [d](guidez)
 
     let report = links_fix_results(tmp.path(), &["--dry-run"]);
     assert_eq!(
-        report["templated"].as_u64(),
-        Some(3),
-        "all three template forms land in the named bucket: {report}"
+        report.templated, 3,
+        "all three template forms land in the named bucket: {report:?}"
     );
-    let templated = report["templated_links"]
-        .as_array()
-        .expect("templated_links array");
-    assert_eq!(templated.len(), 3, "{report}");
+    let templated = &report.templated_links;
+    assert_eq!(templated.len(), 3, "{report:?}");
     assert!(
         templated
             .iter()
             .all(|t| t["target"].as_str().unwrap_or_default().contains("guides")),
-        "templated links keep their original target text: {report}"
+        "templated links keep their original target text: {report:?}"
     );
     assert_eq!(
-        report["unfixable"].as_u64(),
-        Some(0),
-        "templated links are not silently folded into unfixable: {report}"
+        report.unfixable, 0,
+        "templated links are not silently folded into unfixable: {report:?}"
     );
 
     // Neither plain --apply nor --apply-fuzzy may touch them.
@@ -5641,20 +5704,19 @@ x
 
     let report = links_fix_results(tmp.path(), &["--dry-run"]);
     assert_eq!(
-        report["unfixable"].as_u64(),
-        Some(0),
-        "the alias must not shadow the real file: {report}"
+        report.unfixable, 0,
+        "the alias must not shadow the real file: {report:?}"
     );
-    let fuzzy = report["fuzzy_fixes"].as_array().expect("fuzzy_fixes array");
-    assert_eq!(fuzzy.len(), 1, "{report}");
+    let fuzzy = &report.fuzzy_fixes;
+    assert_eq!(fuzzy.len(), 1, "{report:?}");
     assert_eq!(
         fuzzy[0]["new_target"].as_str(),
         Some("notes/target.md"),
-        "the fix must be attributed to the real filename: {report}"
+        "the fix must be attributed to the real filename: {report:?}"
     );
     assert!(
         fuzzy[0]["confidence"].as_f64().unwrap_or_default() > 0.96,
-        "the 0.966 offer must survive: {report}"
+        "the 0.966 offer must survive: {report:?}"
     );
 }
 
@@ -5698,38 +5760,33 @@ Bare URL: https://example.com/z/target.md
     write_md(tmp.path(), "docs/valid.md", untouched_body);
 
     let before = links_fix_results(tmp.path(), &[]);
-    let broken_before = before["broken"].as_u64().expect("broken count");
-    assert!(broken_before > 0, "fixture must start broken: {before}");
+    let broken_before = before.broken;
+    assert!(broken_before > 0, "fixture must start broken: {before:?}");
 
     let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
-    assert_eq!(
-        applied["failed"].as_u64(),
-        Some(0),
-        "no write may fail: {applied}"
-    );
+    assert_eq!(applied.failed, 0, "no write may fail: {applied:?}");
 
     let after = links_fix_results(tmp.path(), &[]);
-    let broken_after = after["broken"].as_u64().expect("broken count");
+    let broken_after = after.broken;
     assert!(
         broken_after < broken_before,
-        "broken count must strictly decrease ({broken_before} → {broken_after}): {after}"
+        "broken count must strictly decrease ({broken_before} → {broken_after}): {after:?}"
     );
     assert_eq!(
-        after["case_mismatches"].as_u64(),
-        Some(0),
-        "case mismatches must be repaired too: {after}"
+        after.case_mismatches, 0,
+        "case mismatches must be repaired too: {after:?}"
     );
 
     // iter-212: exactly one fixture link survives a default `--apply-fuzzy` —
     // `../c/target.md` → `z/target.md` discards the author's directory for an
     // unrelated tree and scores the bare-basename floor of 0.7, under the
     // default 0.8. It is reported, not written.
-    assert_eq!(broken_after, 1, "{after}");
-    assert_eq!(after["fuzzy_below_floor"].as_u64(), Some(1), "{after}");
+    assert_eq!(broken_after, 1, "{after:?}");
+    assert_eq!(after.fuzzy_below_floor, 1, "{after:?}");
     assert_eq!(
-        after["fuzzy_fixes"][0]["confidence"].as_f64(),
+        after.fuzzy_fixes[0]["confidence"].as_f64(),
         Some(0.7),
-        "{after}"
+        "{after:?}"
     );
 
     // Opening the floor is the documented escape hatch and clears the rest.
@@ -5737,12 +5794,11 @@ Bare URL: https://example.com/z/target.md
         tmp.path(),
         &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
     );
-    assert_eq!(forced["failed"].as_u64(), Some(0), "{forced}");
+    assert_eq!(forced.failed, 0, "{forced:?}");
     let final_state = links_fix_results(tmp.path(), &[]);
     assert_eq!(
-        final_state["broken"].as_u64(),
-        Some(0),
-        "every fixture link has a real target: {final_state}"
+        final_state.broken, 0,
+        "every fixture link has a real target: {final_state:?}"
     );
 
     // The file whose links all resolved must be byte-identical.
@@ -5895,7 +5951,7 @@ fn setup_bucket_vault() -> TempDir {
     tmp
 }
 
-fn links_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
+fn links_fix_json(dir: &std::path::Path, extra: &[&str]) -> LinksFixResults {
     let mut args = vec!["links", "fix", "--format", "json"];
     args.extend_from_slice(extra);
     let out = hyalo_no_hints()
@@ -5903,10 +5959,7 @@ fn links_fix_json(dir: &std::path::Path, extra: &[&str]) -> serde_json::Value {
         .args(&args)
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let val: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("links fix {extra:?} did not emit JSON: {stdout} ({e})"));
-    val["results"].clone()
+    typed_results(&out.stdout)
 }
 
 fn links_fix_text(dir: &std::path::Path, extra: &[&str]) -> String {
@@ -5928,12 +5981,11 @@ fn links_text_and_json_buckets_sum_to_broken() {
     let tmp = setup_bucket_vault();
 
     let r = links_fix_json(tmp.path(), &["--expand-short-form", "--dry-run"]);
-    let n = |k: &str| r[k].as_u64().unwrap_or_else(|| panic!("missing {k}: {r}"));
-    assert!(n("broken") > 0, "fixture must produce broken links: {r}");
+    assert!(r.broken > 0, "fixture must produce broken links: {r:?}");
     assert_eq!(
-        n("broken"),
-        n("fixable") + n("fuzzy") + n("unfixable") + n("templated"),
-        "JSON buckets must partition `broken`: {r}"
+        r.broken,
+        r.fixable + r.fuzzy + r.unfixable + r.templated,
+        "JSON buckets must partition `broken`: {r:?}"
     );
 
     let text = links_fix_text(tmp.path(), &["--expand-short-form", "--dry-run"]);
@@ -5954,7 +6006,7 @@ fn links_text_and_json_buckets_sum_to_broken() {
         fixable + fuzzy + unfixable,
         "text buckets must sum to the broken count:\n{text}"
     );
-    assert_eq!(broken, n("broken"), "text and JSON must agree:\n{text}");
+    assert_eq!(broken, r.broken as u64, "text and JSON must agree:\n{text}");
 }
 
 /// UX-4: unfixable links used to be JSON-only. They now appear in text too.
@@ -6018,9 +6070,9 @@ fn links_text_caps_long_bucket_listings() {
     // JSON is never capped — a script still sees everything.
     let r = links_fix_json(tmp.path(), &["--dry-run"]);
     assert_eq!(
-        r["unfixable_links"].as_array().map(Vec::len),
-        Some(30),
-        "JSON must list every unfixable link: {r}"
+        r.unfixable_links.len(),
+        30,
+        "JSON must list every unfixable link: {r:?}"
     );
 }
 
@@ -6029,12 +6081,9 @@ fn links_text_caps_long_bucket_listings() {
 /// and `--apply` must report the same detail.
 #[test]
 fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
-    fn assert_detail(arr: &serde_json::Value, label: &str, require_non_empty: bool) {
-        let items = arr
-            .as_array()
-            .unwrap_or_else(|| panic!("{label} is not an array: {arr}"));
+    fn assert_detail(items: &[serde_json::Value], label: &str, require_non_empty: bool) {
         if require_non_empty {
-            assert!(!items.is_empty(), "{label} must not be empty: {arr}");
+            assert!(!items.is_empty(), "{label} must not be empty: {items:?}");
         }
         for f in items {
             for key in [
@@ -6059,23 +6108,23 @@ fn links_json_carries_per_fix_detail_in_dry_run_and_apply() {
     let tmp = setup_bucket_vault();
 
     let dry = links_fix_json(tmp.path(), &["--expand-short-form", "--dry-run"]);
-    assert_detail(&dry["fixes"], "fixes", true);
-    assert_detail(&dry["fuzzy_fixes"], "fuzzy_fixes", true);
+    assert_detail(&dry.fixes, "fixes", true);
+    assert_detail(&dry.fuzzy_fixes, "fuzzy_fixes", true);
     // Only populated on a case-insensitive filesystem — see setup_bucket_vault.
-    assert_detail(&dry["case_mismatch_fixes"], "case_mismatch_fixes", false);
+    assert_detail(&dry.case_mismatch_fixes, "case_mismatch_fixes", false);
     assert_eq!(
-        dry["fuzzy_fixes"][0]["strategy"], "FuzzyMatch",
-        "the fuzzy proposal must name its strategy: {dry}"
+        dry.fuzzy_fixes[0]["strategy"], "FuzzyMatch",
+        "the fuzzy proposal must name its strategy: {dry:?}"
     );
     assert_eq!(
-        dry["fixes"][0]["strategy"], "ShortestPath",
-        "the certain proposal must name its strategy: {dry}"
+        dry.fixes[0]["strategy"], "ShortestPath",
+        "the certain proposal must name its strategy: {dry:?}"
     );
 
     let applied = links_fix_json(tmp.path(), &["--expand-short-form", "--apply"]);
-    assert_detail(&applied["fixes"], "fixes (apply)", true);
-    assert_detail(&applied["fuzzy_fixes"], "fuzzy_fixes (apply)", true);
-    assert_detail(&applied["applied_fixes"], "applied_fixes", true);
+    assert_detail(&applied.fixes, "fixes (apply)", true);
+    assert_detail(&applied.fuzzy_fixes, "fuzzy_fixes (apply)", true);
+    assert_detail(&applied.applied_fixes, "applied_fixes", true);
 }
 
 /// NEW-18 (dogfood pre3): `fuzzy_fixes` entries carry `col` alongside `line`
@@ -6098,11 +6147,11 @@ fn fuzzy_fixes_carry_a_column() {
     );
 
     let json = links_fix_json(tmp.path(), &["--dry-run"]);
-    let fuzzy = json["fuzzy_fixes"]
-        .as_array()
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| panic!("expected at least one fuzzy fix: {json}"));
-    let entry = &fuzzy[0];
+    assert!(
+        !json.fuzzy_fixes.is_empty(),
+        "expected at least one fuzzy fix: {json:?}"
+    );
+    let entry = &json.fuzzy_fixes[0];
     assert_eq!(entry["line"].as_u64(), Some(4));
     let byte_offset = line.find("correct-nam").unwrap();
     let expected_col = line[..byte_offset].chars().count() + 1;
@@ -6137,11 +6186,11 @@ fn fuzzy_fixes_column_counts_characters_not_bytes() {
     );
 
     let json = links_fix_json(tmp.path(), &["--dry-run"]);
-    let fuzzy = json["fuzzy_fixes"]
-        .as_array()
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| panic!("expected at least one fuzzy fix: {json}"));
-    let entry = &fuzzy[0];
+    assert!(
+        !json.fuzzy_fixes.is_empty(),
+        "expected at least one fuzzy fix: {json:?}"
+    );
+    let entry = &json.fuzzy_fixes[0];
     let byte_offset = line.find("correct-nam").unwrap();
     let char_col = line[..byte_offset].chars().count() + 1;
     assert_eq!(
@@ -6197,17 +6246,15 @@ Correct: [c](/code-security/how-tos/scan-code/configuring-larger-runners-for-def
     tmp
 }
 
-fn confidence_of(results: &serde_json::Value, needle: &str) -> f64 {
-    results["fuzzy_fixes"]
-        .as_array()
-        .expect("fuzzy_fixes array")
+fn confidence_of(fuzzy_fixes: &[serde_json::Value], needle: &str) -> f64 {
+    fuzzy_fixes
         .iter()
         .find(|f| {
             f["old_target"]
                 .as_str()
                 .is_some_and(|t| t.ends_with(needle))
         })
-        .unwrap_or_else(|| panic!("no proposal for {needle}: {results}"))["confidence"]
+        .unwrap_or_else(|| panic!("no proposal for {needle}: {fuzzy_fixes:?}"))["confidence"]
         .as_f64()
         .expect("confidence is a number")
 }
@@ -6217,64 +6264,69 @@ fn links_fix_confidence_orders_the_correct_relocation_highest() {
     let tmp = setup_confidence_corpus();
     let r = links_fix_results(tmp.path(), &[]);
 
-    let wrong_a = confidence_of(&r, "actions-limits");
-    let wrong_b = confidence_of(&r, "actions-minute-multipliers");
-    let correct = confidence_of(&r, "configuring-larger-runners-for-default-setup");
+    let wrong_a = confidence_of(&r.fuzzy_fixes, "actions-limits");
+    let wrong_b = confidence_of(&r.fuzzy_fixes, "actions-minute-multipliers");
+    let correct = confidence_of(
+        &r.fuzzy_fixes,
+        "configuring-larger-runners-for-default-setup",
+    );
 
     assert!(
         correct > wrong_a && correct > wrong_b,
         "the only correct proposal must score highest \
-         (correct={correct} wrong_a={wrong_a} wrong_b={wrong_b}): {r}"
+         (correct={correct} wrong_a={wrong_a} wrong_b={wrong_b}): {r:?}"
     );
     // And the ordering has to translate into the apply decision.
-    assert!(correct >= 0.8, "correct={correct}: {r}");
-    assert!(wrong_a < 0.8 && wrong_b < 0.8, "{r}");
+    assert!(correct >= 0.8, "correct={correct}: {r:?}");
+    assert!(wrong_a < 0.8 && wrong_b < 0.8, "{r:?}");
 }
 
+// `fuzzy_min_confidence` round-trips CLI/config float literals (0.0, 0.8,
+// 0.99) straight through with no arithmetic in between, so exact equality
+// is what these assertions actually mean to test — not an approximation.
 #[test]
+#[allow(clippy::float_cmp)]
 fn links_fix_bare_apply_fuzzy_respects_the_default_floor() {
     let tmp = setup_confidence_corpus();
     let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
 
     assert_eq!(
-        applied["fuzzy_min_confidence"].as_f64(),
-        Some(0.8),
-        "the effective floor must be reported, not left null: {applied}"
+        applied.fuzzy_min_confidence, 0.8,
+        "the effective floor must be reported, not left null: {applied:?}"
     );
     assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(1),
-        "only the in-section relocation may be written: {applied}"
+        applied.applied_fixes.len(),
+        1,
+        "only the in-section relocation may be written: {applied:?}"
     );
     assert_eq!(
-        applied["fuzzy_below_floor"].as_u64(),
-        Some(2),
-        "the two cross-section guesses stay reported-but-unapplied: {applied}"
+        applied.fuzzy_below_floor, 2,
+        "the two cross-section guesses stay reported-but-unapplied: {applied:?}"
     );
 
     // Broken count decreases monotonically and the survivors keep candidates.
     let after = links_fix_results(tmp.path(), &[]);
-    assert_eq!(after["broken"].as_u64(), Some(2), "{after}");
-    assert_eq!(after["unfixable"].as_u64(), Some(0), "{after}");
+    assert_eq!(after.broken, 2, "{after:?}");
+    assert_eq!(after.unfixable, 0, "{after:?}");
 }
 
 #[test]
+#[allow(clippy::float_cmp)]
 fn links_fix_min_confidence_zero_restores_accept_everything() {
     let tmp = setup_confidence_corpus();
     let applied = links_fix_results(
         tmp.path(),
         &["--apply", "--apply-fuzzy", "--min-confidence", "0"],
     );
-    assert_eq!(applied["fuzzy_min_confidence"].as_f64(), Some(0.0));
+    assert_eq!(applied.fuzzy_min_confidence, 0.0);
     assert_eq!(
-        applied["fuzzy_below_floor"].as_u64(),
-        Some(0),
-        "nothing is below a zero floor: {applied}"
+        applied.fuzzy_below_floor, 0,
+        "nothing is below a zero floor: {applied:?}"
     );
     assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(3),
-        "the escape hatch must write every proposal, garbage included: {applied}"
+        applied.applied_fixes.len(),
+        3,
+        "the escape hatch must write every proposal, garbage included: {applied:?}"
     );
 }
 
@@ -6285,16 +6337,13 @@ fn links_fix_min_confidence_near_one_applies_nothing() {
         tmp.path(),
         &["--apply", "--apply-fuzzy", "--min-confidence", "0.99"],
     );
-    assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(0),
-        "{applied}"
-    );
+    assert_eq!(applied.applied_fixes.len(), 0, "{applied:?}");
     let after = links_fix_results(tmp.path(), &[]);
-    assert_eq!(after["broken"].as_u64(), Some(3), "{after}");
+    assert_eq!(after.broken, 3, "{after:?}");
 }
 
 #[test]
+#[allow(clippy::float_cmp)]
 fn links_fix_config_fuzzy_min_confidence_moves_the_floor() {
     let tmp = setup_confidence_corpus();
     fs::write(
@@ -6305,18 +6354,17 @@ fn links_fix_config_fuzzy_min_confidence_moves_the_floor() {
 
     let dry = links_fix_results(tmp.path(), &[]);
     assert_eq!(
-        dry["fuzzy_min_confidence"].as_f64(),
-        Some(0.99),
-        "the config key must reach the report: {dry}"
+        dry.fuzzy_min_confidence, 0.99,
+        "the config key must reach the report: {dry:?}"
     );
     // The config key moves the bar but must never opt *in* to applying.
-    assert_eq!(dry["fuzzy_applied"].as_bool(), Some(false), "{dry}");
+    assert!(!dry.fuzzy_applied, "{dry:?}");
 
     let applied = links_fix_results(tmp.path(), &["--apply", "--apply-fuzzy"]);
     assert_eq!(
-        applied["applied_fixes"].as_array().map(Vec::len),
-        Some(0),
-        "config floor of 0.99 rejects everything: {applied}"
+        applied.applied_fixes.len(),
+        0,
+        "config floor of 0.99 rejects everything: {applied:?}"
     );
 
     // An explicit flag still wins over the config value.
@@ -6324,12 +6372,8 @@ fn links_fix_config_fuzzy_min_confidence_moves_the_floor() {
         tmp.path(),
         &["--apply", "--apply-fuzzy", "--min-confidence", "0.8"],
     );
-    assert_eq!(overridden["fuzzy_min_confidence"].as_f64(), Some(0.8));
-    assert_eq!(
-        overridden["applied_fixes"].as_array().map(Vec::len),
-        Some(1),
-        "{overridden}"
-    );
+    assert_eq!(overridden.fuzzy_min_confidence, 0.8);
+    assert_eq!(overridden.applied_fixes.len(), 1, "{overridden:?}");
 }
 
 #[test]

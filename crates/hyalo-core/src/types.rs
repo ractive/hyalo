@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single frontmatter property with its inferred type and value.
 /// Used by `properties` (aggregate summary).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyInfo {
     pub name: String,
     #[serde(rename = "type")]
@@ -22,7 +22,7 @@ pub struct PropertyInfo {
 
 /// Aggregate property summary entry.
 /// Used by `properties` command and `summary`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertySummaryEntry {
     pub name: String,
     #[serde(rename = "type")]
@@ -36,7 +36,7 @@ pub struct PropertySummaryEntry {
 }
 
 /// One type variant in a mixed-type property summary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MixedTypeEntry {
     #[serde(rename = "type")]
     pub prop_type: String,
@@ -49,14 +49,14 @@ pub struct MixedTypeEntry {
 
 /// Aggregate tag summary.
 /// Used by `tags` command and `summary`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSummary {
     pub tags: Vec<TagSummaryEntry>,
     pub total: usize,
 }
 
 /// A single tag with its file count.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSummaryEntry {
     pub name: String,
     pub count: usize,
@@ -68,7 +68,7 @@ pub struct TagSummaryEntry {
 
 /// A single link with its resolution status.
 /// Used by `find` (links field).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkInfo {
     pub target: String,
     pub path: Option<String>,
@@ -95,7 +95,7 @@ pub struct LinkInfo {
 
 /// A single backlink: another file that links to this one.
 /// Used by `find` (backlinks field).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacklinkInfo {
     pub source: String,
     pub line: usize,
@@ -171,7 +171,7 @@ pub struct TaskDryRunResult {
 // ---------------------------------------------------------------------------
 
 /// Lint violation counts for the vault summary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LintSummary {
     pub errors: usize,
     pub warnings: usize,
@@ -179,7 +179,7 @@ pub struct LintSummary {
 }
 
 /// High-level vault summary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultSummary {
     /// Resolved vault directory (display string).
     pub dir: String,
@@ -198,7 +198,7 @@ pub struct VaultSummary {
 }
 
 /// Vault-wide link health: total links and broken count.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkHealthSummary {
     pub total: usize,
     pub broken: usize,
@@ -206,7 +206,7 @@ pub struct LinkHealthSummary {
     /// of `broken` because the target is out of scope rather than missing
     /// (iter-193). Omitted from JSON when zero so vaults with no such links
     /// keep the previous output shape.
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub out_of_vault: usize,
     /// Links whose target resolves but whose `#fragment` names no heading
     /// there — a dead anchor, distinct from `broken` (a missing target).
@@ -255,28 +255,28 @@ fn is_zero_broken_anchors(value: &Option<usize>) -> bool {
 }
 
 /// File counts by directory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileCounts {
     pub total: usize,
     pub directories: Vec<DirectoryCount>,
 }
 
 /// Count of files in a directory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectoryCount {
     pub directory: String,
     pub count: usize,
 }
 
 /// Files grouped by status property value (count only).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusGroup {
     pub value: String,
     pub count: usize,
 }
 
 /// A recently modified file.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {
     pub path: String,
     pub modified: String,
@@ -298,7 +298,7 @@ pub struct FindTaskInfo {
 }
 
 /// A content search match within a file body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentMatch {
     pub line: usize,
     pub section: String,
@@ -307,7 +307,7 @@ pub struct ContentMatch {
 
 /// The unified file object returned by the `find` command.
 /// Always returned in an array. Optional fields are controlled by `--fields`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileObject {
     pub file: String,
     pub modified: String,

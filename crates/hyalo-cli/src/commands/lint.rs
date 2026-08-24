@@ -18,7 +18,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use hyalo_core::filename_template::FilenameTemplate;
@@ -41,7 +41,7 @@ use crate::output::{CommandOutcome, Format, format_success};
 // ---------------------------------------------------------------------------
 
 /// Severity of a single lint violation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
@@ -94,7 +94,7 @@ pub const RULE_ID_FRONTMATTER_PARSE_ERROR: &str = "HYALO005";
 pub const RULE_ID_BROKEN_LINK: &str = "HYALO006";
 
 /// A single lint violation found in a file.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Violation {
     pub severity: Severity,
     pub message: String,
@@ -116,14 +116,14 @@ impl Default for Violation {
 }
 
 /// Lint results for a single file.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileLintResult {
     pub file: String,
     pub violations: Vec<Violation>,
 }
 
 /// A single auto-fix that was (or would be) applied.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixAction {
     /// Kind of fix: "insert-default", "fix-enum-typo", "normalize-date", "infer-type".
     pub kind: String,
@@ -140,7 +140,7 @@ pub struct FixAction {
 ///
 /// The `files` field is renamed from the internal `results` to avoid a
 /// confusing `results.results` nesting once the CLI envelope wraps the payload.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LintOutput {
     pub files: Vec<FileLintResult>,
     /// Total number of violations found across all files.
@@ -155,18 +155,18 @@ pub struct LintOutput {
     pub files_checked: usize,
     /// Fixes that were applied (or previewed) per file. Omitted when no
     /// `--fix` run produced any changes.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<FileFixResult>,
     /// `true` when `--dry-run` was passed and fixes were not written.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
     /// `true` when `--limit` truncated the file list.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub limited: bool,
 }
 
 /// Fixes applied to a single file.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileFixResult {
     pub file: String,
     pub actions: Vec<FixAction>,
@@ -1479,7 +1479,7 @@ pub fn validate_constraint_simple(
 // ---------------------------------------------------------------------------
 
 /// A group of violations for one rule within one file.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuleGroup {
     pub rule: String,
     pub count: usize,
@@ -1491,7 +1491,7 @@ pub struct RuleGroup {
 }
 
 /// A single body violation.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BodyViolation {
     pub line: usize,
     pub column: usize,
@@ -1506,7 +1506,7 @@ pub struct BodyViolation {
 }
 
 /// Extended lint output for one file (read-only shape).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExtFileLintResult {
     pub file: String,
     /// Frontmatter `type:` discriminator, if the file declared one. Used by
@@ -1519,7 +1519,7 @@ pub struct ExtFileLintResult {
 
 /// One entry in `fixed_groups`: a rule + count of violations that were fixed.
 /// Includes `violations` so text renderers can show line/message details.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FixedGroup {
     pub rule: String,
     pub count: usize,
@@ -1528,14 +1528,14 @@ pub struct FixedGroup {
 }
 
 /// One entry in `conflicts`: a rule whose fix was skipped due to range overlap.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConflictEntry {
     pub rule: String,
     pub reason: String,
 }
 
 /// Extended lint output for one file in fix-mode.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExtFileLintFixResult {
     pub file: String,
     /// Frontmatter `type:` discriminator, if the file declared one. Mirrors
@@ -1552,7 +1552,7 @@ pub struct ExtFileLintFixResult {
 }
 
 /// Full extended lint output (read-only mode).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintOutput {
     pub files: Vec<ExtFileLintResult>,
     pub total: usize,
@@ -1569,10 +1569,10 @@ pub struct ExtLintOutput {
     /// Always present (not skipped when zero) — consistent with the other
     /// count fields on this struct.
     pub files_ignored: usize,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
     /// Frontmatter fix actions applied (or previewed) per file.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<FileFixResult>,
 }
 
@@ -1584,7 +1584,7 @@ pub struct ExtLintOutput {
 /// drifting out of sync with the real field set as fields are added or
 /// removed here, and its `#[serde(skip_serializing_if)]` on `dry_run`
 /// applies the same way it does on the non-empty path.
-#[derive(Debug, Default, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintFixOutput {
     pub files: Vec<ExtFileLintFixResult>,
     pub total_fixed: usize,
@@ -1605,7 +1605,7 @@ pub struct ExtLintFixOutput {
     /// questions.
     pub remaining_errors: usize,
     pub remaining_warnings: usize,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
 }
 
