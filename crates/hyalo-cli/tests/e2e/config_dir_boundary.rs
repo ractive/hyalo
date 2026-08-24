@@ -416,3 +416,58 @@ fn dir_out_of_bounds_warning_survives_quiet() {
         "the diagnostic must survive -q: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// PR #253 review (Copilot finding 2) — the diagnostic cannot be used to
+// inject terminal escape sequences into the victim's stderr
+// ---------------------------------------------------------------------------
+
+/// A hostile `.hyalo.toml` embeds a raw ESC (CSI) sequence in `dir`, via
+/// TOML's backslash-u escape syntax, so the file itself is provable to have
+/// asked for exactly that byte. The refusal diagnostic must not carry that
+/// byte through to the terminal raw -- end to end, through both the
+/// `warn_always` stderr line and the `AppError::User` error body, neither of
+/// which sanitizes on its own (unlike the JSON/text pipeline `hyalo config`
+/// goes through).
+#[test]
+fn dir_out_of_bounds_diagnostic_does_not_leak_a_raw_escape_sequence() {
+    let tmp = TempDir::new().unwrap();
+    // A "../<segment>" escape (refused on the leading ".." component) whose
+    // second segment carries an embedded ESC CSI color-code sequence,
+    // decoded from TOML's backslash-u escape syntax. The ESC must be
+    // preceded by a real path separator: "..<esc>..." with nothing between
+    // is a single oddly-named component, not a ".." traversal, and would
+    // exercise the unrelated "vault dir does not exist" check instead.
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \"../\\u001b[31mFAKE\\u001b[0m\"\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\n# A\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["summary", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let raw_esc = b'\x1b';
+    assert!(
+        !output.stderr.contains(&raw_esc),
+        "a raw ESC byte reached stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.stdout.contains(&raw_esc),
+        "a raw ESC byte reached stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // The rest of the diagnostic must still be legible — sanitization must
+    // strip the escape byte, not eat the whole message.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("FAKE") && stderr.contains(".hyalo.toml"),
+        "sanitization must not eat the rest of the diagnostic: {stderr}"
+    );
+}

@@ -2284,8 +2284,14 @@ discovery entry points identically since the gate lives in
 `load_config_from` itself, not in either caller.
 
 **Non-goals, deferred to [[iterations/iteration-222-security-robustness-batch]]:**
-Windows drive-relative paths (`C:foo` without a root, distinct from the
-already-rejected `C:\foo`) and alternate data streams are a known gap
-(M-2), not addressed here. Sandboxing hyalo against a fully hostile repo
-beyond the write-scope root remains out of scope for a local single-user
-CLI.
+alternate data streams are a known gap (M-2), not addressed here. Windows
+drive-relative paths (`C:foo` without a root, distinct from the also-rejected
+`C:\foo`) turned out to be in scope, not out of it: `Path::is_absolute()`
+returns `false` for `C:foo` on Windows, so it is not caught by the
+absolute-path check, but `validate_project_local_dir`'s component walk still
+refuses it — a `C:foo` value lexes to a single `Prefix` component, which the
+walk's catch-all arm treats as an escape (PR #253 review, finding 3). The
+broader Windows/ADS hardening iteration 222 was scoped for remains open;
+this DEC only corrects an inaccurate claim that `C:foo` specifically passed
+through unrefused. Sandboxing hyalo against a fully hostile repo beyond the
+write-scope root remains out of scope for a local single-user CLI.

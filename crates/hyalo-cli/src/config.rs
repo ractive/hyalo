@@ -439,6 +439,16 @@ impl DirBoundaryError {
     /// pointer to the escape hatch — used for the loud stderr warning, the
     /// hard-refusal error body, and `hyalo config`'s report alike so the
     /// wording never has to be kept in sync across three call sites.
+    ///
+    /// Sanitized before being returned: `raw_dir` is attacker-controlled
+    /// TOML content from a project-local `.hyalo.toml`, and this diagnostic
+    /// is printed via `warn::warn_always` and `AppError::User`'s `eprintln!`
+    /// — neither of which sanitizes on its own — so an embedded terminal
+    /// escape sequence in `dir` would otherwise reach the user's terminal
+    /// raw, even under `-q` (PR #253 review, Copilot finding 2). The config
+    /// directory's own path is included too, even though it is less likely
+    /// to be attacker-chosen — a directory name can still contain arbitrary
+    /// bytes on a hostile repo.
     fn diagnostic(&self) -> String {
         let what = match self.reason {
             DirBoundaryReason::Absolute => {
@@ -446,11 +456,11 @@ impl DirBoundaryError {
             }
             DirBoundaryReason::Escapes => "resolves above the config directory",
         };
-        format!(
+        crate::output::sanitize_control_chars(&format!(
             "{}: dir = {:?} {what} — pass --dir explicitly if that scope is genuinely intended",
             self.config_path.display(),
             self.raw_dir
-        )
+        ))
     }
 }
 
@@ -470,8 +480,15 @@ impl DirBoundaryError {
 /// Symlinks are checked too: when the resolved path already exists on disk,
 /// both sides are canonicalized and compared for real containment, so a
 /// `dir` that is lexically bounded but physically escapes via a symlink is
-/// still caught. A `dir` that does not exist yet has nothing to
-/// canonicalize — the lexical check is authoritative for it, and the
+/// still caught. The canonicalize check runs against the *lexically
+/// normalized* join (`config_dir` + the `..`-collapsed form), not the raw
+/// join with `..` segments still in it — a raw join for an allowed
+/// round-trip like `"sub/../kb"` would still contain the phantom `sub/`
+/// component, and `canonicalize` fails outright (ENOENT) walking through a
+/// directory that doesn't exist, silently no-opping the symlink check for
+/// exactly the inputs that need it (PR #253 review, Copilot finding 1). A
+/// `dir` whose *normalized* target does not exist yet has nothing to
+/// canonicalize — the lexical check above is authoritative for it, and the
 /// filesystem cannot yet be walked through it anyway.
 fn validate_project_local_dir(
     config_dir: &Path,
@@ -489,7 +506,6 @@ fn validate_project_local_dir(
         return Err(err(DirBoundaryReason::Absolute));
     }
 
-    let joined = config_dir.join(&raw_norm);
     let mut depth: i32 = 0;
     for comp in Path::new(&raw_norm).components() {
         match comp {
@@ -501,12 +517,22 @@ fn validate_project_local_dir(
             }
             std::path::Component::Normal(_) => depth += 1,
             std::path::Component::CurDir => {}
-            // `RootDir`/`Prefix` (a bare `/…` or Windows `C:\…`) — already
-            // covered by the `is_absolute`/`starts_with('/')` check above for
-            // every platform this runs on; treat defensively as an escape.
+            // `RootDir`/`Prefix` — the `is_absolute`/`starts_with('/')` check
+            // above only ever catches a rooted or POSIX-absolute path; a
+            // Windows drive-*relative* value like `C:foo` (no `\` after the
+            // colon) is NOT `is_absolute()` per `std::path::Path` and reaches
+            // this loop as a `Prefix` component instead. This arm is the
+            // actual, load-bearing refusal for that case — not a defensive
+            // backstop — so do not remove it under the assumption the checks
+            // above already cover every platform.
             _ => return Err(err(DirBoundaryReason::Escapes)),
         }
     }
+
+    // The join actually resolved (`..` collapsed away): a bounded round-trip
+    // like `"sub/../kb"` lands on `config_dir/kb`, never touching a phantom
+    // `sub/` that may not exist on disk.
+    let joined = config_dir.join(lexically_normalize_relative(&raw_norm));
 
     // Defense in depth against a symlink escape: when the target exists,
     // compare canonicalized paths instead of trusting the lexical walk above.
@@ -1785,6 +1811,116 @@ mod tests {
         let dir = make_temp();
         let resolved = load_config_from(dir.path());
         assert_eq!(resolved, ResolvedDefaults::defaults_for(dir.path()));
+    }
+
+    // -------------------------------------------------------------------
+    // PR #253 review — finding 1: the symlink defense-in-depth check must
+    // canonicalize the *normalized* join, not the raw one still carrying a
+    // phantom `..`-preceding segment.
+    // -------------------------------------------------------------------
+
+    /// `docs/.hyalo.toml` sets `dir = "phantom/../link"` — an allowed
+    /// bounded round-trip lexically (`phantom/../link` nets to `link`, which
+    /// exists) — but `docs/link` is a symlink escaping the config directory.
+    /// Before the fix, canonicalizing the *raw* join (`docs/phantom/../link`)
+    /// failed with ENOENT because `docs/phantom/` was never created, so the
+    /// symlink check silently no-opped and the escape passed. After the fix,
+    /// canonicalizing the *normalized* join (`docs/link`) resolves through
+    /// the symlink and is refused.
+    #[test]
+    #[cfg(unix)]
+    fn symlink_escape_through_a_bounded_round_trip_dir_is_refused() {
+        let tmp = make_temp();
+        let docs = tmp.path().join("docs");
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&docs).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, docs.join("link")).unwrap();
+
+        let err = validate_project_local_dir(&docs, "phantom/../link")
+            .expect_err("a round-trip dir landing on a symlink that escapes docs/ must refuse");
+        assert_eq!(err.reason, DirBoundaryReason::Escapes);
+    }
+
+    /// The same round-trip form pointed at a real, in-bounds subdirectory
+    /// (no symlink involved) must still be allowed — the fix must not turn
+    /// every round-trip into a refusal, only ones that physically escape.
+    #[test]
+    fn symlink_free_bounded_round_trip_dir_is_still_allowed() {
+        let tmp = make_temp();
+        fs::create_dir_all(tmp.path().join("kb")).unwrap();
+        let resolved = validate_project_local_dir(tmp.path(), "phantom/../kb")
+            .expect("a round-trip dir with no symlink involved must be allowed");
+        assert_eq!(resolved, tmp.path().join("kb"));
+    }
+
+    // -------------------------------------------------------------------
+    // PR #253 review — finding 2: the diagnostic must not carry raw control
+    // bytes from an attacker-controlled `dir` value onto the terminal.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn diagnostic_strips_embedded_escape_sequences() {
+        let tmp = make_temp();
+        // An absolute path (guaranteed refused) carrying a raw ESC (0x1B) CSI
+        // sequence, as a hostile `.hyalo.toml` might embed to manipulate the
+        // victim's terminal. `raw_dir` is interpolated via `{:?}` (Debug),
+        // which already escapes control bytes to `\u{...}` text on its own —
+        // this test mainly guards against that formatting choice changing.
+        let hostile = "/\u{1b}[31mFAKE ERROR\u{1b}[0m";
+        let err = validate_project_local_dir(tmp.path(), hostile).unwrap_err();
+        assert_eq!(err.reason, DirBoundaryReason::Absolute);
+        let diagnostic = err.diagnostic();
+        assert!(
+            !diagnostic.contains('\u{1b}'),
+            "the diagnostic must not carry a raw ESC byte: {diagnostic:?}"
+        );
+    }
+
+    /// The vector `raw_dir`'s `{:?}` (Debug) formatting does not cover:
+    /// `config_path` is interpolated via `{}` (Display), which does *not*
+    /// escape control bytes. A repo can name a directory with an embedded
+    /// ESC sequence (arbitrary bytes are legal in a Unix filename), so
+    /// `config_path` is exactly as attacker-controlled as `dir` itself once
+    /// the victim clones and `cd`s into it. Constructs the error directly
+    /// rather than via a real symlinked/oddly-named directory, since only
+    /// the string content — not actual filesystem behavior — is under test
+    /// here (PR #253 review, Copilot finding 2).
+    #[test]
+    fn diagnostic_strips_escape_sequences_from_the_config_path_too() {
+        let err = DirBoundaryError {
+            config_path: PathBuf::from("/tmp/\u{1b}[31mFAKE\u{1b}[0m/.hyalo.toml"),
+            raw_dir: "..".to_owned(),
+            reason: DirBoundaryReason::Escapes,
+        };
+        let diagnostic = err.diagnostic();
+        assert!(
+            !diagnostic.contains('\u{1b}'),
+            "the diagnostic must not carry a raw ESC byte from the config path either: {diagnostic:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // PR #253 review — finding 3: the component-loop catch-all is the real
+    // refusal for a Windows drive-relative `dir`, not a defensive backstop.
+    // -------------------------------------------------------------------
+
+    /// `C:foo` (no `\` after the colon) is drive-*relative*, not absolute —
+    /// `Path::is_absolute()` returns `false` for it on Windows, unlike the
+    /// already-rejected `C:\foo`. Only the component loop's `Prefix` catch-all
+    /// arm refuses it. Gated to Windows because `std::path::Path` only parses
+    /// a leading `C:` as a `Prefix` component under `#[cfg(windows)]`; on
+    /// Unix `"C:foo"` is just an ordinary `Normal("C:foo")` path segment, so
+    /// this input is not meaningful to test off Windows. CI runs
+    /// `windows-latest`, so this executes for real rather than being
+    /// permanently skipped.
+    #[test]
+    #[cfg(windows)]
+    fn windows_drive_relative_dir_is_refused() {
+        let tmp = make_temp();
+        let err = validate_project_local_dir(tmp.path(), "C:foo")
+            .expect_err("a drive-relative dir must be refused even though it is not is_absolute()");
+        assert_eq!(err.reason, DirBoundaryReason::Escapes);
     }
 
     #[test]
