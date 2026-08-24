@@ -548,6 +548,27 @@ fn run_inner() -> Result<(), AppError> {
                 return Err(AppError::Exit(2));
             }
 
+            // Unknown long flag that names a schema-declared property →
+            // `--property` hint. Models and users reach for natural-language
+            // flags (`hyalo find --status planned`) even though the skill/help
+            // teach `--property status=planned`; clap's own tip ("to pass
+            // '--status' as a value, use '-- --status'") actively misleads.
+            // Only fires when the flag names a real property in the effective
+            // schema (checked via suggest::is_schema_property), so unrelated
+            // typos keep clap's normal error.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && let Some(name) = crate::suggest::unknown_long_flag_name(&e)
+                && crate::suggest::is_schema_property(&config.schema, &name)
+            {
+                eprintln!(
+                    "error: unexpected argument '--{name}' found\n\n\
+                     tip: '{name}' is a frontmatter property, not a flag — did you mean \
+                     '--property {name}=<value>'?\n\n\
+                     Example: hyalo find --property {name}=<value>\n"
+                );
+                return Err(AppError::Exit(2));
+            }
+
             // Intercept `--tag` / `-t` on the `append` subcommand. Tags are
             // scalar list items, so there is nothing to "append" in the
             // property-level sense — `hyalo set --tag T` is the right tool.
