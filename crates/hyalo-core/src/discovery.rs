@@ -356,10 +356,13 @@ pub fn resolve_file_ci(
 
     // Reject path traversal attempts — use `OutsideVault` so the user
     // understands the path was rejected because it escapes the vault, not
-    // because the file doesn't exist.
+    // because the file doesn't exist. `has_unsafe_windows_colon` catches the
+    // Windows drive-relative (`C:foo`) and NTFS-ADS (`a.md:stream`) cases
+    // that `is_absolute()` and `has_parent_traversal()` alone do not (M-2).
     if normalized.starts_with('/')
         || has_parent_traversal(&normalized)
         || Path::new(&normalized).is_absolute()
+        || has_unsafe_windows_colon(&normalized)
     {
         return Err(FileResolveError::OutsideVault {
             path: normalized,
@@ -587,6 +590,39 @@ pub fn has_parent_traversal(path: &str) -> bool {
     Path::new(path)
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+/// Return true if `path` contains a colon in a way that is unsafe on
+/// Windows: either a drive-relative prefix (`C:foo` — note *no* separator
+/// after the colon, unlike `C:\foo`) or an NTFS Alternate Data Stream marker
+/// (`a.md:stream`).
+///
+/// `C:foo` is drive-*relative*: `Path::is_absolute()` returns `false` for it
+/// (there is no root component, only a `Prefix`), so it slips past an
+/// `is_absolute()` + `has_parent_traversal()` boundary check and later
+/// resolves against the process's current directory on that drive —
+/// potentially outside the vault. `a.md:stream` is lexically an ordinary
+/// in-vault filename (Rust's generic path parser does not split on `:`
+/// inside a component), but the OS resolves it to an alternate data stream
+/// on `a.md` rather than the file itself — a silent wrong-target write, not
+/// an escape, but still not what the caller meant (M-2,
+/// adversarial-review-2026-08-23.md).
+///
+/// A colon is an ordinary, harmless filename character on non-Windows
+/// platforms (and in fact a legal one — some Unix filesystems allow it), so
+/// this check only applies on Windows; it is a compile-time no-op
+/// everywhere else.
+#[must_use]
+pub fn has_unsafe_windows_colon(path: &str) -> bool {
+    #[cfg(windows)]
+    {
+        path.contains(':')
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// Canonicalize the vault directory once.
@@ -1989,6 +2025,50 @@ mod tests {
         let (path, rel) = resolve_file(tmp.path(), "note.md").unwrap();
         assert!(path.is_file());
         assert_eq!(rel, "note.md");
+    }
+
+    // --- M-2: Windows drive-relative / NTFS-ADS rejection ---
+    // (adversarial-review-2026-08-23.md)
+
+    /// Lexical check runs on every platform, but only actually rejects on
+    /// Windows — a colon is a legal filename character on Unix/macOS, so
+    /// `has_unsafe_windows_colon` is intentionally a no-op there. This test
+    /// pins that platform split so a future change can't accidentally start
+    /// rejecting harmless colon-containing filenames off Windows.
+    #[test]
+    fn has_unsafe_windows_colon_is_platform_gated() {
+        let result = has_unsafe_windows_colon("a.md:stream");
+        assert_eq!(result, cfg!(windows));
+    }
+
+    #[test]
+    fn has_unsafe_windows_colon_accepts_plain_paths() {
+        assert!(!has_unsafe_windows_colon("notes/a.md"));
+        assert!(!has_unsafe_windows_colon("a.md"));
+    }
+
+    /// `C:foo` (no `\` after the colon) is drive-*relative*, not absolute:
+    /// `Path::is_absolute()` returns `false` for it on Windows (unlike the
+    /// already-rejected `C:\foo`), so it must be caught by the dedicated
+    /// colon check rather than the `is_absolute()` branch. Gated to Windows
+    /// because `"C:foo"` is just an ordinary filename on Unix — rejecting it
+    /// there would be a real, unwanted behavior change. CI runs
+    /// windows-latest, so this executes for real.
+    #[test]
+    #[cfg(windows)]
+    fn resolve_file_rejects_windows_drive_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_file(tmp.path(), "C:foo.md").unwrap_err();
+        assert!(matches!(err, FileResolveError::OutsideVault { .. }));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn resolve_file_rejects_ntfs_alternate_data_stream_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "").unwrap();
+        let err = resolve_file(tmp.path(), "a.md:stream").unwrap_err();
+        assert!(matches!(err, FileResolveError::OutsideVault { .. }));
     }
 
     // --- Task 4: case-insensitive CLI file-argument resolution ---

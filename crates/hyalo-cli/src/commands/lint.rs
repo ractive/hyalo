@@ -2237,6 +2237,28 @@ fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (u
     (errors, warnings)
 }
 
+/// Record a `--fix` write-path failure (TOCTOU or I/O) as a `FILE`-rule
+/// error violation, so it shows up in the report instead of only aborting
+/// via `?` (Finding 4, review round on PR #254 — the write-path sibling of
+/// M-1's read-path fix).
+fn push_fix_write_error_violation(
+    violations_by_rule: &mut indexmap::IndexMap<String, Vec<InternalViolation>>,
+    message: &str,
+) {
+    violations_by_rule
+        .entry("FILE".to_owned())
+        .or_default()
+        .push(InternalViolation {
+            line: 1,
+            column: 1,
+            message: message.to_owned(),
+            severity: "error".to_owned(),
+            fix: None,
+            fixed: false,
+            autofixable: None,
+        });
+}
+
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn lint_one_file_extended(
@@ -2313,9 +2335,42 @@ fn lint_one_file_extended(
         meta.len(),
     );
 
-    // Read the file content once.
-    let content =
-        std::fs::read_to_string(full_path).with_context(|| format!("reading {rel_path}"))?;
+    // Read the file content once. A single unreadable file (invalid UTF-8,
+    // permission error, etc.) must not abort the whole vault-wide run — the
+    // caller's merge loop propagates any `Err` here via `?`, which used to
+    // kill `lint`/`lint --fix` entirely on one corrupt file (M-1,
+    // adversarial-review-2026-08-23.md). Report it once and skip just this
+    // file, mirroring the size-limit skip above and the lossy-decode
+    // skip+warn precedent in `scanner/mod.rs`.
+    let content = match std::fs::read_to_string(full_path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("warning: skipping {} ({e})", full_path.display());
+            let mut violations_by_rule = indexmap::IndexMap::new();
+            violations_by_rule.insert(
+                "FILE".to_owned(),
+                vec![InternalViolation {
+                    line: 1,
+                    column: 1,
+                    message: format!("could not read file ({e}) — skipped, not linted"),
+                    severity: "error".to_owned(),
+                    fix: None,
+                    fixed: false,
+                    autofixable: None,
+                }],
+            );
+            return Ok(PerFileLintResult {
+                rel_path: rel_path.to_owned(),
+                doc_type: None,
+                violations_by_rule,
+                total_violations: 1,
+                body_modified: false,
+                fix_actions: Vec::new(),
+                body_fix_outcomes: Vec::new(),
+                post_fix_schema_remaining: None,
+            });
+        }
+    };
 
     // Find where the frontmatter ends so we can split body.
     let body_start = find_body_start(&content);
@@ -2373,6 +2428,11 @@ fn lint_one_file_extended(
 
     let mut violations_by_rule: indexmap::IndexMap<String, Vec<InternalViolation>> =
         indexmap::IndexMap::new();
+    // Set when the frontmatter fix write fails (TOCTOU or I/O) below, so the
+    // body-fix write is skipped for this file rather than attempted against
+    // a `mtime0` baseline that may no longer be trustworthy (Finding 4,
+    // review round on PR #254).
+    let mut frontmatter_write_failed = false;
 
     // Frontmatter violations → use the existing `validate_properties` but map to new shape.
     // Only emit if the rule isn't filtered out.
@@ -2535,18 +2595,60 @@ fn lint_one_file_extended(
             let mut mutable = properties.clone();
             let actions = apply_fixes(rel_path, &mut mutable, schema);
             if !actions.is_empty() {
+                let mut applied = true;
                 if matches!(fix, FixMode::Apply) {
-                    check_mtime(full_path, mtime0)?;
-                    write_frontmatter_within(vault_dir, full_path, &mutable)
-                        .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
-                    // Re-baseline: the write above legitimately changed the
-                    // file's mtime, and a later body-fix write in this same
-                    // call must not mistake it for a concurrent modification.
-                    mtime0 = read_mtime(full_path).with_context(|| {
-                        format!("re-reading mtime for {rel_path} after frontmatter fix")
-                    })?;
+                    // A TOCTOU failure here (external edit during --fix) or
+                    // a write error is a real, expected runtime condition —
+                    // not exotic — and must not abort the whole batch via
+                    // `?` (M-1 follow-up, Finding 4, review round on PR
+                    // #254: only the initial read was hardened, not this
+                    // write path, so `lint_files_extended`'s merge loop
+                    // still killed the run on one file's write failure).
+                    // Catch it, report it as a diagnostic on this file, and
+                    // skip fixing (this file only) instead.
+                    let write_result = check_mtime(full_path, mtime0).and_then(|()| {
+                        write_frontmatter_within(vault_dir, full_path, &mutable)
+                            .with_context(|| format!("writing fixed frontmatter to {rel_path}"))
+                    });
+                    match write_result {
+                        Ok(()) => {
+                            // Re-baseline: the write above legitimately
+                            // changed the file's mtime, and a later
+                            // body-fix write in this same call must not
+                            // mistake it for a concurrent modification. If
+                            // *this* re-read fails, the frontmatter write
+                            // itself already succeeded — still count the
+                            // fix as applied, but skip attempting the body
+                            // fix below (no trustworthy baseline for its
+                            // own TOCTOU check).
+                            match read_mtime(full_path) {
+                                Ok(fresh) => mtime0 = fresh,
+                                Err(e) => {
+                                    frontmatter_write_failed = true;
+                                    push_fix_write_error_violation(
+                                        &mut violations_by_rule,
+                                        &format!(
+                                            "fixed frontmatter written to {rel_path}, but could \
+                                             not re-read its mtime for the body-fix TOCTOU \
+                                             check: {e}"
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            applied = false;
+                            frontmatter_write_failed = true;
+                            push_fix_write_error_violation(
+                                &mut violations_by_rule,
+                                &format!("could not write fixed frontmatter to {rel_path}: {e}"),
+                            );
+                        }
+                    }
                 }
-                fix_actions = actions;
+                if applied {
+                    fix_actions = actions;
+                }
             }
             if should_include_frontmatter {
                 // Re-validate the mutated properties to get the actual
@@ -2719,24 +2821,48 @@ fn lint_one_file_extended(
         }
     }
 
-    if matches!(fix, FixMode::Apply) && working_body != body_content {
+    // A TOCTOU failure (external edit during --fix) or an I/O error on any
+    // of the three fallible steps below (re-reading fresh frontmatter,
+    // `check_mtime`, or the write itself) is a real, expected runtime
+    // condition — not exotic — and must not abort the whole batch via `?`
+    // (M-1 follow-up, Finding 4, review round on PR #254: only the initial
+    // read was hardened, not this write path, so `lint_files_extended`'s
+    // merge loop still killed the run on one file's write failure here).
+    // Skipping the body write when the frontmatter write already failed
+    // above avoids compounding two partial-state failures on one file; the
+    // frontmatter failure's own diagnostic already covers it.
+    let mut body_write_failed = false;
+    if matches!(fix, FixMode::Apply) && working_body != body_content && !frontmatter_write_failed {
         // Re-derive the frontmatter bytes fresh from disk when a
         // frontmatter fix already landed above — `content[..body_start]` is
         // a snapshot from before that write and would silently revert it if
         // reused here.
-        let frontmatter_part: Cow<'_, str> = if fix_actions.is_empty() {
-            Cow::Borrowed(&content[..body_start])
+        let frontmatter_part: Result<Cow<'_, str>> = if fix_actions.is_empty() {
+            Ok(Cow::Borrowed(&content[..body_start]))
         } else {
-            let fresh = std::fs::read_to_string(full_path)
-                .with_context(|| format!("re-reading {rel_path} after frontmatter fix"))?;
-            let fresh_body_start = find_body_start(&fresh);
-            Cow::Owned(fresh[..fresh_body_start].to_owned())
+            std::fs::read_to_string(full_path)
+                .with_context(|| format!("re-reading {rel_path} after frontmatter fix"))
+                .map(|fresh| {
+                    let fresh_body_start = find_body_start(&fresh);
+                    Cow::Owned(fresh[..fresh_body_start].to_owned())
+                })
         };
-        check_mtime(full_path, mtime0)?;
-        let new_content = format!("{frontmatter_part}{working_body}");
-        hyalo_core::fs_util::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
-            .with_context(|| format!("writing fixed body to {rel_path}"))?;
-        body_modified = true;
+        let write_result = frontmatter_part.and_then(|frontmatter_part| {
+            check_mtime(full_path, mtime0)?;
+            let new_content = format!("{frontmatter_part}{working_body}");
+            hyalo_core::fs_util::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
+                .with_context(|| format!("writing fixed body to {rel_path}"))
+        });
+        match write_result {
+            Ok(()) => body_modified = true,
+            Err(e) => {
+                body_write_failed = true;
+                push_fix_write_error_violation(
+                    &mut violations_by_rule,
+                    &format!("could not write fixed body to {rel_path}: {e}"),
+                );
+            }
+        }
     }
 
     // Body rules lint the post-frontmatter slice, so their diagnostics carry
@@ -2772,10 +2898,15 @@ fn lint_one_file_extended(
     };
     for d in fixed_diagnostics {
         let rule_id = d.rule_id.clone();
+        // `fixed_diagnostics` was populated by the in-memory fix loop above,
+        // before it was known whether the write to disk would succeed. If
+        // it didn't (`body_write_failed`), nothing was actually fixed — the
+        // report must not claim `fixed: true` for a change that only ever
+        // existed in memory (Finding 4, review round on PR #254).
         violations_by_rule
             .entry(rule_id)
             .or_default()
-            .push(diag_to_violation(d, true));
+            .push(diag_to_violation(d, !body_write_failed));
     }
     for d in current_diagnostics {
         let rule_id = d.rule_id.clone();
@@ -3045,6 +3176,20 @@ fn lint_one_file_extended(
                         fixed: false,
                         autofixable: None,
                     });
+            }
+        }
+    }
+
+    // Mirror the `fixed_diagnostics` correction above: `body_fix_outcomes`
+    // was recorded by the in-memory fix loop before the write's outcome was
+    // known, so an `Applied` entry here must be downgraded to `NoFix` when
+    // the write to disk never actually happened (Finding 4, review round on
+    // PR #254) — otherwise fix-mode's totals (`fix_mode_file_totals`) would
+    // count a change that was never persisted.
+    if body_write_failed {
+        for (_, outcome) in &mut body_fix_outcomes {
+            if matches!(outcome, FixOutcome::Applied) {
+                *outcome = FixOutcome::NoFix;
             }
         }
     }

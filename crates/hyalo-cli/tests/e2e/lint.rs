@@ -3487,3 +3487,193 @@ fn lint_fix_json_uses_remaining_errors_warnings_keys() {
         "fix-mode JSON must carry remaining_errors/remaining_warnings: {val}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M-1: one invalid-UTF-8 file must not abort the whole run
+// ---------------------------------------------------------------------------
+
+/// A single invalid-UTF-8 file used to make `lint`'s per-file merge loop
+/// propagate the read error via `?`, aborting the entire run (exit 2) and
+/// hiding every other file's violations (adversarial-review-2026-08-23.md
+/// M-1). It must instead be reported once and the rest of the vault linted
+/// normally, exiting non-zero because the unreadable file itself is an error.
+#[test]
+fn lint_reports_invalid_utf8_file_and_lints_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "clean.md",
+        "---\ntitle: Clean\n---\n\nHello world.\n",
+    );
+    // A file with a body markdown violation (trailing whitespace, MD009), so
+    // it would normally report a violation — proving the rest of the vault
+    // is still fully linted, not just "didn't crash".
+    write_md(
+        tmp.path(),
+        "dirty.md",
+        "---\ntitle: Dirty\n---\n\nHello   \n",
+    );
+    std::fs::write(
+        tmp.path().join("invalid.md"),
+        b"---\ntitle: bad\n---\n\n\xff\xfe invalid utf-8 here\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.code() != Some(2),
+        "one invalid-UTF-8 file must not abort the whole run with exit 2: \
+         stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid.md"),
+        "the bad file is reported once on stderr: {stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint did not emit JSON: {stdout} ({e})"));
+    let files = val["results"]["files"]
+        .as_array()
+        .expect("files array present");
+    let paths: Vec<&str> = files.iter().filter_map(|f| f["file"].as_str()).collect();
+    assert!(
+        paths.contains(&"invalid.md"),
+        "the unreadable file itself appears in results with its violation: {stdout}"
+    );
+    assert!(
+        paths.contains(&"dirty.md"),
+        "the rest of the vault is still linted — dirty.md's own \
+         violation must still be reported: {stdout}"
+    );
+}
+
+/// `lint --fix` must still fix the rest of the vault when one file is
+/// unreadable, not abort before any fix is applied.
+#[test]
+fn lint_fix_still_fixes_rest_of_vault_with_invalid_utf8_file_present() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    // Trailing whitespace — MD009, autofixable.
+    write_md(
+        tmp.path(),
+        "dirty.md",
+        "---\ntitle: Dirty\n---\n\nHello   \n",
+    );
+    std::fs::write(
+        tmp.path().join("invalid.md"),
+        b"---\ntitle: bad\n---\n\n\xff\xfe invalid utf-8 here\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.code() != Some(2),
+        "lint --fix must not abort with exit 2 on one invalid-UTF-8 file: \
+         stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let fixed = std::fs::read_to_string(tmp.path().join("dirty.md")).unwrap();
+    assert!(
+        !fixed.contains("Hello   \n"),
+        "dirty.md's trailing whitespace must still be fixed: {fixed:?}"
+    );
+}
+
+/// Finding 4 (review round on PR #254): only the initial `read_to_string`
+/// was hardened against a per-file abort — the `--fix` *write* path (the
+/// frontmatter fix write, the fresh-frontmatter re-read, `check_mtime`, and
+/// the body fix write) still propagated any failure via `?`, aborting the
+/// whole batch through `lint_files_extended`'s merge loop on one file's
+/// write failure. Makes one file's containing directory read-only (so
+/// `atomic_write_within`'s `NamedTempFile` creation fails for files in it)
+/// and asserts the rest of the vault still gets fixed.
+#[test]
+#[cfg(unix)]
+fn lint_fix_write_failure_on_one_file_does_not_abort_the_batch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    // Trailing whitespace — MD009, autofixable. Lives in a writable dir.
+    write_md(
+        tmp.path(),
+        "dirty.md",
+        "---\ntitle: Dirty\n---\n\nHello   \n",
+    );
+    // Same violation, but in a directory that will be made read-only after
+    // writing — the fix computes fine in memory, but the write to disk must
+    // fail.
+    write_md(
+        tmp.path(),
+        "locked/bad.md",
+        "---\ntitle: Bad\n---\n\nHello   \n",
+    );
+
+    let locked_dir = tmp.path().join("locked");
+    let orig_mode = std::fs::metadata(&locked_dir).unwrap().permissions().mode();
+    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--format", "json"])
+        .output()
+        .unwrap();
+
+    // Restore permissions immediately so TempDir cleanup doesn't fail.
+    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(orig_mode)).unwrap();
+
+    assert!(
+        out.status.code() != Some(2),
+        "one file's write failure during --fix must not abort the whole \
+         batch: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let dirty_fixed = std::fs::read_to_string(tmp.path().join("dirty.md")).unwrap();
+    assert!(
+        !dirty_fixed.contains("Hello   \n"),
+        "dirty.md (unaffected by the permission lock) must still be fixed: \
+         {dirty_fixed:?}"
+    );
+
+    let locked_content = std::fs::read_to_string(tmp.path().join("locked/bad.md")).unwrap();
+    assert!(
+        locked_content.contains("Hello   \n"),
+        "locked/bad.md's write must have failed, leaving its original \
+         (unfixed) content on disk: {locked_content:?}"
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint --fix did not emit JSON: {stdout} ({e})"));
+    let files = val["results"]["files"]
+        .as_array()
+        .expect("files array present");
+    let locked_entry = files
+        .iter()
+        .find(|f| f["file"].as_str() == Some("locked/bad.md"))
+        .unwrap_or_else(|| panic!("locked/bad.md missing from results: {stdout}"));
+    let has_file_error = locked_entry["remaining_groups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|g| g["rule"].as_str() == Some("FILE"));
+    assert!(
+        has_file_error,
+        "locked/bad.md's write failure must be reported as a FILE-rule \
+         violation: {locked_entry}"
+    );
+}

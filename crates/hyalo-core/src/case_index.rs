@@ -376,6 +376,69 @@ fn sweep_case_probes_older_than(dir: &Path, min_age: std::time::Duration) -> usi
     removed
 }
 
+/// Whether `a` and `b` live on the same filesystem/volume.
+///
+/// Used to decide whether [`probe_case_insensitive`] can safely write its
+/// probe file to `std::env::temp_dir()` instead of the vault: case
+/// sensitivity is a per-filesystem property, so a probe on the wrong device
+/// (e.g. a `tmpfs` `$TMPDIR` when the vault lives on a case-insensitive
+/// network share) would give the wrong answer. Returns `false` — "assume
+/// different, don't risk it" — whenever either path can't be stat'd or the
+/// platform offers no cheap way to compare (ADVISORY-c,
+/// adversarial-review-2026-08-23.md).
+#[cfg(unix)]
+fn same_device(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    ma.dev() == mb.dev()
+}
+
+/// Windows has no cheap stat-level device id exposed by `std`, so this
+/// compares the canonicalized paths' drive/UNC prefix component instead — a
+/// coarser check (misses the rare case of two distinct volumes mounted under
+/// the same drive letter, e.g. `subst`), but a false "different device"
+/// answer only costs an in-vault probe, never an incorrect result, so
+/// erring conservative here is safe.
+#[cfg(windows)]
+fn same_device(a: &Path, b: &Path) -> bool {
+    let prefix = |p: &Path| {
+        dunce::canonicalize(p)
+            .ok()?
+            .components()
+            .next()
+            .map(|c| c.as_os_str().to_os_string())
+    };
+    match (prefix(a), prefix(b)) {
+        (Some(pa), Some(pb)) => pa == pb,
+        _ => false,
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_device(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
+/// Where [`probe_case_insensitive`] should create its probe file.
+///
+/// Prefers `std::env::temp_dir()` when it is verified to be on the same
+/// filesystem as `dir` — keeping the transient create/delete entirely
+/// outside the user's vault, so it neither pings file watchers scanning the
+/// repo tree nor shows up as a flickering untracked file in `git status`.
+/// Falls back to `dir` itself (the original behavior) whenever that can't be
+/// verified, since correctness of the case-sensitivity answer always wins
+/// over avoiding the noise.
+fn probe_write_dir(dir: &Path) -> PathBuf {
+    let tmp = std::env::temp_dir();
+    if same_device(dir, &tmp) {
+        tmp
+    } else {
+        dir.to_path_buf()
+    }
+}
+
 /// Probe the filesystem under `dir` for case-insensitive behavior.
 ///
 /// **Write-based fallback probe.** Prefer [`probe_case_insensitive_stat`],
@@ -388,9 +451,15 @@ fn sweep_case_probes_older_than(dir: &Path, min_age: std::time::Duration) -> usi
 ///
 /// On probe errors (permissions, read-only fs), returns `Ok(false)` — we
 /// prefer strict semantics as the safe default.
+///
+/// The probe file itself is written to [`probe_write_dir`]`(dir)` — usually
+/// the system temp dir, verified same-device, rather than `dir` — so the
+/// vault directory does not see a transient create/delete (ADVISORY-c).
 pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
     use std::io::Write as _;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    let write_dir = probe_write_dir(dir);
 
     // Try a handful of unique probe names. Include seconds, nanoseconds, PID,
     // and attempt counter to minimize collisions across concurrent calls and
@@ -412,8 +481,8 @@ pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
         let lower_name = format!("{CASE_PROBE_PREFIX}{suffix}");
         let upper_name = lower_name.to_ascii_uppercase();
 
-        let lower_path = dir.join(&lower_name);
-        let upper_path = dir.join(&upper_name);
+        let lower_path = write_dir.join(&lower_name);
+        let upper_path = write_dir.join(&upper_name);
 
         if lower_path.exists() || upper_path.exists() {
             continue;
@@ -737,6 +806,123 @@ mod tests {
             return; // case-insensitive filesystem — nothing to assert here
         }
         assert_eq!(probe_case_insensitive_stat(dir), Some(false));
+    }
+
+    // ---- ADVISORY-c: write-based probe stays out of the vault ----
+    // (adversarial-review-2026-08-23.md)
+
+    #[test]
+    fn same_device_is_reflexive() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(
+            same_device(tmp.path(), tmp.path()),
+            "a path must be considered the same device as itself"
+        );
+    }
+
+    #[test]
+    fn same_device_false_for_nonexistent_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(
+            !same_device(tmp.path(), &missing),
+            "an unstatable path must conservatively answer 'different device'"
+        );
+    }
+
+    #[test]
+    fn write_probe_does_not_touch_the_vault_when_temp_dir_is_same_device() {
+        // `tempfile::tempdir()` creates its directory inside
+        // `std::env::temp_dir()`, so the vault built here is guaranteed to be
+        // on the same device as the temp dir the probe should prefer —
+        // making this portable across CI platforms without needing a second
+        // real filesystem mounted.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(
+            same_device(dir, &std::env::temp_dir()),
+            "test precondition: a tempdir must be same-device as env::temp_dir()"
+        );
+
+        let before: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+
+        // Force the write-based fallback path directly (bypassing the
+        // stat-only probe) against an otherwise-empty vault.
+        let _ = probe_case_insensitive(dir).unwrap();
+
+        let after: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            before, after,
+            "write-based probe must not create or leave any file in the vault \
+             directory when a same-device temp dir is available"
+        );
+    }
+
+    #[test]
+    fn write_probe_leaves_no_residual_file_in_temp_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        let sys_tmp = std::env::temp_dir();
+        let before: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name())
+            .filter(|n| {
+                n.to_str()
+                    .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
+            })
+            .collect();
+
+        let _ = probe_case_insensitive(dir).unwrap();
+
+        let after: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.file_name())
+            .filter(|n| {
+                n.to_str()
+                    .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
+            })
+            .collect();
+
+        assert_eq!(
+            before, after,
+            "probe must clean up its own file in the temp dir, leaving no residue"
+        );
+    }
+
+    #[test]
+    fn write_probe_detection_matches_ground_truth_when_redirected_to_temp_dir() {
+        // The probe now writes into env::temp_dir() rather than `dir` itself
+        // whenever they're same-device — this must not change the *answer*,
+        // only where the transient file lives. Cross-check against a direct
+        // filesystem oracle: write "abc", read back "ABC", see if it's the
+        // same content (case-insensitive filesystem) or a miss
+        // (case-sensitive).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let probed = probe_case_insensitive(dir).unwrap();
+
+        let oracle_lower = dir.join("hyalo-oracle-probe-abc");
+        std::fs::write(&oracle_lower, "content").unwrap();
+        let oracle_upper = dir.join("HYALO-ORACLE-PROBE-ABC");
+        let ground_truth = std::fs::metadata(&oracle_upper).is_ok();
+        std::fs::remove_file(&oracle_lower).unwrap();
+
+        assert_eq!(
+            probed, ground_truth,
+            "redirecting the probe to temp_dir must not change the detected \
+             case-sensitivity answer"
+        );
     }
 
     #[test]

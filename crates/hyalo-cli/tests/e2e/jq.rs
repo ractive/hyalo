@@ -443,3 +443,98 @@ fn count_with_jq_exits_one() {
     assert!(!output.status.success());
     assert_eq!(output.status.code(), Some(1));
 }
+
+// ---------------------------------------------------------------------------
+// F3-1 (deep-analysis-3-2026-08-23.md): --jq resource limits
+// ---------------------------------------------------------------------------
+//
+// `--jq` runs user-supplied input with no interpreter-level step/fuel hook
+// available (jaq-core 3.0.0's public API has none), so both repros below are
+// bounded by a coarse wall-clock deadline on a worker thread rather than a
+// cooperative check — see `JQ_TIME_LIMIT`'s doc comment in `output.rs`.
+// `.timeout()` here is a CI safety net: if the fix ever regresses, these
+// tests fail cleanly with a timeout error instead of hanging the whole
+// suite (and, for the second test, exhausting CI memory).
+
+#[test]
+fn jq_infinite_recursion_errors_within_time_limit_instead_of_hanging() {
+    // Before the fix: `def f: f; f` never emits a value, so the byte-count
+    // output cap (which only fires once something is produced) never
+    // triggers — the process spun forever.
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", "def f: f; f"])
+        .arg("find")
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "an infinitely-recursing filter with no output must error, not hang or succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("time limit"),
+        "expected a time-limit error, got: {stderr}"
+    );
+}
+
+#[test]
+fn jq_unbounded_intermediate_array_errors_within_time_limit_instead_of_oom() {
+    // Before the fix: `[range(3e8)]` built its entire 300M-element
+    // intermediate array — inside a single, uninterruptible jaq evaluation
+    // step — before ever yielding the one `length` value to Rust: ~8.7s and
+    // ~4.8 GB peak RSS to print a single number. This test genuinely costs a
+    // few seconds and a few hundred MB; that is an acceptable, *bounded*
+    // cost for a regression test on what was rated the batch's highest-
+    // severity finding, and is a large improvement over the unmitigated
+    // behavior it guards against.
+    let tmp = setup_vault();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", "[range(3e8)] | length"])
+        .arg("find")
+        .timeout(std::time::Duration::from_secs(20))
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "an unbounded intermediate array must error, not hang, OOM, or succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("time limit"),
+        "expected a time-limit error, got: {stderr}"
+    );
+}
+
+#[test]
+fn jq_legitimate_heavy_filter_over_many_files_still_works() {
+    // The deadline must not be so tight that ordinary, non-pathological use
+    // over a large-ish result set is at risk of a false-positive timeout.
+    let tmp = TempDir::new().unwrap();
+    for i in 0..500 {
+        write_tagged(tmp.path(), &format!("note-{i:04}.md"), &["rust", "cli"]);
+    }
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["--jq", "[.results[] | select(.tags | length > 0)] | length"])
+        .args(["find", "--fields", "tags"])
+        .timeout(std::time::Duration::from_secs(10))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "500");
+}

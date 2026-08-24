@@ -254,7 +254,12 @@ pub(crate) struct Cli {
     /// The filtered result is printed as plain text. Incompatible with --format text
     /// (combining them is a user error and exits 1).
     /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
-    /// Note: recursive filters (e.g. 'recurse', '..') on large inputs may run indefinitely
+    /// LIMITS: a filter is given 3 seconds of wall-clock time (a pathological filter —
+    /// infinite recursion with no output, or building a huge intermediate array before
+    /// ever yielding a value, e.g. '[range(3e8)]' — errors out instead of hanging or
+    /// exhausting memory), may emit at most 1,000,000 output values, and the total
+    /// emitted text is capped at 10 MiB. Any limit breach exits 1 with a clean error,
+    /// never a hang or an OOM.
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
