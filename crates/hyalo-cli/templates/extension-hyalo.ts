@@ -17,17 +17,26 @@ interface HyaloToolArgs {
   indexFile?: string;
 }
 
+/** Whether the argv already carries a value-taking flag (long or short). */
+function hasFlag(argv: string[], long: string, short?: string): boolean {
+  return argv.includes(long) || (short !== undefined && argv.includes(short));
+}
+
 function buildCommand(params: HyaloToolArgs): string[] {
   const { subcommand, args: extraArgs = [], formatText = true, jq, indexFile } = params;
   const cmdArgs = [subcommand];
 
-  if (formatText && !jq) {
+  // Only inject defaults the caller did not supply themselves: the model
+  // often repeats `--format text` from the skill's guidance, and a duplicate
+  // `--format` is a hard clap error ("cannot be used multiple times").
+  const hasFormat = hasFlag(extraArgs, "--format", "-f");
+  if (formatText && !jq && !hasFormat) {
     cmdArgs.push("--format", "text");
   }
-  if (jq) {
+  if (jq && !hasFlag(extraArgs, "--jq")) {
     cmdArgs.push("--jq", jq);
   }
-  if (indexFile) {
+  if (indexFile && !hasFlag(extraArgs, "--index-file")) {
     cmdArgs.push("--index-file", indexFile);
   }
   cmdArgs.push(...extraArgs);
