@@ -441,12 +441,13 @@ const TAG_SUMMARY_FILTER: &str = r#""\(.total) unique \(if .total == 1 then "tag
 const TAG_SUMMARY_ENTRY_FILTER: &str =
     r#""\(.name)\t\(.count) \(if .count == 1 then "file" else "files" end)""#;
 
-/// Every `LinkInfo` text rendering opens with its source line (iter-215,
-/// dogfood UX-6): `  line 12: …`. `.line` is always present on a `LinkInfo`,
-/// but JSON written by an older hyalo (or a hand-built fixture) may omit it,
-/// so the `// 0` fallbacks below keep those renderable instead of erroring.
-///
-/// `line 0` is the "unknown" rendering: no source line is 0 (they are 1-based).
+// Every `LinkInfo` text rendering opens with its source line (iter-215,
+// dogfood UX-6): `  line 12: …`. `.line` is always present on a `LinkInfo`,
+// but JSON written by a pre-215 hyalo (or a hand-built fixture) may omit it,
+// so the `// 0` fallbacks in each filter keep those renderable instead of
+// failing. `line 0` is the "unknown" rendering — no real source line is 0,
+// they are 1-based.
+
 /// `LinkInfo` — just target: `{line, target}`
 /// Format: `  line 12: "target" (unresolved)`
 const LINK_INFO_TARGET_FILTER: &str = r#""  line \(.line // 0): \"\(.target)\" (unresolved)""#;
