@@ -2313,9 +2313,42 @@ fn lint_one_file_extended(
         meta.len(),
     );
 
-    // Read the file content once.
-    let content =
-        std::fs::read_to_string(full_path).with_context(|| format!("reading {rel_path}"))?;
+    // Read the file content once. A single unreadable file (invalid UTF-8,
+    // permission error, etc.) must not abort the whole vault-wide run — the
+    // caller's merge loop propagates any `Err` here via `?`, which used to
+    // kill `lint`/`lint --fix` entirely on one corrupt file (M-1,
+    // adversarial-review-2026-08-23.md). Report it once and skip just this
+    // file, mirroring the size-limit skip above and the lossy-decode
+    // skip+warn precedent in `scanner/mod.rs`.
+    let content = match std::fs::read_to_string(full_path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("warning: skipping {} ({e})", full_path.display());
+            let mut violations_by_rule = indexmap::IndexMap::new();
+            violations_by_rule.insert(
+                "FILE".to_owned(),
+                vec![InternalViolation {
+                    line: 1,
+                    column: 1,
+                    message: format!("could not read file ({e}) — skipped, not linted"),
+                    severity: "error".to_owned(),
+                    fix: None,
+                    fixed: false,
+                    autofixable: None,
+                }],
+            );
+            return Ok(PerFileLintResult {
+                rel_path: rel_path.to_owned(),
+                doc_type: None,
+                violations_by_rule,
+                total_violations: 1,
+                body_modified: false,
+                fix_actions: Vec::new(),
+                body_fix_outcomes: Vec::new(),
+                post_fix_schema_remaining: None,
+            });
+        }
+    };
 
     // Find where the frontmatter ends so we can split body.
     let body_start = find_body_start(&content);

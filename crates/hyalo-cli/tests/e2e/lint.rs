@@ -3487,3 +3487,107 @@ fn lint_fix_json_uses_remaining_errors_warnings_keys() {
         "fix-mode JSON must carry remaining_errors/remaining_warnings: {val}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M-1: one invalid-UTF-8 file must not abort the whole run
+// ---------------------------------------------------------------------------
+
+/// A single invalid-UTF-8 file used to make `lint`'s per-file merge loop
+/// propagate the read error via `?`, aborting the entire run (exit 2) and
+/// hiding every other file's violations (adversarial-review-2026-08-23.md
+/// M-1). It must instead be reported once and the rest of the vault linted
+/// normally, exiting non-zero because the unreadable file itself is an error.
+#[test]
+fn lint_reports_invalid_utf8_file_and_lints_the_rest() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "clean.md",
+        "---\ntitle: Clean\n---\n\nHello world.\n",
+    );
+    // A file with a body markdown violation (trailing whitespace, MD009), so
+    // it would normally report a violation — proving the rest of the vault
+    // is still fully linted, not just "didn't crash".
+    write_md(
+        tmp.path(),
+        "dirty.md",
+        "---\ntitle: Dirty\n---\n\nHello   \n",
+    );
+    std::fs::write(
+        tmp.path().join("invalid.md"),
+        b"---\ntitle: bad\n---\n\n\xff\xfe invalid utf-8 here\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.code() != Some(2),
+        "one invalid-UTF-8 file must not abort the whole run with exit 2: \
+         stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid.md"),
+        "the bad file is reported once on stderr: {stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let val: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("lint did not emit JSON: {stdout} ({e})"));
+    let files = val["results"]["files"]
+        .as_array()
+        .expect("files array present");
+    let paths: Vec<&str> = files.iter().filter_map(|f| f["file"].as_str()).collect();
+    assert!(
+        paths.contains(&"invalid.md"),
+        "the unreadable file itself appears in results with its violation: {stdout}"
+    );
+    assert!(
+        paths.contains(&"dirty.md"),
+        "the rest of the vault is still linted — dirty.md's own \
+         violation must still be reported: {stdout}"
+    );
+}
+
+/// `lint --fix` must still fix the rest of the vault when one file is
+/// unreadable, not abort before any fix is applied.
+#[test]
+fn lint_fix_still_fixes_rest_of_vault_with_invalid_utf8_file_present() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    // Trailing whitespace — MD009, autofixable.
+    write_md(
+        tmp.path(),
+        "dirty.md",
+        "---\ntitle: Dirty\n---\n\nHello   \n",
+    );
+    std::fs::write(
+        tmp.path().join("invalid.md"),
+        b"---\ntitle: bad\n---\n\n\xff\xfe invalid utf-8 here\n",
+    )
+    .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.code() != Some(2),
+        "lint --fix must not abort with exit 2 on one invalid-UTF-8 file: \
+         stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let fixed = std::fs::read_to_string(tmp.path().join("dirty.md")).unwrap();
+    assert!(
+        !fixed.contains("Hello   \n"),
+        "dirty.md's trailing whitespace must still be fixed: {fixed:?}"
+    );
+}

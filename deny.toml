@@ -1,12 +1,23 @@
 # Configuration for cargo-deny — https://embarkstudios.github.io/cargo-deny/
 #
 # Run locally: cargo deny check
-# Runs automatically in the release workflow as a quality gate.
+# Runs automatically as a quality gate in the *release* pipeline only — the
+# `cargo deny check` step lives in the external, shared
+# `ractive/release-workflows` release.yml (this repo's own release.yml just
+# `uses:` it), which fires on `release: published` / `workflow_dispatch`. It
+# is NOT part of `ci.yml`/`quality-gates.yml`, so it does not gate ordinary
+# PRs — only a release cut (verified 2026-08-24, iter-222, by pulling the
+# shared workflow's content via `gh api`).
 
 [advisories]
-# Ignore list last re-verified 2026-08-22 (iter-196, on the mdbook-lint
-# 0.15.2 -> 0.16.0 bump): both advisories still resolve through the same
-# `comrak -> syntect` chain and nothing else in the tree pulls them.
+# Ignore list last re-verified 2026-08-24 (iter-222): both advisories still
+# resolve through the same `comrak -> syntect` chain and nothing else in the
+# tree pulls them. RUSTSEC-2026-0190 (anyhow `Error::downcast_mut`
+# unsoundness, patched >= 1.0.103) is deliberately NOT in this ignore list —
+# it was resolved by bumping anyhow (1.0.102 -> 1.0.104 via `cargo update -p
+# anyhow`; the workspace `Cargo.toml` requirement is already `"1"`, so no
+# manifest edit was needed) rather than ignored, since a clean upgrade was
+# available.
 ignore = [
     # bincode 1.x is unmaintained; pulled in via comrak -> syntect (syntax
     # highlighting caches). No safe upgrade on the syntect 5.x line; not

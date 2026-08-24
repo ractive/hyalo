@@ -922,13 +922,23 @@ fn append_line_to_file_content(content: &str, line: &str) -> String {
 fn upsert_managed_section(content: &str, section: &str) -> (String, &'static str) {
     let lines: Vec<&str> = content.lines().collect();
 
-    // Find line indices of the start and end markers.
+    // Find the start marker, then search for the end marker only *after* it —
+    // mirroring `strip_managed_section`'s anchoring. Searching for the end
+    // marker globally (the previous behavior) let a stray `<!-- hyalo:end -->`
+    // mentioned in prose *before* the real managed section win the match: the
+    // `s < e` guard below would then fail even though a valid pair exists
+    // further down, and the function would append a duplicate section instead
+    // of replacing the real one (F3-2, deep-analysis-3-2026-08-23.md).
     let start_idx = lines.iter().position(|l| l.contains(SECTION_START));
-    let end_idx = lines.iter().position(|l| l.contains(SECTION_END));
+    let end_idx = start_idx.and_then(|s| {
+        lines
+            .iter()
+            .skip(s + 1)
+            .position(|l| l.contains(SECTION_END))
+            .map(|rel| s + 1 + rel)
+    });
 
-    if let (Some(s), Some(e)) = (start_idx, end_idx)
-        && s < e
-    {
+    if let (Some(s), Some(e)) = (start_idx, end_idx) {
         // Both markers present in correct order — replace from start to end (inclusive).
         let mut result = String::new();
         for line in &lines[..s] {
@@ -1277,6 +1287,44 @@ mod tests {
             "last paragraph preserved"
         );
         assert!(!result.contains("stale"), "stale content replaced");
+    }
+
+    #[test]
+    fn upsert_managed_section_ignores_stray_end_marker_before_real_section() {
+        // A stray mention of the end marker in prose *before* the real
+        // managed section (F3-2 repro) must not be mistaken for the closer
+        // of a phantom pair — the real START..END pair further down must
+        // still be found and replaced in place, not appended as a duplicate.
+        let section = make_section();
+        let content =
+            format!("# T\nstray {SECTION_END} here\n\n{SECTION_START}\nOLD\n{SECTION_END}\ntail\n");
+        let (result, action) = upsert_managed_section(&content, &section);
+        assert_eq!(action, "replaced managed section");
+        assert!(result.contains("stray"), "prose before start preserved");
+        assert!(result.contains("tail"), "prose after end preserved");
+        assert!(!result.contains("OLD"), "old managed content replaced");
+        assert!(result.contains(CLAUDE_MD_HINT), "new hint content present");
+        // Exactly one managed section — the stray mention plus the real
+        // pair must not produce two.
+        assert_eq!(result.matches(SECTION_START).count(), 1);
+        // SECTION_END appears once as the real closer of the new section;
+        // the stray "stray <!-- hyalo:end --> here" line before it is
+        // preserved verbatim (it's just prose the user wrote) so this
+        // matches twice total — once as the stray mention, once as the
+        // real closer.
+        assert_eq!(result.matches(SECTION_END).count(), 2);
+
+        // Round-trip through strip (what `deinit` calls) must remove
+        // exactly the real managed section and leave the stray mention and
+        // surrounding prose intact — no orphaned duplicate.
+        let (stripped, was_stripped) = strip_managed_section(&result);
+        assert!(was_stripped, "deinit finds and strips the managed section");
+        assert!(stripped.contains("stray"), "stray prose still present");
+        assert!(stripped.contains("tail"), "trailing prose still present");
+        assert!(
+            !stripped.contains(CLAUDE_MD_HINT),
+            "managed hint content fully removed, no orphan"
+        );
     }
 
     #[test]

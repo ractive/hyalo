@@ -2295,3 +2295,62 @@ broader Windows/ADS hardening iteration 222 was scoped for remains open;
 this DEC only corrects an inaccurate claim that `C:foo` specifically passed
 through unrefused. Sandboxing hyalo against a fully hostile repo beyond the
 write-scope root remains out of scope for a local single-user CLI.
+
+## DEC-093: `--jq` is bounded by a worker-thread wall-clock deadline, not a cooperative step check, because jaq exposes no interruption hook (2026-08-24)
+
+**Decision:** [[iterations/iteration-222-security-robustness-batch]] closes
+F3-1: `apply_jq_filter_result` (`crates/hyalo-cli/src/output.rs`) now
+compiles and executes a user-supplied `--jq` filter on its own thread and
+waits on `JQ_TIME_LIMIT` (3 seconds) via `mpsc::Receiver::recv_timeout`.
+Only `filter_code: String`, `value: serde_json::Value`, and the final
+`Result<String, String>` cross the thread boundary — a compiled
+`jaq_core::compile::Filter` and `jaq_json::Val` both hold `Rc` internally
+(`Val::Arr(Rc<Vec<Val>>)`, `Val::Obj(Rc<Map<..>>)`, plus `Rc` inside
+jaq-core's own list types) and so are not `Send`; compiling *inside* the
+worker thread instead of passing a pre-compiled filter across the channel
+avoids ever needing them to be. On timeout the function returns an error
+without joining the worker: both call sites (`output_pipeline.rs`, `run.rs`'s
+`hyalo config --jq`) format that error and return almost immediately, so the
+whole process — worker thread included — is torn down by the OS shortly
+after, which is what actually bounds the abandoned thread's resource use,
+not anything inside the thread itself. A second, cheap, in-loop guard —
+`JQ_MAX_OUTPUT_VALUES` (1,000,000) — caps total emitted *value count*
+alongside the pre-existing `JQ_OUTPUT_CAP` (10 MiB emitted *bytes*), so a
+filter producing millions of tiny values can't outlast the byte cap.
+
+**Why a thread instead of a step counter:** the two reviewed repros
+(`hyalo find --jq 'def f: f; f'` — infinite recursion, never emits a value,
+~1.6 MB RSS, pure CPU spin; `hyalo find --jq '[range(3e8)] | length'` —
+verified 8.7s / 4.8 GB peak RSS to print one number) both do their unbounded
+work *inside a single opaque jaq evaluation step* — `[range(3e8)]` builds
+the whole 300M-element array before the interpreter ever yields a value back
+to Rust, and `def f: f; f` never yields at all. jaq-core 3.0.0's public API
+(checked: no `fuel`/`budget`/`step_limit` type or method in the crate)
+offers no way to interrupt mid-step, so a "check the clock between values
+pulled from the output iterator" approach — which would be cheaper and finer
+grained — cannot catch either repro: the for-loop body in
+[`execute_jq_filter`] never runs even once for the first case, and only runs
+after the full 8.7s block for the second. A wall-clock deadline on a
+separate thread, relying on process teardown to reclaim whatever the
+abandoned thread had allocated, was the only mechanism available without
+forking jaq or wiring a non-portable OS memory rlimit. Verified empirically
+(release build, `[range(3e8)] | length`): unmitigated the query alone costs
+8.7s/4.8 GB; with the fix, `hyalo find --jq '[range(3e8)] | length'` returns
+a clean error at ~3s with peak RSS around 1.7–2.3 GB (bounded by the
+deadline window, not the full computation).
+
+**Deadline choice:** 3 seconds. Measured against real corpora (GitHub Docs,
+3,710 files; MDN, 14,394 files) a realistic heavy filter (`map`/`select`/
+`sort_by`/`group_by` over every result) added well under half a second of
+jq-only time on top of the disk-scan/envelope-build baseline — comfortable
+headroom under the deadline. `--jq --help` documents all three limits (time,
+value count, byte size) so an agent hitting one gets an actionable message
+rather than rediscovering the ceiling by trial and error.
+
+**Non-goals:** the internal, hyalo-authored filter templates used for
+`--format text` rendering (`FILE_OBJECT_FILTER` and friends, dispatched via
+`lookup_filter`/`build_file_object_filter`) are trusted, reviewed strings —
+not attacker/user input — and are called once per rendered item, so they
+were deliberately left on the existing cached, unthreaded path
+(`apply_jq_filter`/`run_jq_filter_cached`); wrapping every one of those in a
+thread spawn would be a real per-item perf cost for no security benefit.

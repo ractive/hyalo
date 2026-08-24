@@ -10,7 +10,6 @@ use indexmap::IndexMap;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -680,6 +679,21 @@ impl SnapshotIndex {
                         }
                         return None;
                     }
+                    // M-2 (adversarial-review-2026-08-23.md): the `Prefix(_)`
+                    // arm above already catches a Windows drive-relative
+                    // path like `C:foo`, but an NTFS Alternate Data Stream
+                    // marker (`a.md:stream`) has no `Prefix` component at
+                    // all — the colon sits inside an ordinary `Normal`
+                    // component. Reject it explicitly (Windows-only check;
+                    // a no-op elsewhere).
+                    if crate::discovery::has_unsafe_windows_colon(rel_path) {
+                        if warn {
+                            eprintln!(
+                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                            );
+                        }
+                        return None;
+                    }
                 }
 
                 // SEC-3 (defense-in-depth): reject snapshots whose link graph or
@@ -913,22 +927,16 @@ fn write_snapshot(
         bm25_index,
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-    // Use a kernel-assigned temp-file name in the same directory as the
-    // target to avoid a predictable path that could be exploited via a
-    // pre-created symlink (symlink-substitution attack).  Placing the temp
-    // file in the same directory as `path` ensures the subsequent atomic
-    // rename stays on the same filesystem.
-    let parent = path
-        .parent()
-        .context("index path has no parent directory")?;
-    let mut tmp =
-        tempfile::NamedTempFile::new_in(parent).context("failed to create temp file for index")?;
-    tmp.write_all(&bytes)
-        .context("failed to write temp index")?;
-    // On persist failure, dropping `e.file` removes the temp file automatically.
-    tmp.persist(path)
-        .map_err(|e| e.error)
-        .with_context(|| format!("failed to rename index into place: {}", path.display()))?;
+    // Route through the shared write policy (DEC-062: when `path` is a
+    // symlink, follow it and replace the *target*, leaving the symlink in
+    // place) instead of a hand-rolled `NamedTempFile` + `persist` pair, so
+    // index writes give the same answer as every other atomic write in
+    // hyalo for the same input (L-1, adversarial-review-2026-08-23.md). This
+    // also picks up `atomic_write`'s kernel-assigned temp-file name in the
+    // same directory as the target (the same symlink-substitution defense
+    // the old code commented on), permission preservation, and parent-dir
+    // fsync for free.
+    crate::fs_util::atomic_write(path, &bytes).context("failed to write index")?;
     Ok(())
 }
 
@@ -1887,6 +1895,36 @@ Content.
                 "snapshot with Windows absolute rel_path must be rejected"
             );
         }
+    }
+
+    // M-2 (adversarial-review-2026-08-23.md): Windows drive-relative and
+    // NTFS-ADS rel_paths must be rejected. Gated to Windows because a colon
+    // is an ordinary filename character elsewhere, and `Path::new("C:foo")`
+    // only parses a `Prefix` component under `#[cfg(windows)]` — on Unix
+    // this input is meaningless to test.
+    #[test]
+    #[cfg(windows)]
+    fn load_inner_rejects_windows_drive_relative_path() {
+        // No `\` after the colon: drive-*relative*, not absolute — distinct
+        // from the already-covered `C:\...` case in
+        // `load_inner_rejects_absolute_path`.
+        let bytes = make_snapshot_bytes("C:notes.md");
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with a drive-relative rel_path must be rejected"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn load_inner_rejects_ntfs_alternate_data_stream_path() {
+        // Lexically inside the vault (no Prefix/RootDir/ParentDir
+        // component) but resolves to an ADS on `notes.md`, not the file.
+        let bytes = make_snapshot_bytes("notes.md:hidden-stream");
+        assert!(
+            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            "snapshot with an NTFS-ADS rel_path must be rejected"
+        );
     }
 
     #[test]

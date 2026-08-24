@@ -726,19 +726,107 @@ fn apply_jq_filter(
     run_jq_filter_cached(filter_code, value, cache).ok()
 }
 
+/// Wall-clock deadline for evaluating a single user-supplied `--jq` filter
+/// (F3-1, deep-analysis-3-2026-08-23.md).
+///
+/// `jaq`'s public API (checked jaq-core 3.0.0) has no step counter, fuel
+/// limit, or other cooperative-cancellation hook — a pathological filter's
+/// unbounded work can happen entirely *inside one* internal evaluation step,
+/// with no opportunity for us to check anything in between. `[range(3e8)]`
+/// builds its whole 300M-element intermediate array before the interpreter
+/// ever yields a value back to Rust (verified: 8.7s / 4.8 GB peak RSS to
+/// print a single number), and `def f: f; f` recurses forever without ever
+/// producing a value at all — so neither is reachable by checking a clock
+/// between values pulled from the output iterator inside
+/// [`execute_jq_filter`]'s loop; that loop's body never even runs for the
+/// second case.
+///
+/// The mitigation is therefore necessarily coarse: run the filter on its own
+/// thread and bound how long the *caller* waits via `recv_timeout`. Both
+/// call sites (`output_pipeline.rs`, `run.rs`'s `hyalo config --jq`) format
+/// the returned error and return almost immediately afterward, so — since
+/// the worker thread is deliberately never joined on timeout — the whole
+/// process, worker included, is torn down by the OS shortly after this
+/// function returns. That caps the *actual* resource exposure to roughly one
+/// deadline's worth of runaway work rather than the filter's full
+/// pathological cost: a 3s deadline turns `[range(3e8)]`'s real 8.7s/4.8 GB
+/// into an error after 3s and however much the abandoned thread allocated in
+/// that window, not the full amount.
+const JQ_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Maximum number of output values a `--jq` filter may emit, independent of
+/// [`JQ_OUTPUT_CAP`]'s byte total.
+///
+/// The byte cap alone only bounds emitted *bytes* — a filter producing
+/// millions of tiny values (e.g. `range(1e9) | tostring[0:0]`, all empty
+/// strings) would iterate far longer than intended without ever crossing
+/// it. This is a cheap, exact check inside the loop that already tracks
+/// `total_len`, catching that class before the byte cap would.
+const JQ_MAX_OUTPUT_VALUES: usize = 1_000_000;
+
 /// Apply a user-supplied jq filter to a `serde_json::Value`.
 ///
 /// Compiles the filter on every call. For repeated use across many values,
 /// prefer the cached path via [`format_success`] / [`format_value_as_text`].
 ///
+/// Bounded by [`JQ_TIME_LIMIT`]: compilation and execution both run on a
+/// worker thread, and this function returns a clean timeout error if that
+/// thread hasn't produced a result within the deadline (see the constant's
+/// doc comment for why a thread is necessary rather than a cooperative
+/// check). Only `filter_code`/`value` (cloned into the thread) and the final
+/// `Result<String, String>` (sent back over a channel) ever cross the thread
+/// boundary — never a compiled `Filter` or a `jaq_json::Val`, both of which
+/// use `Rc` internally and so are not `Send`.
+///
 /// Returns `Ok(String)` with newline-joined output values on success, or
-/// `Err(String)` with a human-readable description of the parse or runtime error.
+/// `Err(String)` with a human-readable description of the parse, runtime, or
+/// timeout error.
 pub fn apply_jq_filter_result(
     filter_code: &str,
     value: &serde_json::Value,
 ) -> Result<String, String> {
-    let filter = compile_jq_filter(filter_code)?;
-    execute_jq_filter(&filter, value)
+    let filter_code = filter_code.to_owned();
+    let value = value.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let spawned = std::thread::Builder::new()
+        .name("hyalo-jq-eval".to_owned())
+        .spawn(move || {
+            let result = compile_jq_filter(&filter_code)
+                .and_then(|filter| execute_jq_filter(&filter, &value));
+            // The receiver may already have timed out and moved on; a failed
+            // send just means nobody is listening anymore, not an error here.
+            let _ = tx.send(result);
+        });
+    let handle = match spawned {
+        Ok(h) => h,
+        Err(e) => return Err(format!("failed to start jq evaluation: {e}")),
+    };
+
+    match rx.recv_timeout(JQ_TIME_LIMIT) {
+        Ok(result) => {
+            // Finished within the deadline — join is a formality (near-zero
+            // wait, the thread already sent its result), just to avoid
+            // leaking a completed-but-unjoined handle.
+            let _ = handle.join();
+            result
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            // Deliberately not joined: the worker may still be spinning
+            // (`def f: f; f`) or mid-allocation (`[range(3e8)]`). It is left
+            // to run to completion or to be torn down by the OS when this
+            // process exits shortly after returning this error — see
+            // `JQ_TIME_LIMIT`'s doc comment.
+            drop(handle);
+            Err(format!(
+                "jq filter exceeded the {}s time limit (see `hyalo find --help` for --jq's limits)",
+                JQ_TIME_LIMIT.as_secs()
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("jq evaluation thread panicked".to_owned())
+        }
+    }
 }
 
 /// Format a jaq load error (lex/parse/IO) into a human-readable string.
@@ -826,9 +914,16 @@ fn execute_jq_filter(
 
     let mut out = String::new();
     let mut total_len: usize = 0;
+    let mut value_count: usize = 0;
     for result in filter.id.run((ctx, input)).map(jaq_core::unwrap_valr) {
         match result {
             Ok(val) => {
+                value_count += 1;
+                if value_count > JQ_MAX_OUTPUT_VALUES {
+                    return Err(format!(
+                        "jq filter output exceeds {JQ_MAX_OUTPUT_VALUES} values"
+                    ));
+                }
                 let s = match val {
                     Val::TStr(ref s) | Val::BStr(ref s) => match std::str::from_utf8(s) {
                         Ok(valid) => valid.to_owned(),
@@ -2390,6 +2485,68 @@ mod tests {
         assert!(
             err.contains("exceeds") && err.contains("MiB"),
             "unexpected error message: {err}"
+        );
+    }
+
+    // --- F3-1: jq resource limits (deep-analysis-3-2026-08-23.md) ---
+
+    #[test]
+    fn jq_max_output_values_constant_is_one_million() {
+        assert_eq!(JQ_MAX_OUTPUT_VALUES, 1_000_000);
+    }
+
+    #[test]
+    fn jq_time_limit_constant_is_three_seconds() {
+        assert_eq!(JQ_TIME_LIMIT, std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn jq_value_count_cap_triggers_before_byte_cap_on_many_tiny_values() {
+        // `range(...)` without array-collection is a streaming generator: our
+        // for loop in `execute_jq_filter` pulls one value at a time, so this
+        // is cheap (no huge intermediate) and exercises JQ_MAX_OUTPUT_VALUES
+        // directly rather than JQ_TIME_LIMIT or JQ_OUTPUT_CAP. Each emitted
+        // value is a single-digit-or-more number (a few bytes), so the byte
+        // cap (10 MiB) would take far longer than 1,000,000 iterations to
+        // reach — the value-count cap must fire first.
+        let val = json!(null);
+        let result = apply_jq_filter_result("range(2000000)", &val);
+        assert!(
+            result.is_err(),
+            "expected the value-count cap to trigger, got Ok"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("1000000") && err.contains("values"),
+            "expected a value-count-limit error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn jq_infinite_recursion_with_no_output_errors_within_time_limit() {
+        // `def f: f; f` never emits a value at all, so the loop body in
+        // `execute_jq_filter` never runs even once — neither JQ_OUTPUT_CAP
+        // nor JQ_MAX_OUTPUT_VALUES can catch it, only the wall-clock
+        // deadline on the worker thread can. This genuinely blocks for
+        // ~JQ_TIME_LIMIT (3s) — an acceptable one-time cost for a real
+        // regression test on a HIGH-severity finding; CPU cost is trivial
+        // (no allocation), unlike the array-collection case covered by the
+        // e2e tests in `tests/e2e/jq.rs`.
+        let val = json!(null);
+        let started = std::time::Instant::now();
+        let result = apply_jq_filter_result("def f: f; f", &val);
+        assert!(
+            result.is_err(),
+            "expected a time-limit error, got Ok output"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("time limit"),
+            "expected a time-limit error, got: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(9),
+            "must return well within a small multiple of JQ_TIME_LIMIT, not hang"
         );
     }
 

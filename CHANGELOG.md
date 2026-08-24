@@ -221,6 +221,9 @@ and this project adheres to
   other command still prints it on stderr, since their own output doesn't
   surface `malformed` at all. The ancestor-adoption note itself was verified
   to already honor `--quiet` — not a bug.
+- `hyalo init --claude` no longer corrupts a hand-edited CLAUDE.md when a stray `<!-- hyalo:end -->` mention appears in prose before the real managed section (F3-2). It used to append a duplicate section instead of replacing the existing one, and a later `hyalo deinit` would then strip the original and orphan the duplicate.
+- `hyalo lint`/`lint --fix` no longer abort the whole run on one invalid-UTF-8 or otherwise unreadable file (M-1). The bad file is now reported once and the rest of the vault is linted/fixed normally.
+- `create-index --output` onto a symlink now follows the shared `fs_util` write policy (DEC-062: replace the target, keep the symlink) instead of a hand-rolled temp-file/persist pair that clobbered the symlink itself (L-1).
 
 ### Changed
 
@@ -1043,6 +1046,10 @@ and this project adheres to
 ### Security
 
 - BREAKING: a project-local `.hyalo.toml` whose `dir` is absolute or nets above the config directory now refuses every command (iter-221, H-1). Previously honored verbatim, so a cloned repo could point the vault root at its own parent or an absolute path and every downstream boundary gate then defended containment against that attacker-chosen root instead of the real one. An in-bounds relative `dir` (including a bounded `sub/../kb` round-trip) and an explicit `--dir` are unaffected; `hyalo config` still reports the problem (`dir_out_of_bounds`) instead of being refused. See DEC-092.
+- Bound `--jq` filter evaluation: a filter now gets a 3-second wall-clock deadline (evaluated on a worker thread) and a 1,000,000-value output-count cap, alongside the existing 10 MiB output-size cap. Previously an infinitely-recursing filter with no output (e.g. `def f: f; f`) hung the process forever, and a filter that built a huge intermediate before emitting anything (e.g. `[range(3e8)] | length`) used 4.8 GB RSS to print one number. Both now error cleanly within the deadline.
+- Windows drive-relative paths (`C:foo`) and NTFS Alternate Data Stream markers (`a.md:stream`) are now rejected by both the snapshot-index path validation and the `--file` resolution boundary check (M-2). Windows-only; a colon is an ordinary filename character elsewhere.
+- The case-insensitivity filesystem probe no longer creates and deletes a transient file inside the vault directory (ADVISORY-c). It now writes to the system temp directory when verified to be on the same filesystem as the vault (falling back to the vault only when that can't be confirmed), so it no longer pings file watchers or flickers in `git status`.
+- Bumped `anyhow` to 1.0.104, resolving RUSTSEC-2026-0190 (unsoundness in `Error::downcast_mut`, patched >= 1.0.103); hyalo does not call that API, but the fix was a clean drop-in upgrade.
 
 ## [0.20.0] - 2026-07-19
 

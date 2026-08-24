@@ -202,6 +202,46 @@ fn create_index_custom_output_path() {
 }
 
 #[test]
+fn create_index_output_follows_symlink_and_keeps_it_a_symlink() {
+    // L-1 (adversarial-review-2026-08-23.md): `write_snapshot` used to bypass
+    // `fs_util`'s shared write policy (DEC-062) with a raw
+    // `NamedTempFile::new_in` + `persist`, which replaces a symlinked
+    // `--output` destination with a regular file instead of following it —
+    // diverging from every other atomic write in hyalo for the same input.
+    let tmp = setup_vault();
+    let outside_dir = TempDir::new().unwrap();
+    let real_target = outside_dir.path().join("real-index.bin");
+    let link_path = tmp.path().join("idx-link");
+    unix_fs::symlink(&real_target, &link_path).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["create-index", "--output", link_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let meta = std::fs::symlink_metadata(&link_path).unwrap();
+    assert!(
+        meta.file_type().is_symlink(),
+        "--output path must remain a symlink after create-index, not be \
+         replaced by a regular file"
+    );
+    assert!(
+        real_target.is_file(),
+        "the symlink's target must be the file that actually got written"
+    );
+    assert!(
+        real_target.metadata().unwrap().len() > 0,
+        "the index content must have landed at the real target"
+    );
+}
+
+#[test]
 fn create_index_bare_relative_filename() {
     // L-26: a bare relative output filename (e.g. `idx.bin`) has
     // `parent() == Some("")`. The vault-boundary check must treat that as the
