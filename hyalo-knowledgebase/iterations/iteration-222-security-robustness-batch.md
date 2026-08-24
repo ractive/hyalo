@@ -1,5 +1,5 @@
 ---
-title: "Iteration 222 — security & robustness batch (UTF-8 lint, symlink policy, Windows paths, error leaks)"
+title: "Iteration 222 — security & robustness batch (jq limits, UTF-8 lint, managed-region + symlink integrity, Windows paths, error leaks)"
 type: iteration
 date: 2026-08-23
 status: planned
@@ -8,6 +8,7 @@ tags: [iteration, security, lint, write-path, cross-platform]
 related:
   - "[[reviews/adversarial-review-2026-08-23]]"
   - "[[reviews/deep-analysis-2-2026-08-23]]"
+  - "[[reviews/deep-analysis-3-2026-08-23]]"
   - "[[iterations/iteration-202-boundary-completion]]"
 ---
 
@@ -19,10 +20,37 @@ Clear the MEDIUM/LOW security findings and the ADVISORY items from
 [[reviews/adversarial-review-2026-08-23]] that don't belong to the H-1
 config-dir iteration: the invalid-UTF-8 lint abort, the `create-index -o`
 symlink-policy divergence, the Windows drive-relative/ADS gap, and the
-parser-internal error leaks.
+parser-internal error leaks. Also carries the HIGH `--jq` resource-limit
+finding and the `init --claude` managed-region corruption from
+[[reviews/deep-analysis-3-2026-08-23]] (F3-1, F3-2) — both are
+robustness/write-path integrity, same threat surface. F3-1 is the
+highest-severity item in this batch.
 
 ## Context
 
+- **F3-1 (HIGH, VERIFIED)** — `crates/hyalo-cli/src/output.rs:790`: `--jq`
+  is user/agent-supplied input evaluated with the ONLY guard being a 10 MiB
+  output cap (`JQ_OUTPUT_CAP`). Two escapes, both reproduced on the release
+  binary: (1) infinite CPU spin with no output — `hyalo find --jq 'def f: f;
+  f'` hangs forever (the cap only fires when a value is emitted); (2)
+  unbounded intermediate allocation — `hyalo find --jq '[range(3e8)] |
+  length'` uses 4.8 GB RSS to print one number (the intermediate array is
+  never counted). Not untrusted-vault content — the filter comes from the
+  user/agent — so severity rests on the DoS-yourself agent-loop scenario
+  (CLAUDE.md tells agents to build `--jq` programs; a wrong-but-plausible
+  filter wedges or OOMs the machine).
+- **F3-2 (MEDIUM, VERIFIED)** — `crates/hyalo-cli/src/commands/init.rs:926-927`:
+  `upsert_managed_section` finds the FIRST `<!-- hyalo:end -->` anywhere in
+  the file, including one appearing before the start marker (e.g. a stray
+  marker mention in user prose). When `end_idx < start_idx` the `s < e`
+  guard fails and it APPENDS a second managed section instead of replacing;
+  `deinit`'s `strip_managed_section` then strips the original and orphans the
+  appended one — silent corruption of the CLAUDE.md that steers agents. The
+  sibling `strip_managed_section` (init.rs:680-689) and the shared
+  `managed_region.rs` (`Markers::splice`, fixed for OKF/MADR in iter-165/166)
+  already anchor END strictly after START; the CLAUDE.md upsert never got the
+  fix. This is an argument for report #2's ARCH consolidation (route CLAUDE.md
+  editing through `managed_region::Markers`, delete the hand-rolled copy).
 - **M-1 (MEDIUM, VERIFIED)** — `crates/hyalo-cli/src/commands/lint.rs:2226`:
   `std::fs::read_to_string(full_path).with_context(...)?` propagates out of
   the per-file loop, so one invalid-UTF-8 file aborts the whole `lint` /
@@ -52,6 +80,22 @@ parser-internal error leaks.
 
 ## Tasks
 
+- [ ] F3-1 (HIGH): bound `--jq` evaluation. (a) run the jaq iterator on a
+      thread with a wall-clock deadline (check an `Instant` every N steps and
+      bail); (b) add a step/allocation ceiling — cap total emitted value count
+      and per-value serialized size, and/or a global step counter — so an
+      infinite/huge intermediate is stopped before OOM, not just at output;
+      (c) document the limits in `--jq --help`. Tests (per report #2's
+      note): `assert_cmd` with `.timeout()` asserting the command ERRORS
+      rather than hanging on `def f: f; f` and on `[range(3e8)]`
+- [ ] F3-2: fix `upsert_managed_section` to anchor the END marker strictly
+      after START (like `strip_managed_section` already does), so a stray
+      marker mention in prose can't cause a duplicate append. PREFERRED:
+      route CLAUDE.md section editing through `managed_region::Markers` and
+      delete the two hand-rolled line-scanners (coordinates with report #2
+      ARCH consolidation). Test: the review's exact repro (stray
+      `<!-- hyalo:end -->` before the real section) round-trips through
+      `init --claude` / `deinit` with no duplication or orphan
 - [ ] M-1: catch the UTF-8 (and read) error per file in the lint loop, emit
       one diagnostic per offending file, continue; still exit non-zero at
       the end when strictness requires it. Mirror `scanner/mod.rs`'s
@@ -81,6 +125,11 @@ parser-internal error leaks.
 
 ## Acceptance criteria
 
+- [ ] `--jq 'def f: f; f'` and `--jq '[range(3e8)] | length'` both error
+      within a bounded time/memory instead of hanging or OOMing; the limits
+      are documented in `--jq --help`
+- [ ] The F3-2 stray-marker repro round-trips through `init --claude` /
+      `deinit` with exactly one managed section and no orphan
 - [ ] One invalid-UTF-8 file no longer aborts `lint` or `lint --fix`; the
       rest of the vault is linted/fixed and the bad file is reported once
 - [ ] `create-index -o` onto a symlink follows one consistent, tested policy
