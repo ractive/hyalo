@@ -11,6 +11,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `links fix --apply-fuzzy` applies). `--raw` adds the file's text; `results.malformed` /
   `results.parse_error` flag a config that exists but does not parse.
   JSON uses the standard envelope: `hyalo config --jq '.results.dir'`
+- **`results` key conventions**: the envelope owns `total`; inside `results`, `total` always means
+  "items the command considered", so a count of findings gets its own name (`lint` →
+  `.results.violations`, `links auto` → `.results.matched`). Top-level `results` keys are always
+  present — `0`, `false`, `[]` and `null` included — so `.results.dry_run` is `false`, not
+  missing, on any non-dry-run mutation; only per-item records inside arrays omit optional keys.
+  Every mutating command reports `dry_run` and `skipped_count`.
 - **Config discovery**: `.hyalo.toml` is read from the current directory, or from the nearest
   parent whose configured vault contains it — running from inside the vault keeps the config.
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect

@@ -198,6 +198,12 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         hints is always present (empty [] when --no-hints). \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
         --count prints just the total as a bare integer (shortcut for --jq '.total').\n\
+        RESULTS CONVENTIONS: the envelope owns \"total\". When a command repeats \"total\" inside \
+        results it always means the number of items that command considered (a denominator) — \
+        never a count of findings, which is named for what it counts (lint: violations, \
+        links auto: matched). Top-level results keys are always present, including when the \
+        value is 0, false, [] or null; only per-item records inside arrays omit absent optional \
+        keys. Every mutating command reports dry_run and skipped_count.\n\
         Use --format text for human-readable output, --format json for machine-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
@@ -702,7 +708,9 @@ pub(crate) enum Commands {
             task counts (total/done), link health (total/broken count, plus a distinct \
             broken_anchors count — a link whose target resolves but whose #fragment names no \
             heading there; omitted from JSON when zero, NEW-15), \
-            orphan count, dead-end count, and recently modified files.\n\
+            orphan count, dead-end count, and recently modified files. When a `[schema]` \
+            block is configured it also carries `schema` with `errors`, `warnings` and \
+            `files_with_violations` \u{2014} the same key `lint` uses for that quantity.\n\
             Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X, \
             or --broken-links --strict to fail CI on any finding.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
@@ -1275,6 +1283,8 @@ Repeatable (AND).\n\
             path ({% ifversion ghes %}/admin{% endif %}/guides). hyalo cannot know what it \
             renders to, so it is counted under templated / templated_links and never rewritten \
             — a fuzzy match on the literal text would silently drop the conditional.\n\
+            DRY RUN: `dry_run` is true on a preview and false under --apply, on both \
+            `links fix` and `links auto`, so one key tells preview from apply.\n\
             SIDE EFFECTS: None unless `links fix --apply` is passed.\n\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
@@ -1334,15 +1344,17 @@ Repeatable (AND).\n\
             OUTPUT: Text by default — summary mode groups violations by `(file, rule)` and caps\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
             `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
-            for a JSON payload with `rule_groups`, `total`, `rules_fired`,\n\
+            for a JSON payload with `rule_groups`, `violations`, `rules_fired`,\n\
             `files_with_violations`, `files_truncated`, and `files_ignored` (files dropped by\n\
             `[lint] ignore`, appended to the text summary line as \"(N ignored by [lint]\n\
             ignore)\" so a bare sweep never reads as a clean bill of health for files it never\n\
             looked at — UX-1). EVERY counter in that payload —\n\
-            `total`, `rules_fired`, `errors`, `warnings`, `files_with_violations`,\n\
+            `violations`, `rules_fired`, `errors`, `warnings`, `files_with_violations`,\n\
             `files_checked` — and the exit code describe the WHOLE vault, never just the\n\
-            displayed slice: a file cap can never mask an error, and `total` reconciles\n\
-            against `errors + warnings`. `files_truncated` is about the displayed `files[]`\n\
+            displayed slice: a file cap can never mask an error, and `violations`\n\
+            reconciles against `errors + warnings`. The run-level finding count is named\n\
+            `violations`, not `total`, because the envelope's own `total` on the same\n\
+            payload is the count of files with violations. `files_truncated` is about the displayed `files[]`\n\
             list — true only when there were more violating files than the cap, not merely\n\
             when the vault is bigger than it.\n\
             LIMIT: --limit/-n N caps the displayed files[]; `--limit 0` means UNLIMITED (lift\n\
@@ -2301,7 +2313,10 @@ pub(crate) enum LinksAction {
             OUTPUT: each proposed match carries file, line, col, matched_text and link_target. \
             `line` and `col` are both 1-based, and `col` counts Unicode scalar values (characters), \
             not bytes — the same convention as `lint`'s `column`, so a mention after an accented or \
-            CJK character reports the column an editor shows.\n\n\
+            CJK character reports the column an editor shows. \
+            `matched` is the proposal count and `scanned` the files examined; `dry_run` \
+            says whether this was a preview, which `applied` alone cannot — an --apply \
+            run that finds nothing to link also reports applied: false.\n\n\
             COMMON MISTAKES:\n\
             - --exclude-target-glob filters by file path, --exclude-title filters by title text. \
             Use --exclude-target-glob for directories (e.g. 'templates/*'), --exclude-title for words.\n\

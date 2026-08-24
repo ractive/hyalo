@@ -348,6 +348,13 @@ OUTPUT SHAPES (JSON, default):
   # total: present for list commands ({LIST_COMMANDS}); omitted elsewhere
   # hints: always present (empty [] when --no-hints or --jq)
   # --jq operates on the full envelope: --jq '.results[].file', --jq '.total'
+  # Conventions inside results:
+  #   - a `total` inside results always counts items the command considered;
+  #     a count of findings is named for what it counts (lint: violations,
+  #     links auto: matched)
+  #   - top-level results keys are always present (0 / false / [] / null
+  #     included); only per-item records inside arrays omit optional keys
+  #   - every mutating command reports dry_run and skipped_count
 
   # find — results is an array of file objects
   {\"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
@@ -359,20 +366,32 @@ OUTPUT SHAPES (JSON, default):
   {\"results\": {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}, \"hints\": [...]}
 
   # set / remove / append (mutation result)
-  {\"results\": {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
-  {\"results\": {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
+  {\"results\": {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...],
+  \"skipped_count\": N, \"scanned\": N, \"total\": N, \"dry_run\": false}, \"hints\": [...]}
+  {\"results\": {\"tag\": \"reviewed\", \"modified\": [...], \"skipped\": [...],
+  \"skipped_count\": N, \"scanned\": N, \"total\": N, \"dry_run\": false}, \"hints\": [...]}
 
   # properties summary — results is an array
   {\"results\": [{\"name\": \"status\", \"type\": \"text\", \"count\": 21}, ...], \"total\": N, \"hints\": [...]}
 
   # properties rename
-  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"conflicts\": [...], \"total\": N}, \"hints\": [...]}
+  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped_count\": N, \"conflicts\": [...], \"total\": N, \"dry_run\": false}, \"hints\": [...]}
 
   # tags summary — results is an array
   {\"results\": [{\"name\": \"backlog\", \"count\": 10}, ...], \"total\": 31, \"hints\": [...]}
 
   # tags rename
-  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped\": [...], \"total\": N}, \"hints\": [...]}
+  {\"results\": {\"from\": \"old\", \"to\": \"new\", \"modified\": [...], \"skipped_count\": N, \"total\": N, \"dry_run\": false}, \"hints\": [...]}
+
+  # lint (read-only) — violations is the run-level finding count
+  {\"results\": {\"files\": [...], \"violations\": N, \"errors\": N, \"warnings\": N,
+  \"files_checked\": N, \"files_with_violations\": N, \"files_ignored\": N,
+  \"rules_fired\": N, \"files_truncated\": false, \"dry_run\": false}, \"total\": N, \"hints\": [...]}
+
+  # links auto — matched is the proposal count; scanned is the denominator
+  {\"results\": {\"matches\": [...], \"matched\": N, \"scanned\": N, \"applied\": false,
+  \"dry_run\": true, \"files_applied\": 0, \"files_skipped\": 0, \"files_failed\": 0,
+  \"apply_outcomes\": [...], \"ambiguous_titles\": [...]}, \"hints\": [...]}
 
   # task read / toggle / set
   {\"results\": {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}, \"hints\": [...]}
@@ -381,6 +400,7 @@ OUTPUT SHAPES (JSON, default):
   {\"results\": {\"files\": {\"total\": 31, \"directories\": [...]}, \"properties\": [...], \"tags\": {...},
   \"status\": [{\"value\": \"draft\", \"count\": 5}], \"tasks\": {\"total\": 50, \"done\": 30},
   \"orphans\": 7, \"dead_ends\": 3, \"links\": {\"total\": 166, \"broken\": 5},
+  \"schema\": {\"errors\": 2, \"warnings\": 3, \"files_with_violations\": 4},
   \"recent_files\": [...]}, \"hints\": [...]}
 
   # backlinks
