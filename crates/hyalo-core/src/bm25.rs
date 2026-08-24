@@ -143,16 +143,78 @@ pub fn create_stemmer(lang: StemLanguage) -> Stemmer {
     Stemmer::create(lang.to_algorithm())
 }
 
+/// Bumped whenever [`tokenize`]'s output for the same input text changes in a
+/// way that makes previously persisted [`crate::index::IndexEntry::bm25_tokens`]
+/// stale (i.e. no longer what a fresh tokenize would produce). Readers compare
+/// this against [`crate::index::IndexEntry::bm25_tokenizer_version`] and fall
+/// back to live re-tokenization on mismatch — see DEC-094 (F-2).
+///
+/// v1: whole-alphanumeric-run tokens (original). v2: scriptio-continua runs
+/// (CJK ideographs, Hiragana/Katakana, Hangul) are additionally split into
+/// overlapping character bigrams instead of one unmatchable giant token.
+pub const TOKENIZER_VERSION: u32 = 2;
+
+/// Returns `true` for codepoints from scripts conventionally written without
+/// spaces between words ("scriptio continua"): CJK ideographs (including
+/// compatibility/extension blocks), Hiragana, Katakana, and Hangul syllables.
+/// Detected by codepoint range rather than a full Unicode Script table —
+/// cheap, and sufficient to catch the common case a naive alphanumeric split
+/// misses entirely (see F-2 in `reviews/deep-analysis-2-2026-08-23.md`).
+fn is_scriptio_continua(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x30FF   // Hiragana + Katakana
+        | 0x31F0..=0x31FF // Katakana Phonetic Extensions
+        | 0x2E80..=0x2EFF // CJK Radicals Supplement
+        | 0x3400..=0x4DBF // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF // CJK Unified Ideographs
+        | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+        | 0xAC00..=0xD7A3 // Hangul Syllables
+        | 0x20000..=0x2A6DF // CJK Unified Ideographs Extension B
+    )
+}
+
+/// Tokenize one alphanumeric run (already split on non-alphanumeric chars).
+/// Scriptio-continua runs (see [`is_scriptio_continua`]) become overlapping
+/// character bigrams instead of a single whole-run token, so a query for a
+/// substring of a longer CJK run can still match. Other scripts keep the
+/// original whole-run + lowercase + stem pipeline.
+fn tokenize_run(run: &str, stemmer: &Stemmer, out: &mut Vec<String>) {
+    if run.chars().any(is_scriptio_continua) {
+        let chars: Vec<char> = run.chars().collect();
+        if chars.len() == 1 {
+            out.push(chars[0].to_string());
+        } else {
+            out.extend(chars.windows(2).map(|pair| pair.iter().collect::<String>()));
+        }
+    } else {
+        out.push(stemmer.stem(&run.to_lowercase()).into_owned());
+    }
+}
+
 /// Tokenizes `text` with per-token Unicode-aware lowercasing, splits on non-alphanumeric chars,
-/// and stems each token using `stemmer`.
+/// and stems each token using `stemmer`. Scriptio-continua runs (CJK, Hiragana/Katakana, Hangul)
+/// are tokenized as overlapping character bigrams instead of one whole-run token — see
+/// [`TOKENIZER_VERSION`].
 pub fn tokenize(text: &str, stemmer: &Stemmer) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let lower = word.to_lowercase();
-            stemmer.stem(&lower).into_owned()
-        })
-        .collect()
+    // Fast path: pure-ASCII text can never contain scriptio-continua codepoints,
+    // so skip the per-run classification pass entirely and keep the original
+    // single-pass pipeline. This preserves the hot scan-path performance that
+    // motivated the pretokenize-perf fix (bm25_tokenize scan regression).
+    if text.is_ascii() {
+        return text
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .map(|word| stemmer.stem(&word.to_lowercase()).into_owned())
+            .collect();
+    }
+
+    let mut tokens = Vec::new();
+    for run in text.split(|c: char| !c.is_alphanumeric()) {
+        if !run.is_empty() {
+            tokenize_run(run, stemmer, &mut tokens);
+        }
+    }
+    tokens
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +509,13 @@ pub struct Bm25InvertedIndex {
     doc_paths: Vec<String>,
     /// Average document length (pre-computed, stored as f64 for precision).
     avgdl: f64,
+    /// [`TOKENIZER_VERSION`] that produced every token in `postings`. `#[serde(default)]`
+    /// makes a snapshot written before this field existed deserialize as `0`, which never
+    /// equals the current [`TOKENIZER_VERSION`] — callers must treat that as "rebuild
+    /// before trusting" (DEC-094 / F-2), the same way a version mismatch is handled for
+    /// [`crate::index::IndexEntry::bm25_tokenizer_version`].
+    #[serde(default)]
+    tokenizer_version: u32,
 }
 
 impl Bm25InvertedIndex {
@@ -514,6 +583,7 @@ impl Bm25InvertedIndex {
             doc_lengths,
             doc_paths,
             avgdl,
+            tokenizer_version: TOKENIZER_VERSION,
         }
     }
 
@@ -564,6 +634,16 @@ impl Bm25InvertedIndex {
         self.doc_paths.len()
     }
 
+    /// Returns the [`TOKENIZER_VERSION`] that produced this index's tokens.
+    ///
+    /// Callers holding a persisted index (loaded from a snapshot) must compare
+    /// this against the current [`TOKENIZER_VERSION`] before trusting it for
+    /// scoring — see the field doc comment and DEC-094 (F-2).
+    #[must_use]
+    pub fn tokenizer_version(&self) -> u32 {
+        self.tokenizer_version
+    }
+
     /// Validate that all `doc_id` values in posting lists are within bounds.
     ///
     /// A crafted snapshot could contain `doc_id` values that exceed the length of
@@ -602,7 +682,16 @@ impl Bm25InvertedIndex {
             doc_lengths,
             doc_paths,
             avgdl,
+            tokenizer_version: TOKENIZER_VERSION,
         }
+    }
+
+    /// Overrides `tokenizer_version` on a test-built index, to simulate a
+    /// snapshot persisted by an older `tokenize()` algorithm.
+    #[cfg(test)]
+    pub(crate) fn with_tokenizer_version_for_test(mut self, version: u32) -> Self {
+        self.tokenizer_version = version;
+        self
     }
 
     // ------------------------------------------------------------------
@@ -855,6 +944,57 @@ mod tests {
         // Just verify we get two non-empty tokens; exact stems depend on the snowball algorithm.
         assert_eq!(tokens.len(), 2);
         assert!(tokens.iter().all(|t| !t.is_empty()));
+    }
+
+    #[test]
+    fn test_tokenize_cjk_run_becomes_bigrams() {
+        let stemmer = make_stemmer(StemLanguage::English);
+        // "日本語" (Japanese, no inter-word spaces) must not collapse into one
+        // unmatchable token (F-2) — it should become overlapping bigrams.
+        let tokens = tokenize("日本語", &stemmer);
+        assert_eq!(tokens, vec!["日本", "本語"]);
+    }
+
+    #[test]
+    fn test_tokenize_cjk_single_char_run() {
+        let stemmer = make_stemmer(StemLanguage::English);
+        // A lone CJK character has no bigram partner — kept as a unigram.
+        let tokens = tokenize("語", &stemmer);
+        assert_eq!(tokens, vec!["語"]);
+    }
+
+    #[test]
+    fn test_tokenize_cjk_query_matches_substring_of_longer_run() {
+        // A query for a CJK substring should tokenize to a subset of the bigrams
+        // produced for the longer run it appears in — the mechanism that lets a
+        // BM25 AND query over the bigrams actually match (F-2 acceptance criterion).
+        let stemmer = make_stemmer(StemLanguage::English);
+        let doc_tokens = tokenize("日本語のテキストです", &stemmer);
+        let query_tokens = tokenize("日本語", &stemmer);
+        assert!(
+            query_tokens.iter().all(|t| doc_tokens.contains(t)),
+            "query bigrams {query_tokens:?} should all appear in document bigrams {doc_tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenize_mixed_cjk_and_ascii_words_both_present() {
+        let stemmer = make_stemmer(StemLanguage::English);
+        // Space-separated CJK and ASCII words tokenize independently: the ASCII
+        // word keeps the normal stem pipeline, the CJK run becomes bigrams.
+        let tokens = tokenize("hello 日本語", &stemmer);
+        assert!(tokens.contains(&"hello".to_owned()));
+        assert!(tokens.contains(&"日本".to_owned()));
+        assert!(tokens.contains(&"本語".to_owned()));
+    }
+
+    #[test]
+    fn test_tokenize_ascii_fast_path_unaffected_by_cjk_handling() {
+        // The is_ascii() fast path must produce byte-identical output to the
+        // pre-F-2 behaviour for pure-ASCII text (no scan-perf regression).
+        let stemmer = make_stemmer(StemLanguage::English);
+        let tokens = tokenize("The Quick-Brown Fox_Jumps", &stemmer);
+        assert_eq!(tokens, vec!["the", "quick", "brown", "fox", "jump"]);
     }
 
     #[test]
@@ -1535,6 +1675,7 @@ mod tests {
                 self_anchors: Vec::new(),
                 bm25_tokens: Some(vec!["rust".to_owned(), "program".to_owned()]),
                 bm25_language: Some("english".to_owned()),
+                bm25_tokenizer_version: Some(TOKENIZER_VERSION),
             },
             IndexEntry {
                 rel_path: "b.md".to_owned(),
@@ -1547,6 +1688,7 @@ mod tests {
                 self_anchors: Vec::new(),
                 bm25_tokens: None, // No tokens — should be skipped
                 bm25_language: None,
+                bm25_tokenizer_version: None,
             },
         ];
 
@@ -1575,12 +1717,74 @@ mod tests {
             self_anchors: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
+            bm25_tokenizer_version: None,
         }];
 
         assert!(
             Bm25InvertedIndex::build_from_entries(&entries).is_none(),
             "no tokens → should return None"
         );
+    }
+
+    #[test]
+    fn test_bm25_index_tokenizer_version_matches_current_when_freshly_built() {
+        let index = Bm25InvertedIndex::build(vec![DocumentInput {
+            rel_path: "a.md".to_owned(),
+            title: "Title".to_owned(),
+            body: "Body text".to_owned(),
+            language: StemLanguage::English,
+        }]);
+        assert_eq!(index.tokenizer_version(), TOKENIZER_VERSION);
+    }
+
+    #[test]
+    fn test_bm25_index_stale_tokenizer_version_is_detectable() {
+        // Simulates a `Bm25InvertedIndex` persisted by an older hyalo build whose
+        // `tokenize()` predates the CJK-bigram fix (F-2 / DEC-094). Readers must
+        // compare `tokenizer_version()` against the current `TOKENIZER_VERSION`
+        // and fall back to live re-tokenization rather than trust stale postings —
+        // this only asserts the version is observably different, since the actual
+        // fallback routing lives in the CLI's `find` command (see e2e coverage).
+        let index = Bm25InvertedIndex::build(vec![DocumentInput {
+            rel_path: "a.md".to_owned(),
+            title: "Title".to_owned(),
+            body: "Body text".to_owned(),
+            language: StemLanguage::English,
+        }])
+        .with_tokenizer_version_for_test(1);
+        assert_ne!(index.tokenizer_version(), TOKENIZER_VERSION);
+    }
+
+    #[test]
+    fn test_bm25_index_missing_tokenizer_version_field_deserializes_as_stale() {
+        // A snapshot written before `tokenizer_version` existed serialized a map
+        // with exactly these four keys and no `tokenizer_version`. `#[serde(default)]`
+        // must decode that gap as `0`, which never equals `TOKENIZER_VERSION` —
+        // proving old snapshots are detected as stale rather than silently trusted.
+        #[derive(Serialize)]
+        struct LegacyBm25IndexShim {
+            postings: HashMap<String, Vec<Posting>>,
+            doc_lengths: Vec<u32>,
+            doc_paths: Vec<String>,
+            avgdl: f64,
+        }
+
+        let legacy = LegacyBm25IndexShim {
+            postings: HashMap::new(),
+            doc_lengths: vec![3],
+            doc_paths: vec!["a.md".to_owned()],
+            avgdl: 3.0,
+        };
+        let bytes = rmp_serde::to_vec_named(&legacy).expect("serialize legacy shim");
+
+        let reloaded: Bm25InvertedIndex =
+            rmp_serde::from_slice(&bytes).expect("deserialize without tokenizer_version");
+        assert_eq!(
+            reloaded.tokenizer_version(),
+            0,
+            "field-absent snapshot must default to version 0, not the current version"
+        );
+        assert_ne!(reloaded.tokenizer_version(), TOKENIZER_VERSION);
     }
 
     // ------------------------------------------------------------------

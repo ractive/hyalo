@@ -1205,6 +1205,7 @@ mod tests {
             self_anchors: Vec::new(),
             bm25_tokens: None,
             bm25_language: None,
+            bm25_tokenizer_version: None,
         }
     }
 
