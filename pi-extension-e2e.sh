@@ -24,6 +24,15 @@ TEMPLATE="${1:-crates/hyalo-cli/templates/extension-hyalo.ts}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
+# Prefer this checkout's release binary: the guard validates the template
+# against THIS tree's hyalo (config envelope shape, [pi] section, lint
+# output). A PATH hyalo may be an older release that parses differently.
+# The extension resolves `hyalo` from PATH at runtime; this only pins the
+# binary under test.
+if [[ -x "target/release/hyalo" ]]; then
+    export PATH="$PWD/target/release:$PATH"
+fi
+
 # --- locate pi and its package directory -------------------------------
 PI_BIN="$(command -v pi)" || fail "pi not found on PATH"
 # Resolve through Homebrew/npm symlink chains to the real package dir.
@@ -74,7 +83,7 @@ echo "== [2/3] live e2e: forcing the hyalo tool (no bash fallback possible) =="
 # Query must return a plain count. Vault contents change, but the term
 # "iteration" always matches in hyalo's own knowledgebase and test vaults
 # that run this script; --count output is a bare number.
-OUT="$(pi --no-builtin-tools -e "$TEMPLATE" -p \
+OUT="$(pi -ne --no-builtin-tools -e "$TEMPLATE" -p \
     'Call the hyalo tool with subcommand "find" and args ["\"iteration\"", "--count"]. Reply with ONLY the number the tool returned, nothing else.')" \
     || fail "pi run failed (extension may not have loaded — check registerTool/registerCommand API)"
 
@@ -95,7 +104,7 @@ echo
 echo "== [3/3] guardrail e2e: lint findings appended to write result =="
 GUARD_FILE="hyalo-knowledgebase/.pi-e2e-guard.md"
 rm -f "$GUARD_FILE"
-OUT="$(pi -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
+OUT="$(pi -ne -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
 ---
 title: Guardrail test
 ---
