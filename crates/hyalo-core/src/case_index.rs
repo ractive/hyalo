@@ -919,21 +919,34 @@ mod tests {
 
         let _ = probe_case_insensitive(dir).unwrap();
 
-        let after: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.file_name())
-            .filter(|n| {
-                n.to_str()
-                    .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
-            })
-            .collect();
-
-        assert_eq!(
-            before, after,
-            "probe must clean up its own file in the temp dir, leaving no residue"
-        );
+        // Poll instead of asserting immediately: the system temp dir is shared
+        // (sibling tests probe it concurrently), and on NTFS a deleted file
+        // stays visible in directory listings while delete-pending (e.g. a CI
+        // antivirus briefly holds a handle). Residue must *clear*, not be
+        // instantaneously absent.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let after: std::collections::HashSet<_> = std::fs::read_dir(&sys_tmp)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name())
+                .filter(|n| {
+                    n.to_str()
+                        .is_some_and(|s| s.to_ascii_lowercase().starts_with(CASE_PROBE_PREFIX))
+                })
+                .collect();
+            let residue: Vec<_> = after.difference(&before).collect();
+            if residue.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "probe must clean up its own file in the temp dir, leaving no \
+                 residue; still present after 10s: {residue:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     #[test]
