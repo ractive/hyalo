@@ -39,6 +39,14 @@ pub(crate) struct ConfigReport {
     /// than defaulted, so the "every value below is a built-in default" note
     /// can say `dir` is the exception (NEW-17, dogfood pre3).
     pub dir_salvaged: bool,
+    /// Diagnostic when this config's `dir` resolves outside its own config
+    /// directory (H-1, iter-221) — absolute, or a net `..` escape. `None` in
+    /// the ordinary case. Distinct from [`Self::malformed`]: the file parsed
+    /// fine, but its `dir` value is refused as a scope-widening attempt.
+    /// Every other hyalo command refuses to run while this is `Some`;
+    /// `hyalo config` is the one place it is safe to show and continue,
+    /// because showing it is the whole point.
+    pub dir_out_of_bounds: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
     /// Resolved vault directory: the effective directory the CLI would use —
@@ -140,6 +148,7 @@ pub(crate) fn collect_config_report(
         raw_contents,
         malformed: resolved.malformed,
         dir_salvaged: resolved.dir_salvaged,
+        dir_out_of_bounds: resolved.dir_out_of_bounds,
         cwd: cwd.to_path_buf(),
         dir,
         dir_overridden,
@@ -220,6 +229,12 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             // unusable file rather than defaulted (NEW-17, dogfood pre3) —
             // meaningful only alongside `malformed: true`.
             "dir_salvaged": report.dir_salvaged,
+            // `true` when `dir` was refused for resolving outside its own
+            // config directory (H-1, iter-221); `dir_out_of_bounds_reason`
+            // carries the diagnostic. Every other command refuses to run
+            // while this is `true` — `hyalo config` is the exception.
+            "dir_out_of_bounds": report.dir_out_of_bounds.is_some(),
+            "dir_out_of_bounds_reason": report.dir_out_of_bounds,
             // Only present with --raw; `null` otherwise so the key's shape
             // never changes between invocations.
             "raw_contents": report.raw_contents,
@@ -342,6 +357,20 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         None => String::new(),
     };
 
+    // H-1 (iter-221): a `dir` refused for resolving outside its own config
+    // directory. Distinct from `malformed_str` above — the file parsed fine,
+    // but this specific value was refused as a scope-widening attempt, and
+    // `dir` below is the hardcoded "." default, not the offending value.
+    let dir_out_of_bounds_str = match report.dir_out_of_bounds.as_deref() {
+        Some(diagnostic) => format!(
+            "dir_out_of_bounds: true\n  {}\n  note: dir below is the built-in default, not the \
+             value the config asked for — every other hyalo command refuses to run until this \
+             is fixed\n",
+            diagnostic.trim_end().replace('\n', "\n  "),
+        ),
+        None => String::new(),
+    };
+
     // Annotate the dir line when a `--dir` override is in effect, so the report
     // makes the shadow explicit rather than silently reporting the override.
     let dir_suffix = if report.dir_overridden {
@@ -351,7 +380,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+        "{dir_out_of_bounds_str}{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),

@@ -234,6 +234,10 @@ pub(crate) struct Cli {
             "Naming a different directory switches to that directory's own .hyalo.toml if it has ",
             "one, else built-in defaults \u{2014} reported on stderr, because the config in your ",
             "working directory then no longer applies.\n\n",
+            "A project-local .hyalo.toml's own `dir` value must resolve at-or-below the directory ",
+            "the file lives in \u{2014} an absolute path or one that nets above it via `..` refuses ",
+            "every command until fixed. This flag is the escape hatch: pass --dir explicitly to ",
+            "point hyalo at a location the config itself is not allowed to claim.\n\n",
             "Run `hyalo config --dir <path>` to see which config file an invocation would use."
         )
     )]

@@ -312,6 +312,19 @@ pub(crate) struct ResolvedDefaults {
     /// `hyalo lint`, matching the ephemeral `--profile` overlay. Multiple
     /// profiles compose.
     pub(crate) lint_profiles: Vec<String>,
+    /// Diagnostic when this config's `dir` resolves outside `config_dir`
+    /// itself — absolute, or a net `..` escape (H-1, iter-221). `None` for
+    /// every other config, including one where `dir` was never set.
+    ///
+    /// Distinct from [`Self::malformed`]: the TOML parsed fine here, but a
+    /// project-local `dir` this wide is a scope expansion the config is not
+    /// entitled to make silently. `dir` above is left at the hardcoded `"."`
+    /// default in this case, never the offending value, so nothing
+    /// downstream can act on it even if a caller forgets to check this field
+    /// first. Every caller that can touch the filesystem must refuse the run
+    /// while this is `Some`; `hyalo config` is the one exception — it exists
+    /// to surface exactly this and must keep working to do so.
+    pub(crate) dir_out_of_bounds: Option<String>,
 }
 
 impl PartialEq for ResolvedDefaults {
@@ -362,6 +375,7 @@ impl ResolvedDefaults {
             malformed: None,
             dir_salvaged: false,
             lint_profiles: Vec::new(),
+            dir_out_of_bounds: None,
         }
     }
 
@@ -388,6 +402,156 @@ impl ResolvedDefaults {
             dir_salvaged,
             ..Self::defaults_for(dir)
         }
+    }
+
+    /// Defaults for a directory whose `.hyalo.toml` set a `dir` outside its
+    /// own boundary (H-1, iter-221). See [`Self::dir_out_of_bounds`].
+    fn dir_out_of_bounds_for(dir: &Path, diagnostic: String) -> Self {
+        Self {
+            dir_out_of_bounds: Some(diagnostic),
+            ..Self::defaults_for(dir)
+        }
+    }
+}
+
+/// Why a project-local `dir` was refused by [`validate_project_local_dir`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirBoundaryReason {
+    /// `dir` is an absolute path.
+    Absolute,
+    /// `dir`'s `..` components net-escape the config directory.
+    Escapes,
+}
+
+/// A project-local `dir` that resolves outside its own config directory
+/// (H-1, iter-221).
+#[derive(Debug, Clone)]
+struct DirBoundaryError {
+    /// The `.hyalo.toml` that set the offending `dir`.
+    config_path: PathBuf,
+    /// The raw `dir = "…"` value, exactly as written in the file.
+    raw_dir: String,
+    reason: DirBoundaryReason,
+}
+
+impl DirBoundaryError {
+    /// One-line diagnostic naming both the offending file and value, with a
+    /// pointer to the escape hatch — used for the loud stderr warning, the
+    /// hard-refusal error body, and `hyalo config`'s report alike so the
+    /// wording never has to be kept in sync across three call sites.
+    fn diagnostic(&self) -> String {
+        let what = match self.reason {
+            DirBoundaryReason::Absolute => {
+                "is an absolute path, which a project-local .hyalo.toml is not allowed to set"
+            }
+            DirBoundaryReason::Escapes => "resolves above the config directory",
+        };
+        format!(
+            "{}: dir = {:?} {what} — pass --dir explicitly if that scope is genuinely intended",
+            self.config_path.display(),
+            self.raw_dir
+        )
+    }
+}
+
+/// Refuse a project-local `dir` that is absolute or that nets outside
+/// `config_dir` after resolving `..` components (H-1, iter-221).
+///
+/// A project-local `.hyalo.toml` travels with the repository it lives in —
+/// hyalo is agent-driven, and agents run its hints verbatim, so a hostile
+/// clone that redefines `dir` this way could redirect every read and write
+/// hyalo does at a location the user never chose. `dir` is trusted to name
+/// anything *at or below* `config_dir` (bounded `sub/../other` round-trips
+/// included, mirroring [`resolve_changelog_file`]); an absolute path or a net
+/// `..` escape is refused outright rather than silently clamped, matching the
+/// "no silent config discard" stance from iter-201 (DEC-069/070/071) — a
+/// scope expansion this large is exactly the kind of thing that must be loud.
+///
+/// Symlinks are checked too: when the resolved path already exists on disk,
+/// both sides are canonicalized and compared for real containment, so a
+/// `dir` that is lexically bounded but physically escapes via a symlink is
+/// still caught. A `dir` that does not exist yet has nothing to
+/// canonicalize — the lexical check is authoritative for it, and the
+/// filesystem cannot yet be walked through it anyway.
+fn validate_project_local_dir(
+    config_dir: &Path,
+    raw_dir: &str,
+) -> Result<PathBuf, DirBoundaryError> {
+    let config_path = config_dir.join(".hyalo.toml");
+    let err = |reason| DirBoundaryError {
+        config_path: config_path.clone(),
+        raw_dir: raw_dir.to_owned(),
+        reason,
+    };
+
+    let raw_norm = raw_dir.replace('\\', "/");
+    if Path::new(&raw_norm).is_absolute() || raw_norm.starts_with('/') {
+        return Err(err(DirBoundaryReason::Absolute));
+    }
+
+    let joined = config_dir.join(&raw_norm);
+    let mut depth: i32 = 0;
+    for comp in Path::new(&raw_norm).components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(err(DirBoundaryReason::Escapes));
+                }
+            }
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            // `RootDir`/`Prefix` (a bare `/…` or Windows `C:\…`) — already
+            // covered by the `is_absolute`/`starts_with('/')` check above for
+            // every platform this runs on; treat defensively as an escape.
+            _ => return Err(err(DirBoundaryReason::Escapes)),
+        }
+    }
+
+    // Defense in depth against a symlink escape: when the target exists,
+    // compare canonicalized paths instead of trusting the lexical walk above.
+    if let (Ok(canon_dir), Ok(canon_config)) = (
+        dunce::canonicalize(&joined),
+        dunce::canonicalize(config_dir),
+    ) && !canon_dir.starts_with(&canon_config)
+    {
+        return Err(err(DirBoundaryReason::Escapes));
+    }
+
+    Ok(joined)
+}
+
+/// Collapse `.` and `..` components of a relative `dir` string without
+/// touching the filesystem or joining it onto any base directory.
+///
+/// [`validate_project_local_dir`] already refused any `dir` that nets above
+/// the config directory, so by the time this runs a bounded round-trip like
+/// `"sub/../kb"` is known-legal — but left as literal text it would still
+/// require the phantom `sub/` to exist on disk purely so the OS can resolve
+/// the `..` through it. Collapsing it here makes an allowed round-trip behave
+/// exactly like writing `"kb"` directly, matching how every existing `dir`
+/// value (which never contained `..`) already behaved.
+fn lexically_normalize_relative(raw: &str) -> PathBuf {
+    let raw_norm = raw.replace('\\', "/");
+    let mut out = PathBuf::new();
+    for comp in Path::new(&raw_norm).components() {
+        match comp {
+            // Already refused before this runs whenever it would net below
+            // empty; kept defensive (push the literal `..`) rather than
+            // panicking if that invariant is ever violated.
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
     }
 }
 
@@ -659,6 +823,15 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         }
     };
 
+    // H-1 (iter-221): refuse before any other processing — a `dir` outside
+    // this file's own boundary makes every other setting in it moot, since
+    // the run must not touch the filesystem at all until this is fixed.
+    if let Some(raw) = cfg.dir.as_deref()
+        && let Err(boundary_err) = validate_project_local_dir(dir, raw)
+    {
+        return ResolvedDefaults::dir_out_of_bounds_for(dir, boundary_err.diagnostic());
+    }
+
     // Deprecation: warn when the kebab-case `required-sections` key is used.
     // The canonical key is `required_sections`; the alias is kept for one
     // release. Checked against the already-parsed `[schema]` value (which the
@@ -758,7 +931,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .unwrap_or_default();
 
     ResolvedDefaults {
-        dir: cfg.dir.map(PathBuf::from).unwrap_or(defaults.dir),
+        dir: cfg
+            .dir
+            .as_deref()
+            .map(lexically_normalize_relative)
+            .unwrap_or(defaults.dir),
         config_dir: dir.to_path_buf(),
         format: cfg.format,
         hints: cfg.hints.unwrap_or(defaults.hints),
@@ -788,6 +965,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         malformed: None,
         dir_salvaged: false,
         lint_profiles,
+        dir_out_of_bounds: None,
     }
 }
 
@@ -1269,6 +1447,9 @@ pub(crate) fn index_mismatch_summary(
 /// "does not apply" note that contradicted it (dogfood UX-5).
 pub(crate) fn emit_config_diagnostics(effective: &EffectiveConfig) {
     if let Some(diagnostic) = effective.config.malformed.as_deref() {
+        crate::warn::warn_always(diagnostic);
+    }
+    if let Some(diagnostic) = effective.config.dir_out_of_bounds.as_deref() {
         crate::warn::warn_always(diagnostic);
     }
 }

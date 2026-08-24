@@ -828,6 +828,27 @@ fn run_inner() -> Result<(), AppError> {
     // an unusable one be reported without naming a file `--dir` already
     // discarded (iter-213, UX-5).
     crate::config::emit_config_diagnostics(&effective);
+
+    // H-1 (iter-221): a project-local .hyalo.toml whose `dir` resolves
+    // outside its own config directory tried to redefine hyalo's own
+    // read/write scope — refuse every command, not just writes, since even a
+    // read would operate against a boundary the config was never entitled to
+    // set for itself. Gated on `!dir_from_cli`: an explicit `--dir` is the
+    // user's own choice, and `EffectiveConfig::dir` is always that literal
+    // value (never this config's own `dir` field, see `resolve_effective`),
+    // so a run with `--dir` given is safe regardless of what a discovered
+    // ancestor config wrote.
+    if !dir_from_cli && let Some(diagnostic) = effective.config.dir_out_of_bounds.as_deref() {
+        let fmt = early_format(
+            cli.format,
+            cli.jq.is_some(),
+            effective.config.format.as_deref(),
+        );
+        return Err(AppError::User(crate::output::format_error(
+            fmt, diagnostic, None, None, None,
+        )));
+    }
+
     let crate::config::EffectiveConfig {
         config,
         dir,

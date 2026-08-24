@@ -2217,3 +2217,75 @@ is real design work with its own trade-offs against the discoverability
 this review; iter-220 does not attempt it. This DEC exists so the extension
 is documented and traceable to where the boundary is meant to land, not
 silently widened and forgotten.
+
+## DEC-092: a project-local `dir` outside its own config directory is a hard refusal, not a clamp (2026-08-24)
+
+**Decision:** [[iterations/iteration-221-config-dir-boundary]] closes H-1
+(re-confirmed as F-6 in the deep-analysis-2 review): a project-local
+`.hyalo.toml`'s `dir` — absolute, or netting above the config directory
+after resolving `..` — now refuses the run outright rather than being
+honored or silently clamped. `load_config_from` validates `dir` immediately
+after a successful TOML parse, before any other field is even looked at; a
+violation short-circuits to `ResolvedDefaults::dir_out_of_bounds_for`, which
+leaves `dir` at the hardcoded `"."` default (never the offending value) and
+records a diagnostic in a new `dir_out_of_bounds: Option<String>` field,
+kept deliberately distinct from `malformed` (the TOML parsed fine; this is a
+policy refusal, not a parse failure). The diagnostic names both the
+offending `.hyalo.toml` and the exact `dir = "…"` value, and points at
+`--dir` as the escape hatch. It is emitted through `warn::warn_always`
+(survives `-q`, same as `malformed`), and every command that can touch the
+filesystem refuses to run while it is set — **reads included, not just
+writers** — since the whole point is that even a read must not operate
+against a boundary the config was never entitled to set for itself. The one
+exception is `hyalo config` itself, which reports `dir_out_of_bounds: true`
+plus the reason in both JSON and text and keeps working, because surfacing
+exactly this is its job.
+
+The gate only fires when no `--dir` was given
+(`crates/hyalo-cli/src/run.rs`, gated on `!dir_from_cli`): `--dir` is the
+user's own explicit choice, and `EffectiveConfig::dir` is always the literal
+`--dir` value in every branch of `resolve_effective` — never a discovered
+config's own `dir` field — so a run with `--dir` given is safe regardless of
+what an ancestor `.hyalo.toml` (adopted via DEC-091's second discovery
+entry point) wrote. A `dir` that stays at-or-below the config directory,
+including a bounded round-trip like `sub/../kb`, is unaffected and is now
+lexically normalized (`lexically_normalize_relative`) so the round-trip
+behaves like writing `kb` directly rather than requiring the phantom `sub/`
+to exist on disk. Symlinks are checked too: when the resolved path already
+exists, both sides are canonicalized and compared for real containment, so
+a `dir` that is lexically bounded but physically escapes through a symlink
+is still refused.
+
+**Why refuse instead of clamp:** hyalo is agent-driven — CLAUDE.md instructs
+agents to run its hints verbatim — so a hostile cloned repo whose
+`.hyalo.toml` widens `dir` is a plausible write-scope-escape primitive
+against exactly the audience most likely to run it unattended. Silently
+clamping to the config directory would fix the escape but would still let
+the config decide, unannounced, that the user's intended scope was wrong;
+DEC-070 already establishes that a config-integrity problem this large must
+be loud, not quietly worked around. Refusing everything (not just writers,
+unlike DEC-070's malformed-config split) is the stricter twin of that
+stance: DEC-070's read/write split exists because a *read* on a wrong-but-
+bounded default vault is merely confusing, while a read that followed an
+attacker-chosen `dir` could itself be the information disclosure — the
+asymmetry that justifies leniency for readers there does not hold here.
+
+**Relationship to DEC-069/070/071 (iter-201) and DEC-091 (iter-220):**
+DEC-069/070/071's throughline is "no silent config discard" — a config that
+stops applying, or applies with missing pieces, must say so loudly rather
+than let a command run quietly degraded. DEC-092 is the same stance applied
+to the opposite direction: a config that tries to *apply more than it
+should* must refuse loudly rather than be silently honored or silently
+narrowed. DEC-091 documented that ancestor-config discovery (DEC-069's case
+1, extended by iter-220 to a second entry point) had no boundary check on
+what an adopted config's `dir` could say, and named this iteration as where
+that boundary would land — DEC-092 is that boundary, and it protects both
+discovery entry points identically since the gate lives in
+`load_config_from` itself, not in either caller.
+
+**Non-goals, deferred to [[iterations/iteration-222-security-robustness-batch]]:**
+Windows drive-relative paths (`C:foo` without a root, distinct from the
+already-rejected `C:\foo`) and alternate data streams are a known gap
+(M-2), not addressed here. Sandboxing hyalo against a fully hostile repo
+beyond the write-scope root remains out of scope for a local single-user
+CLI.
