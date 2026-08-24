@@ -2,7 +2,7 @@
 title: Iteration 216 — results JSON shape consistency
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-216/results-shape-consistency
 tags:
   - iteration
