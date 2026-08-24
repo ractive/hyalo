@@ -2,7 +2,7 @@
 title: "Iteration 223 — query & output correctness (CJK search, section ambiguity, jq/sort output, schema strictness, error hints)"
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-223/query-output-correctness
 tags: [iteration, search, output, ux]
 related:
@@ -71,13 +71,13 @@ hintless error envelopes.
 
 ## Tasks
 
-- [ ] F-1: when `--section` matches more than one distinct heading instance,
+- [x] F-1: when `--section` matches more than one distinct heading instance,
       refuse with an ambiguity error naming the matched heading line numbers
       and suggesting `--line`, OR require an explicit opt-in flag
       (`--all-sections`/`--nth`). Decide which (prefer refuse-by-default,
       matching the `links` ambiguity precedent) and record it. At minimum
       the output must surface the matched section lines
-- [ ] F-2: make BM25 tokenization CJK-aware. Cheapest sufficient approach:
+- [x] F-2: make BM25 tokenization CJK-aware. Cheapest sufficient approach:
       detect CJK (and other scriptio-continua) runs and additionally index
       them as character bigrams, tokenizing CJK queries the same way so they
       match. Fall back / document per the review's ladder if full bigram
@@ -85,36 +85,36 @@ hintless error envelopes.
       limitation only" is the floor, not the target. Add a decision-log
       entry for the tokenization approach and note the index-format
       implication (snapshot rebuild)
-- [ ] F-3: truncate the embedded value in a jq runtime error to ~200 chars
+- [x] F-3: truncate the embedded value in a jq runtime error to ~200 chars
       with an `…` suffix and name the failing filter/position; keep full
       detail behind an explicit `--debug`/verbose path if wanted. Audit for
       the same whole-input-in-error shape elsewhere in output.rs
-- [ ] F-4: keep the total order, but emit a one-line warning when a sort key
+- [x] F-4: keep the total order, but emit a one-line warning when a sort key
       has mixed types across the result set ("property:priority has mixed
       types; numbers sort after strings"), and make missing/type-mismatched
       values group consistently (as `Null` already does)
-- [ ] F3-3: either implement `minimum`/`maximum` for number constraints
+- [x] F3-3: either implement `minimum`/`maximum` for number constraints
       (two `Option<f64>` fields + two comparisons — the natural fix given
       they're the expected names), OR add `#[serde(deny_unknown_fields)]` to
       `RawPropertyConstraint` so any unsupported key is a hard config error
       consistent with the module's stated philosophy. Prefer implementing the
       two AND denying unknown fields, so typos still surface. Test matrix:
       every plausible key is either honored or rejected
-- [ ] F3-4: make the `..` rejection honest — either resolve-then-check
+- [x] F3-4: make the `..` rejection honest — either resolve-then-check
       (join with dir, canonicalize, compare to root; machinery exists in
       `fs_util`) and ACCEPT in-vault `..` paths, or keep the lexical rule but
       reword to "paths must be vault-relative without `..` — use `broken.md`,
       not `../broken.md`". Do not reuse the genuine-escape wording for the
       no-`..` policy
-- [ ] F3-5: add `hint` to the three canonical errors — file-not-found
+- [x] F3-5: add `hint` to the three canonical errors — file-not-found
       ("paths are vault-relative; run `hyalo find --file <glob>` to locate
       it"), empty path ("empty path — check shell quoting"), and the F3-4
       message. One helper, three call sites
-- [ ] Docs sync: `find --help` (CJK limitation/behavior + `--sort`
+- [x] Docs sync: `find --help` (CJK limitation/behavior + `--sort`
       mixed-type note), `task toggle --help` (section ambiguity behavior),
       schema/config docs for `minimum`/`maximum` if implemented, README
       search section if it claims CJK, CHANGELOG, decision-log
-- [ ] Tests: F-1 multi-section repro (refused/flagged); F-2 `find 日本語`
+- [x] Tests: F-1 multi-section repro (refused/flagged); F-2 `find 日本語`
       returns the file, plus a mixed CJK+latin doc; F-3 mistyped `--jq`
       error is bounded in length and names the filter; F-4 mixed-type sort
       emits the warning and orders deterministically; F3-3 `minimum`/`maximum`
@@ -124,22 +124,22 @@ hintless error envelopes.
 
 ## Acceptance criteria
 
-- [ ] `task toggle --section` on a vault with two same-named headings does
+- [x] `task toggle --section` on a vault with two same-named headings does
       not silently toggle both — it refuses or requires explicit opt-in, and
       names the matched sections
-- [ ] `hyalo find 日本語` returns a file containing 日本語 (and CJK queries
+- [x] `hyalo find 日本語` returns a file containing 日本語 (and CJK queries
       match in general), or the limitation is documented AND a substring
       fallback returns it — no silent empty result
-- [ ] A mistyped `--jq` filter produces a bounded error (≤ ~200 chars of
+- [x] A mistyped `--jq` filter produces a bounded error (≤ ~200 chars of
       embedded value) that names the filter, on a large vault
-- [ ] Mixed-type `--sort property:x` warns and is deterministic
-- [ ] A number constraint with `minimum`/`maximum` either enforces them or
+- [x] Mixed-type `--sort property:x` warns and is deterministic
+- [x] A number constraint with `minimum`/`maximum` either enforces them or
       the config is rejected; an unknown constraint key is never silently
       dropped
-- [ ] An in-vault `../file.md` from a subdir no longer reports a false
+- [x] An in-vault `../file.md` from a subdir no longer reports a false
       "outside vault boundary" (resolves, or the message names the real
       no-`..` policy)
-- [ ] file-not-found, empty-path, and boundary errors carry actionable hints
+- [x] file-not-found, empty-path, and boundary errors carry actionable hints
 
 ## Non-goals
 
