@@ -1231,12 +1231,37 @@ fn validate_constraint(
             }
             vec![]
         }
-        PropertyConstraint::Number => {
-            if !matches!(value, Value::Number(_)) {
+        PropertyConstraint::Number { minimum, maximum } => {
+            let Value::Number(n) = value else {
                 return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
                     message: format!("property \"{name}\" expected number, got {value}"),
+                }];
+            };
+            // F3-3: enforce `minimum`/`maximum` when configured. `as_f64`
+            // only returns `None` for a `Number` outside f64's range (not a
+            // realistic frontmatter value); treat that as passing rather
+            // than panic-adjacent unwrap, since it isn't a bound violation.
+            let Some(f) = n.as_f64() else {
+                return vec![];
+            };
+            if let Some(min) = minimum
+                && f < *min
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {f}; minimum is {min}"),
+                }];
+            }
+            if let Some(max) = maximum
+                && f > *max
+            {
+                return vec![Violation {
+                    severity: Severity::Error,
+                    kind: None,
+                    message: format!("property \"{name}\" is {f}; maximum is {max}"),
                 }];
             }
             vec![]
@@ -3518,7 +3543,10 @@ mod tests {
         let v = vc(
             "priority",
             &Value::Number(5.into()),
-            &PropertyConstraint::Number,
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: None,
+            },
         );
         assert!(v.is_none());
     }
@@ -3528,7 +3556,10 @@ mod tests {
         let v = vc(
             "priority",
             &Value::String("five".into()),
-            &PropertyConstraint::Number,
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: None,
+            },
         );
         assert!(matches!(
             v,
@@ -3537,6 +3568,76 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn number_constraint_minimum_violation() {
+        let v = vc(
+            "priority",
+            &Value::Number(0.into()),
+            &PropertyConstraint::Number {
+                minimum: Some(1.0),
+                maximum: None,
+            },
+        );
+        let viol = v.expect("expected a minimum violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(viol.message.contains("minimum"));
+    }
+
+    #[test]
+    fn number_constraint_maximum_violation() {
+        let v = vc(
+            "priority",
+            &Value::Number(99.into()),
+            &PropertyConstraint::Number {
+                minimum: None,
+                maximum: Some(5.0),
+            },
+        );
+        let viol = v.expect("expected a maximum violation");
+        assert_eq!(viol.severity, Severity::Error);
+        assert!(viol.message.contains("maximum"));
+    }
+
+    #[test]
+    fn number_constraint_within_min_max_range_is_valid() {
+        let v = vc(
+            "priority",
+            &Value::Number(3.into()),
+            &PropertyConstraint::Number {
+                minimum: Some(1.0),
+                maximum: Some(5.0),
+            },
+        );
+        assert!(v.is_none());
+    }
+
+    #[test]
+    fn number_constraint_at_min_max_boundary_is_valid() {
+        // Bounds are inclusive.
+        assert!(
+            vc(
+                "priority",
+                &Value::Number(1.into()),
+                &PropertyConstraint::Number {
+                    minimum: Some(1.0),
+                    maximum: Some(5.0),
+                },
+            )
+            .is_none()
+        );
+        assert!(
+            vc(
+                "priority",
+                &Value::Number(5.into()),
+                &PropertyConstraint::Number {
+                    minimum: Some(1.0),
+                    maximum: Some(5.0),
+                },
+            )
+            .is_none()
+        );
     }
 
     #[test]

@@ -21,7 +21,17 @@
 /// [schema.types.iteration.properties.branch]
 /// type = "string"
 /// pattern = "^iter-\\d+/"
+///
+/// [schema.types.task.properties.priority]
+/// type = "number"
+/// minimum = 1
+/// maximum = 5
 /// ```
+///
+/// A property constraint block is deserialized with `deny_unknown_fields`:
+/// any key that isn't one of the fields above (a typo, or a plausible but
+/// unimplemented name) is a hard config error rather than a silently
+/// dropped key.
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -442,8 +452,13 @@ pub enum PropertyConstraint {
     /// `±hh:mm` offset). Distinct from `DateTime`: a naive value is not
     /// accepted here, and a tz-aware value is not accepted by `DateTime`.
     DateTimeTz,
-    /// Integer or floating-point number.
-    Number,
+    /// Integer or floating-point number, with optional inclusive bounds.
+    Number {
+        /// Optional inclusive minimum value.
+        minimum: Option<f64>,
+        /// Optional inclusive maximum value.
+        maximum: Option<f64>,
+    },
     /// Boolean (`true` / `false`).
     Boolean,
     /// YAML sequence / list.
@@ -471,7 +486,16 @@ pub enum PropertyConstraint {
 /// Using a flat struct avoids the issue where `#[serde(tag = "type")]`
 /// silently drops unknown fields, which would hide configuration errors like
 /// `item_pattern` on a `string` property.
+///
+/// `deny_unknown_fields` (F3-3 / DEC-094): a config key that isn't one of the
+/// fields below — a typo (`patterns =`) or a plausible-but-unimplemented name
+/// — is now a hard TOML parse error instead of being silently dropped by
+/// serde, consistent with `TryFrom`'s existing stance that misconfiguration
+/// must surface as an error, not a silently-ignored key. This is a breaking
+/// change for any `.hyalo.toml` that (accidentally or not) carried an unused
+/// key in a `[schema.types.*.properties.*]` block.
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RawPropertyConstraint {
     #[serde(rename = "type")]
     pub constraint_type: Option<String>,
@@ -482,6 +506,10 @@ pub struct RawPropertyConstraint {
     pub min_length: Option<usize>,
     #[serde(rename = "max-length")]
     pub max_length: Option<usize>,
+    /// Inclusive minimum value for `number` properties (F3-3).
+    pub minimum: Option<f64>,
+    /// Inclusive maximum value for `number` properties (F3-3).
+    pub maximum: Option<f64>,
 }
 
 impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
@@ -519,6 +547,14 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
         {
             return Err(format!(
                 "'min-length' ({min}) must not exceed 'max-length' ({max})"
+            ));
+        }
+
+        // `minimum`/`maximum` (F3-3) apply only to `number` properties —
+        // same rejection stance as `min-length`/`max-length` above.
+        if (raw.minimum.is_some() || raw.maximum.is_some()) && constraint_type != "number" {
+            return Err(format!(
+                "'minimum'/'maximum' are only valid on 'number' properties, not '{constraint_type}'"
             ));
         }
 
@@ -585,7 +621,17 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                         "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
                     ));
                 }
-                Ok(PropertyConstraint::Number)
+                if let (Some(min), Some(max)) = (raw.minimum, raw.maximum)
+                    && min > max
+                {
+                    return Err(format!(
+                        "'minimum' ({min}) must not exceed 'maximum' ({max})"
+                    ));
+                }
+                Ok(PropertyConstraint::Number {
+                    minimum: raw.minimum,
+                    maximum: raw.maximum,
+                })
             }
             "boolean" => {
                 if raw.pattern.is_some() {
@@ -1359,5 +1405,103 @@ type = \"adr\"
             err.contains("schema.bind") && err.contains("invalid glob"),
             "expected bind glob error, got: {err}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // F3-3: `minimum`/`maximum` on number properties + deny_unknown_fields
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn number_minimum_maximum_parsed_and_enforced_in_range() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("number".to_owned()),
+            minimum: Some(1.0),
+            maximum: Some(5.0),
+            ..Default::default()
+        };
+        let constraint = PropertyConstraint::try_from(raw).expect("should parse");
+        match constraint {
+            PropertyConstraint::Number { minimum, maximum } => {
+                assert_eq!(minimum, Some(1.0));
+                assert_eq!(maximum, Some(5.0));
+            }
+            other => panic!("expected Number constraint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn number_minimum_exceeding_maximum_is_config_error() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("number".to_owned()),
+            minimum: Some(10.0),
+            maximum: Some(5.0),
+            ..Default::default()
+        };
+        let err = PropertyConstraint::try_from(raw).expect_err("min > max should be rejected");
+        assert!(
+            err.contains("minimum") && err.contains("maximum"),
+            "expected a minimum/maximum ordering error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn number_minimum_on_non_number_type_is_config_error() {
+        let raw = RawPropertyConstraint {
+            constraint_type: Some("string".to_owned()),
+            minimum: Some(1.0),
+            ..Default::default()
+        };
+        let err =
+            PropertyConstraint::try_from(raw).expect_err("minimum on 'string' should be rejected");
+        assert!(
+            err.contains("'minimum'") && err.contains("'string'"),
+            "expected a type-mismatch error naming both fields, got: {err}"
+        );
+    }
+
+    #[test]
+    fn raw_property_constraint_rejects_unknown_key() {
+        // F3-3: a typo like `patterns = ".*"` (plural, meant to be `pattern`)
+        // must be a hard TOML error, not silently dropped by serde.
+        let toml = r#"
+type = "string"
+patterns = ".*"
+"#;
+        let result: Result<RawPropertyConstraint, _> = toml::from_str(toml);
+        assert!(
+            result.is_err(),
+            "an unknown key must be rejected, not silently ignored"
+        );
+    }
+
+    #[test]
+    fn raw_property_constraint_accepts_minimum_maximum_keys() {
+        let toml = r#"
+type = "number"
+minimum = 1
+maximum = 5
+"#;
+        let raw: RawPropertyConstraint = toml::from_str(toml).expect("should parse");
+        assert_eq!(raw.minimum, Some(1.0));
+        assert_eq!(raw.maximum, Some(5.0));
+    }
+
+    #[test]
+    fn schema_config_with_number_min_max_via_full_toml() {
+        let toml = r#"
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        let ts = cfg.merged_schema_for_type("task");
+        match ts.properties.get("priority") {
+            Some(PropertyConstraint::Number { minimum, maximum }) => {
+                assert_eq!(*minimum, Some(1.0));
+                assert_eq!(*maximum, Some(5.0));
+            }
+            other => panic!("expected Number constraint, got {other:?}"),
+        }
     }
 }

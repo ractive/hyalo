@@ -3677,3 +3677,109 @@ fn lint_fix_write_failure_on_one_file_does_not_abort_the_batch() {
          violation: {locked_entry}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F3-3: schema `minimum`/`maximum` on number properties, and
+// deny_unknown_fields rejecting unsupported constraint keys
+// (deep-analysis-3-2026-08-23, DEC-094).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_number_maximum_violation_is_reported() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a priority above maximum should be an error"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("maximum"),
+        "expected the maximum-bound violation to be reported: {stdout}"
+    );
+}
+
+#[test]
+fn lint_number_within_min_max_range_is_clean() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: task\npriority: 3\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a priority within [minimum, maximum] should be clean; stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn lint_schema_unknown_constraint_key_disables_schema_with_warning() {
+    // F3-3: an unsupported/typo'd key (`patterns` instead of `pattern`) in a
+    // property constraint block must not be silently dropped. `RawPropertyConstraint`
+    // now denies unknown fields, so the TOML fails to deserialize; consistent with
+    // how the rest of `.hyalo.toml` handles malformed config (DEC-070's stance,
+    // `crates/hyalo-cli/src/config.rs::parse_schema_from_toml`), the effect is a
+    // loud warning plus schema validation disabled for the run, not a hard failure.
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: task\n---\nBody\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "a.md"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("schema") || stderr.contains("[schema]"),
+        "expected a malformed-schema warning naming the [schema] block: {stderr}"
+    );
+}
