@@ -313,8 +313,9 @@ and this project adheres to
   The line comes from the index (`IndexEntry::links` / `::self_anchors`
   already stored it), so no extra file read is involved and the `--index` and
   disk paths agree. `find --broken-links --jq '.results[] as $f | $f.links[]
-  | select(.path == null or .broken_anchor) | "\($f.file):\(.line)
-  \(.target)"'` now produces a `file:line` list an editor can jump to.
+  | select((.path == null and (.out_of_vault | not)) or .broken_anchor)
+  | "\($f.file):\(.line) \(.target)"'` now produces a `file:line` list an
+  editor can jump to.
 
 - **`hyalo config --raw`, and a machine-readable malformed-config signal**
   (iter-213, dogfood UX-2). `hyalo config` exited 0 with a full set of

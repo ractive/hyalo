@@ -231,7 +231,7 @@ COOKBOOK:
   hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
 
   # Every broken link as file:line — each link carries the source line lint reports
-  hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select(.path == null or .broken_anchor) | \"\\($f.file):\\(.line) \\(.target)\"'
+  hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.path == null and (.out_of_vault | not)) or .broken_anchor) | \"\\($f.file):\\(.line) \\(.target)\"'
 
   # Filter by title (substring or regex)
   hyalo find --title 'meeting'
