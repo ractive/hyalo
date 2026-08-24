@@ -2,7 +2,7 @@
 title: "Iteration 220 — pre3 dogfood small batch (config, hints, buckets, gates)"
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-220/dogfood-small-batch
 tags: [iteration, ux, cli, config, links, lint]
 related:
