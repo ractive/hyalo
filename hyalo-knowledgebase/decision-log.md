@@ -2426,6 +2426,28 @@ directly — one `SectionRange` per matching heading in the outline,
 regardless of how many or how few tasks sit under each — which is the
 correct unit of ambiguity here.
 
+**Asymmetry with `find --section` (review round, 2026-08-24):** `find
+--section` uses the same `build_section_scope` primitive as this fix but
+does the opposite thing on an ambiguous multi-heading match: it unions every
+matched heading's scope within a file, rather than refusing. This is
+deliberate, not an oversight. `find` is a vault-wide, read-only query —
+different files legitimately have different heading structures, and there
+is no single "the" match to disambiguate against the way there is for a
+selector scoped to one file's mutation. Refusing per-file would mean one
+file with a duplicate heading silently drops out of a `find --section`
+result set entirely (or, worse, aborts a vault-wide query over one
+unrelated file), which is a worse failure mode for a search command than
+the union it already produced correctly before this iteration. The
+asymmetry is intentional: mutation commands (`task toggle`/`read`/`set`)
+refuse because an over-broad match risks writing to (or reading from) the
+wrong place with no dry-run gate; `find` unions because there is no "wrong
+place" for a read spanning the whole vault, only a broader result. A
+one-line stderr summary ("`--section` matched more than one heading in N
+file(s)") was added so the union isn't silent, without a per-file note that
+would spam a large result set. See `find --help` (`FindFilters::sections`
+doc comment and the `FILTERS` section of `find`'s `long_about`) for the
+user-facing statement of this asymmetry.
+
 ## DEC-095: BM25 CJK tokenization uses overlapping character bigrams, with a per-index `tokenizer_version` so a stale persisted index falls back to live re-tokenization instead of serving unmatchable results (2026-08-24)
 
 **Decision:** [[iterations/iteration-223-query-output-correctness]] closes
@@ -2493,7 +2515,45 @@ both appear in an unrelated document) but never under-match a real
 substring query, which is the correct direction to err for a search tool.
 BM25 ranking-math correctness beyond tokenization (IDF/length normalization)
 is unchanged and out of scope, per `deep-analysis-2`'s own scope note that
-the ranking math was separately verified sound.
+the ranking math was separately verified sound. A single-character CJK
+query (e.g. searching for one kanji) cannot match a longer run: bigram
+indexing has no unigram entries except for a run that is itself exactly one
+character, so a one-character query tokenizes to a unigram that was never
+indexed for any longer run containing it. This is a pre-existing limitation
+of bigram-only indexing (not introduced or worsened by this fix — the
+pre-F-2 whole-run-token approach couldn't match single-character queries
+either, just for a different reason) and a real gap since single-kanji
+search is a common query shape in practice; accepted for this iteration,
+not fixed (would require unigram indexing alongside bigrams, which roughly
+doubles the CJK posting-list size for a query shape that's a minority of
+real CJK searches).
+
+**Segmentation-boundary rule and mixed-script fix (review round,
+2026-08-24):** the first cut of this fix classified an entire alphanumeric
+*run* as bigram-mode or word-mode by "does the run contain any
+scriptio-continua character" — checked once per run, not per character.
+That broke on a no-separator mixed run, the ordinary shape of real CJK
+technical writing (`日本語Docker入門ガイドです`, Japanese prose with an
+inline Latin product name and no space around it): the whole run, Latin
+substring included, was forced into character bigrams, fragmenting `Docker`
+into unmatchable pieces (`語D`, `ck`, `er入`) — worse than before the CJK
+fix, which at least kept the whole run as one exact (if CJK-unmatchable)
+token, so `Docker` was findable pre-fix and unfindable immediately after
+it. Fixed by segmenting each run at every scriptio-continua /
+non-scriptio-continua character boundary *before* choosing a tokenization
+strategy, then applying bigrams or the word pipeline to each segment
+independently (`tokenize_run` in `bm25.rs`). The segmentation rule is
+narrow and deliberate: a boundary is drawn only between a scriptio-continua
+character and a non-scriptio-continua one — never between two different
+scriptio-continua scripts (Han vs. Hiragana vs. Katakana vs. Hangul). A
+Kanji run immediately followed by Hiragana (`日本語です`, the ordinary
+shape of a Japanese sentence, since Japanese freely interleaves Kanji and
+Hiragana within one semantic word-run with no internal separator) stays in
+one bigram segment, producing a bigram that straddles the Han/Hiragana
+boundary (`語で`) rather than artificially cutting the segment there. Both
+directions are now tested: `Docker` and `日本語` are each independently
+searchable in the mixed run, and a Han/Hiragana-straddling bigram is
+asserted directly.
 
 ## DEC-096: schema `RawPropertyConstraint` denies unknown TOML keys AND implements `minimum`/`maximum` — both, not either/or (BREAKING) (2026-08-24)
 
@@ -2542,6 +2602,37 @@ with a warning naming the problem, rather than losing the command entirely
 — but that is still a real behavior change worth flagging as BREAKING in
 the changelog, since a vault that depended on schema enforcement silently
 loses it until the key is fixed.
+
+**Follow-up: `lint` must surface a malformed schema as a lint-level
+problem, not just a stderr warning (review round, 2026-08-24, finding 2):**
+the graceful-degradation stance above (loud warning, empty `SchemaConfig`,
+command proceeds) had a real gap on `hyalo lint` specifically: the warning
+is `-q`-suppressible, and — worse — `lint --strict` printed a clean "no
+issues" and exited 0 on a file carrying a genuine schema violation the
+(silently disabled) schema would have caught, because *every* type's
+schema is disabled by one bad key anywhere in the `[schema]` block. A CI
+gate relying on `lint --strict` would pass while validation was silently
+off. Fixed by extracting the parse-or-diagnose logic into
+`config::try_parse_schema_from_toml` (returns `Result` instead of
+warning-and-defaulting) and adding `lint::validate_schema_config`, which
+calls it independently and — mirroring the existing `validate_views`
+pattern of representing a config-level problem as a violation on a
+`.hyalo.toml` pseudo-file — turns a parse failure into a visible SCHEMA
+violation in the lint results: `Warn` severity by default (so `--format
+json` shows it in `results` without failing plain `lint`), promoted to
+`Error` directly (not via the later strict-promotion pass the per-file
+`schema/*` violation kinds use) so `lint --strict` exits non-zero and
+names the bad key. This is the review's option (a), the stated minimum
+bar. Option (b) — scoping the degradation to only the offending
+type/property block, so *unaffected* types keep validating — was not
+implemented: the current `RawSchemaConfig`/`TryFrom` architecture
+deserializes and validates the whole `[schema]` block as one atomic step
+(a single `val.clone().try_into::<RawSchemaConfig>()` covering every
+nested type/property), so isolating one bad block would need restructuring
+that deserialization to catch errors per `[schema.types.*]` entry
+independently and keep the successfully-parsed ones — a moderate
+refactor, not the "cheap, do in addition" case the review allowed for.
+Left as a documented follow-up, not attempted here.
 
 ## DEC-097: the lexical no-`..` rejection gets an honest, distinct message and error variant instead of reusing "outside vault boundary" (2026-08-24)
 

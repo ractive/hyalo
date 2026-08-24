@@ -66,6 +66,14 @@ pub const VIOLATION_KIND_MISSING_TYPE: &str = "schema/missing-type";
 pub const VIOLATION_KIND_UNDECLARED_PROPERTY: &str = "schema/undeclared-property";
 /// An explicit `type:` disagrees with the `[schema.bind]` path binding.
 pub const VIOLATION_KIND_BIND_MISMATCH: &str = "schema/bind-mismatch";
+/// The `[schema]` block itself failed to parse (unknown key, invalid field
+/// combination, etc.) — review round finding 2. Distinct from the other
+/// `schema/*` kinds above, which describe a *file* disagreeing with an
+/// otherwise-valid schema; this one means schema validation is silently
+/// disabled vault-wide until the config is fixed, which is a strictly
+/// louder problem and always promoted under `--strict` (see
+/// `validate_schema_config`).
+pub const VIOLATION_KIND_SCHEMA_MALFORMED: &str = "schema/malformed";
 
 /// A required property that is missing/empty AND has no declared `default`, so
 /// `--fix` cannot synthesize a value (mapl BUG-3). Carried on the SCHEMA
@@ -262,6 +270,55 @@ pub fn validate_views(dir: &Path) -> Option<FileLintResult> {
             file: ".hyalo.toml".to_string(),
             violations,
         })
+    }
+}
+
+/// Validate the `[schema]` block in `.hyalo.toml` in isolation and return a
+/// pseudo-file lint result when it fails to parse.
+///
+/// Review round finding 2: `parse_schema_from_toml` (`crates/hyalo-cli/src/config.rs`)
+/// already detects a malformed `[schema]` block (an unknown key from
+/// `deny_unknown_fields`, an invalid field combination, ...) and degrades
+/// gracefully to "no schema validation" — but the only signal was a
+/// `-q`-suppressible stderr warning. That meant one typo'd key in ANY type's
+/// property block silently disabled schema enforcement for the WHOLE vault,
+/// while `lint --strict` printed a clean "no issues" and exited 0 on a file
+/// with a real violation the (silently disabled) schema would have caught.
+///
+/// This independently re-parses `.hyalo.toml` (mirroring [`validate_views`]'s
+/// pattern of representing a config-level problem as a violation on a
+/// `.hyalo.toml` pseudo-file) via the same
+/// [`crate::config::try_parse_schema_from_toml`] used by the runtime config
+/// loader, so the error text — including which key or value is wrong — is
+/// identical to the one already sent to stderr; this just also makes it a
+/// visible lint-result violation. `strict` controls severity directly (not
+/// promoted later like the per-file `schema/*` kinds): `Error` under
+/// `--strict` so `lint --strict` exits non-zero, `Warn` otherwise so
+/// `--format json` output shows the problem in `results` without also
+/// tripping the plain-`lint` exit code — a stricter stance than the
+/// per-file warnings needs, since "validation is silently off" is worse than
+/// any single file's violation it might have caught.
+///
+/// Returns `None` when the schema parses cleanly (including "no `[schema]`
+/// block at all", which is valid — not every vault uses schema validation).
+pub fn validate_schema_config(dir: &Path, strict: bool) -> Option<FileLintResult> {
+    let toml_path = dir.join(".hyalo.toml");
+    let contents = std::fs::read_to_string(&toml_path).ok()?;
+    let table: toml::Table = toml::from_str(&contents).ok()?;
+    match crate::config::try_parse_schema_from_toml(table.get("schema")) {
+        Ok(_) => None,
+        Err(message) => Some(FileLintResult {
+            file: ".hyalo.toml".to_string(),
+            violations: vec![Violation {
+                severity: if strict {
+                    Severity::Error
+                } else {
+                    Severity::Warn
+                },
+                kind: Some(VIOLATION_KIND_SCHEMA_MALFORMED),
+                message,
+            }],
+        }),
     }
 }
 
@@ -3440,6 +3497,64 @@ mod tests {
             types,
             ..Default::default()
         }
+    }
+
+    // --- validate_schema_config (review round finding 2) ---
+
+    #[test]
+    fn validate_schema_config_none_when_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.priority]\ntype = \"number\"\nminimum = 1\nmaximum = 5\n",
+        )
+        .unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+        assert!(validate_schema_config(dir.path(), true).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_none_when_no_schema_block() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_none_when_no_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(validate_schema_config(dir.path(), false).is_none());
+    }
+
+    #[test]
+    fn validate_schema_config_warn_severity_without_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.title]\ntype = \"string\"\npatterns = \".*\"\n",
+        )
+        .unwrap();
+        let result = validate_schema_config(dir.path(), false).expect("malformed schema");
+        assert_eq!(result.file, ".hyalo.toml");
+        assert_eq!(result.violations.len(), 1);
+        assert_eq!(result.violations[0].severity, Severity::Warn);
+        assert_eq!(
+            result.violations[0].kind,
+            Some(VIOLATION_KIND_SCHEMA_MALFORMED)
+        );
+        assert!(result.violations[0].message.contains("patterns"));
+    }
+
+    #[test]
+    fn validate_schema_config_error_severity_under_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".hyalo.toml"),
+            "dir = \".\"\n[schema.types.task.properties.title]\ntype = \"string\"\npatterns = \".*\"\n",
+        )
+        .unwrap();
+        let result = validate_schema_config(dir.path(), true).expect("malformed schema");
+        assert_eq!(result.violations[0].severity, Severity::Error);
     }
 
     // --- is_iso8601_date ---

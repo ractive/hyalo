@@ -362,7 +362,8 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-    /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR)
+    /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
+    /// A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
     #[arg(short, long = "section", value_name = "HEADING")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
@@ -541,7 +542,13 @@ pub(crate) enum Commands {
             matching files, restrict tasks and content matches to the section scope; case-insensitive \
             substring (contains) match by default, e.g. 'Tasks' matches 'Tasks [4/4]'; use leading '#' \
             to pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching). Repeatable (OR). \
-            Nested subsections are included.\n\n\
+            Nested subsections are included. When a file has more than one heading matching --section, \
+            find UNIONS all of them (tasks/content from every matched section are included) -- unlike \
+            `task toggle`/`read`/`set --section`, which refuse an ambiguous multi-heading match. This is \
+            deliberate: find is a vault-wide read-only query where different files legitimately have \
+            different heading sets, so there is no single 'the' match to disambiguate against, unlike a \
+            single-file mutation. A stderr warning names how many result files hit this (not per-file, \
+            to avoid spamming a large result set).\n\n\
             FIELDS: Use --fields to limit which fields appear (default: all). \
             Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\

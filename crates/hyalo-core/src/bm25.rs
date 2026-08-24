@@ -173,21 +173,61 @@ fn is_scriptio_continua(c: char) -> bool {
     )
 }
 
-/// Tokenize one alphanumeric run (already split on non-alphanumeric chars).
-/// Scriptio-continua runs (see [`is_scriptio_continua`]) become overlapping
-/// character bigrams instead of a single whole-run token, so a query for a
-/// substring of a longer CJK run can still match. Other scripts keep the
-/// original whole-run + lowercase + stem pipeline.
-fn tokenize_run(run: &str, stemmer: &Stemmer, out: &mut Vec<String>) {
-    if run.chars().any(is_scriptio_continua) {
-        let chars: Vec<char> = run.chars().collect();
-        if chars.len() == 1 {
-            out.push(chars[0].to_string());
-        } else {
-            out.extend(chars.windows(2).map(|pair| pair.iter().collect::<String>()));
-        }
+/// Tokenize one scriptio-continua *segment* (a maximal run of consecutive
+/// scriptio-continua characters, already isolated by [`tokenize_run`]) as
+/// overlapping character bigrams, so a query for a substring of a longer CJK
+/// run can still match. A single-character segment has no bigram partner and
+/// is kept as a unigram.
+fn tokenize_scriptio_continua_segment(segment: &[char], out: &mut Vec<String>) {
+    if let [only] = segment {
+        out.push(only.to_string());
     } else {
-        out.push(stemmer.stem(&run.to_lowercase()).into_owned());
+        out.extend(
+            segment
+                .windows(2)
+                .map(|pair| pair.iter().collect::<String>()),
+        );
+    }
+}
+
+/// Tokenize one alphanumeric run (already split on non-alphanumeric chars).
+///
+/// A run can itself mix scripts with no separator at all — e.g. `日本語Docker`
+/// in real CJK technical writing, where a Latin product name sits directly
+/// against surrounding Japanese with no space. Classifying the *whole run* by
+/// "contains any scriptio-continua char" (the original approach) forced the
+/// entire run — Latin substring included — into character bigrams, which
+/// fragmented `Docker` into unmatchable pieces (`語D`, `ck`, `er入`) and made
+/// a plain `hyalo find Docker` return nothing: worse than before the CJK fix,
+/// which at least kept the whole run as one exact (if unmatchable-by-query)
+/// token. Fixed by segmenting the run at every scriptio-continua /
+/// non-scriptio-continua boundary first, then tokenizing each segment with
+/// the pipeline appropriate to *that segment*: scriptio-continua segments
+/// become bigrams, everything else keeps the whole-segment lowercase + stem
+/// pipeline. Segment boundaries are drawn only on the scriptio-continua /
+/// non-scriptio-continua distinction — never between different scriptio-
+/// continua scripts (Han vs. Hiragana vs. Katakana vs. Hangul) — so a
+/// Kanji+Hiragana run like `です` immediately after `日本語` stays in one
+/// bigram segment, matching how real CJK text (especially Japanese) freely
+/// interleaves those scripts within a single semantic word-run with no
+/// internal separator. See DEC-095's segmentation-rule note.
+fn tokenize_run(run: &str, stemmer: &Stemmer, out: &mut Vec<String>) {
+    let chars: Vec<char> = run.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let seg_is_cjk = is_scriptio_continua(chars[i]);
+        let mut j = i + 1;
+        while j < chars.len() && is_scriptio_continua(chars[j]) == seg_is_cjk {
+            j += 1;
+        }
+        let segment = &chars[i..j];
+        if seg_is_cjk {
+            tokenize_scriptio_continua_segment(segment, out);
+        } else {
+            let word: String = segment.iter().collect();
+            out.push(stemmer.stem(&word.to_lowercase()).into_owned());
+        }
+        i = j;
     }
 }
 
@@ -986,6 +1026,78 @@ mod tests {
         assert!(tokens.contains(&"hello".to_owned()));
         assert!(tokens.contains(&"日本".to_owned()));
         assert!(tokens.contains(&"本語".to_owned()));
+    }
+
+    #[test]
+    fn test_tokenize_no_separator_mixed_run_keeps_latin_word_searchable() {
+        // Review round finding 1: a single alphanumeric run with NO separator
+        // between CJK and Latin (common in real CJK technical writing, e.g.
+        // "日本語Docker入門ガイドです") must not force the Latin substring into
+        // character bigrams -- "Docker" must survive as one exact token, not
+        // fragment into "語d"/"ck"/"er入".
+        let stemmer = make_stemmer(StemLanguage::English);
+        let tokens = tokenize("日本語Docker入門ガイドです", &stemmer);
+        assert!(
+            tokens.contains(&"docker".to_owned()),
+            "Docker must survive as a whole token: {tokens:?}"
+        );
+        // No token may mix a scriptio-continua character with a non-scriptio-
+        // continua character -- that mixing is exactly the old bug (a bigram
+        // like "語D" straddling the script boundary).
+        assert!(
+            tokens.iter().all(|t| {
+                let all_cjk = t.chars().all(is_scriptio_continua);
+                let none_cjk = t.chars().all(|c| !is_scriptio_continua(c));
+                all_cjk || none_cjk
+            }),
+            "no token may mix scriptio-continua and non-scriptio-continua characters: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenize_no_separator_mixed_run_query_matches_both_substrings() {
+        // The same document must be findable by a query for either the CJK
+        // part or the Latin part -- the acceptance criterion behind finding 1.
+        let stemmer = make_stemmer(StemLanguage::English);
+        let doc_tokens = tokenize("日本語Docker入門ガイドです", &stemmer);
+
+        let latin_query = tokenize("Docker", &stemmer);
+        assert!(
+            latin_query.iter().all(|t| doc_tokens.contains(t)),
+            "query {latin_query:?} should be a subset of doc tokens {doc_tokens:?}"
+        );
+
+        let cjk_query = tokenize("日本語", &stemmer);
+        assert!(
+            cjk_query.iter().all(|t| doc_tokens.contains(t)),
+            "query {cjk_query:?} should be a subset of doc tokens {doc_tokens:?}"
+        );
+    }
+
+    #[test]
+    fn test_tokenize_no_separator_cjk_and_latin_word_example() {
+        // The review's brief example: "日本語test" with zero separator.
+        let stemmer = make_stemmer(StemLanguage::English);
+        let tokens = tokenize("日本語test", &stemmer);
+        assert!(tokens.contains(&"test".to_owned()), "tokens: {tokens:?}");
+        assert!(tokens.contains(&"日本".to_owned()), "tokens: {tokens:?}");
+        assert!(tokens.contains(&"本語".to_owned()), "tokens: {tokens:?}");
+    }
+
+    #[test]
+    fn test_tokenize_mixed_han_hiragana_stays_in_one_bigram_segment() {
+        // Segmentation boundaries are drawn only between scriptio-continua and
+        // non-scriptio-continua characters -- never between different CJK
+        // sub-scripts. "日本語です" (Han "日本語" immediately followed by
+        // Hiragana "です", the ordinary shape of a Japanese sentence) must
+        // produce a bigram straddling the Han/Hiragana boundary ("語で"), not
+        // stop the segment at the script change.
+        let stemmer = make_stemmer(StemLanguage::English);
+        let tokens = tokenize("日本語です", &stemmer);
+        assert!(
+            tokens.contains(&"語で".to_owned()),
+            "a bigram must straddle the Han/Hiragana boundary: {tokens:?}"
+        );
     }
 
     #[test]

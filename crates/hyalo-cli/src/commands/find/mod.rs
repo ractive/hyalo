@@ -142,6 +142,14 @@ pub fn find(
     let has_regex_search = regexp.is_some();
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
+    // Review round finding 3: `--section` unions every matching heading's
+    // scope within a file (deliberate, unlike the `task` commands' refuse-
+    // on-ambiguity policy — see DEC-094's asymmetry note). Counted once, in
+    // the single Phase-2 loop that computes the final per-file scope for
+    // both the BM25 and non-BM25 paths, so a file that also passed through
+    // the BM25 phase-1 pre-filter or phase-2 body-scoping isn't counted
+    // more than once for the same result.
+    let mut ambiguous_section_files: usize = 0;
 
     // Compile --title filter once before the loop.
     let title_matcher = match title_filter.map(TitleMatcher::parse) {
@@ -742,6 +750,9 @@ pub fn find(
             // No matching section in this file — skip entirely
             continue;
         }
+        if scope_ranges.len() > 1 {
+            ambiguous_section_files += 1;
+        }
 
         // --- Task filter using pre-indexed tasks (skipped for BM25 — done in Phase 1) ---
         let mut collected_tasks: Option<Vec<FindTaskInfo>> = if fields.tasks || has_task_filter {
@@ -1083,6 +1094,23 @@ pub fn find(
     {
         crate::warn::warn(format!(
             "no files have property '{key}' -- sort has no effect"
+        ));
+    }
+
+    // Review round finding 3: unlike `task toggle`/`read`/`set --section`
+    // (which refuse an ambiguous multi-heading match — F-1, DEC-094),
+    // `find --section` deliberately unions every matching heading's scope
+    // within a file. Refusing per-file would break normal use: `find` is a
+    // vault-wide read-only query, and different files legitimately have
+    // different heading sets — there is no single "the" match to disambiguate
+    // against, unlike a single-file mutation. A one-line summary (not a
+    // per-file note, which would spam a large result set) names how many
+    // result files hit this so the asymmetry is visible without being noisy.
+    if ambiguous_section_files > 0 {
+        crate::warn::warn(format!(
+            "--section matched more than one heading in {ambiguous_section_files} file(s) \
+             -- each such file's results include content from every matched section \
+             (see `hyalo find --help`)"
         ));
     }
 

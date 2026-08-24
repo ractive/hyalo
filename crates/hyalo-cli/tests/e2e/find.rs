@@ -4460,3 +4460,98 @@ priority: "aaa"
     assert_eq!(str_positions, vec![0, 1], "files: {files:?}");
     assert_eq!(num_positions, vec![2, 3], "files: {files:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Review round finding 1: a no-separator mixed CJK+Latin run must not make
+// the Latin substring unsearchable (deep-analysis-2 F-2 review round, DEC-095).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_no_separator_mixed_cjk_latin_run_both_substrings_searchable() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "mixed.md",
+        "---\ntitle: Mixed\n---\n日本語Docker入門ガイドです\n",
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["Docker"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    assert_eq!(
+        arr.len(),
+        1,
+        "the Latin substring in a no-separator mixed run must remain searchable: {arr:?}"
+    );
+    assert_eq!(arr[0]["file"], "mixed.md");
+
+    let (status, json, stderr) = find_json(&tmp, &["日本語"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    assert_eq!(
+        arr.len(),
+        1,
+        "the CJK substring in the same run must also remain searchable: {arr:?}"
+    );
+    assert_eq!(arr[0]["file"], "mixed.md");
+}
+
+// ---------------------------------------------------------------------------
+// Review round finding 3: `find --section` unions ambiguous matches
+// (deliberate, unlike `task` commands' refusal) and warns with a single
+// summary line naming how many files hit it (DEC-094 follow-up).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_section_ambiguous_match_unions_and_warns_once_per_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "dup.md",
+        "---\ntitle: Dup\n---\n# Sec\nalpha content\n\n# Sec\nbeta content\n",
+    );
+    write_md(
+        tmp.path(),
+        "single.md",
+        "---\ntitle: Single\n---\n# Sec\nonly one match\n",
+    );
+
+    let (status, json, stderr) = find_json(&tmp, &["--section", "Sec"]);
+    assert!(status.success(), "stderr: {stderr}");
+
+    // Union behavior: dup.md still matches (unlike task commands, which
+    // would refuse) and both files are present.
+    let arr = unwrap_results(&json);
+    let files: Vec<&str> = arr.iter().map(|r| r["file"].as_str().unwrap()).collect();
+    assert!(files.contains(&"dup.md"));
+    assert!(files.contains(&"single.md"));
+
+    // Exactly one summary warning naming exactly 1 file (dup.md), not
+    // single.md (which has only one matching heading).
+    assert!(
+        stderr.contains("--section matched more than one heading in 1 file(s)"),
+        "expected a single-count summary warning: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("matched more than one heading").count(),
+        1,
+        "the warning must appear exactly once, not per-file: {stderr}"
+    );
+}
+
+#[test]
+fn find_section_unambiguous_match_does_not_warn() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_md(
+        tmp.path(),
+        "single.md",
+        "---\ntitle: Single\n---\n# Sec\nonly one heading here\n",
+    );
+
+    let (status, _json, stderr) = find_json(&tmp, &["--section", "Sec"]);
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("matched more than one heading"),
+        "a single matching heading must not trigger the ambiguity warning: {stderr}"
+    );
+}

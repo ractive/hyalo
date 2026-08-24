@@ -3783,3 +3783,146 @@ patterns = ".*"
         "expected a malformed-schema warning naming the [schema] block: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Review round finding 2: a malformed [schema] block must be a visible
+// lint-result violation, not just a `-q`-suppressible stderr warning --
+// `lint --strict` must exit non-zero, and non-strict must never print
+// "no issues" while validation is secretly disabled (DEC-096 follow-up).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_malformed_schema_strict_exits_nonzero_naming_the_bad_key() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+
+[schema.types.other.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    // A real violation the (silently disabled) schema would have caught,
+    // to prove the malformed-schema diagnostic isn't just cosmetic.
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Bad\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "bad.md"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "malformed [schema] under --strict must exit non-zero; stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    assert!(
+        json["results"]["errors"].as_u64().unwrap_or(0) > 0,
+        "results.errors must be nonzero: {json}"
+    );
+    let rendered = json.to_string();
+    assert!(
+        rendered.contains("patterns"),
+        "the violation must name the bad key: {rendered}"
+    );
+}
+
+#[test]
+fn lint_malformed_schema_non_strict_never_reports_no_issues() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.priority]
+type = "number"
+minimum = 1
+maximum = 5
+
+[schema.types.other.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "bad.md",
+        "---\ntitle: Bad\ntype: task\npriority: 99\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "bad.md"])
+        .output()
+        .unwrap();
+
+    // Non-strict: exit 0 (a warning doesn't fail the plain command)...
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("expected JSON: {stdout} ({e})"));
+    // ...but results must never claim a clean run while schema validation is
+    // silently disabled: total violations and files_with_violations must be
+    // nonzero, and the malformed-schema key must be visible in the JSON.
+    assert!(
+        json["results"]["total"].as_u64().unwrap_or(0) > 0,
+        "results.total must be nonzero -- 'no issues' must never be reported \
+         while schema validation is silently disabled: {json}"
+    );
+    assert!(
+        json["results"]["files_with_violations"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "results.files_with_violations must be nonzero: {json}"
+    );
+    let rendered = json.to_string();
+    assert!(
+        rendered.contains("patterns"),
+        "the malformed-schema diagnostic must name the bad key in results: {rendered}"
+    );
+}
+
+#[test]
+fn lint_malformed_schema_text_format_shows_violation_not_no_issues() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+[schema.types.task.properties.title]
+type = "string"
+patterns = ".*"
+"#,
+    );
+    write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: task\n---\nBody\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "a.md"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.to_lowercase().contains("no issues"),
+        "text output must not claim a clean run while schema is malformed: {stdout}"
+    );
+    assert!(
+        stdout.contains(".hyalo.toml") || stdout.contains("patterns"),
+        "text output must surface the malformed-schema violation: {stdout}"
+    );
+}

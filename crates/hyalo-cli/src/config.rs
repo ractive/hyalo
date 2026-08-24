@@ -1002,25 +1002,43 @@ fn extract_schema_validate_on_write(raw: Option<&toml::Value>) -> Option<bool> {
     raw?.get("validate_on_write")?.as_bool()
 }
 
+/// Parse a `SchemaConfig` from the raw `[schema]` TOML value, or a
+/// human-readable diagnostic naming what's wrong (which key, which value).
+///
+/// `Ok(None)` means "no `[schema]` block" (nothing to validate, not an
+/// error). Shared by [`parse_schema_from_toml`] (the runtime warn-and-
+/// degrade path) and `lint`'s `validate_schema_config`
+/// (`crates/hyalo-cli/src/commands/lint.rs`, review round finding 2), which
+/// needs the same error text to surface as a lint-level violation instead of
+/// (or in addition to) a `-q`-suppressible stderr warning.
+pub(crate) fn try_parse_schema_from_toml(
+    raw: Option<&toml::Value>,
+) -> Result<Option<SchemaConfig>, String> {
+    let Some(val) = raw else {
+        return Ok(None);
+    };
+    let raw_cfg: RawSchemaConfig = val
+        .clone()
+        .try_into()
+        .map_err(|e| format!("malformed [schema] in .hyalo.toml: {e}"))?;
+    let cfg = SchemaConfig::try_from(raw_cfg)
+        .map_err(|e| format!("invalid [schema] in .hyalo.toml: {e}"))?;
+    Ok(Some(cfg))
+}
+
 /// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
 ///
 /// On malformed schema TOML (or invalid field combinations like `pattern` on a
 /// non-string property), emits a warning and returns an empty schema (no
 /// validation), consistent with how malformed `.hyalo.toml` is handled
-/// throughout the rest of the config loading pipeline.
+/// throughout the rest of the config loading pipeline. `lint` additionally
+/// surfaces the same diagnostic as a visible lint-result violation (review
+/// round finding 2) via `try_parse_schema_from_toml` + `validate_schema_config`,
+/// since a stderr warning alone let `lint --strict` exit 0 on a vault whose
+/// schema validation was silently disabled.
 fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
-    let Some(val) = raw else {
-        return SchemaConfig::default();
-    };
-    let raw_cfg: RawSchemaConfig = match val.clone().try_into() {
-        Ok(c) => c,
-        Err(e) => {
-            crate::warn::warn(format!("malformed [schema] in .hyalo.toml: {e}"));
-            return SchemaConfig::default();
-        }
-    };
-    match SchemaConfig::try_from(raw_cfg) {
-        Ok(cfg) => {
+    match try_parse_schema_from_toml(raw) {
+        Ok(Some(cfg)) => {
             // A `[[schema.bind]]` whose target names an undeclared type binds
             // nothing — warn so a typo doesn't fail silently.
             let unknown = cfg.unknown_bind_targets();
@@ -1032,8 +1050,9 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
             }
             cfg
         }
+        Ok(None) => SchemaConfig::default(),
         Err(e) => {
-            crate::warn::warn(format!("invalid [schema] in .hyalo.toml: {e}"));
+            crate::warn::warn(e);
             SchemaConfig::default()
         }
     }
