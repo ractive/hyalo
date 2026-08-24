@@ -286,6 +286,53 @@ fn lint_files_from_empty_exits_zero() {
     assert_eq!(envelope["results"]["files_missing"].as_u64().unwrap(), 0);
 }
 
+/// `lint --files-from` resolving to zero files must emit the read-only
+/// shape's *current* key names, not a stale hand-written literal —
+/// `run.rs`'s empty-result branch used to build this JSON by hand and had
+/// drifted: it still said `total` after iter-216 D-2 renamed that key to
+/// `violations`, and omitted `files_checked`/`files_ignored`/`dry_run`
+/// entirely, so a `--files-from` run with zero matches silently reported a
+/// different shape than the same command with matches. Serializing
+/// `ExtLintOutput::default()` (like the fix-mode branch already did) fixes
+/// this by construction.
+#[test]
+fn lint_files_from_empty_emits_current_read_only_shape() {
+    let tmp = setup_vault();
+    let list = write_list_file(&[]);
+
+    let mut cmd = hyalo_no_hints();
+    cmd.args(["--dir", tmp.path().to_str().unwrap()]);
+    cmd.args(["lint", "--files-from", list.path().to_str().unwrap()]);
+    cmd.args(["--format", "json"]);
+
+    let out = cmd.output().unwrap();
+    assert!(out.status.success());
+    let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = &envelope["results"];
+    assert!(
+        results.get("total").is_none(),
+        "must not carry the pre-iter-216 `total` key: {envelope}"
+    );
+    for key in [
+        "violations",
+        "files_checked",
+        "files_ignored",
+        "files_with_violations",
+        "rules_fired",
+    ] {
+        assert_eq!(
+            results[key].as_u64(),
+            Some(0),
+            "expected read-only key {key} present and 0: {envelope}"
+        );
+    }
+    assert_eq!(
+        results.get("dry_run").and_then(serde_json::Value::as_bool),
+        Some(false),
+        "dry_run must be present and false without --dry-run: {envelope}"
+    );
+}
+
 /// `lint --fix --files-from` resolving to zero files must emit the
 /// fix-mode shape (`total_fixed`/`total_remaining`/`total_conflicts`,
 /// `remaining_errors`/`remaining_warnings`), not the read-only shape —

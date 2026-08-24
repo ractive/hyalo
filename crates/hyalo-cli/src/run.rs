@@ -271,16 +271,25 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
                 .unwrap_or_else(|_| serde_json::json!({"files": [], "dry_run": *dry_run}));
             CommandOutcome::success_with_total(payload.to_string(), 0)
         }
-        Commands::Lint { .. } => {
-            let payload = serde_json::json!({
-                "files": [],
-                "total": 0,
-                "rules_fired": 0,
-                "files_with_violations": 0,
-                "files_truncated": false,
-                "errors": 0,
-                "warnings": 0
-            });
+        Commands::Lint { dry_run, .. } => {
+            // Read-only shape: serialize `ExtLintOutput::default()` (with
+            // only `dry_run` overridden) rather than a hand-written `json!`
+            // literal, so this can never drift out of the real field set —
+            // the hand-written literal this replaced still said `"total"`
+            // after iter-216 D-2 renamed that key to `violations` and
+            // omitted `files_checked`/`files_ignored`/`dry_run` entirely,
+            // silently reporting the pre-iter-216 shape whenever
+            // `--files-from` resolved to zero files. Mirrors the
+            // `ExtLintFixOutput` branch above.
+            let empty = crate::commands::lint::ExtLintOutput {
+                dry_run: *dry_run,
+                ..Default::default()
+            };
+            // `ExtLintOutput` has no maps or floats, so this cannot actually
+            // fail; the fallback keeps the "no unwrap/expect outside tests"
+            // rule rather than assuming infallibility.
+            let payload = serde_json::to_value(&empty)
+                .unwrap_or_else(|_| serde_json::json!({"files": [], "dry_run": *dry_run}));
             CommandOutcome::success_with_total(payload.to_string(), 0)
         }
         // Mutation commands: empty array
@@ -1881,6 +1890,7 @@ fn run_inner() -> Result<(), AppError> {
     // hint can fire when the command took longer than SLOW_QUERY_THRESHOLD_MS.
     // We measure here (not inside dispatch) so hint rendering is excluded.
     let dispatch_start = Instant::now();
+    eprintln!("DEBUG files_from_empty={files_from_empty}");
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
         Ok(empty_result_for_command(&cli.command))

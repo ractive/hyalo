@@ -1553,7 +1553,13 @@ pub struct ExtFileLintFixResult {
 }
 
 /// Full extended lint output (read-only mode).
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+///
+/// `Default` backs the empty-result shape `run.rs` emits when
+/// `--files-from` resolves to zero files — serializing `Self::default()`
+/// (with only `dry_run` overridden) keeps that shape from drifting out of
+/// sync with the real field set as fields are added, renamed or removed
+/// here, mirroring [`ExtLintFixOutput`]'s empty-result shape.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintOutput {
     pub files: Vec<ExtFileLintResult>,
     /// Total number of violations found across all files.
@@ -1595,8 +1601,9 @@ pub struct ExtLintOutput {
 /// `--files-from` resolves to zero files (review finding #5) — serializing
 /// `Self::default()` (with only `dry_run` overridden) keeps that shape from
 /// drifting out of sync with the real field set as fields are added or
-/// removed here, and its `#[serde(skip_serializing_if)]` on `dry_run`
-/// applies the same way it does on the non-empty path.
+/// removed here. `dry_run` is always serialized (iter-216 D-4), so the
+/// empty shape carries it as a plain `false`/`true`, same as the non-empty
+/// path.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintFixOutput {
     pub files: Vec<ExtFileLintFixResult>,
