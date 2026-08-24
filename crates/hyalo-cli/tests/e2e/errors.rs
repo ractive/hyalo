@@ -16,6 +16,13 @@ fn error_nonexistent_file() {
     let json: serde_json::Value = serde_json::from_str(&stderr).unwrap();
     assert_eq!(json["error"], "file not found");
     assert!(json.get("path").is_some());
+    // F3-5: file-not-found must carry an actionable hint, not just re-state
+    // the path back at the user.
+    let hint = json["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("vault-relative"),
+        "expected a vault-relative-paths hint, got: {hint}"
+    );
 }
 
 #[test]
@@ -806,5 +813,90 @@ Body
     assert_eq!(
         count, 1,
         "big.md should appear exactly once in warnings; full stderr:\n{stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F3-4: an in-vault `../file.md` from a subdir no longer claims to resolve
+// outside the vault; F3-5: file-not-found, empty-path, and the F3-4
+// no-'..' message all carry an actionable hint
+// (deep-analysis-3-2026-08-23, DEC-094).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn error_parent_traversal_from_subdir_does_not_claim_outside_vault() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir(tmp.path().join("sub")).unwrap();
+    write_md(tmp.path(), "root.md", "---\ntitle: Root\n---\nBody\n");
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path().join("sub"))
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "../root.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "the lexical no-'..' policy still refuses this path"
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    let error_msg = json["error"].as_str().unwrap_or_default();
+    assert!(
+        !error_msg.contains("outside vault boundary"),
+        "root.md is squarely inside the vault; the message must not claim \
+         otherwise: {error_msg}"
+    );
+    assert!(
+        error_msg.contains(".."),
+        "expected the message to name the no-'..' policy: {error_msg}"
+    );
+    let hint = json["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("vault-relative"),
+        "expected a hint pointing at the vault-relative form: {hint}"
+    );
+}
+
+#[test]
+fn error_absolute_path_still_says_outside_vault() {
+    // A genuinely absolute path is an accurate "outside vault" claim — F3-4
+    // only narrows the *lexical `..`* case, not this one.
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "/etc/passwd"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    let error_msg = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error_msg.contains("outside vault boundary"),
+        "an absolute path really is outside the vault: {error_msg}"
+    );
+}
+
+#[test]
+fn error_empty_path_hints_at_shell_quoting() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", ""])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&stderr).unwrap();
+    let hint = json["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.to_lowercase().contains("quoting"),
+        "expected a shell-quoting hint for an empty path, got: {hint}"
     );
 }
