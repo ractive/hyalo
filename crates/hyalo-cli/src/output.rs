@@ -1250,8 +1250,11 @@ fn format_value_as_text(value: &serde_json::Value, cache: &mut JaqFilterCache) -
             {
                 return format_lint_fix_output_text(map);
             }
-            // LintOutput: detected by "files" array of {file, violations} + "total".
-            if map.contains_key("total")
+            // LintOutput: detected by "files" array of {file, violations} plus
+            // the run-level violation count. That count was renamed `total` ->
+            // `violations` in iter-216 (D-2); `total` stays in the predicate so
+            // a payload produced by an older hyalo still renders as lint text.
+            if (map.contains_key("violations") || map.contains_key("total"))
                 && map.contains_key("files")
                 && let Some(serde_json::Value::Array(arr)) = map.get("files")
             {

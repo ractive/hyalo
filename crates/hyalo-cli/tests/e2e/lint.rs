@@ -579,7 +579,7 @@ type = "date"
         .unwrap();
 
     let results: ExtLintOutput = typed_results(&output.stdout);
-    let total = results.total;
+    let total = results.violations;
     let files_checked = results.files_checked;
 
     // 2 violations (one error per bad file), 3 files checked
@@ -648,7 +648,10 @@ fn lint_limit_caps_output() {
         results.files.len()
     );
     // total should still reflect ALL violations (not just the limited output)
-    assert!(results.total >= 1, "total should reflect all violations");
+    assert!(
+        results.violations >= 1,
+        "violations should reflect all violations"
+    );
     // files_truncated flag should be present and true
     assert!(
         results.files_truncated,
@@ -3203,7 +3206,7 @@ fn lint_json_counters_describe_whole_run_on_large_clean_vault() {
         "only the dirty file violates: {results:?}"
     );
     assert_eq!(
-        results.total,
+        results.violations,
         results.errors + results.warnings,
         "`total` must describe the same run as errors+warnings: {results:?}"
     );
@@ -3231,7 +3234,7 @@ fn lint_json_rules_fired_is_limit_independent() {
         "rules_fired must not shrink with --limit: {unlimited:?} vs {capped:?}"
     );
     assert_eq!(
-        unlimited.total, capped.total,
+        unlimited.violations, capped.violations,
         "total must not shrink with --limit: {unlimited:?} vs {capped:?}"
     );
     assert_eq!(
@@ -3777,7 +3780,7 @@ patterns = ".*"
     // silently disabled: total violations and files_with_violations must be
     // nonzero, and the malformed-schema key must be visible in the JSON.
     assert!(
-        results.total > 0,
+        results.violations > 0,
         "results.total must be nonzero -- 'no issues' must never be reported \
          while schema validation is silently disabled: {results:?}"
     );

@@ -110,8 +110,12 @@ pub enum AutoApplyStatus {
 pub struct AutoLinkReport {
     /// Number of files scanned.
     pub scanned: usize,
-    /// Total number of proposed auto-link replacements.
-    pub total: usize,
+    /// Number of proposed auto-link replacements (`matches.len()`).
+    ///
+    /// iter-216 D-3: named `matched`, not `total`. `results.total` is
+    /// reserved for the denominator — the number of items the command
+    /// considered, which on this command is `scanned`.
+    pub matched: usize,
     /// The proposed replacements, grouped or flat.
     pub matches: Vec<AutoLinkMatch>,
     /// Titles that were skipped due to ambiguity (multiple files share the
@@ -509,7 +513,7 @@ pub fn auto_link(
     if title_map.is_empty() {
         return Ok(AutoLinkReport {
             scanned: 0,
-            total: 0,
+            matched: 0,
             matches: Vec::new(),
             ambiguous_titles,
             applied: false,
@@ -635,10 +639,10 @@ pub fn auto_link(
         Vec::new()
     };
 
-    let total = all_matches.len();
+    let matched = all_matches.len();
     Ok(AutoLinkReport {
         scanned,
-        total,
+        matched,
         matches: all_matches,
         ambiguous_titles,
         applied: opts.apply,

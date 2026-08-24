@@ -23,6 +23,10 @@ pub(crate) struct AppendPropertyResult {
     pub(crate) value: String,
     pub(crate) modified: Vec<String>,
     pub(crate) skipped: Vec<String>,
+    /// `skipped.len()`, restated as a scalar (iter-216 D-1) — the whole
+    /// mutation family exposes this key so one query answers "how many were
+    /// skipped" regardless of which command produced the result.
+    pub(crate) skipped_count: usize,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -360,11 +364,13 @@ pub fn append(
 
     for ((name, raw_value, _), (modified, skipped)) in parsed_args.iter().zip(prop_results) {
         let total = modified.len() + skipped.len();
+        let skipped_count = skipped.len();
         let result = AppendPropertyResult {
             property: (*name).to_owned(),
             value: (*raw_value).to_owned(),
             modified,
             skipped,
+            skipped_count,
             total,
             scanned,
             dry_run,

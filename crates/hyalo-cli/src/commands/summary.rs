@@ -421,7 +421,7 @@ pub fn summary(
         Some(LintSummary {
             errors: counts.errors,
             warnings: counts.warnings,
-            files_with_issues: counts.files_with_issues,
+            files_with_violations: counts.files_with_issues,
         })
     };
 
