@@ -100,11 +100,13 @@ export default function (pi: ExtensionAPI) {
                 ? [{ type: "text" as const, text: `Stdout:\n${stdout}` }]
                 : []),
             ],
+            details: undefined,
           };
         }
 
         return {
           content: [{ type: "text" as const, text: stdout || "(no output)" }],
+          details: undefined,
         };
       } catch (error) {
         return {
@@ -114,6 +116,7 @@ export default function (pi: ExtensionAPI) {
               text: `Error executing hyalo: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
+          details: undefined,
         };
       }
     },
