@@ -240,6 +240,44 @@ and this project adheres to
 
 ### Changed
 
+#### Breaking: `results` JSON key renames (iter-216)
+
+Three `results` keys were renamed so that one name means one thing across
+every command. Scripts reading the old names get `null` and must be updated;
+`--format text` output is unchanged. The full survey behind these, including
+the divergences deliberately left alone, is in
+`hyalo-knowledgebase/research/results-json-shape-inventory.md`.
+
+| Command | Old key | New key | Why |
+| --- | --- | --- | --- |
+| `lint` | `.results.total` | `.results.violations` | `.results.total` was the violation count while the envelope's `total` on the same payload was the file count — one name, two quantities, one document. |
+| `links auto` | `.results.total` | `.results.matched` | It counted proposals (a numerator) and duplicated the length of `matches`; the denominator on that command is `scanned`. |
+| `summary` | `.results.schema.files_with_issues` | `.results.schema.files_with_violations` | Same quantity `lint` already reported as `files_with_violations`. |
+
+The rule those follow: the envelope owns `total`, and a `total` inside
+`results` always means *the number of items the command considered*, never a
+count of findings. `set`/`remove`/`append`/`properties rename`/`tags rename`
+already complied (`total = modified + skipped`) and are unchanged.
+
+#### Non-breaking: `results` keys added (iter-216)
+
+- **`dry_run` is now always present on `lint` and `lint --fix` results**, and
+  **newly present on `links auto` and `links fix`**. It used to be omitted
+  when `false` on `lint` while `set`/`remove`/`append`/`mv`/renames emitted
+  `dry_run: false`, so the same state read back as `null` from one command
+  and `false` from another. On the two `links` commands there was no way to
+  tell a preview from an `--apply` that had nothing to do: `applied` is
+  `false` in both cases (`links auto --apply` over a vault with no linkable
+  titles reports `applied: false`). Top-level `results` keys are always
+  present; only per-item records inside arrays omit absent optional keys.
+- **`skipped_count` added to `set`, `remove` and `append` results.**
+  `properties rename` / `tags rename` already reported the skip set as a
+  count only — their skip set is "every scanned file that lacks the
+  property", which on a large vault is the whole vault and carries no
+  information — so no single key answered "how many were skipped" across the
+  mutation family. `skipped` (the list) is unchanged where it was already
+  emitted.
+
 - **`set`/`append --property a.b=x` now rejects the whole batch, instead of
   silently creating a literal `"a.b"` key, when a top-level `a` already
   exists as a mapping in a matched file's frontmatter** (iter-219, dogfood

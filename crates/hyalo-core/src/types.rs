@@ -193,7 +193,13 @@ pub struct TaskDryRunResult {
 pub struct LintSummary {
     pub errors: usize,
     pub warnings: usize,
-    pub files_with_issues: usize,
+    /// Number of files with at least one schema violation.
+    ///
+    /// iter-216 D-5: named `files_with_violations` to match the key `hyalo
+    /// lint` emits for the same quantity. `summary` used to call it
+    /// `files_with_issues`, so a script comparing the digest against a full
+    /// lint run had to know both spellings.
+    pub files_with_violations: usize,
 }
 
 /// High-level vault summary.

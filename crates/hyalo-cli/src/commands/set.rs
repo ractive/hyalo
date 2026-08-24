@@ -26,6 +26,14 @@ pub(crate) struct SetPropertyResult {
     pub(crate) value: Value,
     pub(crate) modified: Vec<String>,
     pub(crate) skipped: Vec<String>,
+    /// `skipped.len()`, restated as a scalar.
+    ///
+    /// iter-216 D-1: `properties rename` / `tags rename` report the skip set
+    /// as a count only (their skip set is "every scanned file that lacks the
+    /// property", which on a large vault is the whole vault and carries no
+    /// information). Emitting `skipped_count` here too gives the whole
+    /// mutation family one key that answers "how many were skipped".
+    pub(crate) skipped_count: usize,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -39,6 +47,8 @@ pub(crate) struct SetTagResult {
     pub(crate) tag: String,
     pub(crate) modified: Vec<String>,
     pub(crate) skipped: Vec<String>,
+    /// `skipped.len()`, restated as a scalar — see [`SetPropertyResult::skipped_count`].
+    pub(crate) skipped_count: usize,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -627,11 +637,13 @@ pub fn set(
             batch_type,
             first_old_value[i].as_ref(),
         );
+        let skipped_count = skipped.len();
         let result = SetPropertyResult {
             property: (*name).to_owned(),
             value: parsed_value.clone(),
             modified,
             skipped,
+            skipped_count,
             total,
             scanned,
             dry_run,
@@ -643,10 +655,12 @@ pub fn set(
 
     for (tag, (modified, skipped)) in tag_args.iter().zip(tag_results) {
         let total = modified.len() + skipped.len();
+        let skipped_count = skipped.len();
         let result = SetTagResult {
             tag: tag.clone(),
             modified,
             skipped,
+            skipped_count,
             total,
             scanned,
             dry_run,

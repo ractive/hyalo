@@ -109,7 +109,7 @@ fn lint_fix_through_symlink_is_idempotent() {
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
     assert_eq!(
-        val["results"]["total"],
+        val["results"]["violations"],
         0,
         "second lint must be clean, got: {}",
         String::from_utf8_lossy(&second.stdout)

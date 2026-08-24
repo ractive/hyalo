@@ -98,7 +98,7 @@ fn redundant_dir_keeps_the_config_for_lint() {
     }
     // Not vacuous: the schema really did produce findings.
     assert!(
-        a["results"]["total"].as_u64().unwrap_or(0) > 0,
+        a["results"]["violations"].as_u64().unwrap_or(0) > 0,
         "fixture stopped producing lint findings: {a}"
     );
 }

@@ -143,8 +143,9 @@ pub struct FixAction {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LintOutput {
     pub files: Vec<FileLintResult>,
-    /// Total number of violations found across all files.
-    pub total: usize,
+    /// Total number of violations found across all files. Named `violations`
+    /// rather than `total` for the reason given on [`ExtLintOutput::violations`].
+    pub violations: usize,
     /// Number of error-severity violations across all files (not limited by `--limit`).
     pub errors: usize,
     /// Number of warn-severity violations across all files (not limited by `--limit`).
@@ -409,7 +410,7 @@ pub fn lint_files_with_options(
     }
     let output = LintOutput {
         files: results,
-        total,
+        violations: total,
         errors: counts.errors,
         warnings: counts.warnings,
         files_with_issues: counts.files_with_issues,
@@ -1552,10 +1553,23 @@ pub struct ExtFileLintFixResult {
 }
 
 /// Full extended lint output (read-only mode).
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+///
+/// `Default` backs the empty-result shape `run.rs` emits when
+/// `--files-from` resolves to zero files — serializing `Self::default()`
+/// (with only `dry_run` overridden) keeps that shape from drifting out of
+/// sync with the real field set as fields are added, renamed or removed
+/// here, mirroring [`ExtLintFixOutput`]'s empty-result shape.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintOutput {
     pub files: Vec<ExtFileLintResult>,
-    pub total: usize,
+    /// Total number of violations found across all files.
+    ///
+    /// iter-216 D-1..D-5: named `violations`, not `total`. `results.total` is
+    /// reserved for "the number of items the command considered" (the
+    /// denominator); this is a count of findings, and the envelope's own
+    /// `total` on the very same document is the *file* count, so one name
+    /// used to carry two quantities in one payload.
+    pub violations: usize,
     pub rules_fired: usize,
     pub files_with_violations: usize,
     /// Total number of files that were examined (including clean files).
@@ -1569,7 +1583,12 @@ pub struct ExtLintOutput {
     /// Always present (not skipped when zero) — consistent with the other
     /// count fields on this struct.
     pub files_ignored: usize,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// `true` when `--fix --dry-run` previewed fixes without writing them.
+    ///
+    /// iter-216 D-4: always present, never skipped when `false`. Top-level
+    /// `results` keys are always present; `set`/`remove`/`append`/`mv` already
+    /// emit `dry_run: false`, and a script switching between those and `lint`
+    /// used to get `null` from one and `false` from the other.
     pub dry_run: bool,
     /// Frontmatter fix actions applied (or previewed) per file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1582,8 +1601,9 @@ pub struct ExtLintOutput {
 /// `--files-from` resolves to zero files (review finding #5) — serializing
 /// `Self::default()` (with only `dry_run` overridden) keeps that shape from
 /// drifting out of sync with the real field set as fields are added or
-/// removed here, and its `#[serde(skip_serializing_if)]` on `dry_run`
-/// applies the same way it does on the non-empty path.
+/// removed here. `dry_run` is always serialized (iter-216 D-4), so the
+/// empty shape carries it as a plain `false`/`true`, same as the non-empty
+/// path.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintFixOutput {
     pub files: Vec<ExtFileLintFixResult>,
@@ -1605,7 +1625,8 @@ pub struct ExtLintFixOutput {
     /// questions.
     pub remaining_errors: usize,
     pub remaining_warnings: usize,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// `true` when `--dry-run` previewed fixes without writing them.
+    /// Always present (iter-216 D-4) — see [`ExtLintOutput::dry_run`].
     pub dry_run: bool,
 }
 
@@ -2120,7 +2141,7 @@ pub fn lint_files_extended(
 
         let output = ExtLintOutput {
             files: output_files,
-            total: authoritative_total,
+            violations: authoritative_total,
             rules_fired: authoritative_rules_fired,
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,

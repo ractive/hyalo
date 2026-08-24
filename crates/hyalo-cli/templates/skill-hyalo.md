@@ -116,6 +116,21 @@ hyalo find --property status=draft --jq '.results[].file'  # just file paths
 hyalo summary --jq '.results.tasks.total'                  # tasks count from summary
 ```
 
+**Conventions inside `results`** (so one query works across commands):
+
+- The envelope owns `total`. Where a command repeats `total` inside `results` it means *the
+  number of items that command considered* — `set`/`remove`/`append`/`properties rename`/
+  `tags rename` use `total = modified + skipped`. A count of *findings* is never called
+  `total`: `lint` reports `.results.violations`, `links auto` reports `.results.matched`.
+- Top-level `results` keys are always present, including `0`, `false`, `[]` and `null`. Only
+  per-item records inside arrays omit absent optional keys, so `.results.dry_run` is `false`
+  (not missing) on a non-dry-run of any mutating command.
+- Every mutating command reports `dry_run` and `skipped_count`:
+  `hyalo set --glob '**/*.md' --property status=draft --jq '.results.skipped_count'`.
+- `links fix` pairs each bucket count with a list whose suffix names the record type:
+  `…_fixes` holds fix proposals (`old_target`/`new_target`/`strategy`/`confidence`),
+  `…_links` holds links with no proposal.
+
 **Hints are enabled by default.** Every query appends drill-down suggestions (`-> hyalo ...`
 lines in text mode, a `"hints"` array in the JSON envelope). Read and follow these hints — they show
 concrete next commands to explore deeper. Use `--no-hints` to suppress them, or `--jq` which

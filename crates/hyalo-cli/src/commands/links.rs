@@ -479,6 +479,10 @@ pub fn links_fix(
         "fixes": certain_fixes,
         "unfixable_links": unfixable_links,
         "applied": !dry_run,
+        // iter-216 D-4: every other mutating command reports `dry_run`, and a
+        // caller that switches between `links fix`, `links auto` and `set`
+        // should not have to know that this one spells it `applied` inverted.
+        "dry_run": dry_run,
         "applied_fixes": applied_fixes,
         "unapplied": unapplied_count,
         "unapplied_fixes": unapplied_fixes,
@@ -955,7 +959,7 @@ pub fn links_auto(
                     ..opts
                 },
             )?;
-            baseline.total
+            baseline.matched
         };
         (titles, mentions)
     } else {
@@ -963,10 +967,10 @@ pub fn links_auto(
     };
 
     let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
-    // `baseline.total` counted mentions *before* the config exclusions; the
+    // `baseline.matched` counted mentions *before* the config exclusions; the
     // difference is what they suppressed. Saturating because a future filter
     // that is not purely subtractive must report 0, never underflow.
-    let config_excluded_mentions = config_excluded_mentions.saturating_sub(report.total);
+    let config_excluded_mentions = config_excluded_mentions.saturating_sub(report.matched);
 
     // iter-197: advisory note when common English words drive the candidates.
     // stderr only (deduped and suppressed by `-q` like every other note), so the
@@ -1006,10 +1010,17 @@ pub fn links_auto(
 
     let mut output = serde_json::json!({
         "scanned": report.scanned,
-        "total": report.total,
+        // iter-216 D-3: `matched` (was `total`) — `results.total` is reserved
+        // for the denominator, which on this command is `scanned`.
+        "matched": report.matched,
         "matches": report.matches,
         "ambiguous_titles": report.ambiguous_titles,
         "applied": report.applied,
+        // iter-216 D-4: `applied` is not the inverse of `dry_run` here — a
+        // `--apply` run over a vault with no linkable titles also reports
+        // `applied: false`, so without this key a script cannot tell a preview
+        // from an apply that had no work to do.
+        "dry_run": !apply,
         // L-11: per-file apply outcomes (applied/skipped/failed with reason).
         // Empty in preview mode. `files_applied`/`files_skipped`/`files_failed`
         // are the counts; `apply_outcomes` carries the per-file detail.

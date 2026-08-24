@@ -341,10 +341,10 @@ fn inject_ext_file_result(
         if let Some(files) = obj.get_mut("files").and_then(|f| f.as_array_mut()) {
             files.insert(0, extra_value);
         }
-        // Read-only shape has `total`.
-        if let Some(n) = obj.get_mut("total").and_then(|v| v.as_u64()) {
+        // Read-only shape has `violations` (named `total` before iter-216 D-2).
+        if let Some(n) = obj.get_mut("violations").and_then(|v| v.as_u64()) {
             obj.insert(
-                "total".to_string(),
+                "violations".to_string(),
                 serde_json::Value::from(n + extra_violations as u64),
             );
         }
