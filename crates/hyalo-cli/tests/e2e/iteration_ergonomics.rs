@@ -712,8 +712,14 @@ fn set_absolute_path_outside_vault_names_dir_and_hint() {
     // The self-healing hint names both fixes.
     assert!(err.contains("relative to"), "got: {err}");
     assert!(err.contains("cd to a parent"), "got: {err}");
-    // The offending path is reported.
-    assert!(err.contains(&stray_str), "got: {err}");
+    // The offending path is reported. The JSON path field is
+    // separator-normalized to forward slashes, so compare against the
+    // forward-slash spelling of the input (Windows: stray_str has '\\').
+    let stray_fwd = stray_str.replace('\\', "/");
+    assert!(
+        err.contains(&stray_fwd),
+        "got: {err}; expected path: {stray_fwd}"
+    );
     // And the stray file is untouched.
     assert!(
         !fs::read_to_string(&stray).unwrap().contains("x:"),
