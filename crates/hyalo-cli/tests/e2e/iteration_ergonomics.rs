@@ -690,14 +690,21 @@ fn set_absolute_path_outside_vault_names_dir_and_hint() {
     assert!(!output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("outside vault boundary"), "got: {err}");
-    // The effective vault dir is named.
+    // The effective vault dir is named. Accept either the TempDir's raw
+    // spelling or its canonical form: the message carries the dir as given
+    // (macOS: /var/folders/... while canonicalize yields /private/var/...),
+    // while on Windows the canonical form may use the 8.3 short user name
+    // (e.g. RUNNER~1) which differs from the TempDir's spelling.
+    let canonical_vault = dunce::canonicalize(vault.path()).unwrap();
     assert!(
         err.contains("vault:"),
         "expected vault dir in message: {err}"
     );
+    let raw_ok = err.contains(vault.path().to_str().unwrap());
+    let canonical_ok = err.contains(&*canonical_vault.to_string_lossy());
     assert!(
-        err.contains(vault.path().to_str().unwrap()),
-        "expected the actual vault path: {err}"
+        raw_ok || canonical_ok,
+        "expected the actual vault path (raw or canonical) in: {err}"
     );
     // The self-healing hint names both fixes.
     assert!(err.contains("relative to"), "got: {err}");
