@@ -66,6 +66,17 @@ Post-merge verifications and deferred decisions from iter-237 (folded here so th
 - [ ] (Conditional) `hyalo doctor`-style check reporting extension/hyalo version compatibility drift — only if dogfooding shows drift confusion
 - [ ] (Conditional, from iter-236 via 237) `--jq` passthrough on `hyalo_find` and a `hyalo_lint` typed tool — only if observed model friction justifies
 
+## Carry-over from [[iterations/iteration-234-lint-dead-output-cleanup]]
+
+Deferred by that iteration's non-goals ("any further `results` shape renames"):
+
+- [ ] Inventory finding **D-5**: rename `summary`'s `schema.files_with_issues`
+      to `files_with_violations` so it matches `lint`'s field name for the
+      same quantity (`output.rs` already carries a compatibility shim reading
+      both). Remediation R4, flagged "yes" in
+      [[research/results-json-shape-inventory]]. Iteration 234 deleted the
+      dead `LintOutput` half of J-9; this is the remaining *live* drift.
+
 ## Out of scope / carry-over candidates
 
 - `--iteration` on `links` (no consumer friction observed yet)

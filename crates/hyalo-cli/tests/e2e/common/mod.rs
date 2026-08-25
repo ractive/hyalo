@@ -11,7 +11,7 @@ use std::path::Path;
 /// (`json["results"]["links"]["total"]`), so an output-shape regression
 /// surfaced as a generic `expect`/index panic rather than tying the test to
 /// the actual typed output structs (DEC-025's `crates/hyalo-core/src/types.rs`
-/// family, plus per-command structs like `lint`'s `LintOutput`). Deserializing
+/// family, plus per-command structs like `lint`'s `ExtLintOutput`). Deserializing
 /// into `Envelope<T>` for a real `T` makes a field rename in production a
 /// compile error in the converted suites instead of a silent `Value::Null`
 /// a stringly-keyed lookup would tolerate.

@@ -34,7 +34,7 @@ use hyalo_core::util::is_iso8601_date;
 use crate::commands::section_scanner::SectionScanner;
 use crate::commands::terse_root_cause;
 
-use crate::output::{CommandOutcome, Format, format_success};
+use crate::output::{CommandOutcome, Format};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,36 +134,6 @@ pub struct FixAction {
     pub old: Option<String>,
     /// New value applied (or previewed with --dry-run).
     pub new: String,
-}
-
-/// Aggregated lint output.
-///
-/// The `files` field is renamed from the internal `results` to avoid a
-/// confusing `results.results` nesting once the CLI envelope wraps the payload.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct LintOutput {
-    pub files: Vec<FileLintResult>,
-    /// Total number of violations found across all files. Named `violations`
-    /// rather than `total` for the reason given on [`ExtLintOutput::violations`].
-    pub violations: usize,
-    /// Number of error-severity violations across all files (not limited by `--limit`).
-    pub errors: usize,
-    /// Number of warn-severity violations across all files (not limited by `--limit`).
-    pub warnings: usize,
-    /// Number of files with at least one violation (not limited by `--limit`).
-    pub files_with_issues: usize,
-    /// Number of files that were checked.
-    pub files_checked: usize,
-    /// Fixes that were applied (or previewed) per file. Omitted when no
-    /// `--fix` run produced any changes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fixes: Vec<FileFixResult>,
-    /// `true` when `--dry-run` was passed and fixes were not written.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub dry_run: bool,
-    /// `true` when `--limit` truncated the file list.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub limited: bool,
 }
 
 /// Fixes applied to a single file.
@@ -323,7 +293,7 @@ pub fn validate_schema_config(dir: &Path, strict: bool) -> Option<FileLintResult
     }
 }
 
-/// Whether — and how — `lint_files_with_options` should apply auto-fixes.
+/// Whether — and how — the lint `--fix` path should apply auto-fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixMode {
     /// Read-only: do not attempt to fix anything.
@@ -332,102 +302,6 @@ pub enum FixMode {
     Apply,
     /// Compute the fixes that would be applied but don't write any files.
     DryRun,
-}
-
-/// Run lint with the given fix mode.
-///
-/// When `fix` is `Apply`, repairable violations are written back to each file
-/// before the final counts are computed, so the returned counts reflect only
-/// the violations that *remain* after fixing. With `DryRun`, counts reflect
-/// the post-fix state but files are untouched.
-///
-/// `vault_root` is forwarded to [`hyalo_core::frontmatter::write_frontmatter_within`]
-/// when `fix` is `Apply` so a symlinked destination that resolves outside the
-/// vault is refused at write time (iter-191 follow-up). Pass `None` only when
-/// `fix` is `Off` (no write is possible) or the caller has no vault to check
-/// against.
-#[allow(clippy::too_many_arguments)]
-pub fn lint_files_with_options(
-    files: &[(std::path::PathBuf, String)],
-    schema: &SchemaConfig,
-    fix: FixMode,
-    limit: Option<usize>,
-    snapshot_index: &mut Option<hyalo_core::index::SnapshotIndex>,
-    index_path: Option<&Path>,
-    case_insensitive: bool,
-    vault_root: Option<&Path>,
-) -> Result<(CommandOutcome, LintCounts)> {
-    let mut results: Vec<FileLintResult> = Vec::new();
-    let mut counts = LintCounts::default();
-    let mut fix_results: Vec<FileFixResult> = Vec::new();
-    let mut index_dirty = false;
-
-    for (full_path, rel_path) in files {
-        let (file_result, file_fixes) = lint_file_with_fix(
-            full_path,
-            rel_path,
-            schema,
-            fix,
-            case_insensitive,
-            vault_root,
-        )?;
-        for v in &file_result.violations {
-            match v.severity {
-                Severity::Error => counts.errors += 1,
-                Severity::Warn => counts.warnings += 1,
-            }
-        }
-        if !file_result.violations.is_empty() {
-            counts.files_with_issues += 1;
-        }
-        if !file_fixes.actions.is_empty() {
-            // If fixes were actually applied, update the snapshot index entry.
-            if matches!(fix, FixMode::Apply) {
-                let props = read_frontmatter(full_path)
-                    .with_context(|| format!("reading fixed frontmatter from {rel_path}"))?;
-                super::mutation::update_index_entry(
-                    snapshot_index,
-                    rel_path,
-                    props,
-                    full_path,
-                    &mut index_dirty,
-                )?;
-            }
-            fix_results.push(file_fixes);
-        }
-        if !file_result.violations.is_empty() {
-            results.push(file_result);
-        }
-    }
-
-    super::mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
-
-    let files_checked = files.len();
-    let total = counts.errors + counts.warnings;
-    let limited = limit.is_some_and(|n| results.len() > n);
-    if let Some(n) = limit {
-        results.truncate(n);
-    }
-    let output = LintOutput {
-        files: results,
-        violations: total,
-        errors: counts.errors,
-        warnings: counts.warnings,
-        files_with_issues: counts.files_with_issues,
-        files_checked,
-        fixes: fix_results,
-        dry_run: matches!(fix, FixMode::DryRun),
-        limited,
-    };
-
-    let val = serde_json::to_value(&output).context("failed to serialize lint output")?;
-    // Use success_with_total so that `--count` returns the number of files with issues.
-    let outcome = CommandOutcome::success_with_total(
-        format_success(Format::Json, &val),
-        counts.files_with_issues as u64,
-    );
-
-    Ok((outcome, counts))
 }
 
 /// Compute lint counts for `hyalo summary` without formatting output.
@@ -4062,18 +3936,7 @@ type = \"skill\"
         std::fs::write(&path, "---\ntitle: Hello\n---\nBody\n").unwrap();
 
         let schema = SchemaConfig::default();
-        let files = vec![(path, "note.md".to_owned())];
-        let (_, counts) = lint_files_with_options(
-            &files,
-            &schema,
-            FixMode::Off,
-            None,
-            &mut None,
-            None,
-            false,
-            None,
-        )
-        .unwrap();
+        let (_, counts) = lint_extended_strict(&path, "note.md", &schema, false);
         assert_eq!(counts.errors, 0);
         assert_eq!(counts.warnings, 0);
     }
@@ -4349,18 +4212,32 @@ type = \"skill\"
         .unwrap();
 
         let schema = SchemaConfig::default();
+        let engine = hyalo_mdlint::HyaloLintEngine::create().unwrap();
+        let md_config = hyalo_mdlint::LintConfig::default();
         let files = vec![(path.clone(), "note.md".to_owned())];
-        let (_, counts) = lint_files_with_options(
-            &files,
-            &schema,
-            FixMode::Apply,
-            None,
-            &mut None,
-            None,
-            false,
-            Some(dir.path()),
-        )
-        .unwrap();
+        let mut snapshot: Option<hyalo_core::index::SnapshotIndex> = None;
+        let mut opts = ExtLintOptions {
+            fix: FixMode::Apply,
+            detailed: false,
+            rule_filter: None,
+            rule_prefix: None,
+            max_per_rule: 100,
+            max_files: 100,
+            fix_rules: &[],
+            snapshot_index: &mut snapshot,
+            index_path: None,
+            vault_dir: dir.path(),
+            strict: false,
+            okf_profile: false,
+            madr_profile: false,
+            skills_profile: false,
+            changelog_profile: false,
+            case_insensitive: false,
+            link_lint_ctx: None,
+            files_ignored: 0,
+        };
+        let (_, counts) =
+            lint_files_extended(&files, &schema, &engine, &md_config, &mut opts).unwrap();
 
         // After fix, the comma-joined tag warning should be gone.
         assert_eq!(counts.warnings, 0, "comma-tag warning should be fixed");
