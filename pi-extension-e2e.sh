@@ -79,7 +79,7 @@ echo "type-check OK"
 
 # --- layer 2: live e2e with builtin tools disabled ----------------------
 echo
-echo "== [2/3] live e2e: forcing the hyalo tool (no bash fallback possible) =="
+echo "== [2/4] live e2e: forcing the hyalo tool (no bash fallback possible) =="
 # Query must return a plain count. Vault contents change, but the term
 # "iteration" always matches in hyalo's own knowledgebase and test vaults
 # that run this script; --count output is a bare number.
@@ -101,7 +101,7 @@ echo "e2e OK: hyalo tool returned count=$COUNT"
 # Catches drift in BOTH the pi event API and hyalo's config/lint output
 # shapes (e.g. the JSON envelope changing would break vault resolution).
 echo
-echo "== [3/3] guardrail e2e: lint findings appended to write result =="
+echo "== [3/4] guardrail e2e: lint findings appended to write result =="
 GUARD_FILE="hyalo-knowledgebase/.pi-e2e-guard.md"
 rm -f "$GUARD_FILE"
 OUT="$(pi -ne -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
@@ -118,5 +118,63 @@ if ! grep -q "hyalo lint" <<<"$OUT"; then
     fail "guardrail did not fire: expected hyalo lint findings in the write result, got: $OUT"
 fi
 echo "guardrail e2e OK: lint findings were appended to the write result"
+
+# --- layer 4: typed-tool e2e ---------------------------------------------
+#
+# One forced call per typed tool (hyalo_find / hyalo_read / hyalo_set /
+# hyalo_task) with --no-builtin-tools, asserting non-empty structured
+# output. The model MUST use the named tool; a broken registration or a
+# schema/exec drift shows up as an error string instead of real output.
+# Uses a scratch file so the vault is left untouched.
 echo
-echo "PASS: template is compatible with installed pi; tool path and lint guardrail work"
+echo "== [4/4] typed-tool e2e: one forced call each (find/read/set/task) =="
+SCRATCH="hyalo-knowledgebase/pi-e2e-scratch/pi-e2e-typed.md"
+# The scratch file must live at a visible path inside the vault: hyalo skips
+# hidden files AND hidden directories during find queries. Cleaned up below.
+mkdir -p "$(dirname "$SCRATCH")"
+rm -f "$SCRATCH"
+cat > "$SCRATCH" <<'EOF'
+---
+title: Typed tool e2e
+type: note
+status: draft
+tags:
+  - e2e
+---
+# Typed tool e2e
+
+## Tasks
+
+- [ ] sample task
+EOF
+
+run_typed() {
+    local label="$1" prompt="$2" needle="$3"
+    local out
+    out="$(pi -ne --no-builtin-tools -e "$TEMPLATE" -p "$prompt")" \
+        || fail "typed tool '$label': pi run failed (tool may not be registered)"
+    if ! grep -q "$needle" <<<"$out"; then
+        fail "typed tool '$label': expected output containing '$needle', got: $out"
+    fi
+    echo "typed tool OK: $label"
+}
+
+run_typed hyalo_find \
+    'Call the hyalo_find tool with property ["title~=Typed tool"] and countOnly true. Reply with ONLY the number returned.' \
+    '^[[:space:]]*1[[:space:]]*$'
+run_typed hyalo_read \
+    'Call the hyalo_read tool with file "pi-e2e-scratch/pi-e2e-typed.md". Then reply with ONLY the exact heading text of its second heading, nothing else.' \
+    'Tasks'
+run_typed hyalo_set \
+    'Call the hyalo_set tool with file "pi-e2e-scratch/pi-e2e-typed.md", property "status=review". Reply with ONLY the word DONE when it succeeded.' \
+    'DONE'
+grep -q 'status: review' "$SCRATCH" || fail "hyalo_set ran but did not persist status=review"
+run_typed hyalo_task \
+    'Call the hyalo_task tool with file "pi-e2e-scratch/pi-e2e-typed.md" and mode "all". Reply with ONLY the word DONE when it succeeded.' \
+    'DONE'
+grep -q '\[x\]' "$SCRATCH" || fail "hyalo_task ran but no checkbox toggled to [x]"
+rm -rf "$(dirname "$SCRATCH")"
+echo "typed-tool e2e OK: all four typed tools answered structured calls"
+
+echo
+echo "PASS: template is compatible with installed pi; generic + typed tools and lint guardrail work"
