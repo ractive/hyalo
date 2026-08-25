@@ -690,21 +690,24 @@ fn set_absolute_path_outside_vault_names_dir_and_hint() {
     assert!(!output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
     assert!(err.contains("outside vault boundary"), "got: {err}");
-    // The effective vault dir is named. Accept either the TempDir's raw
-    // spelling or its canonical form: the message carries the dir as given
-    // (macOS: /var/folders/... while canonicalize yields /private/var/...),
-    // while on Windows the canonical form may use the 8.3 short user name
-    // (e.g. RUNNER~1) which differs from the TempDir's spelling.
-    let canonical_vault = dunce::canonicalize(vault.path()).unwrap();
+    // The effective vault dir is named. The stderr is JSON, where Windows
+    // path separators are escaped (C:\\Users\\...), so a full-path
+    // `contains` breaks on separators. Assert on the vault's unique
+    // separator-free temp component instead (present in the raw and the
+    // canonical spelling alike — the 8.3 short-name form on Windows
+    // runners differs from TempDir's spelling only before this component).
+    let vault_name = vault
+        .path()
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
     assert!(
         err.contains("vault:"),
         "expected vault dir in message: {err}"
     );
-    let raw_ok = err.contains(vault.path().to_str().unwrap());
-    let canonical_ok = err.contains(&*canonical_vault.to_string_lossy());
     assert!(
-        raw_ok || canonical_ok,
-        "expected the actual vault path (raw or canonical) in: {err}"
+        !vault_name.is_empty() && err.contains(vault_name),
+        "expected the actual vault path component {vault_name:?} in: {err}"
     );
     // The self-healing hint names both fixes.
     assert!(err.contains("relative to"), "got: {err}");
