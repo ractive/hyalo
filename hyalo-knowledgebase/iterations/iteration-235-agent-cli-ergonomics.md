@@ -2,7 +2,7 @@
 title: "Iteration 235 — agent-facing CLI ergonomics: find --filenames-only, --iteration addressing, boundary-error hints"
 type: iteration
 date: 2026-08-24
-status: in-progress
+status: completed
 branch: iter-235/agent-cli-ergonomics
 tags:
   - iteration
