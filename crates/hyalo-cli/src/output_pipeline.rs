@@ -268,16 +268,25 @@ impl OutputPipeline<'_> {
                     return 1;
                 }
                 // Raw output bypasses the JSON pipeline — print directly to stdout.
-                // Used by the `read` command for text-format content output.
-                // println! matches pre-refactor behavior: the content string already ends
-                // with '\n', and the extra newline from println! preserves empty-line
-                // endings (e.g. `--lines :2` where line 2 is blank).
+                // Used by the `read` command for text-format content output, and by
+                // `find --filenames-only` for bare path lists (iter-235).
+                //
+                // `print!` (not `println!`) for an *empty* RawOutput so that a
+                // zero-result `--filenames-only` run prints nothing — not even a
+                // trailing newline — so a `while read` / `xargs` loop sees no
+                // phantom empty item. `read`'s content always ends with '\n' (its
+                // RawOutput is never empty), so it keeps the trailing-newline
+                // behaviour via the `else` arm.
                 //
                 // Sanitized here (unlike the JSON pipeline above) because RawOutput
                 // is raw file body content that never passes through format_success/
                 // format_envelope — without this, a vault file containing ANSI escapes
                 // or other control bytes would inject them straight into the terminal.
-                println!("{}", crate::output::sanitize_control_chars(&output));
+                if output.is_empty() {
+                    print!("{}", crate::output::sanitize_control_chars(&output));
+                } else {
+                    println!("{}", crate::output::sanitize_control_chars(&output));
+                }
                 0
             }
             Ok(CommandOutcome::UserError(output)) => {

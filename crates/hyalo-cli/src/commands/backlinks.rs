@@ -64,7 +64,7 @@ pub fn backlinks(
         match crate::commands::resolve_file_user_ci(dir, file_arg, case_insensitive) {
             Ok(r) => r,
             Err(e) => {
-                return Ok(crate::commands::resolve_error_to_outcome(e, format));
+                return Ok(crate::commands::resolve_error_to_outcome(e, format, dir));
             }
         };
 

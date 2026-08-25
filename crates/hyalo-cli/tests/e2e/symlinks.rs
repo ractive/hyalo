@@ -145,6 +145,16 @@ fn symlink_escaping_vault_is_refused() {
         combined.contains("file resolves outside vault boundary"),
         "expected the vault-boundary error, got: {combined}"
     );
+    // iter-235: the boundary refusal is self-healing — names the vault dir
+    // and offers the relative-path / `cd` hint in the same message.
+    assert!(
+        combined.contains("vault:"),
+        "expected the effective vault dir in the boundary error, got: {combined}"
+    );
+    assert!(
+        combined.contains("relative to") && combined.contains("cd to a parent"),
+        "expected a relative-path / cd hint in the boundary error, got: {combined}"
+    );
     assert!(
         fs::read_to_string(&secret)
             .unwrap()
@@ -179,6 +189,14 @@ fn set_symlink_escaping_vault_is_refused() {
         "expected the vault-boundary error, got: {combined}"
     );
     assert!(
+        combined.contains("vault:"),
+        "expected the effective vault dir in the boundary error, got: {combined}"
+    );
+    assert!(
+        combined.contains("relative to") && combined.contains("cd to a parent"),
+        "expected a relative-path / cd hint in the boundary error, got: {combined}"
+    );
+    assert!(
         !fs::read_to_string(&secret).unwrap().contains("status:"),
         "the out-of-vault file must be byte-for-byte untouched"
     );
@@ -208,6 +226,14 @@ fn append_symlink_escaping_vault_is_refused() {
     assert!(
         combined.contains("file resolves outside vault boundary"),
         "expected the vault-boundary error, got: {combined}"
+    );
+    assert!(
+        combined.contains("vault:"),
+        "expected the effective vault dir in the boundary error, got: {combined}"
+    );
+    assert!(
+        combined.contains("relative to") && combined.contains("cd to a parent"),
+        "expected a relative-path / cd hint in the boundary error, got: {combined}"
     );
     assert!(
         !fs::read_to_string(&secret).unwrap().contains("two"),

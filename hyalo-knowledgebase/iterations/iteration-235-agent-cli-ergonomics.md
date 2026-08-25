@@ -2,7 +2,7 @@
 title: "Iteration 235 — agent-facing CLI ergonomics: find --filenames-only, --iteration addressing, boundary-error hints"
 type: iteration
 date: 2026-08-24
-status: planned
+status: completed
 branch: iter-235/agent-cli-ergonomics
 tags:
   - iteration
@@ -53,7 +53,7 @@ paths-only output only makes sense for result-list commands.
 
 ## Tasks
 
-- [ ] Add `--filenames-only` flag to `hyalo find` (FindFilters in
+- [x] Add `--filenames-only` flag to `hyalo find` (FindFilters in
       `crates/hyalo-cli/src/cli/args.rs`, rendering in
       `crates/hyalo-cli/src/commands/find/mod.rs`):
       - Prints one raw file path per line (no JSON quoting, no count, no hints)
@@ -68,7 +68,7 @@ paths-only output only makes sense for result-list commands.
       - Serialize in views (`FindFilters` is `serde::Serialize`; field must
         round-trip like other output-shaping flags or be explicitly skipped
         with a documented reason)
-- [ ] Add `--iteration <ID>` filter to `hyalo find` and accept it on
+- [x] Add `--iteration <ID>` filter to `hyalo find` and accept it on
       `hyalo set` as the file selector (replacing glob math):
       - `ID` matches the natural key: bare integer or integer+letter suffix
         (`206`, `16b`, `01`) — same grammar ralph-loop/preflight use
@@ -82,7 +82,7 @@ paths-only output only makes sense for result-list commands.
         exists as a separate file): in `find`, return all matches (it's a
         filter); in `set`, error listing the candidates unless exactly one
       - `set --iteration 206 --property status=completed` must work end-to-end
-- [ ] Improve the vault-boundary error (both sites:
+- [x] Improve the vault-boundary error (both sites:
       `crates/hyalo-cli/src/commands/mod.rs:294` and
       `crates/hyalo-cli/src/commands/find/mod.rs:211`):
       - Message includes the effective vault dir (absolute path) and the
@@ -90,15 +90,15 @@ paths-only output only makes sense for result-list commands.
       - Hint text: "pass a path relative to <dir>, or cd to a parent of it"
         (the find/mod.rs site already passes a hint — align the shared
         error-format call in commands/mod.rs to include dir + hint)
-- [ ] Update `--help` long text for `find` (`--filenames-only`, `--iteration`)
+- [x] Update `--help` long text for `find` (`--filenames-only`, `--iteration`)
       and `set` (`--iteration`) following the existing help conventions
       (usage examples that show the agent use case)
-- [ ] Define `--iteration` interaction with the other `set` file selectors
+- [x] Define `--iteration` interaction with the other `set` file selectors
       (`--file`, `--glob`, `--tag`, `--type`): they are **competing selectors** —
       clap `conflicts_with` on all of them (exit 2 when combined). `--where-property`
       still composes (it filters *within* the selection) — document this distinction
       in `--help`
-- [ ] Tests:
+- [x] Tests:
       - e2e: `find --filenames-only` with filters, zero-result, conflict
         matrix (--jq / --count / --format json), --strict exit code
       - e2e: `find --iteration 206` and `set --iteration 206 ...` happy path;
@@ -109,28 +109,28 @@ paths-only output only makes sense for result-list commands.
         `tests/e2e/mv.rs:1401` and `tests/e2e/symlinks.rs:145` — update them,
         don't just append)
       - unit: ID grammar parsing (bare, letter, zero-pad, invalid)
-- [ ] Docs: `--filenames-only` and `--iteration` in the README command
+- [x] Docs: `--filenames-only` and `--iteration` in the README command
       reference; mention in CHANGELOG unreleased section
 
 ## Acceptance criteria
 
-- [ ] `hyalo find --property status=planned --filenames-only` prints exactly
+- [x] `hyalo find --property status=planned --filenames-only` prints exactly
       the pending iteration plan paths, one per line, no decoration — usable
       in `sort`, `xargs`, `while read` pipelines
-- [ ] `hyalo find --iteration 206 --filenames-only` prints exactly the
+- [x] `hyalo find --iteration 206 --filenames-only` prints exactly the
       iteration-206 plan path; `hyalo set --iteration 206 --property
       status=completed` updates it — both without any glob or `--jq`
-- [ ] `hyalo set /tmp/foo.md --property x=1` fails with an error containing
+- [x] `hyalo set /tmp/foo.md --property x=1` fails with an error containing
       the vault dir and a relative-path hint
-- [ ] The ralph-loop skill's three hyalo-usage warnings could be dropped:
+- [x] The ralph-loop skill's three hyalo-usage warnings could be dropped:
       with `--filenames-only` and `--iteration`, none of the warned-against
       patterns are needed (manual follow-up after merge — the skill lives at
       `~/.pi/agent/skills/ralph-loop/`, outside this repo, so it is not part
       of this iteration's deliverables or CI)
-- [ ] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q` all green; existing boundary-message test
       assertions updated to the new message
-- [ ] No behavior change for existing invocations: no new flag → identical
+- [x] No behavior change for existing invocations: no new flag → identical
       output byte-for-byte, **except the vault-boundary error text (Task 3)**,
       which changes for existing invocations by design (regression-tested on
       a snapshot of current find/set output in the e2e suite)

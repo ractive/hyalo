@@ -82,7 +82,7 @@ pub fn mv(
     // 1. Validate source exists
     let (_src_full, old_rel) = match super::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
-        Err(e) => return Ok(crate::commands::resolve_error_to_outcome(e, format)),
+        Err(e) => return Ok(crate::commands::resolve_error_to_outcome(e, format, dir)),
     };
 
     // 2. Validate target path
@@ -399,8 +399,9 @@ fn build_rename_map(
             CommandOutcome::UserError(out)
         })?;
         for (_, new_rel) in &proposed {
-            if let Err(msg) = ensure_dest_within_vault(&canonical_vault, dir, new_rel) {
-                let out = crate::output::format_error(format, &msg, Some(new_rel), None, None);
+            if let Err((msg, hint)) = ensure_dest_within_vault(&canonical_vault, dir, new_rel) {
+                let hint_opt = (!hint.is_empty()).then_some(hint.as_str());
+                let out = crate::output::format_error(format, &msg, Some(new_rel), hint_opt, None);
                 return Err(CommandOutcome::UserError(out));
             }
         }
@@ -532,7 +533,8 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
     let canonical_vault = canonicalize_vault_dir(dir)
         .context("failed to canonicalize vault directory for write safety check")?;
     for (_, new_rel) in renames {
-        ensure_dest_within_vault(&canonical_vault, dir, new_rel).map_err(anyhow::Error::msg)?;
+        ensure_dest_within_vault(&canonical_vault, dir, new_rel)
+            .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
     }
 
     // Capture source mtimes upfront to detect concurrent modifications.
@@ -757,16 +759,21 @@ fn ensure_dest_within_vault(
     canonical_vault: &Path,
     dir: &Path,
     new_rel: &str,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), (String, String)> {
     let dst = dir.join(new_rel);
     match hyalo_core::fs_util::escaping_write_target(canonical_vault, &dst) {
         Ok(None) => Ok(()),
-        Ok(Some(target)) => Err(hyalo_core::fs_util::outside_vault_message(
-            "target path",
-            Some(&target),
+        Ok(Some(target)) => Err((
+            hyalo_core::fs_util::outside_vault_message_with_dir(
+                "target path",
+                Some(&target),
+                canonical_vault,
+            ),
+            hyalo_core::fs_util::outside_vault_hint(canonical_vault),
         )),
-        Err(e) => Err(format!(
-            "failed to verify destination {new_rel} stays within the vault: {e}"
+        Err(e) => Err((
+            format!("failed to verify destination {new_rel} stays within the vault: {e}"),
+            String::new(),
         )),
     }
 }
@@ -895,8 +902,9 @@ fn validate_target_single(
             return Err(CommandOutcome::UserError(out));
         }
     };
-    if let Err(msg) = ensure_dest_within_vault(&canonical_vault, dir, &normalized) {
-        let out = crate::output::format_error(format, &msg, Some(&normalized), None, None);
+    if let Err((msg, hint)) = ensure_dest_within_vault(&canonical_vault, dir, &normalized) {
+        let hint_opt = (!hint.is_empty()).then_some(hint.as_str());
+        let out = crate::output::format_error(format, &msg, Some(&normalized), hint_opt, None);
         return Err(CommandOutcome::UserError(out));
     }
 
@@ -983,7 +991,8 @@ fn execute_mv(
     // check in `link_rewrite::execute_plans`).
     let canonical_vault = canonicalize_vault_dir(dir)
         .context("failed to canonicalize vault directory for write safety check")?;
-    ensure_dest_within_vault(&canonical_vault, dir, new_rel).map_err(anyhow::Error::msg)?;
+    ensure_dest_within_vault(&canonical_vault, dir, new_rel)
+        .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
 
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)

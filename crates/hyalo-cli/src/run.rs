@@ -1122,6 +1122,39 @@ fn run_inner() -> Result<(), AppError> {
         // --jq + --format text is a user error → exit 1, not 2 (iter-181 task 2).
         return Err(AppError::Exit(1));
     }
+    // iter-235: `--filenames-only` is a find-local projection that bypasses the
+    // JSON envelope entirely (raw paths, one per line). clap already rejects
+    // it alongside `--jq` and `--count` (which likewise replace the whole
+    // pipeline); here we cover an explicit `--format json`, which is a
+    // contradictory projection (JSON envelope vs. raw paths). The default
+    // JSON-when-piped format does NOT conflict — `--filenames-only` overrides
+    // the format so a piped `find --filenames-only | sort` works without a
+    // `--format text` chore, which is the whole point of the flag.
+    if format_from_cli
+        && format == Format::Json
+        && matches!(
+            &cli.command,
+            Commands::Find {
+                filters: FindFilters {
+                    filenames_only: true,
+                    ..
+                },
+                ..
+            }
+        )
+    {
+        eprintln!(
+            "{}",
+            crate::output::format_error(
+                format,
+                "--filenames-only cannot be combined with --format json",
+                None,
+                Some("--filenames-only prints raw paths; drop --format (or use --format text)"),
+                None,
+            )
+        );
+        return Err(AppError::Exit(1));
+    }
     // `--format github` is lint-only: it emits GitHub Actions workflow commands
     // for lint violations. Reject it for every other subcommand with a clear
     // message listing the valid formats, so `hyalo find --format github` fails

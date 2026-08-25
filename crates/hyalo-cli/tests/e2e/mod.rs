@@ -27,6 +27,7 @@ mod hints;
 mod hyalo_config;
 mod index;
 mod init;
+mod iteration_ergonomics;
 mod jq;
 mod json_errors;
 mod links;

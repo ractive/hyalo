@@ -341,6 +341,38 @@ already complied (`total = modified + skipped`) and are unchanged.
 
 ### Added
 
+- **`find --filenames-only`, `find`/`set --iteration <ID>`, and a self-healing
+  vault-boundary error** (iter-235, agent-ergonomics review findings 1/2/3/5).
+  These close the three highest-friction traps the ralph-loop port dogfood
+  documented workarounds for instead of the tool providing the feature:
+  - `find --filenames-only` prints one raw file path per line — no JSON,
+    no envelope, no count, no hints — the `grep -l` projection of a find
+    result set, usable in `sort`, `xargs`, and `while read` loops. Zero
+    results → empty output, exit 0. Conflicts with `--jq`, `--count`, and an
+    explicit `--format json` (mutually exclusive projections); `--strict`
+    still flips the exit code, so `find --property status=planned
+    --filenames-only --strict` is a CI gate that lists the offenders and
+    fails.
+  - `--iteration <ID>` resolves a sequence-keyed document by its natural
+    key (`--iteration 206` → `iterations/iteration-206-*.md`) using the
+    type schema's `filename_template` `{n}` slot, so iteration lookups no
+    longer need a hand-built glob (`--property 'title~=206'` silently fails
+    because the frontmatter title is `"Iteration 206 — …"`). Accepts a bare
+    integer (`206`), zero-padded integer (`01`), or integer + letter suffix
+    (`16b`); the ID is substituted verbatim, so `01` matches
+    `iteration-01-*` (not `iteration-1-*`) and `16b` matches only
+    `iteration-16b-*` (bare `16` does not match the suffixed file). On
+    `find` this is a filter (returns every match); on `set` it selects the
+    file to mutate and errors unless exactly one match is found, listing
+    the candidates so the caller can disambiguate by suffix. `--where-*`
+    still composes on `set --iteration` (filters within the selection).
+  - The vault-boundary error now names the effective vault directory and
+    offers a self-healing hint (`pass a path relative to <dir>, or cd to a
+    parent of it`), so an agent that passed `/tmp/foo.md` learns the vault
+    root and the fix in the same message instead of guessing another
+    absolute path. The long-standing `resolves outside vault boundary`
+    substring is preserved for existing assertions.
+
 - **Every link in `find --broken-links` / `--fields links` now carries its
   source `line`** (iter-215, dogfood UX-6). The report listed every link of a
   matching file with no location, so finding the one that was actually broken

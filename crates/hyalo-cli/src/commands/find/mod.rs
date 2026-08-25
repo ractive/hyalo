@@ -208,9 +208,13 @@ pub fn find(
             } else {
                 return Ok(CommandOutcome::UserError(crate::output::format_error(
                     format,
-                    "file resolves outside vault boundary",
+                    &hyalo_core::fs_util::outside_vault_message_with_dir(
+                        "file",
+                        None,
+                        &canonical_dir,
+                    ),
                     Some(f),
-                    Some("pass a path relative to the vault dir"),
+                    Some(&hyalo_core::fs_util::outside_vault_hint(&canonical_dir)),
                     None,
                 )));
             }
@@ -241,7 +245,11 @@ pub fn find(
                 continue;
             }
             if let Err(err) = discovery::resolve_file(dir, f) {
-                return Ok(crate::commands::resolve_error_to_outcome(err, format));
+                return Ok(crate::commands::resolve_error_to_outcome(
+                    err,
+                    format,
+                    &canonical_dir,
+                ));
             }
         }
     }
@@ -1218,6 +1226,54 @@ pub fn find(
         crate::output::format_success(format, &json_output),
         total as u64,
     ))
+}
+
+/// Project a `find` outcome onto bare file paths, one per line (iter-235).
+///
+/// `--filenames-only` is the agent/pipeline counterpart to `--format text`'s
+/// human layout: a compact, copy-pasteable list of the matching `file` paths
+/// with no JSON envelope, no count, no hints. It bypasses the entire output
+/// pipeline by producing a [`CommandOutcome::RawOutput`], so `--jq`, `--count`,
+/// and `--format` all become irrelevant (and are rejected upstream).
+///
+/// A `Success` outcome carries the find result array as a JSON string (the
+/// internal format is always JSON). Each element's `file` field is the
+/// vault-relative path we want. Zero results → empty output (no trailing
+/// newline), so `find --filenames-only` in a pipe yields nothing rather than
+/// a blank line. A non-empty result set ends with a newline so the last path
+/// is complete in `while read` / `xargs` loops.
+///
+/// Errors pass through unchanged — a `UserError` (bad filter, missing
+/// file, boundary refusal) is never remangled into a filename list.
+pub(crate) fn project_filenames_only(outcome: CommandOutcome) -> CommandOutcome {
+    let CommandOutcome::Success { output, .. } = &outcome else {
+        return outcome;
+    };
+    // The internal `output` is a JSON array of find result objects. Parse it
+    // once, then walk each element's `file` field. serde_json::Value keeps the
+    // cost to one allocation per path, which is the lower bound for emitting
+    // them as text anyway.
+    let value: serde_json::Value = match serde_json::from_str(output) {
+        Ok(v) => v,
+        // Should not happen — find always emits valid JSON. Leave the
+        // original Success outcome intact rather than inventing an error.
+        Err(_) => return outcome,
+    };
+    let paths: Vec<&str> = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("file").and_then(|f| f.as_str()))
+        .collect();
+    if paths.is_empty() {
+        // Empty output, exit 0 — indistinguishable from a successful query
+        // that matched nothing, which is the intent (no spurious blank line
+        // for a `while read` loop to trip on).
+        return CommandOutcome::RawOutput(String::new());
+    }
+    let mut out = paths.join("\n");
+    out.push('\n');
+    CommandOutcome::RawOutput(out)
 }
 
 // ---------------------------------------------------------------------------
