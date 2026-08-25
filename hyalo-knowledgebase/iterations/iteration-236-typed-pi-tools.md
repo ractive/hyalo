@@ -130,3 +130,17 @@ Design decisions (from the session discussion, 2026-08-24):
 - `--jq` passthrough param on `hyalo_find` (if agents ask for it)
 - A `hyalo_lint` typed tool (once a dogfood session shows the model linting
   via the generic tool often enough to justify it)
+
+Both folded into [[iterations/iteration-237-pi-package-distribution]] (see
+its Out of scope / carry-over candidates section).
+
+## Review pass (2026-08-25, pre-merge)
+
+- Restored `--no-hints` on the lint-guardrail and session-summary calls in
+  `extension-hyalo.ts`. The iteration commit had silently dropped it,
+  contradicting the "behavior byte-identical" claim of the `runHyalo`
+  refactor and the deliberate design of #259/#261 (zero noise on every
+  write; hints are for interactive queries, not injected context).
+- All `pi-extension-e2e.sh` layers re-verified green locally (pi 0.84.3)
+  after the fix; fmt/clippy/test green.
+- Verified every ticked task/AC above against the merged diff — all landed.

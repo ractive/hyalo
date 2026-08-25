@@ -154,7 +154,7 @@ async function lintVaultFile(
   try {
     const { stdout, code } = await pi.exec(
       "hyalo",
-      ["lint", filePath, "--format", "text"],
+      ["lint", filePath, "--format", "text", "--no-hints"],
       { signal, timeout: 30_000 },
     );
     // lint exits 0 = clean, 1 = violations found (stdout holds them),
@@ -401,7 +401,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const { stdout, code } = await pi.exec(
         "hyalo",
-        ["summary", "--format", "text"],
+        ["summary", "--format", "text", "--no-hints"],
         { timeout: 30_000 },
       );
       if (code !== 0 || !stdout.trim()) return;
