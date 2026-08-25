@@ -153,6 +153,56 @@ impl FilenameTemplate {
         out
     }
 
+    /// Returns `true` when the template contains at least one numeric `{n}` or
+    /// `{n:0W}` placeholder.
+    ///
+    /// Used by `--iteration <ID>` resolution to decide which type schemas are
+    /// addressable by a natural key: a template like
+    /// `iterations/iteration-{n}-{slug}.md` carries an `{n}` slot an iteration
+    /// ID can be substituted into, while a purely literal template
+    /// (`notes/README.md`) or one with only `{slug}` / `{date}` is not.
+    #[must_use]
+    pub fn has_n_placeholder(&self) -> bool {
+        self.segments
+            .iter()
+            .any(|seg| matches!(seg, Segment::Placeholder(Placeholder::N { .. })))
+    }
+
+    /// Build a glob that matches files carrying a specific sequence ID.
+    ///
+    /// `id` is substituted verbatim into every `{n}` / `{n:0W}` placeholder
+    /// slot, and every other placeholder (`{slug}`, `{date}`) becomes `*`, so a
+    /// template `iterations/iteration-{n}-{slug}.md` combined with the ID
+    /// `"206"` yields `iterations/iteration-206-*.md` — exactly the files for
+    /// iteration 206 regardless of slug.
+    ///
+    /// The ID is inserted as written (not normalised): a bare `01` matches
+    /// `iteration-01-*` (zero-padded files), not `iteration-1-*`. A
+    /// letter-suffixed ID like `16b` matches only `iteration-16b-*`; a bare
+    /// integer like `16` matches `iteration-16-*` and *not* `iteration-16b-*`
+    /// (the suffix is a separate identifier — see [`crate::iteration_id`]).
+    ///
+    /// This is the specific-key counterpart to [`to_glob`]'s permissive
+    /// "match any value" expansion; it does not require the ID itself to
+    /// satisfy the `{n}` character class, because the goal is matching real
+    /// files that may carry letter suffixes the `{n}` matcher itself rejects
+    /// (`iteration-195a-…` is a real iteration file even though `195a` is not
+    /// a pure digit run).
+    #[must_use]
+    pub fn to_glob_for_id(&self, id: &str) -> String {
+        let mut out = String::new();
+        for seg in &self.segments {
+            match seg {
+                Segment::Literal(s) => out.push_str(s),
+                Segment::Placeholder(Placeholder::N { .. }) => out.push_str(id),
+                // `{slug}` and `{date}` both become `*` — any value is an
+                // acceptable match once the ID pins the `{n}` slot.
+                Segment::Placeholder(Placeholder::Slug | Placeholder::Date) => out.push('*'),
+            }
+        }
+        out
+    }
+
     /// Returns `true` if the given relative path matches this template.
     ///
     /// Path separators are normalized to `/` for matching, so templates can
@@ -347,6 +397,60 @@ mod tests {
         let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
         // The glob for a padded number is the same permissive digit-run form.
         assert_eq!(t.to_glob(), "decisions/[0-9][0-9]*-*.md");
+    }
+
+    #[test]
+    fn has_n_placeholder_detects_numeric_slot() {
+        let t = FilenameTemplate::parse("iterations/iteration-{n}-{slug}.md").unwrap();
+        assert!(t.has_n_placeholder());
+        let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
+        assert!(t.has_n_placeholder());
+    }
+
+    #[test]
+    fn has_n_placeholder_false_for_literal_only_or_other_placeholders() {
+        assert!(
+            !FilenameTemplate::parse("notes/README.md")
+                .unwrap()
+                .has_n_placeholder()
+        );
+        assert!(
+            !FilenameTemplate::parse("journal/{date}.md")
+                .unwrap()
+                .has_n_placeholder()
+        );
+        assert!(
+            !FilenameTemplate::parse("notes/{slug}.md")
+                .unwrap()
+                .has_n_placeholder()
+        );
+    }
+
+    #[test]
+    fn to_glob_for_id_substitutes_id_and_star() {
+        let t = FilenameTemplate::parse("iterations/iteration-{n}-{slug}.md").unwrap();
+        // Bare integer matches only the same-number files.
+        assert_eq!(t.to_glob_for_id("206"), "iterations/iteration-206-*.md");
+        // Zero-padded ID is inserted verbatim.
+        assert_eq!(t.to_glob_for_id("01"), "iterations/iteration-01-*.md");
+        // Letter-suffixed ID matches only the suffixed files.
+        assert_eq!(t.to_glob_for_id("16b"), "iterations/iteration-16b-*.md");
+    }
+
+    #[test]
+    fn to_glob_for_id_for_padded_template_inserts_raw_id() {
+        let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
+        // The ID is inserted verbatim — the pad width is a rendering concern,
+        // not applied here, so a vault using padded filenames gets a matching
+        // glob only when the caller passes the padded form (e.g. "0206").
+        assert_eq!(t.to_glob_for_id("0206"), "decisions/0206-*.md");
+        assert_eq!(t.to_glob_for_id("206"), "decisions/206-*.md");
+    }
+
+    #[test]
+    fn to_glob_for_id_date_placeholder_becomes_star() {
+        let t = FilenameTemplate::parse("journal/{date}-{n}.md").unwrap();
+        assert_eq!(t.to_glob_for_id("42"), "journal/*-42.md");
     }
 
     #[test]

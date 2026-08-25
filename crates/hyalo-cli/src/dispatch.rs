@@ -544,12 +544,48 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 dead_end,
                 title,
                 language,
+                filenames_only,
+                iteration,
                 files_from: _, // resolved in run.rs before dispatch
             } = filters_raw;
             if orphan && dead_end {
                 crate::warn::warn(
                     "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
                 );
+            }
+            // Resolve --iteration <ID> into glob patterns from the schema's
+            // type filename_templates (iter-235). The globs join the --glob
+            // set with OR semantics (positive globs are unioned), so
+            // `--iteration 206` is just another way to scope the same find.
+            let mut glob = glob;
+            if let Some(id_str) = iteration {
+                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
+                    Ok(id) => {
+                        match crate::commands::iteration::resolve_iteration_globs(
+                            ctx.schema,
+                            &id,
+                            effective_format,
+                        ) {
+                            crate::commands::iteration::IterationGlobs::Globs(g) => {
+                                glob.extend(g);
+                            }
+                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
+                                return Ok(o);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            Some(&id_str),
+                            Some(
+                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
+                            ),
+                            None,
+                        )));
+                    }
+                }
             }
             // Parse property filters
             let prop_filters: Vec<filter::PropertyFilter> = match properties
@@ -717,7 +753,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         needs_stem_map,
                         resolved.as_snapshot(),
                     );
-                    let outcome = find_commands::find(
+                    let mut outcome = find_commands::find(
                         resolved.as_index(),
                         dir,
                         site_prefix,
@@ -755,6 +791,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         && *total > 0
                     {
                         ctx.exit_code_override = Some(1);
+                    }
+                    // iter-235: `--filenames-only` projects the find result
+                    // set onto raw file paths (one per line, no envelope,
+                    // no count, no hints). It runs *after* the `--strict`
+                    // check above, so `find --filenames-only --strict`
+                    // still flips the exit code (1 when results exist) —
+                    // the CI-gate + filename-list use case. RawOutput bypasses
+                    // the JSON pipeline entirely (no jq, no count, no hints,
+                    // no envelope), which is exactly the point: an agent or
+                    // shell pipeline wants bare paths, nothing else.
+                    if filenames_only {
+                        outcome = crate::commands::find::project_filenames_only(outcome);
                     }
                     Ok(outcome)
                 }
@@ -1264,6 +1312,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             mut file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
+            iteration,
             where_properties,
             where_tags,
             dry_run,
@@ -1286,12 +1335,109 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 }
             };
             let do_validate = validate || ctx.validate_on_write;
+            // iter-235: `--iteration <ID>` resolves the file to mutate from the
+            // type schema's filename_template, then must select exactly one
+            // file (set is a single-target mutation — ambiguous matches are an
+            // error, unlike find which returns all). Resolved here, before the
+            // generic `set` call, so set sees a normal file list and `--where-*`
+            // still filters within it.
+            let mut resolved_files: Option<Vec<String>> = None;
+            if let Some(id_str) = iteration {
+                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
+                    Ok(id) => {
+                        match crate::commands::iteration::resolve_iteration_globs(
+                            ctx.schema,
+                            &id,
+                            effective_format,
+                        ) {
+                            crate::commands::iteration::IterationGlobs::Globs(g) => {
+                                match crate::commands::collect_files(
+                                    dir,
+                                    &[],
+                                    &g,
+                                    effective_format,
+                                )? {
+                                    crate::commands::FilesOrOutcome::Files(pairs) => {
+                                        let paths: Vec<String> =
+                                            pairs.into_iter().map(|(_, rel)| rel).collect();
+                                        match paths.len() {
+                                            0 => {
+                                                return Ok(CommandOutcome::UserError(
+                                                    crate::output::format_error(
+                                                        effective_format,
+                                                        &format!(
+                                                            "no file found for iteration {id} \
+                                                             (resolved globs: {})",
+                                                            g.join(", ")
+                                                        ),
+                                                        Some(&id_str),
+                                                        Some(
+                                                            "check the iteration number, or list candidates with `hyalo find --iteration <ID>`",
+                                                        ),
+                                                        None,
+                                                    ),
+                                                ));
+                                            }
+                                            1 => {
+                                                resolved_files = Some(paths);
+                                            }
+                                            _ => {
+                                                let mut listed = paths.clone();
+                                                listed.sort();
+                                                return Ok(CommandOutcome::UserError(
+                                                    crate::output::format_error(
+                                                        effective_format,
+                                                        &format!(
+                                                            "iteration {id} matches multiple files — \
+                                                             pass a letter suffix to disambiguate, \
+                                                             or use --file/--glob to target one directly"
+                                                        ),
+                                                        Some(&id_str),
+                                                        Some(&format!(
+                                                            "candidates:\n{}",
+                                                            listed
+                                                                .iter()
+                                                                .map(|p| format!("  - {p}"))
+                                                                .collect::<Vec<_>>()
+                                                                .join("\n")
+                                                        )),
+                                                        None,
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
+                                }
+                            }
+                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
+                                return Ok(o);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            Some(&id_str),
+                            Some(
+                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
+                            ),
+                            None,
+                        )));
+                    }
+                }
+            }
+            let (set_files, set_globs): (&[String], &[String]) = match resolved_files {
+                Some(ref paths) => (paths.as_slice(), &[]),
+                None => (&file, &glob),
+            };
             set_commands::set(
                 dir,
                 &properties,
                 &tag,
-                &file,
-                &glob,
+                set_files,
+                set_globs,
                 &where_prop_filters,
                 &where_tags,
                 effective_format,

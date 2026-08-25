@@ -120,7 +120,7 @@ pub fn task_read(
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format)),
+        Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
     };
 
     let resolved = match resolve_task_lines(&full_path, lines, section, all) {
@@ -192,7 +192,7 @@ pub fn task_toggle(
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format)),
+        Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
     };
 
     let resolved = match resolve_task_lines(&full_path, lines, section, all) {
@@ -311,7 +311,7 @@ pub fn task_set_status(
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
         Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format)),
+        Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
     };
 
     let resolved = match resolve_task_lines(&full_path, lines, section, all) {

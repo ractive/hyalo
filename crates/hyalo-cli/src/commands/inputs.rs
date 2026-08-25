@@ -142,7 +142,7 @@ pub(crate) fn resolve_inputs(
                     counters: None,
                 })),
                 Err(e) => Ok(ResolvedInputsOrOutcome::Outcome(
-                    crate::commands::resolve_error_to_outcome(e, format),
+                    crate::commands::resolve_error_to_outcome(e, format, dir),
                 )),
             }
         }

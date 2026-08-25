@@ -79,6 +79,42 @@ pub fn outside_vault_message(subject: &str, resolved: Option<&Path>) -> String {
     }
 }
 
+/// Like [`outside_vault_message`] but names the effective vault directory so
+/// the caller can act on the refusal without a second probe (iter-235,
+/// agent-ergonomics review finding 3). An agent that passed `/tmp/foo.md`
+/// learns *which* directory is the vault root and how to fix the invocation
+/// in the same message, rather than guessing another absolute path.
+///
+/// The vault dir is appended as `(vault: <dir>)` after the existing subject
+/// and resolved-target clause, keeping the long-standing ``resolves outside
+/// vault boundary`` substring intact so existing assertions keep passing.
+/// `resolved` is the canonical destination the path escaped to, when known.
+#[must_use]
+pub fn outside_vault_message_with_dir(
+    subject: &str,
+    resolved: Option<&Path>,
+    vault_dir: &Path,
+) -> String {
+    let base = outside_vault_message(subject, resolved);
+    format!("{base} (vault: {})", vault_dir.display())
+}
+
+/// The shared self-healing hint text for a vault-boundary refusal (iter-235).
+///
+/// Names the vault dir the caller should anchor against — pass the same
+/// `vault_dir` given to [`outside_vault_message_with_dir`] — and the two ways
+/// to fix the invocation: a relative path, or a `cd` to a parent of the vault.
+/// Quote the dir back to the caller because the most common failure mode is
+/// an agent guessing absolute paths with no idea which directory hyalo is
+/// actually rooted at.
+#[must_use]
+pub fn outside_vault_hint(vault_dir: &Path) -> String {
+    format!(
+        "pass a path relative to {}, or cd to a parent of it",
+        vault_dir.display()
+    )
+}
+
 /// Report where a prospective write to `path` would really land, when that is
 /// outside `vault_root`.
 ///
@@ -474,6 +510,49 @@ mod tests {
         assert_eq!(
             outside_vault_message("path", None),
             "path resolves outside vault boundary"
+        );
+    }
+
+    #[test]
+    fn outside_vault_message_with_dir_appends_vault() {
+        let msg = outside_vault_message_with_dir(
+            "file",
+            Some(Path::new("/elsewhere/secret.md")),
+            Path::new("/home/me/kb"),
+        );
+        assert!(
+            msg.contains("file resolves outside vault boundary: /elsewhere/secret.md"),
+            "keeps the long-standing substring: {msg}"
+        );
+        assert!(
+            msg.contains("(vault: /home/me/kb)"),
+            "names the effective vault dir: {msg}"
+        );
+    }
+
+    #[test]
+    fn outside_vault_message_with_dir_no_resolved_target() {
+        let msg = outside_vault_message_with_dir("path", None, Path::new("/repo/docs"));
+        assert!(
+            msg.contains("path resolves outside vault boundary"),
+            "base message intact: {msg}"
+        );
+        assert!(
+            msg.contains("(vault: /repo/docs)"),
+            "vault dir still named: {msg}"
+        );
+    }
+
+    #[test]
+    fn outside_vault_hint_names_dir_and_two_fixes() {
+        let hint = outside_vault_hint(Path::new("/home/me/kb"));
+        assert!(
+            hint.contains("relative to /home/me/kb"),
+            "names the vault dir: {hint}"
+        );
+        assert!(
+            hint.contains("cd to a parent"),
+            "offers the cd alternative: {hint}"
         );
     }
 

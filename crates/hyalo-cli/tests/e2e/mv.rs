@@ -1401,6 +1401,17 @@ fn mv_single_symlink_escape_rejected() {
         stderr.contains("outside vault boundary"),
         "expected vault-boundary error, got: {stderr}"
     );
+    // iter-235: the boundary error is self-healing — it names the vault dir
+    // and offers a relative-path / `cd` hint, so an agent (or human) does not
+    // have to probe another absolute path to fix the invocation.
+    assert!(
+        stderr.contains("vault:"),
+        "expected the effective vault dir in the boundary error, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("relative to") && stderr.contains("cd to a parent"),
+        "expected a relative-path / cd hint in the boundary error, got: {stderr}"
+    );
 
     // Source untouched; nothing written outside the vault.
     assert!(

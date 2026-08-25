@@ -11,6 +11,7 @@ pub mod find;
 pub mod heading_grammar;
 pub mod init;
 pub(crate) mod inputs;
+pub(crate) mod iteration;
 pub mod link_lint;
 pub mod links;
 pub mod lint;
@@ -64,12 +65,21 @@ pub(crate) fn refuse_escaping_write(
     let Some(target) = hyalo_core::fs_util::escaping_write_target(dir, full)? else {
         return Ok(None);
     };
+    // iter-235: name the vault dir in the message and offer the relative-path
+    // / `cd` hint when the caller hasn't provided its own. Every writer that
+    // refuses an escape here already passes `dir` (the canonical vault root),
+    // so the message is self-healing without each call site repeating the
+    // hint text.
+    let effective_hint: Option<String> = match hint {
+        Some(h) => Some(h.to_owned()),
+        None => Some(hyalo_core::fs_util::outside_vault_hint(dir)),
+    };
     Ok(Some(CommandOutcome::UserError(
         crate::output::format_error(
             format,
-            &hyalo_core::fs_util::outside_vault_message(subject, Some(&target)),
+            &hyalo_core::fs_util::outside_vault_message_with_dir(subject, Some(&target), dir),
             Some(display),
-            hint,
+            effective_hint.as_deref(),
             None,
         ),
     )))
@@ -271,7 +281,7 @@ pub fn collect_files(
                 // All files failed — return error for the first one (no warning needed)
                 let (_, first_err) = errors.into_iter().next().expect("at least one error");
                 return Ok(FilesOrOutcome::Outcome(resolve_error_to_outcome(
-                    first_err, format,
+                    first_err, format, dir,
                 )));
             }
             // Some succeeded — warn about the ones that didn't
@@ -450,7 +460,7 @@ pub fn build_scanned_index(
                 && let Some(e) = first_err
             {
                 return Ok(ScannedIndexOutcome::Outcome(resolve_error_to_outcome(
-                    e, format,
+                    e, format, dir,
                 )));
             }
         }
@@ -611,8 +621,19 @@ const PARENT_TRAVERSAL_HINT: &str =
     "drop the '..' and use a vault-relative path, e.g. \"sub/note.md\" not \"../sub/note.md\"";
 
 /// Convert a `FileResolveError` into a user-facing `CommandOutcome`.
+///
+/// `dir` is the effective vault directory, used only to make an
+/// [`FileResolveError::OutsideVault`] refusal self-healing (iter-235):
+/// the message names the vault root and the hint offers the two fixes
+/// (relative path, or `cd` to a parent). Callers that have already lost
+/// the dir can pass `discovery::canonicalize_vault_dir(dir)`; passing a
+/// non-canonical dir just yields a less tidy `vault:` field.
 #[must_use]
-pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> CommandOutcome {
+pub fn resolve_error_to_outcome(
+    err: FileResolveError,
+    format: Format,
+    dir: &std::path::Path,
+) -> CommandOutcome {
     match err {
         FileResolveError::MissingExtension { path, hint } => {
             CommandOutcome::UserError(crate::output::format_error(
@@ -654,12 +675,13 @@ pub fn resolve_error_to_outcome(err: FileResolveError, format: Format) -> Comman
         FileResolveError::OutsideVault { path, resolved } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,
-                &hyalo_core::fs_util::outside_vault_message(
+                &hyalo_core::fs_util::outside_vault_message_with_dir(
                     "file",
                     resolved.as_deref().map(std::path::Path::new),
+                    dir,
                 ),
                 Some(&path),
-                None,
+                Some(&hyalo_core::fs_util::outside_vault_hint(dir)),
                 None,
             ))
         }

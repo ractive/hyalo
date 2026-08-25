@@ -264,7 +264,7 @@ pub fn run(
     // Resolve file
     let (full_path, rel_path) = match super::resolve_file_user(dir, file) {
         Ok(r) => r,
-        Err(e) => return Ok(super::resolve_error_to_outcome(e, format)),
+        Err(e) => return Ok(super::resolve_error_to_outcome(e, format, dir)),
     };
 
     // `read` targets one explicit file, so — unlike the read-only scanner,
