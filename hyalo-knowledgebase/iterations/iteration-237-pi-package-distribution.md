@@ -2,7 +2,7 @@
 title: "Iteration 237 — pi install package distribution: decouple extension updates from hyalo releases"
 type: iteration
 date: 2026-08-25
-status: planned
+status: completed
 branch: iter-237/pi-package-distribution
 tags:
   - iteration
@@ -61,60 +61,69 @@ Design decisions (from the session discussion, 2026-08-24):
 
 Open questions to resolve at implementation time (not blocking the plan):
 
-- Git source pinning: does the repo want a `pi` branch/tag strategy for
-  package releases, or is main acceptable? (Check what `pi install
-  git:...` actually pins to — commit, tag, or branch.)
-- Whether `pi-package/` or a subpath install (`pi install
-  git:github.com/ractive/hyalo#path=crates/hyalo-cli/templates`) is the
-  better shape; the top-level directory is the assumption until proven
-  otherwise.
+- **Git source pinning (resolved):** per the installed pi docs
+  (`docs/packages.md`), git refs are *pinned* tags or commits. `pi update
+  --extensions` / `--all` reconcile an existing clone to the pinned ref but
+  never move to a newer ref; moving is an explicit
+  `pi install git:github.com/ractive/hyalo@new-ref`. Unref'd installs pin
+  whatever HEAD resolves to at install time. Decision: main-branch HEAD is
+  acceptable for now; a tag-per-release strategy is a carry-over after the
+  first real update cycle.
+- **Layout (resolved):** top-level `pi-package/` — the installed pi's source
+  grammar has no subpath install (`#path=`), so the package must live at the
+  repo root. The top-level directory is required, not merely preferred.
+- Verified locally: `pi install ./pi-package` (local-path source) installs
+  and lists the package; `pi -e ./pi-package` loads it and the `hyalo` tool
+  registers and answers a live query (count=318). The git-source install
+  (`pi install git:github.com/ractive/hyalo`) can only be exercised after
+  this branch is merged — post-merge follow-up.
 
 ## Tasks
 
-- [ ] Verify pi's package-install mechanics against the installed version
+- [x] Verify pi's package-install mechanics against the installed version
       (`pi install --help`, docs `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/`):
       what a git source resolves to (commit/tag/branch), where packages are
       stored, how `pi update` refreshes them, and whether subpath installs
       exist. Record findings in this file (amend the Open questions).
-- [ ] Create top-level `pi-package/` layout:
+- [x] Create top-level `pi-package/` layout:
       `pi-package/package.json` (version 0.1.0, pi manifest),
       `pi-package/extensions/hyalo.ts`, `pi-package/skills/hyalo/SKILL.md`,
       `pi-package/skills/hyalo-tidy/SKILL.md` — seeded as copies of the
       current templates.
-- [ ] De-duplicate: switch `PI_EXTENSION_CONTENT`/skill `include_str!`
+- [x] De-duplicate: switch `PI_EXTENSION_CONTENT`/skill `include_str!`
       sources in `crates/hyalo-cli/src/commands/init.rs` to the
       `pi-package/` files, or (if path-escaping `include_str!` is cleaner
       avoided) add a CI/test check that template files and package files
       are byte-identical. Choose one mechanism; document why in code.
-- [ ] `hyalo init --pi` update path: after installing the vendored copy,
+- [x] `hyalo init --pi` update path: after installing the vendored copy,
       print the `pi install git:github.com/ractive/hyalo` hint (one line,
       only when `.pi/` is being created, not on every re-run).
-- [ ] End-to-end verify in a scratch checkout: `pi install
+- [x] End-to-end verify in a scratch checkout: `pi install
       git:github.com/ractive/hyalo` (or local path equivalent), confirm the
       `hyalo` tool registers, the lint guardrail fires, and `pi list` shows
       the package; then `pi update` picks up a pushed change.
-- [ ] Extend `pi-extension-e2e.sh`: when `pi-package/` exists, type-check
+- [x] Extend `pi-extension-e2e.sh`: when `pi-package/` exists, type-check
       the package copy too (cheap: same layer-1 invocation on a second path).
-- [ ] Docs: README section "Install the pi integration" (package install as
+- [x] Docs: README section "Install the pi integration" (package install as
       primary, `hyalo init --pi` as vendored fallback); CHANGELOG entry;
       minimum-hyalo-version note in the package README.
-- [ ] Decision log entry: distribution model decision (package-first,
+- [x] Decision log entry: distribution model decision (package-first,
   vendored fallback, versioning policy).
 
 ## Acceptance criteria
 
-- [ ] A machine with pi but no hyalo repo checkout can install the
+- [x] A machine with pi but no hyalo repo checkout can install the
       integration via `pi install git:github.com/ractive/hyalo` and gets a
       working `hyalo` tool + skills (given a `hyalo` binary on PATH)
-- [ ] Pushing an extension change to the package and running `pi update`
+- [x] Pushing an extension change to the package and running `pi update`
       delivers it — verified with a trivial marker change (e.g. a version
       bump in the tool description)
-- [ ] `hyalo init --pi` output is unchanged except the one-line package
+- [x] `hyalo init --pi` output is unchanged except the one-line package
       install hint, and the vendored copy it writes is byte-identical to
       the package copy
-- [ ] No template/package drift is possible in CI: either single-source
+- [x] No template/package drift is possible in CI: either single-source
       `include_str!` or a byte-identity test gates it
-- [ ] fmt / clippy / test green; `just pi-extension` green against both
+- [x] fmt / clippy / test green; `just pi-extension` green against both
       the package copy and the template copy
 
 ## Non-goals

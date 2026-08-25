@@ -2779,3 +2779,32 @@ listed there, and the filters fall back to `line 0` (no real line is 0), so a
 `LinkInfo` deserialized from an older snapshot still renders instead of
 dropping to generic key/value formatting. Text output gained a `line N:`
 prefix on each link.
+
+## DEC-101: pi integration distributed as a git-installable pi package, template copy eliminated (2026-08-25)
+
+**Decision:** the pi extension and skills live in a top-level `pi-package/`
+directory that is a valid pi package — `pi install git:github.com/ractive/hyalo`
+— and simultaneously the single source of truth for the hyalo binary: the
+`include_str!` constants in `init.rs` point directly at the `pi-package/`
+files. The duplicate copies under `crates/hyalo-cli/templates/` were removed.
+
+**Why:** the 2026-08-24 dogfood showed the failure mode of the old model —
+users of a broken extension stayed broken until they upgraded hyalo *and*
+re-ran `hyalo init --pi`. A git package source lets `pi update --extensions`
+deliver extension fixes independently of hyalo releases. Keeping two copies
+(template + package) would invite drift, so the binary embeds the package
+files directly; drift is impossible by construction.
+
+**Vendored fallback:** `hyalo init --pi` still writes the embedded copies
+into `.pi/` for users who don't want a git dependency, and now prints a
+one-time hint recommending the package install. It writes byte-identical
+content because it is the same file at compile time.
+
+**Versioning policy:** the package carries its own `version` in
+`pi-package/package.json` (0.1.0), bumped with a CHANGELOG entry on every
+extension/skill change. Git refs are pinned by pi at install time; moving to
+a new ref is an explicit `pi install git:...@new-ref` (verified against the
+installed pi docs — `pi update` reconciles but never moves pinned refs).
+Main-branch HEAD is acceptable as the ref for now; a tag strategy is a
+carry-over. Minimum-hyalo-version requirements are documented in
+`pi-package/README.md` (typed tools need ≥ 0.21).

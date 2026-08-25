@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Local drift guard for the pi extension template.
+# Local drift guard for the pi extension.
 #
-# The template (crates/hyalo-cli/templates/extension-hyalo.ts) is embedded
-# into the release binary and shipped to users via `hyalo init --pi`.
+# The extension (pi-package/extensions/hyalo.ts, iter-237: single source of
+# truth, also embedded into the release binary via include_str! and shipped
+# to users via `hyalo init --pi` and `pi install git:github.com/ractive/hyalo`).
 # pi's extension API evolves without notice; drift has broken the extension
 # silently before (models fell back to bash, nobody noticed). This script
 # guards against that drift — LOCALLY, not in CI (no pi/LLM in CI).
@@ -15,12 +16,12 @@
 #      extension tools ON) so the model MUST use the hyalo tool. A broken
 #      tool cannot hide behind a bash fallback.
 #
-# Usage: ./pi-extension-e2e.sh [path-to-template]
-#        (default: crates/hyalo-cli/templates/extension-hyalo.ts)
+# Usage: ./pi-extension-e2e.sh [path-to-extension]
+#        (default: pi-package/extensions/hyalo.ts)
 
 set -euo pipefail
 
-TEMPLATE="${1:-crates/hyalo-cli/templates/extension-hyalo.ts}"
+TEMPLATE="${1:-pi-package/extensions/hyalo.ts}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 

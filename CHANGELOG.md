@@ -11,6 +11,18 @@ and this project adheres to
 
 ### Added
 
+- **pi package distribution: `pi install git:github.com/ractive/hyalo`**
+  (iter-237). The pi extension and skills now live in a top-level
+  `pi-package/` directory that is both a valid pi package (installable
+  directly from the git repo, refreshable with `pi update --extensions`)
+  and the single source of truth the hyalo binary embeds via `include_str!`.
+  The old duplicate copies under `crates/hyalo-cli/templates/` are gone —
+  package/binary drift is now impossible by construction. `hyalo init --pi`
+  remains as the vendored installer of last resort and now prints a one-time
+  hint pointing at the package install when it creates `.pi/` for the first
+  time. `xtask check-bundled-skills` now also lints the pi-package skills,
+  and `pi-extension-e2e.sh` type-checks the package copy.
+
 - **Typed pi tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`**
   (iter-236). The pi extension previously registered one generic `hyalo`
   tool where the model assembled CLI argv itself (`subcommand` + free-form
