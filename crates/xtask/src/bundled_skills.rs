@@ -1,7 +1,8 @@
 //! Gate — Bundled-skill self-conformance.
 //!
-//! RB-5 regression guard: every skill template hyalo ships
-//! (`crates/hyalo-cli/templates/skill-*.md`) must itself pass the `skills`
+//! RB-5 regression guard: every skill hyalo ships — the templates in
+//! `crates/hyalo-cli/templates/skill-*.md` *and* the pi-package skills in
+//! `pi-package/skills/*/SKILL.md` — must itself pass the `skills`
 //! conformance profile. A profile whose own bundled skill violates the profile
 //! is an embarrassment class of bug, so this gate lints each template *as
 //! installed* — placed at `.claude/skills/<name>/SKILL.md` inside a scratch
@@ -32,10 +33,29 @@ pub fn run() -> Result<bool> {
                 .is_some_and(|n| n.starts_with("skill-") && n.ends_with(".md"))
         })
         .collect();
+    // pi-package skills (iter-237): `pi-package/skills/*/SKILL.md` are the
+    // same bundled skills distributed via `pi install git:...`.
+    let pi_skills_dir = root.join("pi-package").join("skills");
+    match std::fs::read_dir(&pi_skills_dir) {
+        Ok(entries) => {
+            for entry in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+                let skill_file = entry.join("SKILL.md");
+                if skill_file.is_file() {
+                    skill_files.push(skill_file);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "check-bundled-skills: pi package skills dir not found, skipping: {pi_skills_dir:?}"
+            );
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading {pi_skills_dir:?}")),
+    }
     skill_files.sort();
 
     if skill_files.is_empty() {
-        eprintln!("check-bundled-skills: no skill-*.md templates found in {templates_dir:?}");
+        eprintln!("check-bundled-skills: no skill templates found in {templates_dir:?}");
         return Ok(false);
     }
 

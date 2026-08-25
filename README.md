@@ -202,6 +202,24 @@ This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills
 
 All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
 
+## Install the pi integration
+
+For the [pi](https://github.com/earendil-works/pi-coding-agent) coding agent, the integration ships as an installable pi package:
+
+```sh
+pi install git:github.com/ractive/hyalo
+```
+
+This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus the `hyalo` and `hyalo-tidy` skills. Updates are delivered independently of hyalo releases:
+
+```sh
+pi update --extensions
+```
+
+A `hyalo` binary on `PATH` is required (any recent release; typed tools need ≥ 0.21). See `pi-package/README.md` for details.
+
+**Vendored fallback** — if you prefer no git dependency, `hyalo init --pi` writes the same extension and skills into your vault's `.pi/` directory. The vendored copy only changes when you upgrade hyalo and re-run the command, so the package install above is the recommended path.
+
 ## Profiles
 
 Profiles are pre-packaged schema and lint configurations for popular markdown conventions. `hyalo init --profile <name>` merges a declarative fragment into `.hyalo.toml`; add `--claude` to also install a bundled Claude Code skill for the convention. Profiles are **composable** and **idempotent**: multiple `--profile` runs deep-merge without clobbering each other or your hand-written config, and `hyalo lint --profile <name>` works as an ephemeral overlay on any checkout (CI, a freshly cloned third-party bundle) with no config file at all.

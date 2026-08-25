@@ -36,9 +36,9 @@ miri-all:
     MIRIFLAGS="-Zmiri-disable-isolation" \
         cargo +nightly miri test -p hyalo-core --lib -- --test-threads=1
 
-# Drift guard for the pi extension template (crates/hyalo-cli/templates/extension-hyalo.ts).
-# Run locally after touching the template or after upgrading pi — NOT in CI
-# (no pi / LLM access there). Layer 1 type-checks the template against the
+# Drift guard for the pi extension (pi-package/extensions/hyalo.ts).
+# Run locally after touching the extension or after upgrading pi — NOT in CI
+# (no pi / LLM access there). Layer 1 type-checks the extension against the
 # installed pi package's own .d.ts; layer 2 runs pi with --no-builtin-tools so
 # the model must use the hyalo tool (no silent bash fallback).
 pi-extension:

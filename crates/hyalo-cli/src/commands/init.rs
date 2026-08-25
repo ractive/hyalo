@@ -15,10 +15,18 @@ const SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo.md");
 const TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy.md");
 const RULE_TEMPLATE: &str = include_str!("../../templates/rule-knowledgebase.md");
 
-const PI_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-pi.md");
-const PI_TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy-pi.md");
-const PI_EXTENSION_CONTENT: &str = include_str!("../../templates/extension-hyalo.ts");
-const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../templates/package.json");
+// Single source of truth (iter-237): the pi integration lives in the
+// top-level `pi-package/` directory — the same layout `pi install
+// git:github.com/ractive/hyalo` consumes — and is embedded here directly via
+// `include_str!`. There is no second template copy, so package/binary drift
+// is impossible by construction.
+const PI_SKILL_CONTENT: &str = include_str!("../../../../pi-package/skills/hyalo/SKILL.md");
+const PI_TIDY_SKILL_CONTENT: &str =
+    include_str!("../../../../pi-package/skills/hyalo-tidy/SKILL.md");
+const PI_EXTENSION_CONTENT: &str = include_str!("../../../../pi-package/extensions/hyalo.ts");
+const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../../../pi-package/package.json");
+
+const PI_INSTALL_HINT: &str = "tip: to get extension and skill updates automatically, install the pi package instead: pi install git:github.com/ractive/hyalo";
 
 const CLAUDE_MD_HINT: &str = "Use `hyalo` CLI (not Read/Grep/Glob) for all markdown knowledgebase operations.\n\
 Examples: `hyalo find --property status=planned --format text`, `hyalo find \"search text\"`, `hyalo find --property 'title~=pattern'`.\n\
@@ -469,6 +477,9 @@ fn run_init_in(
             let _ = writeln!(summary, "updated  .pi/package.json");
         } else {
             let _ = writeln!(summary, "created  .pi/package.json");
+            // One-time hint: the vendored copy never updates itself. Suggest
+            // the git package source so `pi update` delivers fixes.
+            let _ = writeln!(summary, "\n{PI_INSTALL_HINT}");
         }
     }
 
