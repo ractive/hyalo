@@ -56,6 +56,17 @@ only) or 237 (pi package distribution, template only), which are both
 - Touching the pi extension or templates (236/237 territory)
 - Any change to `--format text`'s human layout
 
+## Carry-over from [[iterations/iteration-237-pi-package-distribution]]
+
+Post-merge verifications and deferred decisions from iter-237 (folded here so they are not silently forgotten):
+
+- [ ] Verify the git-source install end-to-end once iter-237 is merged: `pi install git:github.com/ractive/hyalo` from a scratch checkout, confirm tool + skills register, then tick AC-1 of iter-237
+- [ ] Verify `pi update --extensions` delivers a pushed change to that install (trivial marker change, e.g. package.json version bump), then tick AC-2 of iter-237
+- [ ] Decide the tag-per-release pinning strategy after the first real update cycle (DEC-101 carry-over): tag naming, whether README recommends a tag ref over main HEAD
+- [ ] (Conditional) `hyalo doctor`-style check reporting extension/hyalo version compatibility drift — only if dogfooding shows drift confusion
+- [ ] (Conditional, from iter-236 via 237) `--jq` passthrough on `hyalo_find` and a `hyalo_lint` typed tool — only if observed model friction justifies
+
 ## Out of scope / carry-over candidates
 
 - `--iteration` on `links` (no consumer friction observed yet)
+- npm registry publishing of pi-package (git source sufficient until asked)

@@ -78,7 +78,7 @@ Open questions to resolve at implementation time (not blocking the plan):
   (`pi install git:github.com/ractive/hyalo`) can only be exercised after
   this branch is merged — post-merge follow-up.
 
-## Tasks
+## Tasks [7/8]
 
 - [x] Verify pi's package-install mechanics against the installed version
       (`pi install --help`, docs `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/docs/`):
@@ -98,10 +98,14 @@ Open questions to resolve at implementation time (not blocking the plan):
 - [x] `hyalo init --pi` update path: after installing the vendored copy,
       print the `pi install git:github.com/ractive/hyalo` hint (one line,
       only when `.pi/` is being created, not on every re-run).
-- [x] End-to-end verify in a scratch checkout: `pi install
+- [ ] End-to-end verify in a scratch checkout: `pi install
       git:github.com/ractive/hyalo` (or local path equivalent), confirm the
       `hyalo` tool registers, the lint guardrail fires, and `pi list` shows
       the package; then `pi update` picks up a pushed change.
+      <!-- PARTIAL: local-path install (`pi install ./pi-package`) verified —
+      tool registers, lint guardrail fires, package lists. The git-source
+      install and the `pi update`-picks-up-a-pushed-change half are NOT yet
+      verified; they require the merged repo → carried into iteration 238. -->
 - [x] Extend `pi-extension-e2e.sh`: when `pi-package/` exists, type-check
       the package copy too (cheap: same layer-1 invocation on a second path).
 - [x] Docs: README section "Install the pi integration" (package install as
@@ -110,14 +114,18 @@ Open questions to resolve at implementation time (not blocking the plan):
 - [x] Decision log entry: distribution model decision (package-first,
   vendored fallback, versioning policy).
 
-## Acceptance criteria
+## Acceptance criteria [3/5]
 
-- [x] A machine with pi but no hyalo repo checkout can install the
+- [ ] A machine with pi but no hyalo repo checkout can install the
       integration via `pi install git:github.com/ractive/hyalo` and gets a
       working `hyalo` tool + skills (given a `hyalo` binary on PATH)
-- [x] Pushing an extension change to the package and running `pi update`
+      <!-- NOT verified: only local-path source exercised pre-merge; git-source
+      install needs the merged repo → carried into iteration 238. -->
+- [ ] Pushing an extension change to the package and running `pi update`
       delivers it — verified with a trivial marker change (e.g. a version
       bump in the tool description)
+      <!-- NOT verified pre-merge (needs pushed git-source install) → carried
+      into iteration 238. -->
 - [x] `hyalo init --pi` output is unchanged except the one-line package
       install hint, and the vendored copy it writes is byte-identical to
       the package copy
