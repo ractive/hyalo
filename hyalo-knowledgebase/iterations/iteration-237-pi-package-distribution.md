@@ -133,3 +133,8 @@ Open questions to resolve at implementation time (not blocking the plan):
   first real update cycle)
 - A `hyalo doctor`-style check that reports extension/hyalo version
   compatibility drift (e.g. `[pi]` unknown → old hyalo binary)
+- Carry-overs from [[iterations/iteration-236-typed-pi-tools]] (both
+  conditional on observed model friction — do not build preemptively):
+  a `--jq` passthrough param on the `hyalo_find` typed tool, and a
+  `hyalo_lint` typed tool (if dogfooding shows the model linting via the
+  generic tool often enough to justify one).

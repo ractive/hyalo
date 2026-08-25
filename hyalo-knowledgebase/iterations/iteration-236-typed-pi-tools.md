@@ -2,7 +2,7 @@
 title: "Iteration 236 — typed pi tools: structured find/read/set/task alongside the generic hyalo tool"
 type: iteration
 date: 2026-08-25
-status: planned
+status: completed
 branch: iter-236/typed-pi-tools
 tags:
   - iteration
@@ -65,52 +65,52 @@ Design decisions (from the session discussion, 2026-08-24):
 
 ## Tasks
 
-- [ ] Extract a shared `runHyalo(pi, argv, signal)` helper in the template
+- [x] Extract a shared `runHyalo(pi, argv, signal)` helper in the template
       (`pi.exec` + exit-code/error rendering + `details: undefined`), and
       refactor the generic tool's `execute` onto it. Pure refactor; behavior
       byte-identical.
-- [ ] Implement `hyalo_find` tool: params `query?`, `property?`
+- [x] Implement `hyalo_find` tool: params `query?`, `property?`
       (array of `K=V` filter strings), `tag?`, `glob?`, `taskStatus?`
       (`todo|done|any`), `countOnly?` (→ `--count`), `limit?`; always
       `--format text`; composes nothing else.
-- [ ] Implement `hyalo_read` tool: params `file`, `section?`; text output.
-- [ ] Implement `hyalo_set` tool: params `file`, `property` (single `K=V`),
+- [x] Implement `hyalo_read` tool: params `file`, `section?`; text output.
+- [x] Implement `hyalo_set` tool: params `file`, `property` (single `K=V`),
       `tag?` (optional add-tag); text output; honors the existing lint
       guardrail automatically (it fires on tool_result regardless of which
       tool wrote).
-- [ ] Implement `hyalo_task` tool: params `file`, `mode` (`all|section|line`),
+- [x] Implement `hyalo_task` tool: params `file`, `mode` (`all|section|line`),
       `section?`, `lines?` (array of ints); dispatches to `task toggle`.
-- [ ] Rework `promptSnippet`/`promptGuidelines`/tool descriptions: typed
+- [x] Rework `promptSnippet`/`promptGuidelines`/tool descriptions: typed
       tools listed as primary, generic `hyalo` as fallback; drop the
       "no --status flag" bullet if `hyalo_find.property` makes it redundant
       (verify with a live hallucination probe before deleting).
-- [ ] Extend `pi-extension-e2e.sh` (layer 4): one forced call per typed tool
+- [x] Extend `pi-extension-e2e.sh` (layer 4): one forced call per typed tool
       (`--no-builtin-tools`, asserting non-empty structured output), keeping
       the whole guard under ~2 minutes.
-- [ ] Update `skill-hyalo-pi.md` template: teach the typed tools first,
+- [x] Update `skill-hyalo-pi.md` template: teach the typed tools first,
       generic tool as escape hatch; keep `--format text` guidance only for
       the generic tool.
-- [ ] Live dogfood verification (hyalo-demo worktree): the three historical
+- [x] Live dogfood verification (hyalo-demo worktree): the three historical
       failure scenarios (status filter, search with quotes, set property)
       must each succeed through a typed tool with no clap error and no
       bash fallback.
-- [ ] Docs: `docs/configuration.md` `[pi]` section gains a sentence naming
+- [x] Docs: `docs/configuration.md` `[pi]` section gains a sentence naming
       the typed tools; CHANGELOG unreleased entry.
 
 ## Acceptance criteria
 
-- [ ] A fresh pi session with the extension loaded answers "find all
+- [x] A fresh pi session with the extension loaded answers "find all
       planned iterations", "read the decision log", "set iteration-236's
       status to in-progress", and "toggle all tasks in file X" using the
       typed tools — no generic-tool calls, no bash, no clap errors
-- [ ] `hyalo find --property status=planned`-equivalent query via
+- [x] `hyalo find --property status=planned`-equivalent query via
       `hyalo_find` returns the same files as the CLI invocation (spot-check
       3 queries)
-- [ ] `just pi-extension` covers every registered tool (generic + 4 typed +
+- [x] `just pi-extension` covers every registered tool (generic + 4 typed +
       guardrail); all layers green; fmt/clippy/test green
-- [ ] No change to the Rust crate — this iteration is template + guard
+- [x] No change to the Rust crate — this iteration is template + guard
       script + docs only (`hyalo init --pi` picks it up on re-run)
-- [ ] Template still type-checks against installed pi (guard layer 1) with
+- [x] Template still type-checks against installed pi (guard layer 1) with
       the 4 new registrations
 
 ## Non-goals
@@ -130,3 +130,17 @@ Design decisions (from the session discussion, 2026-08-24):
 - `--jq` passthrough param on `hyalo_find` (if agents ask for it)
 - A `hyalo_lint` typed tool (once a dogfood session shows the model linting
   via the generic tool often enough to justify it)
+
+Both folded into [[iterations/iteration-237-pi-package-distribution]] (see
+its Out of scope / carry-over candidates section).
+
+## Review pass (2026-08-25, pre-merge)
+
+- Restored `--no-hints` on the lint-guardrail and session-summary calls in
+  `extension-hyalo.ts`. The iteration commit had silently dropped it,
+  contradicting the "behavior byte-identical" claim of the `runHyalo`
+  refactor and the deliberate design of #259/#261 (zero noise on every
+  write; hints are for interactive queries, not injected context).
+- All `pi-extension-e2e.sh` layers re-verified green locally (pi 0.84.3)
+  after the fix; fmt/clippy/test green.
+- Verified every ticked task/AC above against the merged diff — all landed.

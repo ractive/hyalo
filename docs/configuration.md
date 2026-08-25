@@ -276,7 +276,12 @@ truth:
 ## Agent integration (`[pi]`)
 
 Hyalo ships a pi coding-agent extension (`hyalo init --pi`) that registers a
-`hyalo` tool, slash commands, and a post-write lint guardrail: when pi's
+generic `hyalo` tool plus four typed tools — `hyalo_find`, `hyalo_read`,
+`hyalo_set`, and `hyalo_task` — which take structured parameters instead of
+CLI argv for the most common operations (search/filter, read, frontmatter
+mutation, task toggling); the generic tool remains the escape hatch for
+everything else. It also registers slash commands and a post-write lint
+guardrail: when pi's
 `write`/`edit` tools touch a `.md` file inside the vault, the extension runs
 `hyalo lint <file>` on it and appends any violations to the tool result, so
 schema drift cannot land silently.

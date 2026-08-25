@@ -20,8 +20,22 @@ description: >
 # Hyalo CLI — Prime Tool for Markdown Knowledgebases in pi
 
 Hyalo is a fast CLI for querying and mutating YAML frontmatter, tags, tasks, and structure
-in directories of markdown files. Use hyalo via the `bash` tool for all markdown knowledgebase
-operations in pi. Its killer features are combined filtering (e.g.
+in directories of markdown files. If the hyalo pi extension is installed
+(`.pi/extensions/hyalo.ts`), prefer its **typed tools** for the common operations —
+they take structured parameters, so there is no flag spelling or quoting to get wrong:
+
+| Operation | Typed tool | Example parameters |
+|-----------|------------|--------------------|
+| Search/filter | **hyalo_find** | `property: ["status=planned", "type=iteration"]`, `query: "rust"`, `tag: "feature"`, `taskStatus: "todo"`, `countOnly: true`, `limit: 10` |
+| Read a file/section | **hyalo_read** | `file: "iterations/iter-1-x.md"`, `section: "Scope"` |
+| Set one property | **hyalo_set** | `file: "note.md"`, `property: "status=done"`, `tag: "shipped"` |
+| Toggle tasks | **hyalo_task** | `file: "plan.md"`, `mode: "all"` / `mode: "section"`, `section: "Tasks"` / `mode: "line"`, `lines: [5, 7]` |
+
+Use the generic **hyalo** tool (subcommand + args) only for operations the typed tools
+don't cover: summary, lint, mv, links, views, types, backlinks, --jq filters, bulk
+mutations (`--glob`, `--where-property`), etc.
+
+Its killer features are combined filtering (e.g.
 `hyalo find -e "regex" --property status!=done --tag feature`) which you can't easily
 replicate with read/edit/grep/write, and bulk mutations (`hyalo set --where-property`) that replace
 multiple read + edit calls.
@@ -232,15 +246,20 @@ hyalo find --orphan --fields properties,links --format text \
 
 ## Common Pitfalls & Solutions
 
-1. **Missing `--format text`**: Output is verbose JSON — always use `--format text` in pi
-2. **Not using `--index` for large vaults**: Queries are slow — create index for >500 files
-3. **Using system `mv` instead of `hyalo mv`**: Breaks links — always use `hyalo mv`
-4. **Ignoring hints**: hyalo suggests next commands — follow them
-5. **Not validating schemas**: Run `hyalo lint --strict` regularly
+1. **Using the generic tool for common operations**: prefer hyalo_find/hyalo_read/hyalo_set/hyalo_task — no flag spelling or quoting to get wrong
+2. **Missing `--format text`**: Output is verbose JSON — always use `--format text` in pi (the extension injects it automatically; only needed via bash)
+3. **Not using `--index` for large vaults**: Queries are slow — create index for >500 files
+4. **Using system `mv` instead of `hyalo mv`**: Breaks links — always use `hyalo mv`
+5. **Ignoring hints**: hyalo suggests next commands — follow them
+6. **Not validating schemas**: Run `hyalo lint --strict` regularly
 
 ## Integration with pi Extension
 
-If the hyalo extension is installed (`.pi/extensions/hyalo.ts`), use the dedicated `hyalo` tool:
+If the hyalo extension is installed (`.pi/extensions/hyalo.ts`), use the typed tools first:
+```json
+{"tool": "hyalo_find", "property": ["status=planned"], "tag": "iteration"}
+```
+For anything they don't cover, use the generic `hyalo` tool:
 ```json
 {
   "subcommand": "find",

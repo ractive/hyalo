@@ -9,6 +9,22 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Typed pi tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`**
+  (iter-236). The pi extension previously registered one generic `hyalo`
+  tool where the model assembled CLI argv itself (`subcommand` + free-form
+  `args[]`), and every dogfooding bug so far came from that surface:
+  duplicate `--format text`, hallucinated flags, quoting of search terms.
+  The four new typed tools take structured parameters instead — e.g.
+  `hyalo_find` with `property: ["status=planned"]`, `tag`, `taskStatus`,
+  `countOnly`, `limit`; `hyalo_set` with `file` + a single `K=V` property;
+  `hyalo_task` with `mode: all|section|line`. All route through the same
+  shared execution core as the generic tool (timeouts, signals, error
+  rendering unchanged); the generic tool stays as the escape hatch for
+  everything else. `pi-extension-e2e.sh` gains a layer forcing one call per
+  typed tool, and `skill-hyalo-pi.md` teaches the typed tools first.
+
 ### Fixed
 
 - **A heading containing a template expression is never reported as a dead

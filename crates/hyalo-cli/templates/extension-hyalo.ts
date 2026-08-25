@@ -17,6 +17,53 @@ interface HyaloToolArgs {
   indexFile?: string;
 }
 
+/**
+ * Shared execution core for every hyalo tool (generic + typed): runs the
+ * argv through `pi.exec` and renders exit codes / stderr / stdout into a
+ * uniform tool result. One path — no behavioral divergence between tools.
+ */
+async function runHyalo(
+  pi: ExtensionAPI,
+  argv: string[],
+  signal?: AbortSignal,
+) {
+  try {
+    const { stdout, stderr, code } = await pi.exec("hyalo", argv, {
+      signal,
+      timeout: HYALO_TIMEOUT_MS,
+    });
+
+    if (code !== 0) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `hyalo ${argv[0]} failed with exit code ${code}`,
+          },
+          ...(stderr ? [{ type: "text" as const, text: `Stderr:\n${stderr}` }] : []),
+          ...(stdout ? [{ type: "text" as const, text: `Stdout:\n${stdout}` }] : []),
+        ],
+        details: undefined,
+      };
+    }
+
+    return {
+      content: [{ type: "text" as const, text: stdout || "(no output)" }],
+      details: undefined,
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Error executing hyalo: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      details: undefined,
+    };
+  }
+}
+
 /** Whether the argv already carries a value-taking flag (long or short). */
 function hasFlag(argv: string[], long: string, short?: string): boolean {
   return argv.includes(long) || (short !== undefined && argv.includes(short));
@@ -160,54 +207,183 @@ export default function (pi: ExtensionAPI) {
       "(YAML frontmatter, tags, tasks, wikilinks). Subcommands: find, read, set, " +
       "append, remove, task, summary, properties, tags, lint, backlinks, config, ...",
     promptSnippet:
-      "hyalo: structured search/mutation of markdown knowledgebases (frontmatter, tags, tasks, links)",
+      "hyalo: structured search/mutation of markdown knowledgebases (frontmatter, tags, tasks, links). Prefer hyalo_find/hyalo_read/hyalo_set/hyalo_task for common operations; use this tool for everything else.",
     promptGuidelines: [
-      "For .md files with YAML frontmatter in a knowledgebase/vault, prefer the hyalo tool over read/edit/grep: use `hyalo find` to search or filter by content/tags/properties, `hyalo read` to read, and `hyalo set`/`hyalo task` to bulk-mutate instead of many edit calls.",
+      "For .md files with YAML frontmatter in a knowledgebase/vault, prefer the typed hyalo tools first — `hyalo_find` (search/filter by query/property/tag/task status), `hyalo_read` (read a file or section), `hyalo_set` (set one frontmatter property), `hyalo_task` (toggle checkboxes) — they take structured parameters, no flags or quoting. Fall back to the generic hyalo tool for anything they don't cover (summary, lint, mv, links, views, --jq, ...).",
       "hyalo output includes drill-down hints (lines starting with `->`) — follow them to refine queries; hints marked `=>` with `[writes]` modify the vault.",
-      "hyalo flags map to the tool's args array: e.g. `hyalo find --property status=planned --tag iteration` → subcommand 'find', args ['--property', 'status=planned', '--tag', 'iteration']. Filter by a property with '--property K=V' — there are no per-property flags like --status.",
     ],
     parameters: hyaloToolParams,
     async execute(_toolCallId, params: Static<typeof hyaloToolParams>, signal) {
-      const cmdArgs = buildCommand(params);
-      try {
-        const { stdout, stderr, code } = await pi.exec("hyalo", cmdArgs, {
-          signal,
-          timeout: HYALO_TIMEOUT_MS,
-        });
+      return runHyalo(pi, buildCommand(params), signal);
+    },
+  });
 
-        if (code !== 0) {
+  // --- typed tools -------------------------------------------------------
+  // Structured parameters for the ~80% operations. No argv assembly, no
+  // flag spelling, no quoting — the schema is the interface. All route
+  // through runHyalo, so behavior (timeouts, signals, error rendering) is
+  // identical to the generic tool.
+
+  const hyaloFindParams = Type.Object({
+    query: Type.Optional(
+      Type.String({
+        description:
+          "BM25 full-text search term(s). Supports 'a OR b', '" +
+          '"quoted phrase"' +
+          "', and '-term' exclusions.",
+      }),
+    ),
+    property: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Property filter(s) as 'K=V'. Also supports 'K!=V', 'K>=V', 'K<=V', 'K~=pattern', '!K'. Repeatable.",
+      }),
+    ),
+    tag: Type.Optional(
+      Type.String({ description: "Filter by tag." }),
+    ),
+    glob: Type.Optional(
+      Type.String({ description: "Restrict to files matching a glob, e.g. 'iterations/*.md'." }),
+    ),
+    taskStatus: Type.Optional(
+      Type.Union([
+        Type.Literal("todo"),
+        Type.Literal("done"),
+        Type.Literal("any"),
+      ], {
+        description: "Filter by task checkbox status in the file.",
+      }),
+    ),
+    countOnly: Type.Optional(
+      Type.Boolean({ description: "Return only the match count (--count)." }),
+    ),
+    limit: Type.Optional(
+      Type.Number({ description: "Maximum number of results to return." }),
+    ),
+  });
+
+  pi.registerTool({
+    name: "hyalo_find",
+    label: "Hyalo Find",
+    description:
+      "Search/filter a markdown knowledgebase by full-text query, frontmatter " +
+      "properties, tags, glob, or task status. Preferred over the generic hyalo tool for queries.",
+    promptSnippet: "hyalo_find: search/filter knowledgebase files (query, property, tag, task status)",
+    parameters: hyaloFindParams,
+    async execute(_toolCallId, params: Static<typeof hyaloFindParams>, signal) {
+      const argv = ["find", "--format", "text"];
+      if (params.query !== undefined) argv.push(params.query);
+      for (const prop of params.property ?? []) argv.push("--property", prop);
+      if (params.tag !== undefined) argv.push("--tag", params.tag);
+      if (params.glob !== undefined) argv.push("--glob", params.glob);
+      if (params.taskStatus !== undefined) argv.push("--task", params.taskStatus);
+      if (params.countOnly) argv.push("--count");
+      if (params.limit !== undefined) argv.push("--limit", String(Math.trunc(params.limit)));
+      return runHyalo(pi, argv, signal);
+    },
+  });
+
+  const hyaloReadParams = Type.Object({
+    file: Type.String({ description: "File to read (relative to the vault directory)." }),
+    section: Type.Optional(
+      Type.String({
+        description:
+          "Extract only this section by heading (case-insensitive substring; prefix '#' pins level; '/regex/' form also accepted). Nested subsections included.",
+      }),
+    ),
+  });
+
+  pi.registerTool({
+    name: "hyalo_read",
+    label: "Hyalo Read",
+    description:
+      "Read a markdown file's body from the knowledgebase (frontmatter stripped), optionally only one section. Returns plain text.",
+    promptSnippet: "hyalo_read: read a vault file (optionally a single section) as text",
+    parameters: hyaloReadParams,
+    async execute(_toolCallId, params: Static<typeof hyaloReadParams>, signal) {
+      const argv = ["read", "--format", "text", "--file", params.file];
+      if (params.section !== undefined) argv.push("--section", params.section);
+      return runHyalo(pi, argv, signal);
+    },
+  });
+
+  const hyaloSetParams = Type.Object({
+    file: Type.String({ description: "File to mutate (relative to the vault directory)." }),
+    property: Type.String({
+      description:
+        "Frontmatter assignment as 'K=V'. Type is auto-inferred (number/bool/text); use K=[a,b,c] for lists.",
+    }),
+    tag: Type.Optional(
+      Type.String({ description: "Additionally add this tag (idempotent; creates the tags list if absent)." }),
+    ),
+  });
+
+  pi.registerTool({
+    name: "hyalo_set",
+    label: "Hyalo Set",
+    description:
+      "Set (create or overwrite) one frontmatter property on a knowledgebase file, optionally adding a tag. The post-write lint guardrail applies to writes automatically.",
+    promptSnippet: "hyalo_set: set a file's frontmatter property (K=V), optionally add a tag",
+    parameters: hyaloSetParams,
+    async execute(_toolCallId, params: Static<typeof hyaloSetParams>, signal) {
+      const argv = [
+        "set",
+        "--format",
+        "text",
+        "--property",
+        params.property,
+      ];
+      if (params.tag !== undefined) argv.push("--tag", params.tag);
+      argv.push(params.file);
+      return runHyalo(pi, argv, signal);
+    },
+  });
+
+  const hyaloTaskParams = Type.Object({
+    file: Type.String({ description: "File containing the tasks (relative to the vault directory)." }),
+    mode: Type.Union([Type.Literal("all"), Type.Literal("section"), Type.Literal("line")], {
+      description:
+        "'all': toggle every task in the file; 'section': all tasks under one heading; 'line': specific lines.",
+    }),
+    section: Type.Optional(
+      Type.String({ description: "Heading for mode='section' (case-insensitive substring)." }),
+    ),
+    lines: Type.Optional(
+      Type.Array(Type.Number(), { description: "1-based line numbers for mode='line'." }),
+    ),
+  });
+
+  pi.registerTool({
+    name: "hyalo_task",
+    label: "Hyalo Task",
+    description:
+      "Toggle task checkboxes ([ ] <-> [x]) in a knowledgebase file: every task, all tasks under a section heading, or specific lines.",
+    promptSnippet: "hyalo_task: toggle task checkboxes (all / by section / by line)",
+    parameters: hyaloTaskParams,
+    async execute(_toolCallId, params: Static<typeof hyaloTaskParams>, signal) {
+      const argv = ["task", "toggle"];
+      if (params.mode === "section") {
+        if (params.section === undefined) {
           return {
-            content: [
-              {
-                type: "text" as const,
-                text: `hyalo ${params.subcommand} failed with exit code ${code}`,
-              },
-              ...(stderr
-                ? [{ type: "text" as const, text: `Stderr:\n${stderr}` }]
-                : []),
-              ...(stdout
-                ? [{ type: "text" as const, text: `Stdout:\n${stdout}` }]
-                : []),
-            ],
+            content: [{ type: "text" as const, text: "hyalo_task: mode 'section' requires the section parameter" }],
             details: undefined,
           };
         }
-
-        return {
-          content: [{ type: "text" as const, text: stdout || "(no output)" }],
-          details: undefined,
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error executing hyalo: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-          details: undefined,
-        };
+        argv.push("--section", params.section);
+      } else if (params.mode === "line") {
+        const lines = (params.lines ?? []).map((l) => Math.trunc(l));
+        if (lines.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "hyalo_task: mode 'line' requires at least one line number" }],
+            details: undefined,
+          };
+        }
+        argv.push("--line", lines.join(","));
+      } else {
+        argv.push("--all");
       }
+      argv.push(params.file);
+      return runHyalo(pi, argv, signal);
     },
   });
 
