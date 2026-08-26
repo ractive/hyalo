@@ -2,7 +2,7 @@
 title: "Iteration 225 — architecture: thin dispatch, typed hints, hyalo-core façade"
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-225/arch-thin-dispatch-typed-hints
 tags: [iteration, architecture, refactor, tech-debt]
 related:
