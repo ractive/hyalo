@@ -3,13 +3,14 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, LintRulesAction, MadrAction, OkfAction, TypesAction,
+    Commands, LintRulesAction, TypesAction,
 };
 use crate::commands::{
     append as append_commands, backlinks as backlinks_commands,
     changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
+    madr as madr_commands, okf as okf_commands,
     lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
     remove as remove_commands, set as set_commands, summary as summary_commands,
     tags as tag_commands, tasks as task_commands, views as views_commands,
@@ -847,65 +848,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             index_path,
             effective_format,
         ),
-        Commands::Okf { action } => match action {
-            OkfAction::Index {
-                scope,
-                apply,
-                dry_run: _,
-                replace,
-            } => {
-                let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
-                let (outcome, exit_override) = crate::commands::okf::run_index(
-                    ctx.dir,
-                    scope.as_deref(),
-                    apply,
-                    replace,
-                    ctx.okf_ignore,
-                    case_insensitive,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-            OkfAction::Log {
-                target,
-                message,
-                action: log_action,
-                apply,
-                dry_run: _,
-            } => crate::commands::okf::run_log(
-                ctx.dir,
-                target.as_deref(),
-                &message,
-                log_action.as_deref(),
-                apply,
-                effective_format,
-            ),
-        },
-        Commands::Madr { action } => match action {
-            MadrAction::Toc {
-                adr_dir,
-                apply,
-                dry_run: _,
-                replace,
-            } => {
-                let (outcome, exit_override) = crate::commands::madr::run_toc(
-                    ctx.dir,
-                    adr_dir.as_deref(),
-                    apply,
-                    replace,
-                    ctx.schema,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-        },
+        Commands::Okf { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::okf::run`.
+            okf_commands::run(ctx, action)
+        }
+        Commands::Madr { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::madr::run`.
+            madr_commands::run(ctx, action)
+        }
         Commands::Changelog { action } => {
             // ARCH-1 (iter-225): the arm body now lives in
             // `commands::changelog::run`.

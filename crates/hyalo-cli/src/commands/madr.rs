@@ -596,3 +596,38 @@ mod tests {
         assert!(readme.contains("# Y") || readme.contains("0002-y"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo madr` dispatch arm, extracted verbatim from `dispatch.rs`.
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: crate::cli::args::MadrAction,
+) -> Result<CommandOutcome> {
+    let effective_format = ctx.effective_format;
+
+match action {
+    crate::cli::args::MadrAction::Toc {
+        adr_dir,
+        apply,
+        dry_run: _,
+        replace,
+    } => {
+        let (outcome, exit_override) = crate::commands::madr::run_toc(
+            ctx.dir,
+            adr_dir.as_deref(),
+            apply,
+            replace,
+            ctx.schema,
+            &ctx.lint_profiles,
+            effective_format,
+        )?;
+        if let Some(code) = exit_override {
+            ctx.exit_code_override = Some(code);
+        }
+        Ok(outcome)
+    }
+    }
+}
