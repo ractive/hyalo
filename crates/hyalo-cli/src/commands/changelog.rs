@@ -1397,7 +1397,6 @@ pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: crate::cli::args::ChangelogAction,
 ) -> Result<CommandOutcome> {
-    let dir = ctx.dir;
     let effective_format = ctx.effective_format;
 
 match action {
