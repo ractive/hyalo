@@ -473,7 +473,8 @@ pub(crate) struct FindFilters {
     /// NUL-delimited sibling of `--filenames-only` (iter-238): each matching
     /// file path is printed terminated by a NUL byte instead of a newline,
     /// exactly like GNU `find -print0`. Safe for filenames that contain
-    /// newlines (which are legal on every supported platform), and composes
+    /// newlines (which are legal in POSIX filenames, though not on Windows),
+    /// and composes
     /// with `xargs -0` / `while IFS= read -r -d ''`. Same semantics as
     /// `--filenames-only` otherwise: no JSON, no envelope, no count, no hints;
     /// zero results → empty output, exit 0; `--strict` still flips the exit

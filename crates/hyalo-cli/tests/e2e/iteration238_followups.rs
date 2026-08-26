@@ -128,11 +128,13 @@ fn filenames0_round_trips_through_xargs0() {
 }
 
 #[test]
+#[cfg(unix)]
 fn filenames0_survives_newline_in_filename() {
     let vault = setup_iteration_vault();
     // The reason --filenames-only is unsafe for arbitrary filenames: a
     // newline inside a filename is indistinguishable from the delimiter.
-    // NUL is the only byte a POSIX path cannot contain.
+    // NUL is the only byte a POSIX path cannot contain. (POSIX-only: NTFS
+    // and Win32 forbid newlines in filenames, so the fixture can't exist.)
     let dir = vault.path();
     fs::create_dir_all(dir.join("notes")).unwrap();
     fs::write(
