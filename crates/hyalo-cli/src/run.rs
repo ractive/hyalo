@@ -698,6 +698,10 @@ fn run_inner() -> Result<(), AppError> {
     {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
         match init_commands::run_init(init_dir, *claude, *pi, profile.as_deref()) {
+            Ok(CommandOutcome::RawBytes(_)) => {
+                // init/deinit never produce RawBytes; handled for exhaustiveness.
+                unreachable!("init/deinit do not emit RawBytes")
+            }
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 // Sanitized because RawOutput content may echo raw file text (init/deinit
                 // summaries can include vault-derived strings) that never passes through
@@ -711,6 +715,10 @@ fn run_inner() -> Result<(), AppError> {
     }
     if let Commands::Deinit = &mut cli.command {
         match init_commands::run_deinit() {
+            Ok(CommandOutcome::RawBytes(_)) => {
+                // init/deinit never produce RawBytes; handled for exhaustiveness.
+                unreachable!("init/deinit do not emit RawBytes")
+            }
             Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
                 // Sanitized because RawOutput content may echo raw file text (init/deinit
                 // summaries can include vault-derived strings) that never passes through
@@ -790,6 +798,9 @@ fn run_inner() -> Result<(), AppError> {
         // off, an explicit `--hints` turns them back on.
         let show_hints = cli.hints || (!cli.no_hints && config.hints);
         match crate::commands::config::run_config(&report, format, show_hints) {
+            CommandOutcome::RawBytes(_) => {
+                unreachable!("config does not emit RawBytes")
+            }
             CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
                 // Sanitized because the text-mode RawOutput branch echoes the raw
                 // .hyalo.toml contents (`report.raw_contents`), which never passes
@@ -1122,34 +1133,42 @@ fn run_inner() -> Result<(), AppError> {
         // --jq + --format text is a user error → exit 1, not 2 (iter-181 task 2).
         return Err(AppError::Exit(1));
     }
-    // iter-235: `--filenames-only` is a find-local projection that bypasses the
-    // JSON envelope entirely (raw paths, one per line). clap already rejects
-    // it alongside `--jq` and `--count` (which likewise replace the whole
-    // pipeline); here we cover an explicit `--format json`, which is a
-    // contradictory projection (JSON envelope vs. raw paths). The default
-    // JSON-when-piped format does NOT conflict — `--filenames-only` overrides
-    // the format so a piped `find --filenames-only | sort` works without a
-    // `--format text` chore, which is the whole point of the flag.
-    if format_from_cli
-        && format == Format::Json
-        && matches!(
-            &cli.command,
-            Commands::Find {
-                filters: FindFilters {
-                    filenames_only: true,
+    // iter-235/238: `--filenames-only` / `--filenames0` are find-local
+    // projections that bypass the JSON envelope entirely (raw paths). clap
+    // already rejects them alongside `--jq` and `--count` (which likewise
+    // replace the whole pipeline); here we cover an explicit `--format json`,
+    // which is a contradictory projection (JSON envelope vs. raw paths). The
+    // default JSON-when-piped format does NOT conflict — the projection
+    // overrides the format so a piped `find --filenames-only | sort` works
+    // without a `--format text` chore, which is the whole point of the flags.
+    let filename_projection = match &cli.command {
+        Commands::Find {
+            filters:
+                FindFilters {
+                    filenames_only,
+                    filenames0,
                     ..
                 },
-                ..
+            ..
+        } if *filenames_only || *filenames0 => {
+            if *filenames_only {
+                "--filenames-only"
+            } else {
+                "--filenames0"
             }
-        )
-    {
+        }
+        _ => "",
+    };
+    if format_from_cli && format == Format::Json && !filename_projection.is_empty() {
         eprintln!(
             "{}",
             crate::output::format_error(
                 format,
-                "--filenames-only cannot be combined with --format json",
+                &format!("{filename_projection} cannot be combined with --format json"),
                 None,
-                Some("--filenames-only prints raw paths; drop --format (or use --format text)"),
+                Some(
+                    "--filenames-only/--filenames0 print raw paths; drop --format (or use --format text)"
+                ),
                 None,
             )
         );

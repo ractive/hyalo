@@ -581,6 +581,9 @@ No tasks here.
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => {
                 serde_json::from_str(&s).unwrap()
             }
+            CommandOutcome::RawBytes(b) => {
+                serde_json::from_str(&String::from_utf8_lossy(&b)).unwrap()
+            }
             CommandOutcome::UserError(s) => panic!("expected success, got: {s}"),
         }
     }
@@ -789,6 +792,7 @@ Body.
                 assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
                 assert!(s.contains("Tasks:"), "expected 'Tasks:' in: {s}");
             }
+            CommandOutcome::RawBytes(_) => panic!("summary never emits RawBytes"),
             CommandOutcome::UserError(s) => panic!("expected success, got: {s}"),
         }
     }

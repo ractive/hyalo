@@ -758,6 +758,7 @@ title: Note
         .unwrap();
         let out = match outcome {
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();

@@ -464,9 +464,27 @@ pub(crate) struct FindFilters {
     /// fails. Combines with every other filter (`--property`, `--tag`,
     /// `--iteration`, `--glob`, `--broken-links`, …) exactly as `find`
     /// normally does.
-    #[arg(long, conflicts_with_all = ["jq", "count"])]
+    #[arg(
+        long,
+        conflicts_with_all = ["jq", "count", "filenames0"]
+    )]
     #[serde(skip_serializing_if = "is_false")]
     pub filenames_only: bool,
+    /// NUL-delimited sibling of `--filenames-only` (iter-238): each matching
+    /// file path is printed terminated by a NUL byte instead of a newline,
+    /// exactly like GNU `find -print0`. Safe for filenames that contain
+    /// newlines (which are legal in POSIX filenames, though not on Windows),
+    /// and composes
+    /// with `xargs -0` / `while IFS= read -r -d ''`. Same semantics as
+    /// `--filenames-only` otherwise: no JSON, no envelope, no count, no hints;
+    /// zero results → empty output, exit 0; `--strict` still flips the exit
+    /// code when results exist.
+    ///
+    /// Mutually exclusive with `--filenames-only`, `--jq`, `--count`, and an
+    /// explicit `--format json` (pick one projection).
+    #[arg(long, conflicts_with_all = ["jq", "count", "filenames_only"])]
+    #[serde(skip_serializing_if = "is_false")]
+    pub filenames0: bool,
     /// Resolve a sequence-keyed document by its natural ID instead of a glob:
     /// `--iteration 206` expands to `iterations/iteration-206-*.md` using the
     /// type schema's `filename_template` `{n}` slot. Accepts a bare integer
@@ -537,10 +555,12 @@ impl FindFilters {
         if overlay.language.is_some() {
             self.language.clone_from(&overlay.language);
         }
-        // --filenames-only is an output-shaping bool (like --strict): the
-        // overlay can turn it on, never off. A view may carry it, and a CLI
-        // --filenames-only turns on top of any view.
+        // --filenames-only / --filenames0 are output-shaping bools (like
+        // --strict): the overlay can turn them on, never off. A view may carry
+        // one, and a CLI flag turns on on top of any view. clap rejects the
+        // two projections together, so at most one can ever be set.
         self.filenames_only = self.filenames_only || overlay.filenames_only;
+        self.filenames0 = self.filenames0 || overlay.filenames0;
         if overlay.iteration.is_some() {
             self.iteration.clone_from(&overlay.iteration);
         }
@@ -614,6 +634,9 @@ pub(crate) enum Commands {
             empty output, exit 0. Conflicts with --jq, --count, and an explicit --format json.\n\
             --strict still flips the exit code (1 when results exist), so `find --filenames-only\n\
             --strict` is a CI gate that lists the offenders and fails.\n\
+            --filenames0 is the NUL-delimited sibling (GNU `find -print0` precedent): each\n\
+            path ends in \u{00} instead of \n, safe for filenames containing newlines; pair it\n\
+            with `xargs -0`. Same zero-results/conflict/--strict rules as --filenames-only.\n\
             ITERATION ADDRESSING: --iteration <ID> resolves a sequence-keyed document by its\n\
             natural key (`--iteration 206` → `iterations/iteration-206-*.md`) using the\n\
             type schema's filename_template {n} slot. Accepts a bare integer (206), zero-\n\
@@ -675,7 +698,8 @@ pub(crate) enum Commands {
             \u{00a0} hyalo read notes/todo.md\n\
             \u{00a0} hyalo read --file notes/todo.md --section Tasks\n\
             \u{00a0} hyalo read --file notes/todo.md --lines 1:20\n\
-            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json"
+            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json\n\
+            \u{00a0} hyalo read --iteration 206   # natural-key addressing, resolves to exactly one file"
     )]
     Read {
         #[command(flatten)]
@@ -2470,7 +2494,8 @@ pub(crate) enum TaskAction {
           hyalo task read note.md --line 5,7,9\n  \
           hyalo task read note.md --section Tasks\n  \
           hyalo task read note.md --all\n  \
-          hyalo task read --file note.md --line 5")]
+          hyalo task read --file note.md --line 5\n  \
+          hyalo task read --iteration 206 --section Tasks   # natural-key addressing (iter-238)")]
     Read {
         #[command(flatten)]
         selection: InputSelection,
@@ -2500,7 +2525,8 @@ pub(crate) enum TaskAction {
           hyalo task toggle note.md --all\n  \
           hyalo task toggle --file note.md --line 5\n  \
           hyalo task toggle --files-from list.txt --section Tasks\n  \
-          hyalo task toggle --glob 'iterations/*.md' --all"
+          hyalo task toggle --glob 'iterations/*.md' --all\n  \
+          hyalo task toggle --iteration 206 --all           # natural-key addressing (iter-238)"
     )]
     Toggle {
         #[command(flatten)]

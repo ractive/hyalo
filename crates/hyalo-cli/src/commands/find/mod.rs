@@ -1246,6 +1246,25 @@ pub fn find(
 /// Errors pass through unchanged — a `UserError` (bad filter, missing
 /// file, boundary refusal) is never remangled into a filename list.
 pub(crate) fn project_filenames_only(outcome: CommandOutcome) -> CommandOutcome {
+    project_filenames_delimited(outcome, b'\n')
+}
+
+/// Project a `find` outcome onto NUL-terminated file paths (iter-238).
+///
+/// `--filenames0` is the `xargs -0` / newline-safe sibling of
+/// [`project_filenames_only`]: identical semantics except each path is
+/// terminated by a NUL byte instead of a newline, exactly like GNU
+/// `find -print0`. NUL is the only byte a POSIX path cannot contain, so the
+/// projection is unambiguous even for filenames with embedded newlines.
+pub(crate) fn project_filenames0(outcome: CommandOutcome) -> CommandOutcome {
+    project_filenames_delimited(outcome, b'\0')
+}
+
+/// Shared path-projection core: walk the find result array's `file` fields and
+/// emit them separated by `delim` (`\n` for --filenames-only, NUL for
+/// --filenames0). Zero results → empty output, exit 0; non-Success outcomes
+/// pass through unchanged.
+fn project_filenames_delimited(outcome: CommandOutcome, delim: u8) -> CommandOutcome {
     let CommandOutcome::Success { output, .. } = &outcome else {
         return outcome;
     };
@@ -1271,8 +1290,24 @@ pub(crate) fn project_filenames_only(outcome: CommandOutcome) -> CommandOutcome 
         // for a `while read` loop to trip on).
         return CommandOutcome::RawOutput(String::new());
     }
-    let mut out = paths.join("\n");
-    out.push('\n');
+    // Each path is terminated by the delimiter so the last entry is complete
+    // for consumers. --filenames-only stays text (`RawOutput`, newline-
+    // sanitized and println-terminated as before); --filenames0 must reach
+    // `xargs -0` byte-exact — NUL is a control character the text pipeline
+    // strips, so it takes the unsanitized byte path.
+    if delim == b'\0' {
+        let mut out = Vec::new();
+        for p in paths {
+            out.extend_from_slice(p.as_bytes());
+            out.push(delim);
+        }
+        return CommandOutcome::RawBytes(out);
+    }
+    let mut out = String::new();
+    for p in paths {
+        out.push_str(p);
+        out.push(delim as char);
+    }
     CommandOutcome::RawOutput(out)
 }
 

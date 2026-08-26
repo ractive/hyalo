@@ -2808,3 +2808,37 @@ installed pi docs — `pi update` reconciles but never moves pinned refs).
 Main-branch HEAD is acceptable as the ref for now; a tag strategy is a
 carry-over. Minimum-hyalo-version requirements are documented in
 `pi-package/README.md` (typed tools need ≥ 0.21).
+
+## DEC-102: `--filenames0` emits NUL-terminated bytes via a `RawBytes` outcome; `--iteration` extends the shared input resolver (2026-08-25)
+
+**Decision:** two iter-238 ergonomics follow-ups:
+
+1. **`find --filenames0` writes NUL-terminated paths byte-exactly.** The
+   projection produces a new [`CommandOutcome::RawBytes`] variant that
+   bypasses both the JSON pipeline and the control-character sanitizer
+   (`sanitize_control_chars` would strip NUL, defeating the whole flag), and
+   the output pipeline writes it verbatim with no appended newline — GNU
+   `find -print0` precedent. Only hyalo-generated content (vault-relative
+   paths) may use `RawBytes`; raw file *body* text stays on `RawOutput`,
+   which keeps its ANSI-stripping sanitization. Each path is terminated
+   (not just separated) so the last entry is complete for `xargs -0`.
+
+2. **`--iteration <ID>` joins `InputSelection`, resolved at dispatch time**
+   via `iteration::selection_with_iteration_resolved`, which rewrites the
+   selection to carry the matched file as an ordinary `--file` value after
+   enforcing the exactly-one-match contract (same errors as
+   `set --iteration`). Every single-file command built on the shared input
+   resolver gets natural-key addressing in one place — `read`, `backlinks`,
+   and all three `task` actions — instead of five hand-rolled copies.
+
+**Why:** the ralph-loop workflow reads iteration plans and ticks their tasks
+every run, so natural-key addressing belongs on `read`/`task`, not only on
+`find`/`set`. Centralizing resolution in one helper means the next command
+that adopts `InputSelection` inherits `--iteration` for free rather than
+re-implementing (or forgetting) the exactly-one-match error contract.
+
+**Alternatives rejected:** plumbing the schema into `resolve_inputs`
+(signature churn across ~20 test call sites for no behavioral gain) and
+keeping NUL output inside `RawOutput` with an exemption carved into
+`sanitize_control_chars` (would let NUL through every text-mode consumer,
+including `read` of files whose bodies contain NULs).

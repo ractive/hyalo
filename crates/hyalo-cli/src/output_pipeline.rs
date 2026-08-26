@@ -289,6 +289,38 @@ impl OutputPipeline<'_> {
                 }
                 0
             }
+            Ok(CommandOutcome::RawBytes(bytes)) => {
+                if self.count {
+                    eprintln!(
+                        "{}",
+                        crate::output::format_error(
+                            self.error_format,
+                            count_unsupported_error(),
+                            None,
+                            None,
+                            None,
+                        )
+                    );
+                    return 1;
+                }
+                // iter-238: verbatim byte output for `find --filenames0`. No
+                // sanitization and no added newline — the NUL delimiters ARE the
+                // payload, so the projection must reach `xargs -0` byte-exact.
+                if let Err(e) = std::io::Write::write_all(&mut std::io::stdout(), &bytes) {
+                    eprintln!(
+                        "{}",
+                        crate::output::format_error(
+                            self.error_format,
+                            &format!("failed to write stdout: {e}"),
+                            None,
+                            None,
+                            None,
+                        )
+                    );
+                    return 1;
+                }
+                0
+            }
             Ok(CommandOutcome::UserError(output)) => {
                 // UserError strings are always formatted as JSON internally (effective_format=Json).
                 // When the user requested text format, re-format the error as human-readable text.
