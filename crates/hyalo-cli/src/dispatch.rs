@@ -814,7 +814,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             properties,
             tag,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             where_properties,
@@ -822,39 +822,23 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             dry_run,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            remove_commands::remove(
-                dir,
-                &properties,
-                &tag,
-                &file,
-                &glob,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::remove::run`.
+            remove_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                tag,
+                file,
+                glob,
+                where_properties,
+                where_tags,
                 dry_run,
             )
         }
         Commands::Append {
             file_positional,
             properties,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             where_properties,
@@ -863,35 +847,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             validate,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            let do_validate = validate || ctx.validate_on_write;
-            append_commands::append(
-                dir,
-                &properties,
-                &file,
-                &glob,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::append::run`.
+            append_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                file,
+                glob,
+                where_properties,
+                where_tags,
                 dry_run,
-                do_validate,
-                if do_validate { Some(ctx.schema) } else { None },
+                validate,
             )
         }
         Commands::Backlinks {
