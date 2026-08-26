@@ -214,6 +214,7 @@ fn toml_value_to_edit_item(value: &toml::Value) -> Result<toml_edit::Item> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -333,6 +334,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// The `hyalo views` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: Option<ViewsAction>,
@@ -347,7 +349,7 @@ pub(crate) fn run(
     use hyalo_core::filter;
     use hyalo_core::index::ScanOptions;
 
-{
+    {
         let action = action.unwrap_or(ViewsAction::List);
         match action {
             ViewsAction::List => {
@@ -368,12 +370,7 @@ pub(crate) fn run(
                     )));
                 }
                 filters.pattern = pattern;
-                crate::commands::views::set_view(
-                    ctx.config_dir,
-                    &name,
-                    &filters,
-                    effective_format,
-                )
+                crate::commands::views::set_view(ctx.config_dir, &name, &filters, effective_format)
             }
             ViewsAction::Remove { name } => {
                 crate::commands::views::remove_view(ctx.config_dir, &name, effective_format)
@@ -608,11 +605,7 @@ pub(crate) fn run(
                             &parsed_fields,
                             sort_field.as_ref(),
                             reverse,
-                            resolve_limit(
-                                limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
+                            resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
                             broken_links,
                             orphan,
                             dead_end,
@@ -647,4 +640,3 @@ pub(crate) fn run(
         }
     }
 }
-

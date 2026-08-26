@@ -965,6 +965,7 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::schema::{PropertyConstraint, TypeSchema};
@@ -1320,13 +1321,13 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// The `hyalo types` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: Option<crate::cli::args::TypesAction>,
 ) -> Result<CommandOutcome> {
     let effective_format = ctx.effective_format;
     use crate::cli::args::TypesAction;
-
 
     let action = action.unwrap_or(TypesAction::List);
     match action {
@@ -1336,11 +1337,9 @@ pub(crate) fn run(
             ctx.schema,
             effective_format,
         )),
-        TypesAction::Remove { type_name } => crate::commands::types::remove_type(
-            ctx.config_dir,
-            &type_name,
-            effective_format,
-        ),
+        TypesAction::Remove { type_name } => {
+            crate::commands::types::remove_type(ctx.config_dir, &type_name, effective_format)
+        }
         TypesAction::Set {
             type_name,
             required,

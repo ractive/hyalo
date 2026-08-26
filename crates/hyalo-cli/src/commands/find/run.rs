@@ -13,13 +13,14 @@ use crate::dispatch::{
 };
 use crate::output::CommandOutcome;
 
-use super::{find, needs_body, project_filenames0, project_filenames_only};
+use super::{find, needs_body, project_filenames_only, project_filenames0};
 
 /// Handler for `Commands::Find`.
 ///
 /// `pattern` and `filters` are moved straight out of the clap enum; `view`
 /// and `index_flags` were consumed earlier in `run.rs`/dispatch (view merge,
 /// `--index` snapshot loading), so they never reach here.
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut CommandContext<'_>,
     pattern: Option<String>,
@@ -168,7 +169,7 @@ pub(crate) fn run(
         Err(e) => {
             return Ok(CommandOutcome::UserError(crate::output::format_error(
                 effective_format,
-                &e.to_string(),
+                &e,
                 None,
                 None,
                 None,
@@ -219,28 +220,32 @@ pub(crate) fn run(
         .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
         .collect();
 
-    let sort_needs_backlinks =
-        matches!(sort_field.as_ref(), Some(hyalo_core::filter::SortField::BacklinksCount));
-    let sort_needs_links =
-        matches!(sort_field.as_ref(), Some(hyalo_core::filter::SortField::LinksCount));
-    let sort_needs_title =
-        matches!(sort_field.as_ref(), Some(hyalo_core::filter::SortField::Title));
+    let sort_needs_backlinks = matches!(
+        sort_field.as_ref(),
+        Some(hyalo_core::filter::SortField::BacklinksCount)
+    );
+    let sort_needs_links = matches!(
+        sort_field.as_ref(),
+        Some(hyalo_core::filter::SortField::LinksCount)
+    );
+    let sort_needs_title = matches!(
+        sort_field.as_ref(),
+        Some(hyalo_core::filter::SortField::Title)
+    );
     let has_task_filter = task_filter.is_some();
     let has_section_filter = !section_filters.is_empty();
     let has_title_filter = title.is_some();
     // BM25 pattern search requires reading file bodies for each candidate.
     let has_bm25_search = pattern.is_some();
-    let needs_body =
-        needs_body(&parsed_fields, has_task_filter, has_section_filter)
-            || sort_needs_links
-            || sort_needs_title
-            || broken_links
-            || orphan
-            || dead_end
-            || has_title_filter
-            || has_bm25_search;
-    let needs_full_vault =
-        parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
+    let needs_body = needs_body(&parsed_fields, has_task_filter, has_section_filter)
+        || sort_needs_links
+        || sort_needs_title
+        || broken_links
+        || orphan
+        || dead_end
+        || has_title_filter
+        || has_bm25_search;
+    let needs_full_vault = parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
     // The link graph is only built when scan_body is true, so
     // backlinks / backlink-sort always require body scanning.
     let scan_body = needs_body || needs_full_vault;

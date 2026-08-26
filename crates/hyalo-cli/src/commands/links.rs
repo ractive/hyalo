@@ -1062,6 +1062,7 @@ pub fn links_auto(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::{
         AutoFilters, COMMON_TITLE_NOTE_MAX_LISTED, common_title_note, frequent_title_threshold,
@@ -1710,6 +1711,7 @@ mod tests {
 
 /// The `hyalo links` dispatch arm, extracted verbatim from `dispatch.rs`.
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: Option<LinksAction>,
@@ -1724,138 +1726,138 @@ pub(crate) fn run(
     use crate::dispatch::{maybe_case_index, patch_index_for_modified_files};
     use hyalo_core::index::ScanOptions;
 
-match action.unwrap_or(LinksAction::Fix {
-    dry_run: true,
-    apply: false,
-    threshold: 0.8,
-    apply_fuzzy: false,
-    min_confidence: None,
-    glob: vec![],
-    ignore_target: vec![],
-    expand_short_form: false,
-    index_flags: IndexFlags::default(),
+    match action.unwrap_or(LinksAction::Fix {
+        dry_run: true,
+        apply: false,
+        threshold: 0.8,
+        apply_fuzzy: false,
+        min_confidence: None,
+        glob: vec![],
+        ignore_target: vec![],
+        expand_short_form: false,
+        index_flags: IndexFlags::default(),
     }) {
-    LinksAction::Fix {
-        dry_run: _,
-        apply,
-        threshold,
-        apply_fuzzy,
-        min_confidence,
-        glob,
-        ignore_target,
-        expand_short_form,
-        index_flags: _, // consumed in run.rs before dispatch
-    } => {
-        // Scope the immutable borrow of snapshot_index (via resolve_index)
-        // so we can borrow it mutably for index updates afterwards.
-        let (outcome, modified_files, had_failures) = match resolve_index(
-            snapshot_index.as_ref(),
-            dir,
-            &[],
-            &[],
-            effective_format,
-            site_prefix,
-            true,
-            &ScanOptions {
-                scan_body: true,
-                bm25_tokenize: false,
-                default_language: None,
-                frontmatter_link_props: ctx.frontmatter_link_props,
-            },
-        )? {
-            IndexResolution::Resolved(resolved) => {
-                // `links fix` is entirely about link resolution.
-                let ci = maybe_case_index(
-                    ctx.case_insensitive_mode,
-                    dir,
-                    true,
-                    resolved.as_snapshot(),
-                );
-                links_fix(
+        LinksAction::Fix {
+            dry_run: _,
+            apply,
+            threshold,
+            apply_fuzzy,
+            min_confidence,
+            glob,
+            ignore_target,
+            expand_short_form,
+            index_flags: _, // consumed in run.rs before dispatch
+        } => {
+            // Scope the immutable borrow of snapshot_index (via resolve_index)
+            // so we can borrow it mutably for index updates afterwards.
+            let (outcome, modified_files, had_failures) = match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                &[],
+                effective_format,
+                site_prefix,
+                true,
+                &ScanOptions {
+                    scan_body: true,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
+                },
+            )? {
+                IndexResolution::Resolved(resolved) => {
+                    // `links fix` is entirely about link resolution.
+                    let ci = maybe_case_index(
+                        ctx.case_insensitive_mode,
+                        dir,
+                        true,
+                        resolved.as_snapshot(),
+                    );
+                    links_fix(
+                        resolved.as_index(),
+                        dir,
+                        site_prefix,
+                        &glob,
+                        !apply,
+                        threshold,
+                        &ignore_target,
+                        effective_format,
+                        ci.as_ref(),
+                        expand_short_form,
+                        FuzzyApply {
+                            apply_fuzzy,
+                            min_confidence,
+                            config_min_confidence: ctx.config_fuzzy_min_confidence,
+                        },
+                    )?
+                }
+                IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
+            };
+            // L-11: a mid-batch write failure yields a non-zero exit code
+            // even though the envelope is emitted in full.
+            if had_failures {
+                ctx.exit_code_override = Some(1);
+            }
+            // resolved is dropped — safe to borrow snapshot_index mutably.
+            patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+            Ok(outcome)
+        }
+        LinksAction::Auto {
+            dry_run: _,
+            apply,
+            min_length,
+            exclude_title,
+            first_only,
+            no_first_only,
+            exclude_target_glob,
+            no_warn_common_titles,
+            file,
+            glob,
+            index_flags: _, // consumed in run.rs before dispatch
+        } => {
+            let (outcome, modified_files, had_failures) = match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                &[],
+                effective_format,
+                site_prefix,
+                true,
+                &ScanOptions {
+                    scan_body: false,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
+                },
+            )? {
+                IndexResolution::Resolved(resolved) => links_auto(
                     resolved.as_index(),
                     dir,
-                    site_prefix,
-                    &glob,
-                    !apply,
-                    threshold,
-                    &ignore_target,
-                    effective_format,
-                    ci.as_ref(),
-                    expand_short_form,
-                    FuzzyApply {
-                        apply_fuzzy,
-                        min_confidence,
-                        config_min_confidence: ctx.config_fuzzy_min_confidence,
+                    apply,
+                    &AutoFilters {
+                        min_length,
+                        cli_exclude_titles: &exclude_title,
+                        cli_exclude_target_globs: &exclude_target_glob,
+                        cli_first_only: first_only,
+                        cli_no_first_only: no_first_only,
+                        config_exclude_titles: ctx.auto_link_exclude_titles,
+                        config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
+                        config_first_only: ctx.auto_link_first_only,
+                        cli_no_warn_common_titles: no_warn_common_titles,
+                        config_warn_common_titles: ctx.auto_link_warn_common_titles,
                     },
-                )?
+                    file.as_deref(),
+                    &glob,
+                    effective_format,
+                )?,
+                IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
+            };
+            // L-11: partial write failure ⇒ non-zero exit code.
+            if had_failures {
+                ctx.exit_code_override = Some(1);
             }
-            IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
-        };
-        // L-11: a mid-batch write failure yields a non-zero exit code
-        // even though the envelope is emitted in full.
-        if had_failures {
-            ctx.exit_code_override = Some(1);
+            patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+            Ok(outcome)
         }
-        // resolved is dropped — safe to borrow snapshot_index mutably.
-        patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
-        Ok(outcome)
-    }
-    LinksAction::Auto {
-        dry_run: _,
-        apply,
-        min_length,
-        exclude_title,
-        first_only,
-        no_first_only,
-        exclude_target_glob,
-        no_warn_common_titles,
-        file,
-        glob,
-        index_flags: _, // consumed in run.rs before dispatch
-    } => {
-        let (outcome, modified_files, had_failures) = match resolve_index(
-            snapshot_index.as_ref(),
-            dir,
-            &[],
-            &[],
-            effective_format,
-            site_prefix,
-            true,
-            &ScanOptions {
-                scan_body: false,
-                bm25_tokenize: false,
-                default_language: None,
-                frontmatter_link_props: ctx.frontmatter_link_props,
-            },
-        )? {
-            IndexResolution::Resolved(resolved) => links_auto(
-                resolved.as_index(),
-                dir,
-                apply,
-                &AutoFilters {
-                    min_length,
-                    cli_exclude_titles: &exclude_title,
-                    cli_exclude_target_globs: &exclude_target_glob,
-                    cli_first_only: first_only,
-                    cli_no_first_only: no_first_only,
-                    config_exclude_titles: ctx.auto_link_exclude_titles,
-                    config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
-                    config_first_only: ctx.auto_link_first_only,
-                    cli_no_warn_common_titles: no_warn_common_titles,
-                    config_warn_common_titles: ctx.auto_link_warn_common_titles,
-                },
-                file.as_deref(),
-                &glob,
-                effective_format,
-            )?,
-            IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
-        };
-        // L-11: partial write failure ⇒ non-zero exit code.
-        if had_failures {
-            ctx.exit_code_override = Some(1);
-        }
-        patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
-        Ok(outcome)
-    }
     }
 }

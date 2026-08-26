@@ -25,11 +25,11 @@ use hyalo_core::filename_template::FilenameTemplate;
 use hyalo_core::frontmatter::{
     check_mtime, read_frontmatter, read_mtime, write_frontmatter, write_frontmatter_within,
 };
+use hyalo_core::is_iso8601_date;
 use hyalo_core::scanner;
 use hyalo_core::schema::{
     self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
 };
-use hyalo_core::is_iso8601_date;
 
 use crate::commands::section_scanner::SectionScanner;
 use crate::commands::terse_root_cause;
@@ -3361,6 +3361,7 @@ fn has_completed_in_type(props: &std::collections::HashMap<String, PropertyConst
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
@@ -4665,10 +4666,14 @@ type = \"skill\"
 /// `profile`, `files_from` and `index_flags` were consumed earlier in
 /// `run.rs`/dispatch (profile overlay into `ctx.lint_profiles`, snapshot
 /// loading), so they never reach here.
-use crate::dispatch::{CommandContext, adapt_view_result_to_ext, inject_ext_file_result, maybe_case_index};
-    use hyalo_core::mode_enabled;
+use crate::dispatch::{
+    CommandContext, adapt_view_result_to_ext, inject_ext_file_result, maybe_case_index,
+};
+use hyalo_core::mode_enabled;
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::fn_params_excessive_bools)] // moved verbatim from the dispatch arm
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut CommandContext<'_>,
     file_positional: Vec<String>,
@@ -4695,7 +4700,7 @@ pub(crate) fn run(
     let skills_profile_active = profile_active("skills");
     let changelog_profile_active = profile_active("changelog");
 
-{
+    {
         // --strict flag wins over config value; config value is the fallback.
         let effective_strict = lint_strict_flag || ctx.lint_strict;
         // Resolve --type to a glob pattern from its filename_template.
@@ -4844,9 +4849,7 @@ pub(crate) fn run(
                         builder.add(g);
                     }
                     Err(e) => {
-                        crate::warn::warn(format!(
-                            "invalid [lint] ignore pattern {pat:?}: {e}"
-                        ));
+                        crate::warn::warn(format!("invalid [lint] ignore pattern {pat:?}: {e}"));
                         build_failed = true;
                     }
                 }
@@ -5069,10 +5072,8 @@ pub(crate) fn run(
         // silently disabled). Merged into one `.hyalo.toml` pseudo-file
         // result so both kinds of config-level problem show up together
         // rather than as two separate file entries.
-        let mut config_result: Option<self::FileLintResult> =
-            self::validate_views(ctx.config_dir);
-        if let Some(schema_result) =
-            self::validate_schema_config(ctx.config_dir, effective_strict)
+        let mut config_result: Option<self::FileLintResult> = self::validate_views(ctx.config_dir);
+        if let Some(schema_result) = self::validate_schema_config(ctx.config_dir, effective_strict)
         {
             match &mut config_result {
                 Some(existing) => existing.violations.extend(schema_result.violations),

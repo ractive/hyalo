@@ -781,6 +781,7 @@ fn insert_entry(cl: &mut Changelog, unreleased_idx: usize, category: &str, entry
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -1393,82 +1394,83 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// The `hyalo changelog` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: crate::cli::args::ChangelogAction,
 ) -> Result<CommandOutcome> {
     let effective_format = ctx.effective_format;
 
-match action {
-    crate::cli::args::ChangelogAction::Release {
-        version,
-        date,
-        apply,
-        dry_run: _,
-    } => {
-        let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-            ctx.dir,
-            ctx.config_dir,
-            ctx.changelog_path,
-            effective_format,
-        ) {
-            crate::commands::changelog::ChangelogTarget::Path(p) => p,
-            crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-        };
-        let boundary_root = crate::commands::changelog::changelog_boundary_root(
-            ctx.dir,
-            ctx.config_dir,
-            ctx.changelog_path,
-        );
-        let (outcome, exit_override) = crate::commands::changelog::run_release(
-            &changelog_file,
-            &boundary_root,
-            &version,
-            date.as_deref(),
+    match action {
+        crate::cli::args::ChangelogAction::Release {
+            version,
+            date,
             apply,
-            &ctx.lint_profiles,
-            effective_format,
-        )?;
-        if let Some(code) = exit_override {
-            ctx.exit_code_override = Some(code);
+            dry_run: _,
+        } => {
+            let changelog_file = match crate::commands::changelog::resolve_changelog_target(
+                ctx.dir,
+                ctx.config_dir,
+                ctx.changelog_path,
+                effective_format,
+            ) {
+                crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+            };
+            let boundary_root = crate::commands::changelog::changelog_boundary_root(
+                ctx.dir,
+                ctx.config_dir,
+                ctx.changelog_path,
+            );
+            let (outcome, exit_override) = crate::commands::changelog::run_release(
+                &changelog_file,
+                &boundary_root,
+                &version,
+                date.as_deref(),
+                apply,
+                &ctx.lint_profiles,
+                effective_format,
+            )?;
+            if let Some(code) = exit_override {
+                ctx.exit_code_override = Some(code);
+            }
+            Ok(outcome)
         }
-        Ok(outcome)
-    }
-    crate::cli::args::ChangelogAction::Add {
-        category,
-        message,
-        wrap,
-        apply,
-        dry_run: _,
-    } => {
-        let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-            ctx.dir,
-            ctx.config_dir,
-            ctx.changelog_path,
-            effective_format,
-        ) {
-            crate::commands::changelog::ChangelogTarget::Path(p) => p,
-            crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-        };
-        let boundary_root = crate::commands::changelog::changelog_boundary_root(
-            ctx.dir,
-            ctx.config_dir,
-            ctx.changelog_path,
-        );
-        let (outcome, exit_override) = crate::commands::changelog::run_add(
-            &changelog_file,
-            &boundary_root,
-            &category,
-            &message,
+        crate::cli::args::ChangelogAction::Add {
+            category,
+            message,
             wrap,
             apply,
-            &ctx.lint_profiles,
-            effective_format,
-        )?;
-        if let Some(code) = exit_override {
-            ctx.exit_code_override = Some(code);
+            dry_run: _,
+        } => {
+            let changelog_file = match crate::commands::changelog::resolve_changelog_target(
+                ctx.dir,
+                ctx.config_dir,
+                ctx.changelog_path,
+                effective_format,
+            ) {
+                crate::commands::changelog::ChangelogTarget::Path(p) => p,
+                crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
+            };
+            let boundary_root = crate::commands::changelog::changelog_boundary_root(
+                ctx.dir,
+                ctx.config_dir,
+                ctx.changelog_path,
+            );
+            let (outcome, exit_override) = crate::commands::changelog::run_add(
+                &changelog_file,
+                &boundary_root,
+                &category,
+                &message,
+                wrap,
+                apply,
+                &ctx.lint_profiles,
+                effective_format,
+            )?;
+            if let Some(code) = exit_override {
+                ctx.exit_code_override = Some(code);
+            }
+            Ok(outcome)
         }
-        Ok(outcome)
-    }
     }
 }

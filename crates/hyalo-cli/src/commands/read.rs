@@ -437,6 +437,7 @@ pub fn run(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -797,6 +798,8 @@ mod tests {
 
 /// The `hyalo read` dispatch arm, extracted verbatim from `dispatch.rs`.
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run_command(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     selection: crate::cli::inputs::InputSelection,
@@ -809,44 +812,43 @@ pub(crate) fn run_command(
     let snapshot_index = &mut *ctx.snapshot_index;
     use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 
-
-        // iter-238: `--iteration <ID>` on single-file commands resolves to
-        // exactly one file before the generic input resolution runs.
-        let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-            &selection,
-            dir,
-            ctx.schema,
-            effective_format,
-        ) {
-            Ok(s) => s,
-            Err(outcome) => return Ok(outcome),
-        };
-        match resolve_inputs(
-            &selection,
-            dir,
-            ctx.configured_dir_str,
-            snapshot_index.as_ref(),
-            &ResolutionPolicy::Single { allow_glob: false },
-            effective_format,
-            false,
-        )? {
-            ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-            ResolvedInputsOrOutcome::Resolved(r) => {
-                ctx.files_from_counters = r.counters;
-                let (_full, file) = r
-                    .files
-                    .into_iter()
-                    .next()
-                    .context("Single resolution returned no files")?;
-                run(
-                    dir,
-                    &file,
-                    section.as_deref(),
-                    lines.as_deref(),
-                    frontmatter,
-                    effective_format,
-                    ctx.user_format,
-                )
-            }
+    // iter-238: `--iteration <ID>` on single-file commands resolves to
+    // exactly one file before the generic input resolution runs.
+    let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+        &selection,
+        dir,
+        ctx.schema,
+        effective_format,
+    ) {
+        Ok(s) => s,
+        Err(outcome) => return Ok(outcome),
+    };
+    match resolve_inputs(
+        &selection,
+        dir,
+        ctx.configured_dir_str,
+        snapshot_index.as_ref(),
+        &ResolutionPolicy::Single { allow_glob: false },
+        effective_format,
+        false,
+    )? {
+        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+        ResolvedInputsOrOutcome::Resolved(r) => {
+            ctx.files_from_counters = r.counters;
+            let (_full, file) = r
+                .files
+                .into_iter()
+                .next()
+                .context("Single resolution returned no files")?;
+            run(
+                dir,
+                &file,
+                section.as_deref(),
+                lines.as_deref(),
+                frontmatter,
+                effective_format,
+                ctx.user_format,
+            )
         }
+    }
 }

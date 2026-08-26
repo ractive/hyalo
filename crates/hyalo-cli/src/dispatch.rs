@@ -2,25 +2,21 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cli::args::{
-    Commands,
-};
+use crate::cli::args::Commands;
 use crate::commands::{
-    append as append_commands, backlinks as backlinks_commands,
-    changelog as changelog_commands,
+    append as append_commands, backlinks as backlinks_commands, changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
-    madr as madr_commands, okf as okf_commands,
-    lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
-    types as types_commands,
-    remove as remove_commands, set as set_commands, summary as summary_commands,
-    tags as tag_commands, tasks as task_commands, views as views_commands,
+    lint_rules as lint_rules_commands, madr as madr_commands, mv as mv_commands,
+    okf as okf_commands, properties, read as read_commands, remove as remove_commands,
+    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    types as types_commands, views as views_commands,
 };
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 use hyalo_core::filter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
+use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 
 /// Default output limit for list commands when no `--limit` is passed and no
 /// `default_limit` is set in `.hyalo.toml`.
@@ -780,7 +776,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // `commands::changelog::run`.
             changelog_commands::run(ctx, action)
         }
-// Config is dispatched as an early-return in run.rs before dispatch() is called.
+        // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config { .. } => unreachable!("Config command is handled before dispatch"),
     }
 }

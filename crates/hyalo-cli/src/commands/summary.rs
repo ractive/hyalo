@@ -471,6 +471,7 @@ fn truncate_to_depth(dir: &str, max_depth: usize) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::index::{ScanOptions, ScannedIndex};
@@ -1272,6 +1273,8 @@ Body.
 
 /// The `hyalo summary` dispatch arm, extracted verbatim from `dispatch.rs`.
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     glob: Vec<String>,
@@ -1286,39 +1289,38 @@ pub(crate) fn run(
     use crate::dispatch::maybe_case_index;
     use hyalo_core::index::ScanOptions;
 
-match resolve_index(
-    snapshot_index.as_ref(),
-    dir,
-    &[],
-    &glob,
-    effective_format,
-    site_prefix,
-    true,
-    &ScanOptions {
-        scan_body: true,
-        bm25_tokenize: false,
-        default_language: None,
-        frontmatter_link_props: ctx.frontmatter_link_props,
-    },
+    match resolve_index(
+        snapshot_index.as_ref(),
+        dir,
+        &[],
+        &glob,
+        effective_format,
+        site_prefix,
+        true,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: ctx.frontmatter_link_props,
+        },
     )? {
-    IndexResolution::Resolved(resolved) => {
-        // Summary always reports orphan/dead-end counts which rely on
-        // wikilink resolution, so the stem map is always needed.
-        let ci =
-            maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
-        summary(
-            dir,
-            resolved.as_index(),
-            &glob,
-            recent,
-            depth,
-            site_prefix,
-            effective_format,
-            ctx.schema,
-            ctx.lint_ignore,
-            ci.as_ref(),
-        )
-    }
-    IndexResolution::Outcome(outcome) => Ok(outcome),
+        IndexResolution::Resolved(resolved) => {
+            // Summary always reports orphan/dead-end counts which rely on
+            // wikilink resolution, so the stem map is always needed.
+            let ci = maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
+            summary(
+                dir,
+                resolved.as_index(),
+                &glob,
+                recent,
+                depth,
+                site_prefix,
+                effective_format,
+                ctx.schema,
+                ctx.lint_ignore,
+                ci.as_ref(),
+            )
+        }
+        IndexResolution::Outcome(outcome) => Ok(outcome),
     }
 }

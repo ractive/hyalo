@@ -114,6 +114,8 @@ pub fn backlinks(
 
 /// The `hyalo backlinks` dispatch arm, extracted verbatim from `dispatch.rs`.
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     selection: crate::cli::inputs::InputSelection,
@@ -126,9 +128,8 @@ pub(crate) fn run(
     use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
     use crate::commands::{IndexResolution, resolve_index};
     use crate::dispatch::resolve_limit;
-    use hyalo_core::mode_enabled;
     use hyalo_core::index::ScanOptions;
-
+    use hyalo_core::mode_enabled;
 
     // iter-238: `--iteration <ID>` support (single-file command).
     let selection = match crate::commands::iteration::selection_with_iteration_resolved(
@@ -177,11 +178,7 @@ pub(crate) fn run(
                     &file,
                     dir,
                     effective_format,
-                    resolve_limit(
-                        cli_limit,
-                        ctx.config_default_limit,
-                        ctx.programmatic_output,
-                    ),
+                    resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
                     mode_enabled(ctx.case_insensitive_mode, dir),
                 ),
                 IndexResolution::Outcome(outcome) => Ok(outcome),

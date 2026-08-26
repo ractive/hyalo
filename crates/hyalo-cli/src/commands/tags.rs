@@ -302,6 +302,7 @@ pub fn tags_rename(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::filter::tag_matches;
@@ -757,6 +758,7 @@ tags:
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
 use crate::cli::args::TagsAction;
 
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     bare_glob: Vec<String>,
@@ -774,88 +776,80 @@ pub(crate) fn run(
     use crate::dispatch::resolve_limit;
     use hyalo_core::index::ScanOptions;
 
-
-        // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
-        let action = action.unwrap_or(TagsAction::Summary {
-            glob: bare_glob,
-            limit: bare_limit,
-            index_flags: IndexFlags::default(),
-        });
-        match action {
-            TagsAction::Summary {
-                ref glob,
-                limit: cli_limit,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &[],
-                glob,
-                effective_format,
-                site_prefix,
-                false,
-                &ScanOptions {
-                    scan_body: false,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
-                    let filtered =
-                        find_commands::filter_index_entries(idx.entries(), &[], glob);
-                    match filtered {
-                        Err(e) => Err(e),
-                        Ok(filtered) => {
-                            let paths: Vec<String> =
-                                filtered.iter().map(|e| e.rel_path.clone()).collect();
-                            let file_filter = if glob.is_empty() {
-                                None
-                            } else {
-                                Some(paths.as_slice())
-                            };
-                            tags_summary(
-                                idx,
-                                file_filter,
-                                effective_format,
-                                resolve_limit(
-                                    cli_limit,
-                                    ctx.config_default_limit,
-                                    ctx.programmatic_output,
-                                ),
-                            )
-                        }
+    // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
+    let action = action.unwrap_or(TagsAction::Summary {
+        glob: bare_glob,
+        limit: bare_limit,
+        index_flags: IndexFlags::default(),
+    });
+    match action {
+        TagsAction::Summary {
+            ref glob,
+            limit: cli_limit,
+            index_flags: _, // consumed in run.rs before dispatch
+        } => match resolve_index(
+            snapshot_index.as_ref(),
+            dir,
+            &[],
+            glob,
+            effective_format,
+            site_prefix,
+            false,
+            &ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: ctx.frontmatter_link_props,
+            },
+        )? {
+            IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
+                let filtered = find_commands::filter_index_entries(idx.entries(), &[], glob);
+                match filtered {
+                    Err(e) => Err(e),
+                    Ok(filtered) => {
+                        let paths: Vec<String> =
+                            filtered.iter().map(|e| e.rel_path.clone()).collect();
+                        let file_filter = if glob.is_empty() {
+                            None
+                        } else {
+                            Some(paths.as_slice())
+                        };
+                        tags_summary(
+                            idx,
+                            file_filter,
+                            effective_format,
+                            resolve_limit(
+                                cli_limit,
+                                ctx.config_default_limit,
+                                ctx.programmatic_output,
+                            ),
+                        )
                     }
                 }
-                IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                    tags_summary(
-                        &build.index,
-                        None,
-                        effective_format,
-                        resolve_limit(
-                            cli_limit,
-                            ctx.config_default_limit,
-                            ctx.programmatic_output,
-                        ),
-                    )
-                }
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            },
-            TagsAction::Rename {
-                from,
-                to,
-                glob,
-                dry_run,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => tags_rename(
-                dir,
-                &from,
-                &to,
-                &glob,
-                dry_run,
+            }
+            IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => tags_summary(
+                &build.index,
+                None,
                 effective_format,
-                snapshot_index,
-                index_path,
+                resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
             ),
-        }
+            IndexResolution::Outcome(outcome) => Ok(outcome),
+        },
+        TagsAction::Rename {
+            from,
+            to,
+            glob,
+            dry_run,
+            index_flags: _, // consumed in run.rs before dispatch
+        } => tags_rename(
+            dir,
+            &from,
+            &to,
+            &glob,
+            dry_run,
+            effective_format,
+            snapshot_index,
+            index_path,
+        ),
+    }
 }

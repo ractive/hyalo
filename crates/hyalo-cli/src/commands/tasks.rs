@@ -3,8 +3,8 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 use crate::cli::args::TaskAction;
-use crate::commands::resolve_error_to_outcome;
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
+use crate::commands::resolve_error_to_outcome;
 use crate::commands::section_scanner::SectionScanner;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::heading::{SectionFilter, build_section_scope, parse_atx_heading};
@@ -450,6 +450,7 @@ fn patch_index(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use std::fs;
@@ -702,6 +703,7 @@ mod tests {
 /// The `hyalo task` dispatch arm, extracted verbatim from `dispatch.rs`.
 /// `index_flags` on each sub-action was consumed earlier in `run.rs`
 /// (snapshot loading) and never reaches here.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: TaskAction,
@@ -711,7 +713,7 @@ pub(crate) fn run(
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
-{
+    {
         match action {
             TaskAction::Read {
                 selection,
@@ -722,16 +724,15 @@ pub(crate) fn run(
             } => {
                 let configured_dir = ctx.configured_dir_str;
                 // iter-238: `--iteration <ID>` support (single-file command).
-                let selection =
-                    match crate::commands::iteration::selection_with_iteration_resolved(
-                        &selection,
-                        dir,
-                        ctx.schema,
-                        effective_format,
-                    ) {
-                        Ok(s) => s,
-                        Err(outcome) => return Ok(outcome),
-                    };
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
                 match resolve_inputs(
                     &selection,
                     dir,
@@ -785,16 +786,15 @@ pub(crate) fn run(
                 let configured_dir = ctx.configured_dir_str;
                 // iter-238: `--iteration <ID>` support — resolves to exactly
                 // one file, which then takes the single-file path below.
-                let selection =
-                    match crate::commands::iteration::selection_with_iteration_resolved(
-                        &selection,
-                        dir,
-                        ctx.schema,
-                        effective_format,
-                    ) {
-                        Ok(s) => s,
-                        Err(outcome) => return Ok(outcome),
-                    };
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
                 match resolve_inputs(
                     &selection,
                     dir,
@@ -842,9 +842,8 @@ pub(crate) fn run(
                                 )?;
                                 match outcome {
                                     CommandOutcome::Success { output, .. } => {
-                                        let val: serde_json::Value =
-                                            serde_json::from_str(&output)
-                                                .unwrap_or(serde_json::Value::Null);
+                                        let val: serde_json::Value = serde_json::from_str(&output)
+                                            .unwrap_or(serde_json::Value::Null);
                                         match val {
                                             serde_json::Value::Array(items) => {
                                                 flat.extend(items);
@@ -905,16 +904,15 @@ pub(crate) fn run(
                 let configured_dir = ctx.configured_dir_str;
                 // iter-238: `--iteration <ID>` support — resolves to exactly
                 // one file, which then takes the single-file path below.
-                let selection =
-                    match crate::commands::iteration::selection_with_iteration_resolved(
-                        &selection,
-                        dir,
-                        ctx.schema,
-                        effective_format,
-                    ) {
-                        Ok(s) => s,
-                        Err(outcome) => return Ok(outcome),
-                    };
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
                 match resolve_inputs(
                     &selection,
                     dir,
@@ -963,9 +961,8 @@ pub(crate) fn run(
                                 )?;
                                 match outcome {
                                     CommandOutcome::Success { output, .. } => {
-                                        let val: serde_json::Value =
-                                            serde_json::from_str(&output)
-                                                .unwrap_or(serde_json::Value::Null);
+                                        let val: serde_json::Value = serde_json::from_str(&output)
+                                            .unwrap_or(serde_json::Value::Null);
                                         match val {
                                             serde_json::Value::Array(items) => {
                                                 flat.extend(items);

@@ -1328,6 +1328,7 @@ pub fn now_timestamp_tz() -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -1797,6 +1798,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// The `hyalo okf` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     action: crate::cli::args::OkfAction,
@@ -1804,41 +1806,41 @@ pub(crate) fn run(
     let effective_format = ctx.effective_format;
     use hyalo_core::mode_enabled;
 
-match action {
-    crate::cli::args::OkfAction::Index {
-        scope,
-        apply,
-        dry_run: _,
-        replace,
-    } => {
-        let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
-        let (outcome, exit_override) = crate::commands::okf::run_index(
-            ctx.dir,
-            scope.as_deref(),
+    match action {
+        crate::cli::args::OkfAction::Index {
+            scope,
             apply,
+            dry_run: _,
             replace,
-            ctx.okf_ignore,
-            case_insensitive,
-            effective_format,
-        )?;
-        if let Some(code) = exit_override {
-            ctx.exit_code_override = Some(code);
+        } => {
+            let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
+            let (outcome, exit_override) = crate::commands::okf::run_index(
+                ctx.dir,
+                scope.as_deref(),
+                apply,
+                replace,
+                ctx.okf_ignore,
+                case_insensitive,
+                effective_format,
+            )?;
+            if let Some(code) = exit_override {
+                ctx.exit_code_override = Some(code);
+            }
+            Ok(outcome)
         }
-        Ok(outcome)
-    }
-    crate::cli::args::OkfAction::Log {
-        target,
-        message,
-        action: log_action,
-        apply,
-        dry_run: _,
-    } => crate::commands::okf::run_log(
-        ctx.dir,
-        target.as_deref(),
-        &message,
-        log_action.as_deref(),
-        apply,
-        effective_format,
-    ),
+        crate::cli::args::OkfAction::Log {
+            target,
+            message,
+            action: log_action,
+            apply,
+            dry_run: _,
+        } => crate::commands::okf::run_log(
+            ctx.dir,
+            target.as_deref(),
+            &message,
+            log_action.as_deref(),
+            apply,
+            effective_format,
+        ),
     }
 }

@@ -372,6 +372,7 @@ pub fn remove(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use std::fs;
@@ -1046,6 +1047,8 @@ tags:
 /// `files_from` and `index_flags` were consumed earlier in `run.rs`
 /// (snapshot loading) and never reach here.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
     file_positional: Vec<String>,
@@ -1063,33 +1066,32 @@ pub(crate) fn run(
     let index_path = ctx.index_path;
     use crate::dispatch::parse_where_filters;
 
-
-        if !file_positional.is_empty() {
-            file = file_positional;
+    if !file_positional.is_empty() {
+        file = file_positional;
+    }
+    let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                effective_format,
+                &e,
+                None,
+                None,
+                None,
+            )));
         }
-        let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-            Ok(f) => f,
-            Err(e) => {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &e,
-                    None,
-                    None,
-                    None,
-                )));
-            }
-        };
-        remove(
-            dir,
-            &properties,
-            &tag,
-            &file,
-            &glob,
-            &where_prop_filters,
-            &where_tags,
-            effective_format,
-            snapshot_index,
-            index_path,
-            dry_run,
-        )
+    };
+    remove(
+        dir,
+        &properties,
+        &tag,
+        &file,
+        &glob,
+        &where_prop_filters,
+        &where_tags,
+        effective_format,
+        snapshot_index,
+        index_path,
+        dry_run,
+    )
 }

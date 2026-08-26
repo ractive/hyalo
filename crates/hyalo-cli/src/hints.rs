@@ -2874,7 +2874,6 @@ mod tests {
         HintContext::new(source)
     }
 
-
     // -----------------------------------------------------------------------
     // HintBuilder (ARCH-4, iter-225)
     // -----------------------------------------------------------------------
@@ -2913,7 +2912,11 @@ mod tests {
             ("hyalo types list".to_owned(), vec![]),
             (
                 "hyalo lint".to_owned(),
-                vec!["--rule".to_owned(), "HYALO006".to_owned(), "--detailed".to_owned()],
+                vec![
+                    "--rule".to_owned(),
+                    "HYALO006".to_owned(),
+                    "--detailed".to_owned(),
+                ],
             ),
             (
                 "hyalo find".to_owned(),
@@ -2976,7 +2979,10 @@ mod tests {
                 "\"hyalo does not support dotted path syntax for nested properties — --property \\",
             ),
             // warn.rs messages name the program, they are not commands
-            ("warn.rs", "\"hyalo is configured with dir = \\\"{dir_display}\\\".\\n  \\"),
+            (
+                "warn.rs",
+                "\"hyalo is configured with dir = \\\"{dir_display}\\\".\\n  \\",
+            ),
         ];
         let mut offenders = Vec::new();
         let mut stack = vec![src_dir.clone()];
