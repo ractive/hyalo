@@ -785,7 +785,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file_positional,
             properties,
             tag,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             iteration,
@@ -795,138 +795,19 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             validate,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            let do_validate = validate || ctx.validate_on_write;
-            // iter-235: `--iteration <ID>` resolves the file to mutate from the
-            // type schema's filename_template, then must select exactly one
-            // file (set is a single-target mutation — ambiguous matches are an
-            // error, unlike find which returns all). Resolved here, before the
-            // generic `set` call, so set sees a normal file list and `--where-*`
-            // still filters within it.
-            let mut resolved_files: Option<Vec<String>> = None;
-            if let Some(id_str) = iteration {
-                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
-                    Ok(id) => {
-                        match crate::commands::iteration::resolve_iteration_globs(
-                            ctx.schema,
-                            &id,
-                            effective_format,
-                        ) {
-                            crate::commands::iteration::IterationGlobs::Globs(g) => {
-                                match crate::commands::collect_files(
-                                    dir,
-                                    &[],
-                                    &g,
-                                    effective_format,
-                                )? {
-                                    crate::commands::FilesOrOutcome::Files(pairs) => {
-                                        let paths: Vec<String> =
-                                            pairs.into_iter().map(|(_, rel)| rel).collect();
-                                        match paths.len() {
-                                            0 => {
-                                                return Ok(CommandOutcome::UserError(
-                                                    crate::output::format_error(
-                                                        effective_format,
-                                                        &format!(
-                                                            "no file found for iteration {id} \
-                                                             (resolved globs: {})",
-                                                            g.join(", ")
-                                                        ),
-                                                        Some(&id_str),
-                                                        Some(
-                                                            "check the iteration number, or list candidates with `hyalo find --iteration <ID>`",
-                                                        ),
-                                                        None,
-                                                    ),
-                                                ));
-                                            }
-                                            1 => {
-                                                resolved_files = Some(paths);
-                                            }
-                                            _ => {
-                                                let mut listed = paths.clone();
-                                                listed.sort();
-                                                return Ok(CommandOutcome::UserError(
-                                                    crate::output::format_error(
-                                                        effective_format,
-                                                        &format!(
-                                                            "iteration {id} matches multiple files — \
-                                                             pass a letter suffix to disambiguate, \
-                                                             or use --file/--glob to target one directly"
-                                                        ),
-                                                        Some(&id_str),
-                                                        Some(&format!(
-                                                            "candidates:\n{}",
-                                                            listed
-                                                                .iter()
-                                                                .map(|p| format!("  - {p}"))
-                                                                .collect::<Vec<_>>()
-                                                                .join("\n")
-                                                        )),
-                                                        None,
-                                                    ),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
-                                }
-                            }
-                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
-                                return Ok(o);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            Some(&id_str),
-                            Some(
-                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
-                            ),
-                            None,
-                        )));
-                    }
-                }
-            }
-            let (set_files, set_globs): (&[String], &[String]) = match resolved_files {
-                Some(ref paths) => (paths.as_slice(), &[]),
-                None => (&file, &glob),
-            };
-            set_commands::set(
-                dir,
-                &properties,
-                &tag,
-                set_files,
-                set_globs,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::set::run`.
+            set_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                tag,
+                file,
+                glob,
+                iteration,
+                where_properties,
+                where_tags,
                 dry_run,
-                do_validate,
-                // Always pass the schema: `do_validate` still gates the blocking
-                // pre-validation pass, but the (non-blocking) enum/pattern
-                // advisory note needs the schema even without --validate
-                // (iter-181 task 1).
-                Some(ctx.schema),
-                ctx.case_insensitive_mode,
+                validate,
             )
         }
         Commands::Remove {
