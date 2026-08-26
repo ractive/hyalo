@@ -98,5 +98,7 @@ Deferred by that iteration's non-goals ("any further `results` shape renames"):
 p i` installation and, for AC-2/DEC-101, at least one real update cycle,
   neither of which exists yet. The conditional items remain not-triggered
   (no drift confusion or model friction observed while dogfooding 238).
+  **Filed for follow-up in [[iterations/iteration-239-pi-install-verification]]**
+  (created by the iter-238 review pass).
 - `--iteration` on `links` (no consumer friction observed yet)
 - npm registry publishing of pi-package (git source sufficient until asked)
