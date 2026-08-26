@@ -52,7 +52,7 @@ size** (the per-broken-link fuzzy pass), not corpus size. Target that,
 and treat the no-prefix MDN run as the stress case. The snapshot index
 buys only ~36% on `links` because bodies are still read.
 
-## Tasks
+## Tasks [5/5]
 
 - [x] Reproduce: run `hyalo links fix` (dry-run) and `hyalo links auto`
       (dry-run) against a GitHub Docs scratch copy of comparable size to
@@ -77,7 +77,7 @@ buys only ~36% on `links` because bodies are still read.
       benchmark threshold (if the project has one for `links`) or a
       dogfood note to re-check next release.
 
-## Acceptance criteria
+## Acceptance criteria [4/4]
 
 - [x] `links fix` and `links auto` dry-run timings on the GitHub Docs
       scratch copy are measured and recorded in this file, separately
