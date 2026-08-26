@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::cli::args::FindFilters;
+use crate::cli::args::{FindFilters, ViewsAction};
 use crate::output::{CommandOutcome, Format, format_error};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
@@ -327,3 +327,324 @@ mod tests {
         assert!(result.contains("[views.iter]"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo views` dispatch arm, extracted verbatim from `dispatch.rs`.
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: Option<ViewsAction>,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let site_prefix = ctx.site_prefix;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    use crate::commands::{IndexResolution, resolve_index};
+    use crate::dispatch::{maybe_case_index, resolve_limit};
+    use hyalo_core::bm25::parse_language;
+    use hyalo_core::filter;
+    use hyalo_core::index::ScanOptions;
+
+{
+        let action = action.unwrap_or(ViewsAction::List);
+        match action {
+            ViewsAction::List => {
+                crate::commands::views::list_views(ctx.config_dir, effective_format)
+            }
+            ViewsAction::Set {
+                name,
+                pattern,
+                mut filters,
+            } => {
+                if pattern.is_some() && filters.regexp.is_some() {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        "PATTERN and --regexp are mutually exclusive",
+                        None,
+                        None,
+                        None,
+                    )));
+                }
+                filters.pattern = pattern;
+                crate::commands::views::set_view(
+                    ctx.config_dir,
+                    &name,
+                    &filters,
+                    effective_format,
+                )
+            }
+            ViewsAction::Remove { name } => {
+                crate::commands::views::remove_view(ctx.config_dir, &name, effective_format)
+            }
+            ViewsAction::Run {
+                name,
+                pattern: cli_pattern,
+                mut filters,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => {
+                // A positional PATTERN is part of the *overlay*, so it
+                // overrides the view's saved pattern exactly as a
+                // `--tag` typed alongside `find --view` overrides
+                // nothing and extends instead (iter-213, BUG-14): the
+                // help promised `views run <view> <pattern>` was the
+                // same query as `find <pattern> --view <view>`, and
+                // until now the positional was rejected outright.
+                filters.pattern = cli_pattern;
+                // Load the named view and merge the CLI overlay on top.
+                let views = crate::commands::views::load_views(ctx.config_dir);
+                match views.get(&name) {
+                    Some(base) => {
+                        let overlay = std::mem::take(&mut filters);
+                        filters = base.clone();
+                        filters.merge_from(&overlay);
+                    }
+                    None => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &format!("unknown view '{name}'"),
+                            None,
+                            Some("run 'hyalo views list' to see available views"),
+                            None,
+                        )));
+                    }
+                }
+                // Propagate the view's saved pattern to the BM25 search.
+                let pattern = filters.pattern.clone();
+                let FindFilters {
+                    regexp,
+                    properties,
+                    tag,
+                    task,
+                    sections,
+                    file,
+                    glob,
+                    fields,
+                    sort,
+                    reverse,
+                    limit,
+                    broken_links,
+                    strict,
+                    orphan,
+                    dead_end,
+                    title,
+                    language,
+                    ..
+                } = filters;
+                if orphan && dead_end {
+                    crate::warn::warn(
+                        "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
+                    );
+                }
+                for t in &tag {
+                    if let Err(msg) = crate::commands::tags::validate_tag(t) {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &msg,
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                }
+                if let Some(ref lang) = language
+                    && let Err(e) = parse_language(lang)
+                {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &format!("invalid --language value {lang:?}: {e}"),
+                        None,
+                        None,
+                        None,
+                    )));
+                }
+                if let Some(cfg_lang) = ctx.config_language
+                    && let Err(e) = parse_language(cfg_lang)
+                {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
+                        None,
+                        None,
+                        None,
+                    )));
+                }
+                let prop_filters: Vec<filter::PropertyFilter> = match properties
+                    .iter()
+                    .map(|s| filter::parse_property_filter(s))
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                };
+                let task_filter = match task.as_deref().map(filter::parse_task_filter) {
+                    Some(Ok(f)) => Some(f),
+                    Some(Err(e)) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                    None => None,
+                };
+                let parsed_fields = match filter::Fields::parse(&fields) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                };
+                let sort_field = match sort.as_deref().map(filter::parse_sort) {
+                    Some(Ok(f)) => Some(f),
+                    Some(Err(e)) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e.to_string(),
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                    None => None,
+                };
+                let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
+                    .iter()
+                    .map(|s| hyalo_core::heading::SectionFilter::parse(s))
+                    .collect::<Result<Vec<_>, _>>()
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Ok(CommandOutcome::UserError(crate::output::format_error(
+                            effective_format,
+                            &e,
+                            None,
+                            None,
+                            None,
+                        )));
+                    }
+                };
+                let file: Vec<String> = file
+                    .into_iter()
+                    .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
+                    .collect();
+                let sort_needs_backlinks =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
+                let sort_needs_links =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
+                let sort_needs_title =
+                    matches!(sort_field.as_ref(), Some(filter::SortField::Title));
+                let has_task_filter = task_filter.is_some();
+                let has_section_filter = !section_filters.is_empty();
+                let has_bm25_search = pattern.is_some();
+                let has_title_filter = title.is_some();
+                let needs_body = crate::commands::find::needs_body(
+                    &parsed_fields,
+                    has_task_filter,
+                    has_section_filter,
+                ) || sort_needs_links
+                    || sort_needs_title
+                    || broken_links
+                    || orphan
+                    || dead_end
+                    || has_title_filter
+                    || has_bm25_search;
+                let needs_full_vault =
+                    parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
+                let scan_body = needs_body || needs_full_vault;
+                match resolve_index(
+                    snapshot_index.as_ref(),
+                    dir,
+                    &file,
+                    &glob,
+                    effective_format,
+                    site_prefix,
+                    needs_full_vault,
+                    &ScanOptions {
+                        scan_body,
+                        bm25_tokenize: false,
+                        default_language: None,
+                        frontmatter_link_props: ctx.frontmatter_link_props,
+                    },
+                )? {
+                    IndexResolution::Resolved(resolved) => {
+                        // Views may invoke any find flag combination, so be
+                        // conservative and always seed the stem map. Cheap
+                        // when a snapshot index is available.
+                        let ci = maybe_case_index(
+                            ctx.case_insensitive_mode,
+                            dir,
+                            true,
+                            resolved.as_snapshot(),
+                        );
+                        let outcome = crate::commands::find::find(
+                            resolved.as_index(),
+                            dir,
+                            site_prefix,
+                            pattern.as_deref(),
+                            regexp.as_deref(),
+                            &prop_filters,
+                            &tag,
+                            task_filter.as_ref(),
+                            &section_filters,
+                            &file,
+                            &glob,
+                            &parsed_fields,
+                            sort_field.as_ref(),
+                            reverse,
+                            resolve_limit(
+                                limit,
+                                ctx.config_default_limit,
+                                ctx.programmatic_output,
+                            ),
+                            broken_links,
+                            orphan,
+                            dead_end,
+                            title.as_deref(),
+                            effective_format,
+                            language.as_deref(),
+                            ctx.config_language,
+                            ci.as_ref(),
+                        )?;
+                        // PR #251 review M4: `views run` used to silently
+                        // drop `--strict` (the destructure above fell
+                        // into `..`) — `views set gate --broken-links
+                        // --strict` persisted `strict: true` into the
+                        // saved view, but `views run gate` still exited 0
+                        // forever while `find --view gate` correctly
+                        // exited 1: a CI gate that silently stopped
+                        // gating the moment it was saved as a view. Same
+                        // exit-code logic as `Commands::Find` (UX-2).
+                        if strict
+                            && let CommandOutcome::Success {
+                                total: Some(total), ..
+                            } = &outcome
+                            && *total > 0
+                        {
+                            ctx.exit_code_override = Some(1);
+                        }
+                        Ok(outcome)
+                    }
+                    IndexResolution::Outcome(outcome) => Ok(outcome),
+                }
+            }
+        }
+    }
+}
+
