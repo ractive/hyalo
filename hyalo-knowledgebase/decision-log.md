@@ -2842,3 +2842,48 @@ re-implementing (or forgetting) the exactly-one-match error contract.
 keeping NUL output inside `RawOutput` with an exemption carved into
 `sanitize_control_chars` (would let NUL through every text-mode consumer,
 including `read` of files whose bodies contain NULs).
+
+## DEC-225: thin dispatch, argv-based `HintBuilder`, hyalo-core façade (2026-08-25)
+
+**Decision:** three architecture cleanups from
+[[reviews/deep-analysis-2-2026-08-23]], all pure structure — no behavior change
+(the e2e suite, 1737 tests, is the guard):
+
+1. **ARCH-1 — one handler per command.** Every `dispatch.rs` match arm with
+   business logic now delegates to `commands::<cmd>::run(ctx, args)` in the
+   command's own module (`find::run`, `lint::run`, `task::run`, `views::run`,
+   `mv::run`, `set::run`, plus read/properties/tags/summary/backlinks/
+   remove/append/links/changelog/okf/madr/types/lint-rules). `dispatch.rs`
+   shrank from **3024 to 876 lines**; the `dispatch` match itself only
+   destructures clap variants and forwards. Shared helpers (`resolve_index`,
+   `maybe_case_index`, `patch_index_for_modified_files`, …) stay in
+   `dispatch.rs` as `pub(crate)` and are re-exported to handlers. The win is
+   testability: e.g. `find`'s `--strict` exit-code policy is now the pure
+   function `find::run::strict_exit_code`, unit-tested in-process
+   (`strict_exit_code_policy`) where it previously required an e2e process
+   spawn to observe.
+
+2. **ARCH-4 — hints are argv, not strings.** New
+   `hints::HintBuilder::cmd("task toggle").flag_value("--status", "?")` builds
+   the command as an argv vector serialized through the existing
+   `shell_quote`, with `argv()` exposing the vector so tests can feed it to
+   the real clap parser (`hint_builder_commands_parse`). All `build_command_*`
+   family members, the config hints, and `profile_lint_hint` now route
+   through it. A drift guard, `no_raw_hyalo_command_literals`, fails the
+   suite when a new hand-written `"hyalo …"` string literal appears in
+   non-test source — the `tags --limit 0` class of bug (a hint that reads
+   fine but doesn't run) can no longer be introduced.
+
+3. **ARCH-5 — hyalo-core is a curated façade.** Plumbing modules (`util`,
+   `common_words`, `case_index`, `fs_util`; `warn` already was) are now
+   `pub(crate)`, with the specific items the CLI/mdlint consume re-exported
+   at the crate root (`CaseInsensitiveIndex`, `atomic_write_within`,
+   `is_common_word`, `levenshtein`, …). Internal refactors of those modules
+   are no longer semver-relevant; the supported surface is documented in the
+   crate root doc. Call sites were rewritten from
+   `hyalo_core::case_index::X` to `hyalo_core::X`.
+
+**Where a new command goes now:** add the clap variant in
+`cli/args.rs`, then implement `commands/<cmd>.rs::run(ctx, args) -> Result<CommandOutcome>`
+and make the `dispatch.rs` arm a one-line forward. Hint commands are built
+with `HintBuilder`, never `format!("hyalo …")`.
