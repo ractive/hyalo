@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    Commands, LintRulesAction, TypesAction,
+    Commands,
 };
 use crate::commands::{
     append as append_commands, backlinks as backlinks_commands,
@@ -12,6 +12,7 @@ use crate::commands::{
     find as find_commands, links as links_commands, lint as lint_commands,
     madr as madr_commands, okf as okf_commands,
     lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
+    types as types_commands,
     remove as remove_commands, set as set_commands, summary as summary_commands,
     tags as tag_commands, tasks as task_commands, views as views_commands,
 };
@@ -735,59 +736,9 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             )
         }
         Commands::LintRules { action } => {
-            let action = action.unwrap_or(LintRulesAction::List {
-                enabled_only: false,
-                disabled_only: false,
-                rule_prefix: None,
-            });
-            let md_engine = hyalo_mdlint::HyaloLintEngine::create()
-                .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
-            match action {
-                LintRulesAction::List {
-                    enabled_only,
-                    disabled_only,
-                    rule_prefix,
-                } => Ok(lint_rules_commands::list_rules(
-                    ctx.config_dir,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.schema,
-                    enabled_only,
-                    disabled_only,
-                    rule_prefix.as_deref(),
-                    effective_format,
-                )),
-                LintRulesAction::Show { rule_id } => Ok(lint_rules_commands::show_rule(
-                    &rule_id,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.schema,
-                    ctx.user_format,
-                )),
-                LintRulesAction::Set {
-                    rule_id,
-                    enabled,
-                    severity,
-                    dry_run,
-                } => lint_rules_commands::set_rule(
-                    ctx.config_dir,
-                    &rule_id,
-                    enabled,
-                    severity.as_deref(),
-                    dry_run,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.user_format,
-                ),
-                LintRulesAction::Remove { rule_id, dry_run } => lint_rules_commands::remove_rule(
-                    ctx.config_dir,
-                    &rule_id,
-                    dry_run,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.user_format,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in
+            // `commands::lint_rules::run`.
+            lint_rules_commands::run(ctx, action)
         }
         // `Init`, `Deinit`, and `Completion` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
@@ -800,40 +751,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             views_commands::run(ctx, action)
         }
         Commands::Types { action } => {
-            let action = action.unwrap_or(TypesAction::List);
-            match action {
-                TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
-                TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
-                    &type_name,
-                    ctx.schema,
-                    effective_format,
-                )),
-                TypesAction::Remove { type_name } => crate::commands::types::remove_type(
-                    ctx.config_dir,
-                    &type_name,
-                    effective_format,
-                ),
-                TypesAction::Set {
-                    type_name,
-                    required,
-                    default,
-                    property_type,
-                    property_values,
-                    filename_template,
-                    dry_run,
-                } => crate::commands::types::set_type(
-                    ctx.config_dir,
-                    &type_name,
-                    &required,
-                    &default,
-                    &property_type,
-                    &property_values,
-                    filename_template.as_deref(),
-                    dry_run,
-                    effective_format,
-                    ctx.case_insensitive_mode,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::types::run`.
+            types_commands::run(ctx, action)
         }
         Commands::New {
             r#type,

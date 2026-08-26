@@ -1314,3 +1314,52 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo types` dispatch arm, extracted verbatim from `dispatch.rs`.
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: Option<crate::cli::args::TypesAction>,
+) -> Result<CommandOutcome> {
+    let effective_format = ctx.effective_format;
+    use crate::cli::args::TypesAction;
+
+
+    let action = action.unwrap_or(TypesAction::List);
+    match action {
+        TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
+        TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
+            &type_name,
+            ctx.schema,
+            effective_format,
+        )),
+        TypesAction::Remove { type_name } => crate::commands::types::remove_type(
+            ctx.config_dir,
+            &type_name,
+            effective_format,
+        ),
+        TypesAction::Set {
+            type_name,
+            required,
+            default,
+            property_type,
+            property_values,
+            filename_template,
+            dry_run,
+        } => crate::commands::types::set_type(
+            ctx.config_dir,
+            &type_name,
+            &required,
+            &default,
+            &property_type,
+            &property_values,
+            filename_template.as_deref(),
+            dry_run,
+            effective_format,
+            ctx.case_insensitive_mode,
+        ),
+    }
+}
