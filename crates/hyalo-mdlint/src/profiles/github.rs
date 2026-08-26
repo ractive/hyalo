@@ -376,19 +376,29 @@ fn write_command(
 /// Order matters — `%` must be escaped first so the `%` in later replacements
 /// is not double-escaped. Message text ultimately originates from linted file
 /// content (body text, property values), so after the spec escapes are applied
-/// any *other* raw control bytes (e.g. ANSI escape sequences) are stripped via
-/// [`crate::output::sanitize_control_chars`] — the same defense other CLI
-/// output paths use — to prevent terminal/log injection in the Actions job log.
+/// any *other* raw control bytes (e.g. ANSI escape sequences) are stripped
+/// via [`sanitize_control_chars`] — a local mirror of the same defense the
+/// CLI's other output paths use — to prevent terminal/log injection in the
+/// Actions job log.
 /// This must run after the `\r`/`\n` replacement above, since
 /// `sanitize_control_chars` would otherwise silently drop a raw `\r` instead of
 /// letting it become `%0D`.
+/// Strip control characters that could inject terminal escape sequences
+/// (mirror of the CLI's `output::sanitize_control_chars`, kept local so the
+/// renderer has no CLI dependency).
+fn sanitize_control_chars(s: &str) -> String {
+    s.chars()
+        .filter(|&c| !c.is_control() || c == '\n' || c == '\t')
+        .collect()
+}
+
 #[must_use]
 pub fn escape_data(s: &str) -> String {
     let escaped = s
         .replace('%', "%25")
         .replace('\r', "%0D")
         .replace('\n', "%0A");
-    crate::output::sanitize_control_chars(&escaped)
+    sanitize_control_chars(&escaped)
 }
 
 /// Escape a workflow-command *property* value (e.g. `file=`, `title=`).

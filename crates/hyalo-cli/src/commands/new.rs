@@ -6,12 +6,10 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::Context;
 use indexmap::IndexMap;
 
-use hyalo_core::index::SnapshotIndex;
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default, today_iso8601};
 
 use anyhow::Result;
 
-use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format, format_error, format_success};
 
 // ---------------------------------------------------------------------------
@@ -24,8 +22,7 @@ pub(crate) fn create_new(
     type_name: &str,
     file_arg: &str,
     schema: &SchemaConfig,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     format: Format,
 ) -> Result<CommandOutcome> {
     // ------------------------------------------------------------------
@@ -170,9 +167,8 @@ pub(crate) fn create_new(
     } else {
         file_arg
     };
-    let mut index_dirty = false;
-    mutation::add_index_entry(snapshot_index, rel_path, &full_path, &mut index_dirty)?;
-    mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+    journal.add_entry(rel_path, &full_path)?;
+    journal.flush()?;
 
     // ------------------------------------------------------------------
     // Step 7: output

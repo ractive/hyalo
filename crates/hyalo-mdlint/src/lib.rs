@@ -10,7 +10,9 @@
 
 pub mod config;
 pub mod engine;
+pub mod profiles;
 pub mod rules;
+pub mod schema;
 
 pub use config::{LintConfig, RuleOverride};
 pub use engine::{HyaloLintEngine, RuleCatalogEntry};

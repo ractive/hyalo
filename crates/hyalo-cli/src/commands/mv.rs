@@ -7,11 +7,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use crate::commands::mutation;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery::{canonicalize_vault_dir, discover_files, match_globs};
 use hyalo_core::filter::{PropertyFilter, matches_frontmatter_filters};
-use hyalo_core::index::SnapshotIndex;
 use hyalo_core::link_rewrite::{self, Replacement, RewritePlan, SkippedAmbiguous};
 
 // ---------------------------------------------------------------------------
@@ -75,8 +73,7 @@ pub fn mv(
     dry_run: bool,
     format: Format,
     site_prefix: Option<&str>,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     allow_ambiguous: bool,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
@@ -140,16 +137,8 @@ pub fn mv(
         // Patch index: rename the entry, re-scan files with rewritten links,
         // and update the link graph so backlink queries stay accurate.
         let rewritten: Vec<&str> = mv_plan.plans.iter().map(|p| p.rel_path.as_str()).collect();
-        let mut index_dirty = false;
-        mutation::rename_index_entry(
-            snapshot_index,
-            dir,
-            &old_rel,
-            &new_rel,
-            &rewritten,
-            &mut index_dirty,
-        )?;
-        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+        journal.rename_entry(dir, &old_rel, &new_rel, &rewritten)?;
+        journal.flush()?;
     }
 
     Ok(CommandOutcome::success(
@@ -175,8 +164,7 @@ pub fn mv_batch(
     on_conflict: &str,
     format: Format,
     site_prefix: Option<&str>,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     allow_ambiguous: bool,
 ) -> Result<CommandOutcome> {
     // 1. Validate --to is a directory-shaped path.
@@ -260,20 +248,12 @@ pub fn mv_batch(
     if apply && !renames.is_empty() {
         execute_batch_mv(dir, &renames, &plans)?;
         // Update index if present.
-        if snapshot_index.is_some() {
-            let mut index_dirty = false;
+        if journal.has_index() {
             let rewritten_paths: Vec<&str> = plans.iter().map(|p| p.rel_path.as_str()).collect();
             for (old_rel, new_rel) in &renames {
-                mutation::rename_index_entry(
-                    snapshot_index,
-                    dir,
-                    old_rel,
-                    new_rel,
-                    &rewritten_paths,
-                    &mut index_dirty,
-                )?;
+                journal.rename_entry(dir, old_rel, new_rel, &rewritten_paths)?;
             }
-            mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+            journal.flush()?;
         }
     }
 
@@ -1055,8 +1035,8 @@ pub(crate) fn run(
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
+    let mut journal =
+        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
     use crate::cli::args::resolve_single_file;
     use crate::dispatch::property_filter_error_outcome;
 
@@ -1150,8 +1130,7 @@ pub(crate) fn run(
             &on_conflict,
             effective_format,
             site_prefix,
-            snapshot_index,
-            index_path,
+            &mut journal,
             allow_ambiguous,
         )
     } else {
@@ -1192,8 +1171,7 @@ pub(crate) fn run(
             effective_dry_run,
             ctx.user_format,
             site_prefix,
-            snapshot_index,
-            index_path,
+            &mut journal,
             allow_ambiguous,
         )
     }

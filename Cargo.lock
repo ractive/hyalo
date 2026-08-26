@@ -769,8 +769,10 @@ dependencies = [
  "indexmap",
  "mdbook-lint-core",
  "mdbook-lint-rulesets",
+ "regex",
  "serde",
  "serde_json",
+ "strsim 0.11.1",
  "tempfile",
 ]
 

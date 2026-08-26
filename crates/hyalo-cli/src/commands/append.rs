@@ -9,7 +9,6 @@ use crate::commands::{FilesOrOutcome, collect_files, mutation, require_file_or_g
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter};
 use hyalo_core::frontmatter;
-use hyalo_core::index::SnapshotIndex;
 use hyalo_core::schema::SchemaConfig;
 
 // ---------------------------------------------------------------------------
@@ -128,8 +127,7 @@ pub fn append(
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
     validate: bool,
     schema: Option<&SchemaConfig>,
@@ -207,7 +205,7 @@ pub fn append(
     // --- Dotted-key collision pre-pass (iter-219 M5): reject the whole batch
     //     before any file is modified, not mid-loop (a mid-loop `return` left
     //     earlier files in the batch already written, and skipped the
-    //     end-of-loop `save_index_if_dirty` entirely).
+    //     end-of-loop journal flush entirely).
     for (full_path, rel_path) in &files {
         let props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
@@ -287,7 +285,6 @@ pub fn append(
         }
     }
 
-    let mut index_dirty = false;
     // L-2: relative paths skipped because their frontmatter would not parse.
     let mut skipped_unparseable: Vec<String> = Vec::new();
 
@@ -338,13 +335,7 @@ pub fn append(
                 }
                 Err(e) => return Err(e),
             }
-            mutation::update_index_entry(
-                snapshot_index,
-                rel_path,
-                props,
-                full_path,
-                &mut index_dirty,
-            )?;
+            journal.update_entry(rel_path, props, full_path)?;
         }
     }
 
@@ -357,7 +348,7 @@ pub fn append(
     }
 
     if !dry_run {
-        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -394,6 +385,7 @@ pub fn append(
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
+    use crate::commands::journal::MutationJournal;
     use std::fs;
 
     macro_rules! md {
@@ -425,8 +417,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -468,8 +459,7 @@ aliases:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -503,8 +493,7 @@ aliases:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -541,8 +530,7 @@ author: Alice
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -577,8 +565,7 @@ author: Alice
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -614,8 +601,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -642,8 +628,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -663,8 +648,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -685,8 +669,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -707,8 +690,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -735,8 +717,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -769,8 +750,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -808,8 +788,7 @@ title: Note
             &[filter],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -845,8 +824,7 @@ title: Note
             &[],
             &["rust".to_owned()],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -881,8 +859,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -908,8 +885,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -930,8 +906,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -952,8 +927,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1027,8 +1001,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             true, // validate = true — merged list ["alpha","beta"] must pass
             Some(&schema),
@@ -1096,8 +1069,7 @@ author: alice
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             true,
             Some(&schema),
@@ -1135,8 +1107,7 @@ versions:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1176,8 +1147,8 @@ pub(crate) fn run(
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
+    let mut journal =
+        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
     use crate::dispatch::parse_where_filters;
 
     if !file_positional.is_empty() {
@@ -1204,8 +1175,7 @@ pub(crate) fn run(
         &where_prop_filters,
         &where_tags,
         effective_format,
-        snapshot_index,
-        index_path,
+        &mut journal,
         dry_run,
         do_validate,
         if do_validate { Some(ctx.schema) } else { None },

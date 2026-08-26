@@ -26,6 +26,7 @@ mod hint_execution;
 mod hints;
 mod hyalo_config;
 mod index;
+mod index_journal;
 mod init;
 mod iteration238_followups;
 mod iteration_ergonomics;

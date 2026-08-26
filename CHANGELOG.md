@@ -9,6 +9,29 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Lint subsystem moved into `hyalo-mdlint`; one `MutationJournal` owns
+  index maintenance (iter-226).** Two architecture refactors with no
+  user-visible behaviour change (lint output is byte-identical, the snapshot
+  format is untouched). The five conformance-profile linters (changelog /
+  madr / okf / skills / github) plus their engines (`heading_grammar`,
+  `link_lint`, `section_scanner`) and the schema-validation core of `lint`
+  (per-file validation, auto-fix, `validate_constraint`) now live in
+  `hyalo-mdlint` (`profiles::*`, `schema`), exposing an in-process lint API
+  for library consumers — the CLI keeps flag parsing and output formatting
+  only. On the index side, the three scattered index-refresh mechanisms
+  (`save_index_if_dirty`, `tasks::patch_index`,
+  `patch_index_for_modified_files`) are folded into a single
+  `MutationJournal` every mutating command records through, flushed once per
+  invocation — always refreshing the persisted entry *and* its link graph.
+  This also fixes two latent stale-link-graph bugs: `properties rename` and
+  `tags rename` under `--index` used to patch entries but never the link
+  graph, so frontmatter link properties (`related`, `depends-on`) renamed
+  across a vault left backlinks stale until a full `create-index` rebuild.
+  A new `cargo run -p xtask -- check-mutation-journal` CI gate fails when a
+  mutating command bypasses the journal.
+
 ### Added
 
 - **`find --filenames0` and `--iteration <ID>` on `read`/`task`/`backlinks`

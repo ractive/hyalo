@@ -1723,7 +1723,7 @@ pub(crate) fn run(
     let index_path = ctx.index_path;
     use crate::cli::args::IndexFlags;
     use crate::commands::{IndexResolution, resolve_index};
-    use crate::dispatch::{maybe_case_index, patch_index_for_modified_files};
+    use crate::dispatch::maybe_case_index;
     use hyalo_core::index::ScanOptions;
 
     match action.unwrap_or(LinksAction::Fix {
@@ -1799,7 +1799,10 @@ pub(crate) fn run(
                 ctx.exit_code_override = Some(1);
             }
             // resolved is dropped — safe to borrow snapshot_index mutably.
-            patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+            let mut journal =
+                crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
+            journal.rescan_modified(dir, &modified_files)?;
+            journal.flush()?;
             Ok(outcome)
         }
         LinksAction::Auto {
@@ -1856,7 +1859,10 @@ pub(crate) fn run(
             if had_failures {
                 ctx.exit_code_override = Some(1);
             }
-            patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
+            let mut journal =
+                crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
+            journal.rescan_modified(dir, &modified_files)?;
+            journal.flush()?;
             Ok(outcome)
         }
     }

@@ -8,7 +8,6 @@ use crate::commands::{FilesOrOutcome, collect_files, mutation, require_file_or_g
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter};
 use hyalo_core::frontmatter;
-use hyalo_core::index::SnapshotIndex;
 use hyalo_core::schema::SchemaConfig;
 
 // ---------------------------------------------------------------------------
@@ -292,8 +291,7 @@ pub fn set(
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
     validate: bool,
     schema: Option<&SchemaConfig>,
@@ -411,7 +409,7 @@ pub fn set(
     //     before any file is modified, not mid-loop. A mid-loop `return` (the
     //     original iter-219 shape) left files already written in an earlier
     //     iteration on disk, and skipped the end-of-loop
-    //     `save_index_if_dirty` entirely — a partial write plus a stale
+    //     `journal flush` entirely — a partial write plus a stale
     //     on-disk index for whichever file happened to trip the guard.
     for (full_path, rel_path) in &files {
         let props = match frontmatter::read_frontmatter(full_path) {
@@ -500,8 +498,6 @@ pub fn set(
             }
         }
     }
-
-    let mut index_dirty = false;
 
     // Effective type for schema-constraint advisories (iter-181 task 1). Prefer
     // an explicit `type=X` set in this batch; otherwise fall back to the `type:`
@@ -593,13 +589,7 @@ pub fn set(
                 }
                 Err(e) => return Err(e),
             }
-            mutation::update_index_entry(
-                snapshot_index,
-                rel_path,
-                props,
-                full_path,
-                &mut index_dirty,
-            )?;
+            journal.update_entry(rel_path, props, full_path)?;
         }
     }
 
@@ -612,7 +602,7 @@ pub fn set(
     }
 
     if !dry_run {
-        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -685,6 +675,7 @@ pub fn set(
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
+    use crate::commands::journal::MutationJournal;
     use std::fs;
 
     macro_rules! md {
@@ -749,8 +740,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -795,8 +785,7 @@ status: draft
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -831,8 +820,7 @@ status: done
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -870,8 +858,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -912,8 +899,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -949,8 +935,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -977,8 +962,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1000,8 +984,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1024,8 +1007,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1048,8 +1030,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1078,8 +1059,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1115,8 +1095,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1162,8 +1141,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1203,8 +1181,7 @@ title: Note
             &[filter],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1243,8 +1220,7 @@ title: Note
             &[],
             &["rust".to_owned()],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1281,8 +1257,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1310,8 +1285,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1334,8 +1308,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1358,8 +1331,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1425,8 +1397,7 @@ type: post
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             true, // validate = true
             Some(&schema),
@@ -1490,8 +1461,7 @@ type: post
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             true, // validate = true
             Some(&schema),
@@ -1532,8 +1502,7 @@ versions:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1570,8 +1539,7 @@ versions:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1601,8 +1569,7 @@ versions:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1637,8 +1604,7 @@ versions:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
             false,
             None,
@@ -1678,8 +1644,8 @@ pub(crate) fn run(
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
+    let mut journal =
+        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
     use crate::dispatch::parse_where_filters;
 
     if !file_positional.is_empty() {
@@ -1799,8 +1765,7 @@ pub(crate) fn run(
         &where_prop_filters,
         &where_tags,
         effective_format,
-        snapshot_index,
-        index_path,
+        &mut journal,
         dry_run,
         do_validate,
         // Always pass the schema: `do_validate` still gates the blocking

@@ -23,30 +23,30 @@
 
 /// The recommended maximum number of body lines for a SKILL.md file. Above this
 /// the `SKILL-LINE-BUDGET` rule warns.
-pub(crate) const SKILL_LINE_BUDGET: usize = 500;
+pub const SKILL_LINE_BUDGET: usize = 500;
 
 /// Reserved skill names the spec forbids (a skill must not be named after the
 /// vendor). Compared case-insensitively.
-pub(crate) const RESERVED_NAMES: &[&str] = &["anthropic", "claude"];
+pub const RESERVED_NAMES: &[&str] = &["anthropic", "claude"];
 
 /// A single Agent-Skills advisory finding, in the shape the lint pipeline
 /// converts into an `InternalViolation`.
-pub(crate) struct SkillFinding {
-    pub(crate) rule_id: &'static str,
+pub struct SkillFinding {
+    pub rule_id: &'static str,
     /// Severity to use when `[lint.rules.<id>]` does not override it. Most
     /// skills rules are advisory (`"warn"`); `SKILL-RESERVED-NAME` is a hard
     /// spec violation (`"error"`).
-    pub(crate) default_severity: &'static str,
+    pub default_severity: &'static str,
     /// 1-based line within the file, for display.
-    pub(crate) line: usize,
-    pub(crate) message: String,
+    pub line: usize,
+    pub message: String,
 }
 
 /// Rule IDs exposed by the skills profile. Kept in one place so the catalog
 /// (`lint-rules list`) and the runtime stay in lock-step; the parity test in
 /// this module asserts every emitted id is listed here.
 #[cfg(test)]
-pub(crate) const SKILL_RULE_IDS: &[&str] = &[
+pub const SKILL_RULE_IDS: &[&str] = &[
     "SKILL-RESERVED-NAME",
     "SKILL-NAME-DIRNAME",
     "SKILL-LINE-BUDGET",
@@ -62,7 +62,7 @@ pub(crate) const SKILL_RULE_IDS: &[&str] = &[
 ///   excluded), as counted by the caller.
 /// * `is_enabled` — predicate deciding whether a given rule id runs (honors
 ///   `[lint.rules]` overrides and `--rule`/`--rule-prefix` filters).
-pub(crate) fn run_skill_rules(
+pub fn run_skill_rules(
     rel_path: &str,
     effective_type: Option<&str>,
     name: Option<&str>,

@@ -234,16 +234,6 @@ pub(crate) fn resolve_limit(
     }
 }
 
-/// Public wrapper for [`patch_index_for_modified_files`] used by the body-lint pass.
-pub(crate) fn patch_index_for_modified_files_pub(
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
-    dir: &Path,
-    modified_files: &[String],
-) -> Result<()> {
-    patch_index_for_modified_files(snapshot_index, index_path, dir, modified_files)
-}
-
 /// Convert a legacy [`lint_commands::FileLintResult`] (frontmatter/view violations, old shape)
 /// into an [`lint_commands::ExtFileLintResult`] (new rule_groups shape).
 ///
@@ -411,39 +401,6 @@ pub(crate) fn inject_ext_file_result(
     })
 }
 
-/// Patch the snapshot index for a list of vault-relative paths that were
-/// modified on disk.  Uses `refresh_entry_and_links` to re-scan each file
-/// once, refreshing the full entry (properties, tags, links, sections,
-/// tasks, modified timestamp) AND the persisted `LinkGraph`'s outbound
-/// edges — callers whose modification rewrites body wikilinks (`links fix
-/// --apply`, `links auto --apply`) need both or `backlinks`/`find --fields
-/// links` would keep returning pre-mutation results until a full
-/// `create-index` rebuild. Flushes to disk once at the end.
-pub(crate) fn patch_index_for_modified_files(
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
-    dir: &Path,
-    modified_files: &[String],
-) -> Result<()> {
-    if modified_files.is_empty() {
-        return Ok(());
-    }
-    let Some(idx) = snapshot_index.as_mut() else {
-        return Ok(());
-    };
-    let mut dirty = false;
-    for rel in modified_files {
-        match idx.refresh_entry_and_links(dir, rel) {
-            Ok(true) => dirty = true,
-            Ok(false) => {} // not in index, nothing to update
-            Err(e) => {
-                eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
-            }
-        }
-    }
-    crate::commands::mutation::save_index_if_dirty(snapshot_index, index_path, dirty)
-}
-
 /// Render a `parse_property_filter` error as a `UserError`, surfacing the
 /// underlying engine detail (regex compile error with caret/position) the same
 /// way `find -e` does. `parse_property_filter` wraps the regex error as a
@@ -490,10 +447,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
-    // Capture the active conformance profile before borrowing `ctx.snapshot_index`
-    // mutably below (the lint arm needs it while that mutable borrow is live).
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
 
     match command {
         Commands::Find {
@@ -759,8 +712,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             &r#type,
             &file,
             ctx.schema,
-            snapshot_index,
-            index_path,
+            &mut crate::commands::journal::MutationJournal::new(
+                &mut *ctx.snapshot_index,
+                ctx.index_path,
+            ),
             effective_format,
         ),
         Commands::Okf { action } => {
