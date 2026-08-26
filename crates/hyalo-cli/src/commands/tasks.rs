@@ -5,11 +5,10 @@ use std::path::Path;
 use crate::cli::args::TaskAction;
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::resolve_error_to_outcome;
-use crate::commands::section_scanner::SectionScanner;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::heading::{SectionFilter, build_section_scope, parse_atx_heading};
-use hyalo_core::index::{SnapshotIndex, format_modified};
-use hyalo_core::types::{TaskDryRunResult, TaskInfo, TaskReadResult};
+use hyalo_core::types::{TaskDryRunResult, TaskReadResult};
+use hyalo_mdlint::profiles::section_scanner::SectionScanner;
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -188,8 +187,7 @@ pub fn task_toggle(
     section: Option<&str>,
     all: bool,
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
@@ -264,8 +262,9 @@ pub fn task_toggle(
     match hyalo_core::tasks::toggle_tasks(dir, &full_path, &resolved) {
         Ok(infos) => {
             for info in &infos {
-                patch_index(&full_path, &rel_path, info, snapshot_index, index_path)?;
+                journal.update_task(&full_path, &rel_path, info)?;
             }
+            journal.flush()?;
             let results: Vec<TaskReadResult> = infos
                 .into_iter()
                 .map(|info| TaskReadResult {
@@ -307,8 +306,7 @@ pub fn task_set_status(
     all: bool,
     status: char,
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
     let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
@@ -370,8 +368,9 @@ pub fn task_set_status(
     match hyalo_core::tasks::set_tasks_status(dir, &full_path, &resolved, status) {
         Ok(infos) => {
             for info in &infos {
-                patch_index(&full_path, &rel_path, info, snapshot_index, index_path)?;
+                journal.update_task(&full_path, &rel_path, info)?;
             }
+            journal.flush()?;
             let results: Vec<TaskReadResult> = infos
                 .into_iter()
                 .map(|info| TaskReadResult {
@@ -399,60 +398,11 @@ pub fn task_set_status(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Index patching helper
-// ---------------------------------------------------------------------------
-
-fn patch_index(
-    full_path: &Path,
-    rel_path: &str,
-    info: &TaskInfo,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
-) -> Result<()> {
-    if let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path) {
-        if let Some(entry) = idx.get_mut(rel_path) {
-            if let Some(task) = entry.tasks.iter_mut().find(|t| t.line == info.line) {
-                task.status = info.status;
-                task.done = info.done;
-            }
-            // Rebuild section task counts from the updated task list.
-            // Each section owns the range [section.line, next_section.line).
-            let section_starts: Vec<usize> = entry.sections.iter().map(|s| s.line).collect();
-            for (si, section) in entry.sections.iter_mut().enumerate() {
-                let start = section_starts[si];
-                let end = section_starts.get(si + 1).copied().unwrap_or(usize::MAX);
-                let total = entry
-                    .tasks
-                    .iter()
-                    .filter(|t| t.line >= start && t.line < end)
-                    .count();
-                if total > 0 {
-                    let done = entry
-                        .tasks
-                        .iter()
-                        .filter(|t| t.line >= start && t.line < end && t.done)
-                        .count();
-                    section.tasks = Some(hyalo_core::types::TaskCount { total, done });
-                } else {
-                    section.tasks = None;
-                }
-            }
-            entry.modified = format_modified(full_path)?;
-        }
-        idx.save_to(idx_path)?;
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
+    use crate::commands::journal::MutationJournal;
     use std::fs;
 
     fn unwrap_success(outcome: CommandOutcome) -> String {
@@ -509,8 +459,7 @@ mod tests {
                 None,
                 false,
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 false,
             )
             .unwrap(),
@@ -535,8 +484,7 @@ mod tests {
                 None,
                 false,
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 false,
             )
             .unwrap(),
@@ -557,8 +505,7 @@ mod tests {
             None,
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -579,8 +526,7 @@ mod tests {
                 None,
                 false,
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 true, // dry_run
             )
             .unwrap(),
@@ -611,8 +557,7 @@ mod tests {
                 false,
                 '?',
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 false,
             )
             .unwrap(),
@@ -638,8 +583,7 @@ mod tests {
                 false,
                 'x',
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 false,
             )
             .unwrap(),
@@ -661,8 +605,7 @@ mod tests {
             false,
             'x',
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -683,8 +626,7 @@ mod tests {
                 false,
                 '?',
                 Format::Json,
-                &mut None,
-                None,
+                &mut MutationJournal::new(&mut None, None),
                 true, // dry_run
             )
             .unwrap(),
@@ -710,8 +652,8 @@ pub(crate) fn run(
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
+    let mut journal =
+        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
 
     {
         match action {
@@ -737,7 +679,7 @@ pub(crate) fn run(
                     &selection,
                     dir,
                     configured_dir,
-                    snapshot_index.as_ref(),
+                    journal.index(),
                     &ResolutionPolicy::Single { allow_glob: false },
                     effective_format,
                     false,
@@ -799,7 +741,7 @@ pub(crate) fn run(
                     &selection,
                     dir,
                     configured_dir,
-                    snapshot_index.as_ref(),
+                    journal.index(),
                     &ResolutionPolicy::SingleOrMany,
                     effective_format,
                     false,
@@ -817,8 +759,7 @@ pub(crate) fn run(
                                 section.as_deref(),
                                 all,
                                 effective_format,
-                                snapshot_index,
-                                index_path,
+                                &mut journal,
                                 dry_run,
                             )
                         } else {
@@ -836,8 +777,7 @@ pub(crate) fn run(
                                     section.as_deref(),
                                     all,
                                     effective_format,
-                                    snapshot_index,
-                                    index_path,
+                                    &mut journal,
                                     dry_run,
                                 )?;
                                 match outcome {
@@ -917,7 +857,7 @@ pub(crate) fn run(
                     &selection,
                     dir,
                     configured_dir,
-                    snapshot_index.as_ref(),
+                    journal.index(),
                     &ResolutionPolicy::SingleOrMany,
                     effective_format,
                     false,
@@ -936,8 +876,7 @@ pub(crate) fn run(
                                 all,
                                 ch,
                                 effective_format,
-                                snapshot_index,
-                                index_path,
+                                &mut journal,
                                 dry_run,
                             )
                         } else {
@@ -955,8 +894,7 @@ pub(crate) fn run(
                                     all,
                                     ch,
                                     effective_format,
-                                    snapshot_index,
-                                    index_path,
+                                    &mut journal,
                                     dry_run,
                                 )?;
                                 match outcome {

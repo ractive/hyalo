@@ -2,7 +2,7 @@
 title: "Iteration 226 — architecture: lint crate boundary and unified index journal"
 type: iteration
 date: 2026-08-23
-status: planned
+status: completed
 branch: iter-226/arch-lint-crate-index-journal
 tags: [iteration, architecture, refactor, lint, index, tech-debt]
 related:
@@ -46,39 +46,39 @@ ARCH-3 in particular touches every mutating command's write path.
 
 ## Tasks
 
-- [ ] ARCH-2: move schema validation + profile linting into hyalo-mdlint
+- [x] ARCH-2: move schema validation + profile linting into hyalo-mdlint
       (it already depends on hyalo-core for `util::is_iso8601_*`). The CLI
       keeps flag parsing and output formatting only. Expose an in-process
       lint API the e2e suite can drive without spawning. Do this
       profile-by-profile (changelog/madr/okf/skills/github) so each move is
       independently reviewable
-- [ ] ARCH-3: make index refresh a property of the write path, not the
+- [x] ARCH-3: make index refresh a property of the write path, not the
       caller — a single `MutationJournal` (or equivalent) that every
       frontmatter/link write records dirty rel_paths + whether links changed
       into, flushed once at end of dispatch. Collapse `tasks.rs`'s local
       `patch_index` and the scattered `save_index_if_dirty` call sites into
       it; the graph-aware path is chosen by the journal based on whether
       links changed, so no command can forget it
-- [ ] Add a guard that a new mutating command cannot silently skip index
+- [x] Add a guard that a new mutating command cannot silently skip index
       refresh — e.g. the write goes through a type that owns the journal, so
       "forgot to refresh" is not expressible, or an xtask/test that fails if
       a `Commands::` arm mutates without journaling
-- [ ] Regression: the `index.rs:439` stale-link-graph scenario is covered by
+- [x] Regression: the `index.rs:439` stale-link-graph scenario is covered by
       a test that mutates via each path and asserts the persisted graph is
       current
-- [ ] Docs: decision-log entries for the lint crate boundary and the
+- [x] Docs: decision-log entries for the lint crate boundary and the
       journal; update the crate-layout notes
 
 ## Acceptance criteria
 
-- [ ] Schema + profile linting live in hyalo-mdlint with an in-process API;
+- [x] Schema + profile linting live in hyalo-mdlint with an in-process API;
       at least one lint behavior is unit-tested without spawning a process
-- [ ] All mutating commands refresh the persisted index (entries AND link
+- [x] All mutating commands refresh the persisted index (entries AND link
       graph) through one journal; the three old mechanisms are gone or
       funnel through it
-- [ ] A test/guard makes "a mutating command that forgets index refresh"
+- [x] A test/guard makes "a mutating command that forgets index refresh"
       fail to compile or fail CI
-- [ ] The stale-link-graph regression from `index.rs:439` is covered
+- [x] The stale-link-graph regression from `index.rs:439` is covered
 
 ## Non-goals
 

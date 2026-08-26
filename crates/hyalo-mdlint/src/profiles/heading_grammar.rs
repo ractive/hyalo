@@ -38,13 +38,13 @@
 
 /// A scanned ATX heading.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ScannedHeading {
+pub struct ScannedHeading {
     /// Heading level (number of leading `#`, 1..=6).
-    pub(crate) level: usize,
+    pub level: usize,
     /// Trimmed heading text (everything after the `#`s and the required space).
-    pub(crate) text: String,
+    pub text: String,
     /// 1-based file line of the heading (accounting for `line_offset`).
-    pub(crate) line: usize,
+    pub line: usize,
 }
 
 /// Strip a trailing `\r` for CRLF tolerance.
@@ -58,7 +58,7 @@ fn trim_cr(line: &str) -> &str {
 /// fence is never mistaken for a heading. `line_offset` is the 1-based file line
 /// on which `content` begins (1 for a whole file; the body offset for a
 /// post-frontmatter slice).
-pub(crate) fn scan_headings(content: &str, line_offset: usize) -> Vec<ScannedHeading> {
+pub fn scan_headings(content: &str, line_offset: usize) -> Vec<ScannedHeading> {
     let mut headings = Vec::new();
     let mut in_fence = false;
     let mut fence_marker = "";
@@ -106,7 +106,7 @@ pub(crate) fn scan_headings(content: &str, line_offset: usize) -> Vec<ScannedHea
 }
 
 /// How a rule matches a heading's text.
-pub(crate) enum TextMatcher {
+pub enum TextMatcher {
     /// The text must be exactly this (case-sensitive).
     Exact(&'static str),
     /// The text must be one of these (case-sensitive).
@@ -139,29 +139,29 @@ impl TextMatcher {
 }
 
 /// A single heading-grammar rule.
-pub(crate) struct HeadingRule {
+pub struct HeadingRule {
     /// The rule id reported on a violation (maps to a catalog entry).
-    pub(crate) rule_id: &'static str,
+    pub rule_id: &'static str,
     /// Default severity when no `[lint.rules.<id>]` override is set.
-    pub(crate) default_severity: &'static str,
+    pub default_severity: &'static str,
     /// The heading level this rule constrains (1..=6).
-    pub(crate) level: usize,
+    pub level: usize,
     /// The text matcher headings at this level must satisfy.
-    pub(crate) matcher: TextMatcher,
+    pub matcher: TextMatcher,
 }
 
 /// A finding produced by checking a grammar.
-pub(crate) struct GrammarFinding {
-    pub(crate) rule_id: &'static str,
-    pub(crate) default_severity: &'static str,
-    pub(crate) line: usize,
-    pub(crate) message: String,
+pub struct GrammarFinding {
+    pub rule_id: &'static str,
+    pub default_severity: &'static str,
+    pub line: usize,
+    pub message: String,
 }
 
 /// Check every heading of `rule.level` against `rule.matcher`, emitting a
 /// finding for each heading whose text does not match. `is_enabled` gates the
 /// rule (honoring `[lint.rules]` and `--rule`/`--rule-prefix`).
-pub(crate) fn check_level_rule(
+pub fn check_level_rule(
     headings: &[ScannedHeading],
     rule: &HeadingRule,
     is_enabled: &dyn Fn(&str) -> bool,

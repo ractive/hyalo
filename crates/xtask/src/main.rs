@@ -5,6 +5,7 @@ mod bundled_skills;
 mod command_reference;
 mod feature_fanout;
 mod help_drift;
+mod mutation_journal;
 mod stubs;
 mod workspace;
 
@@ -33,6 +34,9 @@ enum Commands {
     CheckDeadPrimitives(stubs::StubArgs),
     /// Stub — not yet implemented (iter-142b).
     CheckTodoAnnotations(stubs::StubArgs),
+    /// Gate (ARCH-3, iter-226): every mutating command records index
+    /// maintenance through MutationJournal; no direct index persistence.
+    CheckMutationJournal,
     /// On-demand scale regression gate: times `find`/`links fix` against a
     /// generated ~14k-file synthetic vault (iter-224 T-6, DEC-098). Not run
     /// in CI — see `crates/xtask/src/bench_scale.rs` for why.
@@ -48,6 +52,7 @@ fn main() {
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
+        Commands::CheckMutationJournal => mutation_journal::run(),
         Commands::BenchScale => bench_scale::run(),
     };
     match result {

@@ -7,7 +7,7 @@ use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::extract_tags;
 use hyalo_core::frontmatter;
-use hyalo_core::index::{SnapshotIndex, VaultIndex, format_modified};
+use hyalo_core::index::VaultIndex;
 use hyalo_core::types::TagSummaryEntry;
 use serde::Serialize;
 use serde_json::Value;
@@ -177,8 +177,7 @@ pub fn tags_rename(
     globs: &[String],
     dry_run: bool,
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<CommandOutcome> {
     // Validate both tag names
     if let Err(msg) = validate_tag(from) {
@@ -210,7 +209,6 @@ pub fn tags_rename(
 
     let mut modified = Vec::new();
     let mut skipped_count: usize = 0;
-    let mut index_dirty = false;
 
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -261,24 +259,15 @@ pub fn tags_rename(
 
         if !dry_run {
             frontmatter::write_frontmatter_within(dir, full_path, &props)?;
-            if let Some(idx) = snapshot_index.as_mut()
-                && let Some(entry) = idx.get_mut(rel_path)
-            {
-                let new_tags = extract_tags(&props);
-                entry.properties = props;
-                entry.tags = new_tags;
-                entry.modified = format_modified(full_path)?;
-                index_dirty = true;
-            }
+            // Journal refresh covers entry AND link graph — the pre-journal
+            // code only patched the entry (stale-graph bug class, ARCH-3).
+            journal.update_entry(rel_path, props, full_path)?;
         }
         modified.push(rel_path.clone());
     }
 
-    if !dry_run
-        && index_dirty
-        && let (Some(idx), Some(idx_path)) = (snapshot_index.as_mut(), index_path)
-    {
-        idx.save_to(idx_path)?;
+    if !dry_run {
+        journal.flush()?;
     }
 
     let total = modified.len() + skipped_count;
@@ -305,6 +294,7 @@ pub fn tags_rename(
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
+    use crate::commands::journal::MutationJournal;
     use hyalo_core::filter::tag_matches;
     use hyalo_core::index::{ScanOptions, ScannedIndex};
     use indexmap::IndexMap;
@@ -588,8 +578,7 @@ tags:
             &[],
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -627,8 +616,7 @@ tags:
             &[],
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -666,8 +654,7 @@ tags:
             &[],
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -688,8 +675,7 @@ tags:
             &[],
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -705,8 +691,7 @@ tags:
             &[],
             false,
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -769,7 +754,6 @@ pub(crate) fn run(
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
     let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
     use crate::cli::args::{IndexFlags, TagsAction};
     use crate::commands::find as find_commands;
     use crate::commands::{IndexResolution, ResolvedIndex, resolve_index};
@@ -848,8 +832,10 @@ pub(crate) fn run(
             &glob,
             dry_run,
             effective_format,
-            snapshot_index,
-            index_path,
+            &mut crate::commands::journal::MutationJournal::new(
+                &mut *ctx.snapshot_index,
+                ctx.index_path,
+            ),
         ),
     }
 }

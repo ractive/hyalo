@@ -173,7 +173,7 @@ impl OutputPipeline<'_> {
                 // `value` here is always the extended lint payload.
                 if self.user_format == Format::Github {
                     let rendered =
-                        crate::commands::lint_github::render(&value, &self.github_path_prefix);
+                        hyalo_mdlint::profiles::github::render(&value, &self.github_path_prefix);
                     println!("{rendered}");
                     // Surface dropped `--files-from` input paths as a GitHub
                     // Actions `::notice::` so a diff-scoped CI run shows in the

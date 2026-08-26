@@ -2887,3 +2887,50 @@ including `read` of files whose bodies contain NULs).
 `cli/args.rs`, then implement `commands/<cmd>.rs::run(ctx, args) -> Result<CommandOutcome>`
 and make the `dispatch.rs` arm a one-line forward. Hint commands are built
 with `HintBuilder`, never `format!("hyalo …")`.
+
+## DEC-226: lint subsystem lives in hyalo-mdlint; index maintenance goes through one MutationJournal (2026-08-25)
+
+Two structural decisions from the 2026-08-23 deep analysis
+([[reviews/deep-analysis-2-2026-08-23]]), implemented in
+[[iterations/iteration-226-arch-lint-crate-index-journal]]:
+
+**ARCH-2 — lint crate boundary.** The hidden lint subsystem that lived in
+`hyalo-cli/src/commands/` moved into `hyalo-mdlint`:
+
+- the five profile linters (`changelog_lint.rs`/`madr_lint.rs`/`okf_lint.rs`/
+  `skills_lint.rs`/`lint_github.rs`) are now
+  `hyalo_mdlint::profiles::{changelog, madr, okf, skills, github}`;
+- their shared engines (`heading_grammar.rs`, `link_lint.rs` =
+  HYALO006's context, `section_scanner.rs`) moved with them;
+- the schema-validation core of the 5,100-line `commands/lint.rs` (types,
+  violation kinds, `lint_file`/`lint_file_with_fix`, auto-fix computation,
+  the `validate_constraint` family) is now `hyalo_mdlint::schema`, exposing
+  an **in-process API** (`lint_file`, `lint_counts_only`,
+  `validate_constraint_simple`, …) that library consumers and the test suite
+  can drive without spawning a CLI process. `commands::lint` re-exports the
+  items so existing call sites are unchanged, and CLI output stays
+  byte-identical. The CLI keeps flag parsing, profile selection and output
+  formatting only.
+
+**ARCH-3 — index refresh is a property of the write path.** The three
+coexisting index-refresh mechanisms (`mutation::save_index_if_dirty` with 8
+call sites, `tasks.rs`'s local `patch_index`, and
+`patch_index_for_modified_files`) are gone, folded into one
+`commands::journal::MutationJournal`. It borrows the command context's
+snapshot index for the duration of a mutating command, tracks dirtiness
+itself, always refreshes the entry *and* the persisted link graph, and is
+flushed exactly once at the end. Every mutating command
+(`set`/`remove`/`append`/`new`/`mv`/`task toggle|set`/`properties rename`/
+`tags rename`/`links fix|auto --apply`/`lint --fix`) goes through it. Two
+bonus fixes of the stale-graph bug class fell out:
+`properties rename` and `tags rename` previously patched only entries,
+never the link graph — frontmatter link properties (`related`,
+`depends-on`) renamed under `--index` used to leave the persisted graph
+stale.
+
+**Guard:** the `xtask check-mutation-journal` gate fails CI when (a) a
+pre-journal persistence token reappears outside the sanctioned files, or
+(b) a mutating command module stops referencing `MutationJournal`. The
+stale-link-graph regression (`index.rs:439`'s recorded bug class) is pinned
+by e2e tests in `tests/e2e/index_journal.rs` that mutate via each path and
+assert the persisted graph is current.

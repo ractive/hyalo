@@ -8,7 +8,6 @@ use crate::commands::{FilesOrOutcome, collect_files, mutation, require_file_or_g
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter::{self, PropertyFilter};
 use hyalo_core::frontmatter;
-use hyalo_core::index::SnapshotIndex;
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -178,8 +177,7 @@ pub fn remove(
     where_property_filters: &[PropertyFilter],
     where_tag_filters: &[String],
     format: Format,
-    snapshot_index: &mut Option<SnapshotIndex>,
-    index_path: Option<&Path>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() && tag_args.is_empty() {
@@ -242,7 +240,6 @@ pub fn remove(
     let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); tag_args.len()];
 
-    let mut index_dirty = false;
     // L-2: relative paths skipped because their frontmatter would not parse.
     let mut skipped_unparseable: Vec<String> = Vec::new();
 
@@ -301,13 +298,7 @@ pub fn remove(
                 }
                 Err(e) => return Err(e),
             }
-            mutation::update_index_entry(
-                snapshot_index,
-                rel_path,
-                props,
-                full_path,
-                &mut index_dirty,
-            )?;
+            journal.update_entry(rel_path, props, full_path)?;
         }
     }
 
@@ -320,7 +311,7 @@ pub fn remove(
     }
 
     if !dry_run {
-        mutation::save_index_if_dirty(snapshot_index, index_path, index_dirty)?;
+        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -375,6 +366,7 @@ pub fn remove(
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
+    use crate::commands::journal::MutationJournal;
     use std::fs;
 
     macro_rules! md {
@@ -440,8 +432,7 @@ status: draft
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -480,8 +471,7 @@ title: Note
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -517,8 +507,7 @@ status: draft
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -554,8 +543,7 @@ status: published
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -595,8 +583,7 @@ aliases:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -637,8 +624,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -677,8 +663,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -701,8 +686,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -721,8 +705,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -753,8 +736,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -785,8 +767,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -820,8 +801,7 @@ priority: low
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -866,8 +846,7 @@ priority: low
             &[filter],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -906,8 +885,7 @@ priority: low
             &[],
             &["deprecated".to_owned()],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -941,8 +919,7 @@ priority: low
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -967,8 +944,7 @@ priority: low
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -988,8 +964,7 @@ priority: low
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -1021,8 +996,7 @@ tags:
             &[],
             &[],
             Format::Json,
-            &mut None,
-            None,
+            &mut MutationJournal::new(&mut None, None),
             false,
         )
         .unwrap();
@@ -1062,8 +1036,8 @@ pub(crate) fn run(
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    let index_path = ctx.index_path;
+    let mut journal =
+        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
     use crate::dispatch::parse_where_filters;
 
     if !file_positional.is_empty() {
@@ -1090,8 +1064,7 @@ pub(crate) fn run(
         &where_prop_filters,
         &where_tags,
         effective_format,
-        snapshot_index,
-        index_path,
+        &mut journal,
         dry_run,
     )
 }

@@ -22,8 +22,8 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::commands::changelog_lint::CATEGORIES;
 use crate::output::{CommandOutcome, Format, format_error};
+use hyalo_mdlint::profiles::changelog::CATEGORIES;
 
 /// Default changelog filename (vault-relative).
 pub(crate) const CHANGELOG_FILE: &str = "CHANGELOG.md";

@@ -14,6 +14,8 @@ anyhow = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+regex = { workspace = true }
+strsim = { workspace = true }
 hyalo-core = { workspace = true }
 
 # Markdown linting engine

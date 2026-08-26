@@ -20,18 +20,18 @@ use std::path::Path;
 
 /// A single MADR advisory finding, in the shape the lint pipeline converts into
 /// an `InternalViolation`.
-pub(crate) struct MadrFinding {
-    pub(crate) rule_id: &'static str,
+pub struct MadrFinding {
+    pub rule_id: &'static str,
     /// 1-based line within the file, for display.
-    pub(crate) line: usize,
-    pub(crate) message: String,
+    pub line: usize,
+    pub message: String,
 }
 
 /// Rule IDs exposed by the MADR profile. Kept in one place so the catalog
 /// (`lint-rules list`) and the runtime stay in lock-step; the parity test in
 /// this module asserts every emitted id is listed here.
 #[cfg(test)]
-pub(crate) const MADR_RULE_IDS: &[&str] = &["MADR-SUPERSEDE-RESOLVE", "MADR-DUPLICATE-NUMBER"];
+pub const MADR_RULE_IDS: &[&str] = &["MADR-SUPERSEDE-RESOLVE", "MADR-DUPLICATE-NUMBER"];
 
 /// Run every enabled MADR rule against one ADR file.
 ///
@@ -42,7 +42,7 @@ pub(crate) const MADR_RULE_IDS: &[&str] = &["MADR-SUPERSEDE-RESOLVE", "MADR-DUPL
 /// * `status` — the frontmatter `status` value, if any.
 /// * `is_enabled` — predicate deciding whether a given rule id runs (honors
 ///   `[lint.rules]` overrides and `--rule`/`--rule-prefix` filters).
-pub(crate) fn run_madr_rules(
+pub fn run_madr_rules(
     rel_path: &str,
     full_path: &Path,
     effective_type: Option<&str>,

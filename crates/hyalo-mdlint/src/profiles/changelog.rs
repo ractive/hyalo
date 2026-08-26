@@ -5,7 +5,7 @@
 //! rules (see `templates/profile-changelog.toml`). Everything that actually
 //! validates the 1.1.0 grammar lives here, split between:
 //!
-//! - the generic [`heading_grammar`](crate::commands::heading_grammar) engine —
+//! - the generic [`heading_grammar`](crate::profiles::heading_grammar) engine —
 //!   heading-*shape* rules (the `# Changelog` title, the `## [version]` /
 //!   `## [Unreleased]` line shape, the six allowed `###` category names), and
 //! - this module's changelog-specific logic — version *ordering* (semver
@@ -20,12 +20,12 @@
 //! Every rule is a pure function over the already-read body — no filesystem, no
 //! network.
 
-use crate::commands::heading_grammar::{
+use crate::profiles::heading_grammar::{
     self, GrammarFinding, HeadingRule, ScannedHeading, TextMatcher,
 };
 
 /// The six Keep a Changelog 1.1.0 change categories (order as in the spec).
-pub(crate) const CATEGORIES: &[&str] = &[
+pub const CATEGORIES: &[&str] = &[
     "Added",
     "Changed",
     "Deprecated",
@@ -38,7 +38,7 @@ pub(crate) const CATEGORIES: &[&str] = &[
 /// (`lint-rules list`) and the runtime stay in lock-step; the parity test in
 /// this module asserts every emitted id is listed here.
 #[cfg(test)]
-pub(crate) const CHANGELOG_RULE_IDS: &[&str] = &[
+pub const CHANGELOG_RULE_IDS: &[&str] = &[
     "CHANGELOG-TITLE",
     "CHANGELOG-VERSION-HEADING",
     "CHANGELOG-CATEGORY",
@@ -51,14 +51,14 @@ pub(crate) const CHANGELOG_RULE_IDS: &[&str] = &[
 
 /// A changelog advisory/error finding, in the shape the lint pipeline converts
 /// into an `InternalViolation`.
-pub(crate) struct ChangelogFinding {
-    pub(crate) rule_id: &'static str,
+pub struct ChangelogFinding {
+    pub rule_id: &'static str,
     /// Severity to use when `[lint.rules.<id>]` does not override it. The
     /// changelog grammar is strict, so most rules default to `"error"`.
-    pub(crate) default_severity: &'static str,
+    pub default_severity: &'static str,
     /// 1-based line within the file, for display.
-    pub(crate) line: usize,
-    pub(crate) message: String,
+    pub line: usize,
+    pub message: String,
 }
 
 /// A parsed `## [X.Y.Z] - DATE` or `## [Unreleased]` version heading.
@@ -83,7 +83,7 @@ struct VersionHeading {
 ///   frontmatter-less file).
 /// * `body_line_offset` — 1-based file line on which `body` starts.
 /// * `is_enabled` — predicate deciding whether a given rule id runs.
-pub(crate) fn run_changelog_rules(
+pub fn run_changelog_rules(
     content: &str,
     body: &str,
     body_line_offset: usize,

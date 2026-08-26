@@ -31,18 +31,18 @@ use std::path::Path;
 
 /// A single OKF advisory finding, in the same shape the lint pipeline converts
 /// into an `InternalViolation`.
-pub(crate) struct OkfFinding {
-    pub(crate) rule_id: &'static str,
+pub struct OkfFinding {
+    pub rule_id: &'static str,
     /// 1-based line within the file (frontmatter + body), for display.
-    pub(crate) line: usize,
-    pub(crate) message: String,
+    pub line: usize,
+    pub message: String,
 }
 
 /// Rule IDs exposed by the OKF profile. Kept in one place so the catalog
 /// (`lint-rules list`) and the runtime stay in lock-step; the parity test in
 /// this module asserts every emitted id is listed here.
 #[cfg(test)]
-pub(crate) const OKF_RULE_IDS: &[&str] = &[
+pub const OKF_RULE_IDS: &[&str] = &[
     "OKF-INDEX-STRUCTURE",
     "OKF-INDEX-MARKERS",
     "OKF-LOG-STRUCTURE",
@@ -123,7 +123,7 @@ fn ends_with_md(s: &str) -> bool {
 ///   / `LOG.md` is recognized as the reserved file the same way the SCHEMA
 ///   exempt-glob pass and `hyalo okf index` already do.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_okf_rules(
+pub fn run_okf_rules(
     rel_path: &str,
     full_path: &Path,
     content: &str,
