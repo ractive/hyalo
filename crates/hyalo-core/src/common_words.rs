@@ -833,7 +833,7 @@ pub const MIN_COMMON_WORD_LEN: usize = 3;
 /// whose only job is to phrase an advisory note.
 ///
 /// ```
-/// use hyalo_core::common_words::is_common_word;
+/// use hyalo_core::is_common_word;
 /// assert!(is_common_word("permissions"));
 /// assert!(is_common_word("README"));
 /// assert!(!is_common_word("Kubernetes"));

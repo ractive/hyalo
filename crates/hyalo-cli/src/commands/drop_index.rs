@@ -29,7 +29,7 @@ pub fn drop_index(
                 if !canonical_path.starts_with(&canonical_dir) {
                     let out = crate::output::format_error(
                         format,
-                        &hyalo_core::fs_util::outside_vault_message(
+                        &hyalo_core::outside_vault_message(
                             "index path",
                             Some(&canonical_path),
                         ),
@@ -61,7 +61,7 @@ pub fn drop_index(
                     Ok(canonical_parent) => {
                         let out = crate::output::format_error(
                             format,
-                            &hyalo_core::fs_util::outside_vault_message(
+                            &hyalo_core::outside_vault_message(
                                 "index path",
                                 Some(
                                     &canonical_parent

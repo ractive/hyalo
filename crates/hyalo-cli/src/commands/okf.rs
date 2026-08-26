@@ -361,7 +361,7 @@ pub fn run_index(
         for plan in &changed {
             let full = dir.join(&plan.rel_path);
             if let Err(err) =
-                hyalo_core::fs_util::atomic_write_within(dir, &full, plan.new_content.as_bytes())
+                hyalo_core::atomic_write_within(dir, &full, plan.new_content.as_bytes())
             {
                 crate::warn::warn(format!(
                     "failed to write {}: {} — skipping this file, continuing",
@@ -1011,7 +1011,7 @@ pub fn run_log(
     let new_content = prepend_log_entry(&old_content, &today, &entry_line);
 
     if apply {
-        hyalo_core::fs_util::atomic_write_within(dir, &full, new_content.as_bytes())
+        hyalo_core::atomic_write_within(dir, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {rel_path}"))?;
     }
 
@@ -1243,7 +1243,7 @@ fn normalize_vault_rel(dir: &Path, raw: &str) -> std::result::Result<String, Str
     {
         return Err(format!(
             "{}: {raw}",
-            hyalo_core::fs_util::outside_vault_message("path", None)
+            hyalo_core::outside_vault_message("path", None)
         ));
     }
     Ok(normalized.to_owned())
@@ -1361,7 +1361,7 @@ mod tests {
     fn timestamp_is_offset_form() {
         let ts = now_timestamp_tz();
         assert!(ts.ends_with("+00:00"), "got {ts}");
-        assert!(hyalo_core::util::is_iso8601_datetime_tz(&ts), "got {ts}");
+        assert!(hyalo_core::is_iso8601_datetime_tz(&ts), "got {ts}");
     }
 
     #[test]
@@ -1802,7 +1802,7 @@ pub(crate) fn run(
     action: crate::cli::args::OkfAction,
 ) -> Result<CommandOutcome> {
     let effective_format = ctx.effective_format;
-    use hyalo_core::case_index::mode_enabled;
+    use hyalo_core::mode_enabled;
 
 match action {
     crate::cli::args::OkfAction::Index {

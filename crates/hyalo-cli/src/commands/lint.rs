@@ -29,7 +29,7 @@ use hyalo_core::scanner;
 use hyalo_core::schema::{
     self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
 };
-use hyalo_core::util::is_iso8601_date;
+use hyalo_core::is_iso8601_date;
 
 use crate::commands::section_scanner::SectionScanner;
 use crate::commands::terse_root_cause;
@@ -1131,7 +1131,7 @@ fn validate_constraint(
                     ),
                 }];
             };
-            if !hyalo_core::util::is_iso8601_datetime(s) {
+            if !hyalo_core::is_iso8601_datetime(s) {
                 return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
@@ -1152,7 +1152,7 @@ fn validate_constraint(
                     ),
                 }];
             };
-            if !hyalo_core::util::is_iso8601_datetime_tz(s) {
+            if !hyalo_core::is_iso8601_datetime_tz(s) {
                 return vec![Violation {
                     severity: Severity::Error,
                     kind: None,
@@ -1536,7 +1536,7 @@ pub struct ExtLintOptions<'a> {
     /// `hyalo lint --profile changelog`.
     pub changelog_profile: bool,
     /// Resolved `[links] case_insensitive` mode for `vault_dir` (see
-    /// [`hyalo_core::case_index::mode_enabled`]). Used so `[schema] exempt`
+    /// [`hyalo_core::mode_enabled`]). Used so `[schema] exempt`
     /// globs (e.g. `**/index.md`) fold case the same way `hyalo okf index`
     /// does on case-insensitive filesystems.
     pub case_insensitive: bool,
@@ -2827,7 +2827,7 @@ fn lint_one_file_extended(
         let write_result = frontmatter_part.and_then(|frontmatter_part| {
             check_mtime(full_path, mtime0)?;
             let new_content = format!("{frontmatter_part}{working_body}");
-            hyalo_core::fs_util::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
+            hyalo_core::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
                 .with_context(|| format!("writing fixed body to {rel_path}"))
         });
         match write_result {
@@ -4666,7 +4666,7 @@ type = \"skill\"
 /// `run.rs`/dispatch (profile overlay into `ctx.lint_profiles`, snapshot
 /// loading), so they never reach here.
 use crate::dispatch::{CommandContext, adapt_view_result_to_ext, inject_ext_file_result, maybe_case_index};
-    use hyalo_core::case_index::mode_enabled;
+    use hyalo_core::mode_enabled;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(

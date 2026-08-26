@@ -126,7 +126,7 @@ pub(crate) fn run(
     use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
     use crate::commands::{IndexResolution, resolve_index};
     use crate::dispatch::resolve_limit;
-    use hyalo_core::case_index::mode_enabled;
+    use hyalo_core::mode_enabled;
     use hyalo_core::index::ScanOptions;
 
 

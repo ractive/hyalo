@@ -123,7 +123,7 @@ pub(crate) fn resolve_changelog_target(
         let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
         ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
             format,
-            &hyalo_core::fs_util::outside_vault_message("[changelog] path", Some(&resolved)),
+            &hyalo_core::outside_vault_message("[changelog] path", Some(&resolved)),
             Some(raw),
             Some(
                 "set [changelog] path to a location inside the config directory, \
@@ -419,7 +419,7 @@ pub fn run_release(
         // Defense in depth: the early `boundary_refusal` gate already ran, but
         // re-check against the same root right before the write so the
         // invariant survives future refactors.
-        hyalo_core::fs_util::atomic_write_within(boundary_root, &full, new_content.as_bytes())
+        hyalo_core::atomic_write_within(boundary_root, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }
 
@@ -583,7 +583,7 @@ pub fn run_add(
         // Defense in depth: the early `boundary_refusal` gate already ran, but
         // re-check against the same root right before the write so the
         // invariant survives future refactors.
-        hyalo_core::fs_util::atomic_write_within(boundary_root, &full, new_content.as_bytes())
+        hyalo_core::atomic_write_within(boundary_root, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {display}"))?;
     }
 

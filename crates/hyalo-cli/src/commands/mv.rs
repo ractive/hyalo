@@ -644,7 +644,7 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
                 // file ends up byte-for-byte as it was before the batch.
                 match &plan.original_content {
                     Some(original) => {
-                        match hyalo_core::fs_util::atomic_write_within(
+                        match hyalo_core::atomic_write_within(
                             dir,
                             old_path,
                             original.as_bytes(),
@@ -747,7 +747,7 @@ fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
 /// in-vault path component is a symlink that resolves outside the vault
 /// (H-3).
 ///
-/// Delegates to [`hyalo_core::fs_util::escaping_write_target`], which anchors
+/// Delegates to [`hyalo_core::escaping_write_target`], which anchors
 /// on the nearest existing ancestor: `fs::create_dir_all` only ever creates
 /// plain directories — never symlinks — so an in-vault anchor guarantees every
 /// component created below it also stays in the vault. Must be called before
@@ -761,15 +761,15 @@ fn ensure_dest_within_vault(
     new_rel: &str,
 ) -> std::result::Result<(), (String, String)> {
     let dst = dir.join(new_rel);
-    match hyalo_core::fs_util::escaping_write_target(canonical_vault, &dst) {
+    match hyalo_core::escaping_write_target(canonical_vault, &dst) {
         Ok(None) => Ok(()),
         Ok(Some(target)) => Err((
-            hyalo_core::fs_util::outside_vault_message_with_dir(
+            hyalo_core::outside_vault_message_with_dir(
                 "target path",
                 Some(&target),
                 canonical_vault,
             ),
-            hyalo_core::fs_util::outside_vault_hint(canonical_vault),
+            hyalo_core::outside_vault_hint(canonical_vault),
         )),
         Err(e) => Err((
             format!("failed to verify destination {new_rel} stays within the vault: {e}"),

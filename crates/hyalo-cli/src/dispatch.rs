@@ -17,7 +17,7 @@ use crate::commands::{
     tags as tag_commands, tasks as task_commands, views as views_commands,
 };
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::case_index::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
+use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 use hyalo_core::filter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;

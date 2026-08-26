@@ -157,7 +157,7 @@ fn section_not_found_hint(query: &str, available: &[String]) -> String {
         // A substring match is what `--section` actually does, so rank those
         // first regardless of length difference.
         let contains = usize::from(!text.contains(&needle));
-        (contains, hyalo_core::util::levenshtein(&text, &needle))
+        (contains, hyalo_core::levenshtein(&text, &needle))
     });
 
     let shown: Vec<&str> = ranked

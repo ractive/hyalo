@@ -74,10 +74,10 @@ pub(crate) fn is_date_typed_property(name: &str) -> bool {
 
 /// Returns `true` when `value` is exactly a YYYY-MM-DD ISO 8601 date.
 ///
-/// Delegates to `hyalo_core::util::is_iso8601_date` so `set` and the
+/// Delegates to `hyalo_core::is_iso8601_date` so `set` and the
 /// HYALO003 lint rule agree on what counts as a date.
 pub(crate) fn looks_like_date(value: &str) -> bool {
-    hyalo_core::util::is_iso8601_date(value)
+    hyalo_core::is_iso8601_date(value)
 }
 
 /// Returns `true` when `value` has the `YYYY-MM-DD` structural shape
@@ -297,7 +297,7 @@ pub fn set(
     dry_run: bool,
     validate: bool,
     schema: Option<&SchemaConfig>,
-    case_insensitive_mode: hyalo_core::case_index::CaseInsensitiveMode,
+    case_insensitive_mode: hyalo_core::CaseInsensitiveMode,
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
     if property_args.is_empty() && tag_args.is_empty() {
@@ -441,7 +441,7 @@ pub fn set(
         // `[schema] exempt` globs fold case the same way `hyalo okf index`
         // treats `INDEX.md` on case-insensitive filesystems (macOS/Windows
         // default).
-        let case_insensitive = hyalo_core::case_index::mode_enabled(case_insensitive_mode, dir);
+        let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
         for (full_path, rel_path) in &files {
             // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are not
             // subject to schema validation.
@@ -753,7 +753,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let out = match outcome {
@@ -799,7 +799,7 @@ status: draft
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
 
@@ -835,7 +835,7 @@ status: done
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -874,7 +874,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -916,7 +916,7 @@ tags:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -953,7 +953,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -981,7 +981,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1004,7 +1004,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1028,7 +1028,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1052,7 +1052,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1082,7 +1082,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
 
@@ -1119,7 +1119,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1166,7 +1166,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1207,7 +1207,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1247,7 +1247,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1285,7 +1285,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         match outcome {
@@ -1314,7 +1314,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1338,7 +1338,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1362,7 +1362,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1429,7 +1429,7 @@ type: post
             false,
             true, // validate = true
             Some(&schema),
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(
@@ -1494,7 +1494,7 @@ type: post
             false,
             true, // validate = true
             Some(&schema),
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(
@@ -1536,7 +1536,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         match outcome {
@@ -1574,7 +1574,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
@@ -1605,7 +1605,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1641,7 +1641,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {

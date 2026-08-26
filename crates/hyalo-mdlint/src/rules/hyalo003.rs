@@ -29,7 +29,7 @@ pub fn check_date_keys(
         // Accept scalar strings that look like YYYY-MM-DD.
         // Null / arrays / objects are ignored (let schema rules handle those).
         let Some(s) = val.as_str() else { continue };
-        if !hyalo_core::util::is_iso8601_date(s) {
+        if !hyalo_core::is_iso8601_date(s) {
             violations.push((key.as_str(), (*s).to_owned()));
         }
     }

@@ -62,7 +62,7 @@ pub(crate) fn refuse_escaping_write(
     hint: Option<&str>,
     format: Format,
 ) -> Result<Option<CommandOutcome>> {
-    let Some(target) = hyalo_core::fs_util::escaping_write_target(dir, full)? else {
+    let Some(target) = hyalo_core::escaping_write_target(dir, full)? else {
         return Ok(None);
     };
     // iter-235: name the vault dir in the message and offer the relative-path
@@ -72,12 +72,12 @@ pub(crate) fn refuse_escaping_write(
     // hint text.
     let effective_hint: Option<String> = match hint {
         Some(h) => Some(h.to_owned()),
-        None => Some(hyalo_core::fs_util::outside_vault_hint(dir)),
+        None => Some(hyalo_core::outside_vault_hint(dir)),
     };
     Ok(Some(CommandOutcome::UserError(
         crate::output::format_error(
             format,
-            &hyalo_core::fs_util::outside_vault_message_with_dir(subject, Some(&target), dir),
+            &hyalo_core::outside_vault_message_with_dir(subject, Some(&target), dir),
             Some(display),
             effective_hint.as_deref(),
             None,
@@ -681,13 +681,13 @@ pub fn resolve_error_to_outcome(
         FileResolveError::OutsideVault { path, resolved } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,
-                &hyalo_core::fs_util::outside_vault_message_with_dir(
+                &hyalo_core::outside_vault_message_with_dir(
                     "file",
                     resolved.as_deref().map(std::path::Path::new),
                     dir,
                 ),
                 Some(&path),
-                Some(&hyalo_core::fs_util::outside_vault_hint(dir)),
+                Some(&hyalo_core::outside_vault_hint(dir)),
                 None,
             ))
         }

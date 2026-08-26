@@ -3,11 +3,11 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use hyalo_core::util::levenshtein;
+use hyalo_core::levenshtein;
 
 use crate::commands::lint::lint_counts_from_properties;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::case_index::CaseInsensitiveIndex;
+use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::frontmatter::infer_type;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::detect_broken_links_from_index;

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use serde::Deserialize;
 
-use hyalo_core::case_index::CaseInsensitiveMode;
+use hyalo_core::CaseInsensitiveMode;
 use hyalo_core::schema::{RawSchemaConfig, SchemaConfig};
 use hyalo_mdlint::RuleOverride;
 

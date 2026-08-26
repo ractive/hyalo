@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hyalo_core::case_index::CaseInsensitiveIndex;
+use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::discovery;
 use hyalo_core::links::{self, Link, LinkKind};
 use hyalo_core::scanner::{FileVisitor, ScanAction, scan_slice_multi};

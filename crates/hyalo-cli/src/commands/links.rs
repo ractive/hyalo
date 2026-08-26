@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::cli::args::LinksAction;
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::case_index::CaseInsensitiveIndex;
+use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
@@ -787,7 +787,7 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
     let mut offenders: Vec<Offender> = tallies
         .into_iter()
         .filter_map(|(key, tally)| {
-            let common_word = hyalo_core::common_words::is_common_word(&key);
+            let common_word = hyalo_core::is_common_word(&key);
             let frequent = tally.count >= frequent_at;
             if !common_word && !frequent {
                 return None;
