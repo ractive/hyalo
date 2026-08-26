@@ -2,6 +2,7 @@
 
 mod build;
 mod filter_index;
+pub(crate) mod run;
 mod sort;
 
 pub use filter_index::{filter_index_entries, needs_body};

@@ -218,7 +218,7 @@ pub(crate) struct CommandContext<'a> {
 /// 4. `DEFAULT_OUTPUT_LIMIT` — hard-coded fallback
 ///
 /// Returns `None` for unlimited, `Some(n)` for an effective cap.
-fn resolve_limit(
+pub(crate) fn resolve_limit(
     cli_limit: Option<usize>,
     config_default: Option<usize>,
     programmatic: bool,
@@ -253,7 +253,7 @@ pub(crate) fn patch_index_for_modified_files_pub(
 /// into an [`lint_commands::ExtFileLintResult`] (new rule_groups shape).
 ///
 /// View violations are grouped under the synthetic rule id `SCHEMA`.
-fn adapt_view_result_to_ext(
+pub(crate) fn adapt_view_result_to_ext(
     result: &lint_commands::FileLintResult,
 ) -> lint_commands::ExtFileLintResult {
     let violations: Vec<lint_commands::BodyViolation> = result
@@ -305,7 +305,7 @@ fn adapt_view_result_to_ext(
 ///
 /// Deserializes the JSON, prepends the new file result, updates `files_with_violations`
 /// and `total`, then re-serializes.
-fn inject_ext_file_result(
+pub(crate) fn inject_ext_file_result(
     outcome: CommandOutcome,
     extra: &lint_commands::ExtFileLintResult,
 ) -> Result<CommandOutcome> {
@@ -424,7 +424,7 @@ fn inject_ext_file_result(
 /// --apply`, `links auto --apply`) need both or `backlinks`/`find --fields
 /// links` would keep returning pre-mutation results until a full
 /// `create-index` rebuild. Flushes to disk once at the end.
-fn patch_index_for_modified_files(
+pub(crate) fn patch_index_for_modified_files(
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
     dir: &Path,
@@ -455,7 +455,7 @@ fn patch_index_for_modified_files(
 /// `.source()` cause under a top-level `"invalid regex in property filter: ..."`
 /// context; passing that cause into `format_error` puts the caret detail in the
 /// `cause` field (iter-181 task 5) instead of dropping it.
-fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOutcome {
+pub(crate) fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOutcome {
     // Use the *root* cause (last link in the chain) so the regex engine's own
     // message — the one carrying the caret/position — reaches the user, not the
     // intermediate `"invalid regex pattern: ..."` wrapper. The chain's first link
@@ -476,7 +476,7 @@ fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOu
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
 /// Returns an error string on invalid input.
-fn parse_where_filters(
+pub(crate) fn parse_where_filters(
     where_properties: &[String],
     where_tags: &[String],
 ) -> Result<Vec<filter::PropertyFilter>, String> {
@@ -510,311 +510,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             pattern,
             file_positional,
             view: _, // resolved before dispatch
-            filters: mut filters_raw,
+            filters,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // Merge positional files into filters (clap prevents positional+--file
-            // and positional+--glob at parse time; a view may have set glob though).
-            if !file_positional.is_empty() {
-                if !filters_raw.glob.is_empty() {
-                    crate::warn::warn(
-                        "positional file arguments override the view's --glob; \
-                         glob filter has been ignored",
-                    );
-                }
-                filters_raw.file = file_positional;
-                filters_raw.glob.clear(); // file overrides view's glob
-            }
-            let FindFilters {
-                pattern: _, // pattern is handled in run.rs before dispatch
-                regexp,
-                properties,
-                tag,
-                task,
-                sections,
-                file,
-                glob,
-                fields,
-                sort,
-                reverse,
-                limit,
-                broken_links,
-                strict,
-                orphan,
-                dead_end,
-                title,
-                language,
-                filenames_only,
-                filenames0,
-                iteration,
-                files_from: _, // resolved in run.rs before dispatch
-            } = filters_raw;
-            if orphan && dead_end {
-                crate::warn::warn(
-                    "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
-                );
-            }
-            // Resolve --iteration <ID> into glob patterns from the schema's
-            // type filename_templates (iter-235). The globs join the --glob
-            // set with OR semantics (positive globs are unioned), so
-            // `--iteration 206` is just another way to scope the same find.
-            let mut glob = glob;
-            if let Some(id_str) = iteration {
-                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
-                    Ok(id) => {
-                        match crate::commands::iteration::resolve_iteration_globs(
-                            ctx.schema,
-                            &id,
-                            effective_format,
-                        ) {
-                            crate::commands::iteration::IterationGlobs::Globs(g) => {
-                                glob.extend(g);
-                            }
-                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
-                                return Ok(o);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            Some(&id_str),
-                            Some(
-                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
-                            ),
-                            None,
-                        )));
-                    }
-                }
-            }
-            // Parse property filters
-            let prop_filters: Vec<filter::PropertyFilter> = match properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(property_filter_error_outcome(&e, effective_format));
-                }
-            };
-            // Parse task filter
-            let task_filter = match task.as_deref().map(filter::parse_task_filter) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-                None => None,
-            };
-            // Parse fields
-            let parsed_fields = match filter::Fields::parse(&fields) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            // Parse sort
-            let sort_field = match sort.as_deref().map(filter::parse_sort) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-                None => None,
-            };
-            // Parse section filters
-            let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
-                .iter()
-                .map(|s| hyalo_core::heading::SectionFilter::parse(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-
-            for t in &tag {
-                if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &msg,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            }
-
-            // Validate --language flag and config language against supported languages.
-            if let Some(ref lang) = language
-                && let Err(e) = parse_language(lang)
-            {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &format!("invalid --language value {lang:?}: {e}"),
-                    None,
-                    None,
-                    None,
-                )));
-            }
-            if let Some(cfg_lang) = ctx.config_language
-                && let Err(e) = parse_language(cfg_lang)
-            {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
-                    None,
-                    None,
-                    None,
-                )));
-            }
-
-            // Strip the dir prefix from --file args so that
-            // filter_index_entries matches vault-relative paths.
-            let file: Vec<String> = file
-                .into_iter()
-                .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
-                .collect();
-
-            let sort_needs_backlinks =
-                matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
-            let sort_needs_links =
-                matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
-            let sort_needs_title = matches!(sort_field.as_ref(), Some(filter::SortField::Title));
-            let has_task_filter = task_filter.is_some();
-            let has_section_filter = !section_filters.is_empty();
-            let has_title_filter = title.is_some();
-            // BM25 pattern search requires reading file bodies for each candidate.
-            let has_bm25_search = pattern.is_some();
-            let needs_body =
-                find_commands::needs_body(&parsed_fields, has_task_filter, has_section_filter)
-                    || sort_needs_links
-                    || sort_needs_title
-                    || broken_links
-                    || orphan
-                    || dead_end
-                    || has_title_filter
-                    || has_bm25_search;
-            let needs_full_vault =
-                parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
-            // The link graph is only built when scan_body is true, so
-            // backlinks / backlink-sort always require body scanning.
-            let scan_body = needs_body || needs_full_vault;
-            let needs_stem_map = find_needs_stem_map(
-                broken_links,
-                orphan,
-                dead_end,
-                parsed_fields.links,
-                sort_needs_links,
-            );
-            match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &file,
-                &glob,
-                effective_format,
-                site_prefix,
-                needs_full_vault,
-                &ScanOptions {
-                    scan_body,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(resolved) => {
-                    let ci = maybe_case_index(
-                        ctx.case_insensitive_mode,
-                        dir,
-                        needs_stem_map,
-                        resolved.as_snapshot(),
-                    );
-                    let mut outcome = find_commands::find(
-                        resolved.as_index(),
-                        dir,
-                        site_prefix,
-                        pattern.as_deref(),
-                        regexp.as_deref(),
-                        &prop_filters,
-                        &tag,
-                        task_filter.as_ref(),
-                        &section_filters,
-                        &file,
-                        &glob,
-                        &parsed_fields,
-                        sort_field.as_ref(),
-                        reverse,
-                        resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
-                        broken_links,
-                        orphan,
-                        dead_end,
-                        title.as_deref(),
-                        effective_format,
-                        language.as_deref(),
-                        ctx.config_language,
-                        ci.as_ref(),
-                    )?;
-                    // UX-2 (dogfood pre3): `--strict` gives any `find` query
-                    // (most commonly `--broken-links`) a CI-gateable exit
-                    // code — before this, `find --broken-links` always
-                    // exited 0 even when it reported findings, so a vault
-                    // whose only defect was a dead heading anchor passed CI
-                    // silently.
-                    if strict
-                        && let CommandOutcome::Success {
-                            total: Some(total), ..
-                        } = &outcome
-                        && *total > 0
-                    {
-                        ctx.exit_code_override = Some(1);
-                    }
-                    // iter-235: `--filenames-only` projects the find result
-                    // set onto raw file paths (one per line, no envelope,
-                    // no count, no hints). It runs *after* the `--strict`
-                    // check above, so `find --filenames-only --strict`
-                    // still flips the exit code (1 when results exist) —
-                    // the CI-gate + filename-list use case. RawOutput bypasses
-                    // the JSON pipeline entirely (no jq, no count, no hints,
-                    // no envelope), which is exactly the point: an agent or
-                    // shell pipeline wants bare paths, nothing else.
-                    //
-                    // iter-238: `--filenames0` is the NUL-delimited sibling
-                    // (`find -print0` precedent) for `xargs -0` / newline-safe
-                    // consumption; identical semantics otherwise.
-                    if filenames_only {
-                        outcome = crate::commands::find::project_filenames_only(outcome);
-                    } else if filenames0 {
-                        outcome = crate::commands::find::project_filenames0(outcome);
-                    }
-                    Ok(outcome)
-                }
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            }
+            // ARCH-1 (iter-225): the ~310-line arm body now lives in
+            // `commands::find::run` — dispatch only forwards the parsed args.
+            find_commands::run::run(ctx, pattern, file_positional, filters)
         }
         Commands::Read {
             selection,
