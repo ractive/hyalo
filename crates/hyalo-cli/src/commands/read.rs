@@ -799,7 +799,7 @@ mod tests {
 /// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
 pub(crate) fn run_command(
     ctx: &mut crate::dispatch::CommandContext<'_>,
-    selection: crate::cli::args::InputSelection,
+    selection: crate::cli::inputs::InputSelection,
     section: Option<String>,
     lines: Option<String>,
     frontmatter: bool,
