@@ -545,41 +545,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             recent,
             depth,
             index_flags: _, // consumed in run.rs before dispatch
-        } => match resolve_index(
-            snapshot_index.as_ref(),
-            dir,
-            &[],
-            &glob,
-            effective_format,
-            site_prefix,
-            true,
-            &ScanOptions {
-                scan_body: true,
-                bm25_tokenize: false,
-                default_language: None,
-                frontmatter_link_props: ctx.frontmatter_link_props,
-            },
-        )? {
-            IndexResolution::Resolved(resolved) => {
-                // Summary always reports orphan/dead-end counts which rely on
-                // wikilink resolution, so the stem map is always needed.
-                let ci =
-                    maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
-                summary_commands::summary(
-                    dir,
-                    resolved.as_index(),
-                    &glob,
-                    recent,
-                    depth,
-                    site_prefix,
-                    effective_format,
-                    ctx.schema,
-                    ctx.lint_ignore,
-                    ci.as_ref(),
-                )
-            }
-            IndexResolution::Outcome(outcome) => Ok(outcome),
-        },
+        } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::summary::run`.
+            summary_commands::run(ctx, glob, recent, depth)
+        }
         Commands::Set {
             file_positional,
             properties,
