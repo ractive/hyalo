@@ -545,6 +545,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 title,
                 language,
                 filenames_only,
+                filenames0,
                 iteration,
                 files_from: _, // resolved in run.rs before dispatch
             } = filters_raw;
@@ -801,8 +802,14 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     // the JSON pipeline entirely (no jq, no count, no hints,
                     // no envelope), which is exactly the point: an agent or
                     // shell pipeline wants bare paths, nothing else.
+                    //
+                    // iter-238: `--filenames0` is the NUL-delimited sibling
+                    // (`find -print0` precedent) for `xargs -0` / newline-safe
+                    // consumption; identical semantics otherwise.
                     if filenames_only {
                         outcome = crate::commands::find::project_filenames_only(outcome);
+                    } else if filenames0 {
+                        outcome = crate::commands::find::project_filenames0(outcome);
                     }
                     Ok(outcome)
                 }
@@ -816,6 +823,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             frontmatter,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
+            // iter-238: `--iteration <ID>` on single-file commands resolves to
+            // exactly one file before the generic input resolution runs.
+            let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                &selection,
+                dir,
+                ctx.schema,
+                effective_format,
+            ) {
+                Ok(s) => s,
+                Err(outcome) => return Ok(outcome),
+            };
             match resolve_inputs(
                 &selection,
                 dir,
@@ -1035,6 +1053,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                     index_flags: _, // consumed in run.rs before dispatch
                 } => {
                     let configured_dir = ctx.configured_dir_str;
+                    // iter-238: `--iteration <ID>` support (single-file command).
+                    let selection =
+                        match crate::commands::iteration::selection_with_iteration_resolved(
+                            &selection,
+                            dir,
+                            ctx.schema,
+                            effective_format,
+                        ) {
+                            Ok(s) => s,
+                            Err(outcome) => return Ok(outcome),
+                        };
                     match resolve_inputs(
                         &selection,
                         dir,
@@ -1086,6 +1115,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         return Ok(CommandOutcome::UserError(out));
                     }
                     let configured_dir = ctx.configured_dir_str;
+                    // iter-238: `--iteration <ID>` support — resolves to exactly
+                    // one file, which then takes the single-file path below.
+                    let selection =
+                        match crate::commands::iteration::selection_with_iteration_resolved(
+                            &selection,
+                            dir,
+                            ctx.schema,
+                            effective_format,
+                        ) {
+                            Ok(s) => s,
+                            Err(outcome) => return Ok(outcome),
+                        };
                     match resolve_inputs(
                         &selection,
                         dir,
@@ -1194,6 +1235,18 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                         .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
 
                     let configured_dir = ctx.configured_dir_str;
+                    // iter-238: `--iteration <ID>` support — resolves to exactly
+                    // one file, which then takes the single-file path below.
+                    let selection =
+                        match crate::commands::iteration::selection_with_iteration_resolved(
+                            &selection,
+                            dir,
+                            ctx.schema,
+                            effective_format,
+                        ) {
+                            Ok(s) => s,
+                            Err(outcome) => return Ok(outcome),
+                        };
                     match resolve_inputs(
                         &selection,
                         dir,
@@ -1542,6 +1595,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             limit: cli_limit,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
+            // iter-238: `--iteration <ID>` support (single-file command).
+            let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                &selection,
+                dir,
+                ctx.schema,
+                effective_format,
+            ) {
+                Ok(s) => s,
+                Err(outcome) => return Ok(outcome),
+            };
             match resolve_inputs(
                 &selection,
                 dir,

@@ -11,6 +11,21 @@ and this project adheres to
 
 ### Added
 
+- **`find --filenames0` and `--iteration <ID>` on `read`/`task`/`backlinks`
+  (iter-238).** Two agent-CLI ergonomics follow-ups deliberately deferred out
+  of iter-235. `find --filenames0` is the NUL-delimited sibling of
+  `--filenames-only` (GNU `find -print0` precedent): each matching path is
+  terminated by a NUL byte instead of a newline, so filenames containing
+  newlines stay unambiguous and the output composes with `xargs -0`. Same
+  rules as `--filenames-only`: no envelope/count/hints, zero results → empty
+  output + exit 0, `--strict` still flips the exit code, and it conflicts
+  with `--filenames-only`, `--jq`, `--count`, and an explicit
+  `--format json`. Separately, every single-file command built on the shared
+  input resolver — `read`, `backlinks`, and all three `task` actions — now
+  accepts `--iteration <ID>`: like `set --iteration`, the ID must resolve to
+  exactly one file (zero matches names the resolved globs; an ambiguous
+  match lists the candidates), after which the command proceeds as if that
+  file had been passed with `--file`.
 - **pi package distribution: `pi install git:github.com/ractive/hyalo`**
   (iter-237). The pi extension and skills now live in a top-level
   `pi-package/` directory that is both a valid pi package (installable

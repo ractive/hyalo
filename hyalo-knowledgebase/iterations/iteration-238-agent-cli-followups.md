@@ -2,7 +2,7 @@
 title: "Iteration 238 — agent-CLI ergonomics follow-ups: --filenames0, --iteration on read/task, properties envelope, title~= normalization"
 type: iteration
 date: 2026-08-25
-status: planned
+status: completed
 branch: iter-238/agent-cli-followups
 tags:
   - iteration
@@ -30,25 +30,24 @@ only) or 237 (pi package distribution, template only), which are both
 
 ## Tasks
 
-- [ ] `find --filenames0` — NUL-delimited sibling of `--filenames-only` for
+- [x] `find --filenames0` — NUL-delimited sibling of `--filenames-only` for
       `xargs -0` / newline-in-filename safety. Shares the
       `project_filenames_only` projection; clap-conflicts with `--filenames-only`
-- [ ] `--iteration <ID>` on `read` and `task` subcommands — reuse
+- [x] `--iteration <ID>` on `read` and `task` subcommands — reuse
       `commands::iteration::resolve_iteration_globs`; same exactly-one-match
       error as `set --iteration` (read/task are single-file)
-- [ ] `properties` output envelope unification with the find result shape
-      (finding #4 — see [[research/results-json-shape-inventory]] and
-      [[iterations/iteration-216-results-shape-consistency]])
-- [ ] `--property 'title~='` normalization for non-iteration types (finding #2
-      remainder — obsoleted for iterations by `--iteration`; revisit only if
-      it bites on other types)
+- [x] ~~`properties` output envelope unification with the find result shape~~
+      — **skipped after dogfood triage** (moved to Out of scope, see below)
+- [x] ~~`--property 'title~='` normalization for non-iteration types~~
+      (finding #2 remainder) — **skipped after dogfood triage** (moved to
+      Out of scope, see below)
 
 ## Acceptance criteria
 
-- [ ] For every task above that ships: e2e tests mirroring the
+- [x] For every task above that ships: e2e tests mirroring the
       `iteration_ergonomics.rs` patterns, help/command-reference updates
       (`check-help-drift`, `check-command-reference` green), CHANGELOG entry
-- [ ] Tasks intentionally skipped after dogfood triage are moved to
+- [x] Tasks intentionally skipped after dogfood triage are moved to
       Out of scope with a note naming the triage evidence
 
 ## Non-goals
@@ -58,7 +57,7 @@ only) or 237 (pi package distribution, template only), which are both
 
 ## Carry-over from [[iterations/iteration-237-pi-package-distribution]]
 
-Post-merge verifications and deferred decisions from iter-237 (folded here so they are not silently forgotten):
+Post-merge verifications and deferred decisions from iter-237 (folded here so they are not silently forgotten). All five were **triaged and deferred** in iter-238: each requires mutating the owner's live global pi installation or a real follow-up update cycle, which an autonomous iteration run cannot safely do; see Out of scope for the notes.
 
 - [ ] Verify the git-source install end-to-end once iter-237 is merged: `pi install git:github.com/ractive/hyalo` from a scratch checkout, confirm tool + skills register, then tick AC-1 of iter-237
 - [ ] Verify `pi update --extensions` delivers a pushed change to that install (trivial marker change, e.g. package.json version bump), then tick AC-2 of iter-237
@@ -70,7 +69,7 @@ Post-merge verifications and deferred decisions from iter-237 (folded here so th
 
 Deferred by that iteration's non-goals ("any further `results` shape renames"):
 
-- [ ] Inventory finding **D-5**: rename `summary`'s `schema.files_with_issues`
+- [x] Inventory finding **D-5**: rename `summary`'s `schema.files_with_issues`
       to `files_with_violations` so it matches `lint`'s field name for the
       same quantity (`output.rs` already carries a compatibility shim reading
       both). Remediation R4, flagged "yes" in
@@ -79,5 +78,25 @@ Deferred by that iteration's non-goals ("any further `results` shape renames"):
 
 ## Out of scope / carry-over candidates
 
+- `properties` envelope unification with the find result shape (research
+  finding #4) — skipped after dogfood triage 2026-08-25: running the built
+  binary against this vault shows `hyalo properties --no-hints` already emits
+  the exact find envelope `{hints, results, total}` (the envelope unification
+  itself landed with iter-216's results-shape work), and the remaining
+  per-item shape difference is recorded as justified divergence J-8 in
+  [[research/results-json-shape-inventory]]. No single-file status-read
+  friction was observed this session (`find --glob X --jq '.results[0].properties.status'`
+  suffices).
+- `--property 'title~='` normalization for non-iteration types (finding #2
+  remainder) — skipped after dogfood triage: obsoleted for iterations by
+  `--iteration`, and no friction on other types was observed during this
+  session. Revisit only if a concrete case appears.
+- Iter-237 carry-overs (git-source install verification, `pi update`
+  delivery check, DEC-101 tag-per-release decision, conditional `hyalo
+  doctor` drift check, conditional `hyalo_find --jq` / `hyalo_lint` typed
+  tools) — deferred: they need attended access to the owner's live `~/.
+p i` installation and, for AC-2/DEC-101, at least one real update cycle,
+  neither of which exists yet. The conditional items remain not-triggered
+  (no drift confusion or model friction observed while dogfooding 238).
 - `--iteration` on `links` (no consumer friction observed yet)
 - npm registry publishing of pi-package (git source sufficient until asked)

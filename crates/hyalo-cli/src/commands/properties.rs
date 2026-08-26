@@ -271,6 +271,7 @@ tags:
     fn unwrap_output(outcome: CommandOutcome) -> (String, bool) {
         match outcome {
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => (s, true),
+            CommandOutcome::RawBytes(b) => (String::from_utf8_lossy(&b).into_owned(), true),
             CommandOutcome::UserError(s) => (s, false),
         }
     }

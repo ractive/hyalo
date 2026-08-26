@@ -532,6 +532,7 @@ tags:
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -547,6 +548,7 @@ tags:
         let outcome = run_tags_summary(tmp.path(), Some("a.md"), Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -734,6 +736,7 @@ tags:
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
             CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),
         };
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();

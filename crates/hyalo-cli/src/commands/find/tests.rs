@@ -124,6 +124,7 @@ macro_rules! md {
 fn unwrap_success(outcome: CommandOutcome) -> String {
     match outcome {
         CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+        CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
         CommandOutcome::UserError(s) => panic!("expected success, got user error: {s}"),
     }
 }
