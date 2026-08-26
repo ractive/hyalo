@@ -5,19 +5,18 @@ use anyhow::{Context, Result};
 use crate::cli::args::{
     ChangelogAction, Commands, LintRulesAction, MadrAction, OkfAction, TypesAction,
 };
-use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
-    IndexResolution, append as append_commands, backlinks as backlinks_commands,
+    append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
     lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
-    remove as remove_commands, resolve_index, set as set_commands, summary as summary_commands,
+    remove as remove_commands, set as set_commands, summary as summary_commands,
     tags as tag_commands, tasks as task_commands, views as views_commands,
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::case_index::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 use hyalo_core::filter;
-use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
+use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
 
 /// Default output limit for list commands when no `--limit` is passed and no
@@ -633,64 +632,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             limit: cli_limit,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // iter-238: `--iteration <ID>` support (single-file command).
-            let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                &selection,
-                dir,
-                ctx.schema,
-                effective_format,
-            ) {
-                Ok(s) => s,
-                Err(outcome) => return Ok(outcome),
-            };
-            match resolve_inputs(
-                &selection,
-                dir,
-                ctx.configured_dir_str,
-                snapshot_index.as_ref(),
-                &ResolutionPolicy::Single { allow_glob: false },
-                effective_format,
-                mode_enabled(ctx.case_insensitive_mode, dir),
-            )? {
-                ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                ResolvedInputsOrOutcome::Resolved(r) => {
-                    ctx.files_from_counters = r.counters;
-                    let (_full, file) = r
-                        .files
-                        .into_iter()
-                        .next()
-                        .context("Single resolution returned no files")?;
-                    match resolve_index(
-                        snapshot_index.as_ref(),
-                        dir,
-                        &[],
-                        &[],
-                        effective_format,
-                        site_prefix,
-                        true,
-                        &ScanOptions {
-                            scan_body: true,
-                            bm25_tokenize: false,
-                            default_language: None,
-                            frontmatter_link_props: ctx.frontmatter_link_props,
-                        },
-                    )? {
-                        IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
-                            resolved.as_index(),
-                            &file,
-                            dir,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                            mode_enabled(ctx.case_insensitive_mode, dir),
-                        ),
-                        IndexResolution::Outcome(outcome) => Ok(outcome),
-                    }
-                }
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::backlinks::run`.
+            backlinks_commands::run(ctx, selection, cli_limit)
         }
         Commands::Mv {
             file_positional,
