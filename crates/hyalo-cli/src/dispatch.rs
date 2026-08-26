@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::cli::args::{
     ChangelogAction, Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, MadrAction,
-    OkfAction, PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction,
+    OkfAction, PropertiesAction, TagsAction, TypesAction, ViewsAction,
     resolve_single_file,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
