@@ -3,10 +3,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    ChangelogAction, Commands, LintRulesAction, MadrAction, OkfAction, TypesAction,
+    Commands, LintRulesAction, MadrAction, OkfAction, TypesAction,
 };
 use crate::commands::{
     append as append_commands, backlinks as backlinks_commands,
+    changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
     lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
@@ -905,79 +906,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 Ok(outcome)
             }
         },
-        Commands::Changelog { action } => match action {
-            ChangelogAction::Release {
-                version,
-                date,
-                apply,
-                dry_run: _,
-            } => {
-                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                    effective_format,
-                ) {
-                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                };
-                let boundary_root = crate::commands::changelog::changelog_boundary_root(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                );
-                let (outcome, exit_override) = crate::commands::changelog::run_release(
-                    &changelog_file,
-                    &boundary_root,
-                    &version,
-                    date.as_deref(),
-                    apply,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-            ChangelogAction::Add {
-                category,
-                message,
-                wrap,
-                apply,
-                dry_run: _,
-            } => {
-                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                    effective_format,
-                ) {
-                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                };
-                let boundary_root = crate::commands::changelog::changelog_boundary_root(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                );
-                let (outcome, exit_override) = crate::commands::changelog::run_add(
-                    &changelog_file,
-                    &boundary_root,
-                    &category,
-                    &message,
-                    wrap,
-                    apply,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-        },
-        // Config is dispatched as an early-return in run.rs before dispatch() is called.
+        Commands::Changelog { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in
+            // `commands::changelog::run`.
+            changelog_commands::run(ctx, action)
+        }
+// Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config { .. } => unreachable!("Config command is handled before dispatch"),
     }
 }
