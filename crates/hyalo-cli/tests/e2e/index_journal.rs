@@ -184,6 +184,35 @@ fn properties_rename_updates_persisted_graph() {
     assert_backlink_sources(&tmp, "beta.md", &["alpha.md"]);
 }
 
+/// Same bug class for `tags rename`: renaming a tag that is also a
+/// frontmatter link property is not possible (tags are a list), but the
+/// entry-only patch path is shared — pin that the graph survives a tags
+/// rename that rewrites frontmatter.
+#[test]
+fn tags_rename_updates_persisted_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("alpha.md"),
+        "---\ntitle: Alpha\ntags: [oldtag]\nrelated: '[[beta]]'\n---\n\n# Alpha\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "---\ntitle: Beta\n---\n\n# Beta\n",
+    )
+    .unwrap();
+    create_index(&tmp);
+    run(
+        &tmp,
+        &[
+            "tags", "rename", "--from", "oldtag", "--to", "newtag", "--glob", "**/*.md", "--index",
+        ],
+    );
+    // The tags rename rewrote alpha.md's frontmatter (tags) — the
+    // `related: '[[beta]]'` edge must survive in the persisted graph.
+    assert_backlink_sources(&tmp, "beta.md", &["alpha.md"]);
+}
+
 // ---------------------------------------------------------------------------
 // mv — rename path
 // ---------------------------------------------------------------------------
@@ -227,6 +256,52 @@ fn task_toggle_updates_persisted_entry() {
         &["task", "read", "--file", "alpha.md", "--all", "--index"],
     );
     assert_eq!(json["results"]["done"], serde_json::json!(true));
+}
+
+// ---------------------------------------------------------------------------
+// links fix --apply — body rewrite path (rescan_modified)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn links_fix_apply_updates_persisted_graph() {
+    let tmp = tempfile::tempdir().unwrap();
+    // alpha links to beta by an ambiguous/partial path so `links fix` has a
+    // rewrite to apply; here a wrong-extension link resolves to beta.md.
+    std::fs::write(
+        tmp.path().join("alpha.md"),
+        "---\ntitle: Alpha\n---\n\n# Alpha\n\nSee [[beta.markdown]].\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "---\ntitle: Beta\n---\n\n# Beta\n",
+    )
+    .unwrap();
+    create_index(&tmp);
+    run(
+        &tmp,
+        &[
+            "links",
+            "fix",
+            "--apply",
+            "--min-confidence",
+            "0",
+            "--index",
+        ],
+    );
+    // After the rewrite (beta.markdown -> beta), the persisted graph
+    // must show alpha.md's outbound edge to beta.md.
+    let (_, json) = run(
+        &tmp,
+        &["find", "--file", "alpha.md", "--fields", "links", "--index"],
+    );
+    let links: Vec<String> = json["results"][0]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|l| l["path"].as_str().map(str::to_owned))
+        .collect();
+    assert!(links.contains(&"beta.md".to_string()), "links: {links:?}");
 }
 
 // ---------------------------------------------------------------------------

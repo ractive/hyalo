@@ -2,7 +2,7 @@
 title: "Iteration 226 — architecture: lint crate boundary and unified index journal"
 type: iteration
 date: 2026-08-23
-status: in-progress
+status: completed
 branch: iter-226/arch-lint-crate-index-journal
 tags: [iteration, architecture, refactor, lint, index, tech-debt]
 related:
