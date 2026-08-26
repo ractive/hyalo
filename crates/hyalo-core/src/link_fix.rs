@@ -18,8 +18,10 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -533,6 +535,21 @@ pub struct LinkMatcher {
     /// link written `/docs/a/b.md` is compared against the vault path
     /// `a/b.md` (iter-200).
     site_prefix: Option<String>,
+    /// Per-file filename stems (`.md` stripped), parallel to `files` —
+    /// precomputed at build so the fuzzy pass (and its iter-206 shortlist
+    /// cache) never re-derives them per broken link.
+    stems: Vec<String>,
+    /// Lazy threshold-gated fuzzy candidate shortlist per distinct target
+    /// stem (iter-206). The Jaro-Winkler candidacy gate over the whole vault
+    /// is by far the dominant cost of `links fix` on link-heavy corpora
+    /// (profiled at ~87% of samples in `find_match`: broken-link count ×
+    /// vault-size calls to `strsim::jaro_winkler`). Broken targets repeat
+    /// heavily across a vault (the same site-absolute URL appears in many
+    /// pages), so the gate is computed once per *distinct* target stem and
+    /// shared by every broken link with that stem. The per-link work that
+    /// remains — self-link filtering and `candidate_confidence` ranking over
+    /// the shortlist — still runs per link because it depends on `source`.
+    fuzzy_shortlists: RefCell<HashMap<String, Rc<Vec<usize>>>>,
 }
 
 /// Result of a single match attempt.
@@ -581,8 +598,12 @@ impl LinkMatcher {
         let mut lower_to_idx = HashMap::with_capacity(files.len());
         let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut stems = Vec::with_capacity(files.len());
 
         for (i, f) in files.iter().enumerate() {
+            // Filename stem, precomputed for the fuzzy pass (iter-206).
+            let fname0 = f.rsplit('/').next().unwrap_or(f.as_str());
+            stems.push(fname0.strip_suffix(".md").unwrap_or(fname0).to_string());
             // Index by exact path, plus the extension-toggled form.
             exact_to_idx.entry(f.clone()).or_insert(i);
             let alt = if f.to_ascii_lowercase().ends_with(".md") {
@@ -619,6 +640,8 @@ impl LinkMatcher {
             stem_to_indices,
             threshold,
             site_prefix: site_prefix.map(std::string::ToString::to_string),
+            stems,
+            fuzzy_shortlists: RefCell::new(HashMap::new()),
         }
     }
 
@@ -637,6 +660,33 @@ impl LinkMatcher {
     /// `.md` candidate is compared verbatim (it is never a real vault path).
     fn is_self_link(source: &str, candidate: &str) -> bool {
         strip_wikilink_md_suffix(source).eq_ignore_ascii_case(strip_wikilink_md_suffix(candidate))
+    }
+
+    /// Threshold-gated fuzzy candidate indices for `target_stem` (iter-206).
+    ///
+    /// Computes (once per distinct target stem, then cached) the indices of
+    /// every file whose stem clears `--threshold` under Jaro-Winkler. This is
+    /// the expensive full-vault pass; sharing it across the many broken links
+    /// that share a target stem turns the O(broken × vault) gate into
+    /// O(distinct stems × vault).
+    fn fuzzy_shortlist(&self, target_stem: &str) -> Rc<Vec<usize>> {
+        if let Some(hit) = self.fuzzy_shortlists.borrow().get(target_stem) {
+            return Rc::clone(hit);
+        }
+        let shortlist: Vec<usize> = self
+            .stems
+            .iter()
+            .enumerate()
+            .filter(|(_, fstem)| {
+                strsim::jaro_winkler(target_stem, fstem.as_str()) >= self.threshold
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let rc = Rc::new(shortlist);
+        self.fuzzy_shortlists
+            .borrow_mut()
+            .insert(target_stem.to_string(), Rc::clone(&rc));
+        rc
     }
 
     /// Try to find a matching file for a broken link target.
@@ -802,17 +852,23 @@ impl LinkMatcher {
         // never win), but *ranking* and the reported confidence now come from
         // [`candidate_confidence`], which weights the basename above the
         // directory instead of rewarding a shared prefix.
+        // iter-206: the expensive full-vault Jaro-Winkler candidacy gate now
+        // runs once per *distinct* target stem (`fuzzy_shortlist` cache);
+        // this loop only ranks the survivors. Per-link semantics are
+        // unchanged: candidacy is still gated by the raw stem score against
+        // `--threshold`, and ranking/confidence still come from
+        // [`candidate_confidence`] (iter-212). The shortlist is *not*
+        // filtered for self-links here — self-link filtering depends on
+        // `source`, which the cache cannot see — so it is applied per link
+        // below, exactly as before.
+        let shortlist = self.fuzzy_shortlist(target_stem);
         let mut best_score = f64::NEG_INFINITY;
         let mut second_score = f64::NEG_INFINITY;
         let mut best_idx: Option<usize> = None;
 
-        for (i, candidate) in self.files.iter().enumerate() {
+        for &i in shortlist.iter() {
+            let candidate = &self.files[i];
             if Self::is_self_link(source, candidate) {
-                continue;
-            }
-            let fname = candidate.rsplit('/').next().unwrap_or(candidate.as_str());
-            let fstem = fname.strip_suffix(".md").unwrap_or(fname);
-            if strsim::jaro_winkler(target_stem, fstem) < self.threshold {
                 continue;
             }
             let score = candidate_confidence_with_claim(&score_target, candidate, asserts_path);
@@ -1608,6 +1664,54 @@ mod tests {
     fn matcher_no_match() {
         let matcher = LinkMatcher::new(make_files(&["completely-unrelated.md"]), 0.95);
         assert!(matcher.find_match("xyz-abc-notexist", "__test__").is_none());
+    }
+
+    // --- iter-206: fuzzy shortlist cache semantics ---
+
+    #[test]
+    fn matcher_shortlist_cache_repeated_target_same_result() {
+        // The same broken target asked twice (as happens across many source
+        // files in a real vault) must produce byte-identical match results —
+        // the cached candidacy shortlist cannot change per-link ranking,
+        // self-link filtering, or tie detection.
+        let matcher = LinkMatcher::new(
+            make_files(&["authentication.md", "authentication-backup.md", "other.md"]),
+            0.7,
+        );
+        let first = matcher.find_match("authentcation", "__test__").unwrap();
+        for source in ["__test__", "other.md", "authentication.md"] {
+            let again = matcher.find_match("authentcation", source);
+            // The self-link filter depends on `source`, so `again` may be None
+            // for `authentication.md` — but for the non-self sources it must
+            // equal the first result exactly.
+            if source != "authentication.md" {
+                let again = again.unwrap();
+                assert_eq!(again.matched_file, first.matched_file);
+                assert_eq!(again.confidence.to_bits(), first.confidence.to_bits());
+            } else if let Some(m) = again {
+                assert_ne!(m.matched_file, first.matched_file);
+            }
+        }
+    }
+
+    #[test]
+    fn matcher_shortlist_cache_does_not_leak_self_link_filter() {
+        // The cached shortlist is shared across sources, but the self-link
+        // filter is per-source: asking for a target whose best fuzzy
+        // candidate IS the source file must still skip that candidate, even
+        // when the shortlist was already cached by an earlier call from a
+        // different source that legitimately matched it.
+        let files = make_files(&["authentication.md", "totally-unrelated.md"]);
+        let matcher = LinkMatcher::new(files, 0.7);
+        // Warm the cache from a different source: "authentication" matches.
+        let warm = matcher.find_match("authentication-typo", "totally-unrelated.md");
+        assert!(warm.is_some());
+        // Now the same target from `authentication.md` itself: the cached
+        // shortlist still contains it, but the per-link self-link filter must
+        // exclude it (only the unrelated file may win, or nothing at all).
+        if let Some(m) = matcher.find_match("authentication-typo", "authentication.md") {
+            assert_ne!(m.matched_file, "authentication.md");
+        }
     }
 
     #[test]
