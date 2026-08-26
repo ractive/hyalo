@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use crate::cli::args::{
     ChangelogAction, Commands, IndexFlags, LinksAction, LintRulesAction, MadrAction,
     OkfAction, PropertiesAction, TagsAction, TypesAction,
-    resolve_single_file,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
@@ -1094,143 +1093,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             allow_ambiguous,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // Resolve the destination from either the positional DEST alias or
-            // the --to flag (iter-181 task 5). clap enforces they are mutually
-            // exclusive and that DEST requires the positional source; a missing
-            // destination (neither form given) is reported here.
-            let Some(to) = to.or(to_positional) else {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    "no destination provided: pass DEST positionally (e.g. `hyalo mv old.md new.md`) or --to <path>",
-                    None,
-                    None,
-                    None,
-                )));
-            };
-            // Parse property filters for batch mode
-            let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
-                .iter()
-                .map(|s| hyalo_core::filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(property_filter_error_outcome(&e, effective_format));
-                }
-            };
-            // Build type filters as additional property filters (type=<value>)
-            let type_filters: Vec<hyalo_core::filter::PropertyFilter> = {
-                let mut tf = Vec::new();
-                for t in &r#type {
-                    match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
-                        Ok(f) => tf.push(f),
-                        Err(e) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    }
-                }
-                tf
-            };
-            let all_prop_filters: Vec<hyalo_core::filter::PropertyFilter> =
-                prop_filters.into_iter().chain(type_filters).collect();
-
-            let has_selectors = !glob.is_empty() || !all_prop_filters.is_empty() || !tag.is_empty();
-            let has_file = file_positional.is_some() || file.is_some();
-
-            if !has_selectors && !has_file {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    "no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)",
-                    None,
-                    None,
-                    None,
-                )));
-            }
-
-            let is_batch = has_selectors;
-
-            if is_batch {
-                // Validate tag filters.
-                for t in &tag {
-                    if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &msg,
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                }
-
-                // --dry-run and --apply are mutually exclusive (also enforced by clap).
-                let effective_apply = apply && !dry_run;
-
-                mv_commands::mv_batch(
-                    dir,
-                    file_positional.as_deref(),
-                    file.as_deref(),
-                    &glob,
-                    &all_prop_filters,
-                    &tag,
-                    &to,
-                    effective_apply,
-                    &on_conflict,
-                    effective_format,
-                    site_prefix,
-                    snapshot_index,
-                    index_path,
-                    allow_ambiguous,
-                )
-            } else {
-                // `mv` has an asymmetric default: single-file mode writes
-                // immediately, batch mode defaults to dry-run and needs
-                // `--apply` to commit. Accepting `--apply` here as a silent
-                // no-op hid that asymmetry from anyone who learned the batch
-                // form first — they had no way to tell whether the flag was
-                // doing the work or the default was (iter-192, DEC-192-mv-apply).
-                if apply {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        "single-file mv applies by default; use --dry-run to preview",
-                        None,
-                        Some(
-                            "--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run",
-                        ),
-                        None,
-                    )));
-                }
-                let file = match resolve_single_file(file_positional, file) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                };
-                let effective_dry_run = dry_run;
-                mv_commands::mv(
-                    dir,
-                    &file,
-                    &to,
-                    effective_dry_run,
-                    ctx.user_format,
-                    site_prefix,
-                    snapshot_index,
-                    index_path,
-                    allow_ambiguous,
-                )
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::mv::run`.
+            mv_commands::run(
+                ctx,
+                file_positional,
+                file,
+                to_positional,
+                to,
+                glob,
+                properties,
+                tag,
+                r#type,
+                dry_run,
+                apply,
+                on_conflict,
+                allow_ambiguous,
+            )
         }
         Commands::CreateIndex {
             output,
