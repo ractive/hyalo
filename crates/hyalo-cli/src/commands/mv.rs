@@ -644,11 +644,7 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
                 // file ends up byte-for-byte as it was before the batch.
                 match &plan.original_content {
                     Some(original) => {
-                        match hyalo_core::fs_util::atomic_write_within(
-                            dir,
-                            old_path,
-                            original.as_bytes(),
-                        ) {
+                        match hyalo_core::atomic_write_within(dir, old_path, original.as_bytes()) {
                             Ok(()) => self_rewrites_restored.push(outcome.rel_path.clone()),
                             Err(restore_err) => {
                                 eprintln!(
@@ -747,7 +743,7 @@ fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
 /// in-vault path component is a symlink that resolves outside the vault
 /// (H-3).
 ///
-/// Delegates to [`hyalo_core::fs_util::escaping_write_target`], which anchors
+/// Delegates to [`hyalo_core::escaping_write_target`], which anchors
 /// on the nearest existing ancestor: `fs::create_dir_all` only ever creates
 /// plain directories — never symlinks — so an in-vault anchor guarantees every
 /// component created below it also stays in the vault. Must be called before
@@ -761,15 +757,15 @@ fn ensure_dest_within_vault(
     new_rel: &str,
 ) -> std::result::Result<(), (String, String)> {
     let dst = dir.join(new_rel);
-    match hyalo_core::fs_util::escaping_write_target(canonical_vault, &dst) {
+    match hyalo_core::escaping_write_target(canonical_vault, &dst) {
         Ok(None) => Ok(()),
         Ok(Some(target)) => Err((
-            hyalo_core::fs_util::outside_vault_message_with_dir(
+            hyalo_core::outside_vault_message_with_dir(
                 "target path",
                 Some(&target),
                 canonical_vault,
             ),
-            hyalo_core::fs_util::outside_vault_hint(canonical_vault),
+            hyalo_core::outside_vault_hint(canonical_vault),
         )),
         Err(e) => Err((
             format!("failed to verify destination {new_rel} stays within the vault: {e}"),
@@ -1029,4 +1025,176 @@ fn describe_filters(
         parts.push(format!("--tag {t}"));
     }
     parts.join(", ")
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo mv` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `files_from` and `index_flags` were consumed earlier in `run.rs`
+/// (snapshot loading) and never reach here.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    file_positional: Option<String>,
+    file: Option<String>,
+    to_positional: Option<String>,
+    to: Option<String>,
+    glob: Vec<String>,
+    properties: Vec<String>,
+    tag: Vec<String>,
+    r#type: Vec<String>,
+    dry_run: bool,
+    apply: bool,
+    on_conflict: String,
+    allow_ambiguous: bool,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let site_prefix = ctx.site_prefix;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    let index_path = ctx.index_path;
+    use crate::cli::args::resolve_single_file;
+    use crate::dispatch::property_filter_error_outcome;
+
+    // Resolve the destination from either the positional DEST alias or
+    // the --to flag (iter-181 task 5). clap enforces they are mutually
+    // exclusive and that DEST requires the positional source; a missing
+    // destination (neither form given) is reported here.
+    let Some(to) = to.or(to_positional) else {
+        return Ok(CommandOutcome::UserError(crate::output::format_error(
+            effective_format,
+            "no destination provided: pass DEST positionally (e.g. `hyalo mv old.md new.md`) or --to <path>",
+            None,
+            None,
+            None,
+        )));
+    };
+    // Parse property filters for batch mode
+    let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
+        .iter()
+        .map(|s| hyalo_core::filter::parse_property_filter(s))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(property_filter_error_outcome(&e, effective_format));
+        }
+    };
+    // Build type filters as additional property filters (type=<value>)
+    let type_filters: Vec<hyalo_core::filter::PropertyFilter> = {
+        let mut tf = Vec::new();
+        for t in &r#type {
+            match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
+                Ok(f) => tf.push(f),
+                Err(e) => {
+                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                        effective_format,
+                        &e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )));
+                }
+            }
+        }
+        tf
+    };
+    let all_prop_filters: Vec<hyalo_core::filter::PropertyFilter> =
+        prop_filters.into_iter().chain(type_filters).collect();
+
+    let has_selectors = !glob.is_empty() || !all_prop_filters.is_empty() || !tag.is_empty();
+    let has_file = file_positional.is_some() || file.is_some();
+
+    if !has_selectors && !has_file {
+        return Ok(CommandOutcome::UserError(crate::output::format_error(
+            effective_format,
+            "no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)",
+            None,
+            None,
+            None,
+        )));
+    }
+
+    let is_batch = has_selectors;
+
+    if is_batch {
+        // Validate tag filters.
+        for t in &tag {
+            if let Err(msg) = crate::commands::tags::validate_tag(t) {
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    &msg,
+                    None,
+                    None,
+                    None,
+                )));
+            }
+        }
+
+        // --dry-run and --apply are mutually exclusive (also enforced by clap).
+        let effective_apply = apply && !dry_run;
+
+        self::mv_batch(
+            dir,
+            file_positional.as_deref(),
+            file.as_deref(),
+            &glob,
+            &all_prop_filters,
+            &tag,
+            &to,
+            effective_apply,
+            &on_conflict,
+            effective_format,
+            site_prefix,
+            snapshot_index,
+            index_path,
+            allow_ambiguous,
+        )
+    } else {
+        // `mv` has an asymmetric default: single-file mode writes
+        // immediately, batch mode defaults to dry-run and needs
+        // `--apply` to commit. Accepting `--apply` here as a silent
+        // no-op hid that asymmetry from anyone who learned the batch
+        // form first — they had no way to tell whether the flag was
+        // doing the work or the default was (iter-192, DEC-192-mv-apply).
+        if apply {
+            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                effective_format,
+                "single-file mv applies by default; use --dry-run to preview",
+                None,
+                Some(
+                    "--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run",
+                ),
+                None,
+            )));
+        }
+        let file = match resolve_single_file(file_positional, file) {
+            Ok(f) => f,
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    &e.to_string(),
+                    None,
+                    None,
+                    None,
+                )));
+            }
+        };
+        let effective_dry_run = dry_run;
+        self::mv(
+            dir,
+            &file,
+            &to,
+            effective_dry_run,
+            ctx.user_format,
+            site_prefix,
+            snapshot_index,
+            index_path,
+            allow_ambiguous,
+        )
+    }
 }

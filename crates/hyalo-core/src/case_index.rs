@@ -212,7 +212,8 @@ static PROBE_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
 ///
 /// Exposed for tests and diagnostics; the count only grows on cache misses.
 #[must_use]
-pub fn probe_count() -> usize {
+#[allow(dead_code)] // pub before the ARCH-5 façade (iter-225); kept for diagnostics
+pub(crate) fn probe_count() -> usize {
     PROBE_COUNT.load(Ordering::Relaxed)
 }
 
@@ -455,7 +456,8 @@ fn probe_write_dir(dir: &Path) -> PathBuf {
 /// The probe file itself is written to [`probe_write_dir`]`(dir)` — usually
 /// the system temp dir, verified same-device, rather than `dir` — so the
 /// vault directory does not see a transient create/delete (ADVISORY-c).
-pub fn probe_case_insensitive(dir: &Path) -> Result<bool> {
+#[allow(clippy::unnecessary_wraps)] // pub before the ARCH-5 façade (iter-225)
+pub(crate) fn probe_case_insensitive(dir: &Path) -> Result<bool> {
     use std::io::Write as _;
     use std::time::{SystemTime, UNIX_EPOCH};
 

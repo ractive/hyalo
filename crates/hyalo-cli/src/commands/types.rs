@@ -223,7 +223,7 @@ pub(crate) fn set_type(
     filename_template: Option<&str>,
     dry_run: bool,
     format: Format,
-    case_insensitive_mode: hyalo_core::case_index::CaseInsensitiveMode,
+    case_insensitive_mode: hyalo_core::CaseInsensitiveMode,
 ) -> Result<CommandOutcome> {
     // Validate type name before anything else.
     if let Err(msg) = validate_type_name(type_name) {
@@ -556,7 +556,7 @@ pub(crate) fn set_type(
         // Resolved once here (only when a violation check is actually
         // needed) rather than probing the filesystem unconditionally on
         // every `hyalo types set` invocation.
-        let case_insensitive = hyalo_core::case_index::mode_enabled(case_insensitive_mode, dir);
+        let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
         let counts = crate::commands::lint::lint_counts_only(
             &file_pairs,
             &updated_schema,
@@ -965,6 +965,7 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::schema::{PropertyConstraint, TypeSchema};
@@ -1122,7 +1123,7 @@ mod tests {
             None,
             false,
             Format::Json,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(
@@ -1216,7 +1217,7 @@ mod tests {
             None,
             false,
             Format::Json,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
@@ -1244,7 +1245,7 @@ mod tests {
             None,
             false,
             Format::Json,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
 
@@ -1305,12 +1306,59 @@ mod tests {
             None,
             false,
             Format::Json,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         );
         // Should return an error about malformed TOML, not panic
         assert!(
             result.is_err() || matches!(result, Ok(CommandOutcome::UserError(_))),
             "expected error for malformed TOML"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo types` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: Option<crate::cli::args::TypesAction>,
+) -> Result<CommandOutcome> {
+    let effective_format = ctx.effective_format;
+    use crate::cli::args::TypesAction;
+
+    let action = action.unwrap_or(TypesAction::List);
+    match action {
+        TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
+        TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
+            &type_name,
+            ctx.schema,
+            effective_format,
+        )),
+        TypesAction::Remove { type_name } => {
+            crate::commands::types::remove_type(ctx.config_dir, &type_name, effective_format)
+        }
+        TypesAction::Set {
+            type_name,
+            required,
+            default,
+            property_type,
+            property_values,
+            filename_template,
+            dry_run,
+        } => crate::commands::types::set_type(
+            ctx.config_dir,
+            &type_name,
+            &required,
+            &default,
+            &property_type,
+            &property_values,
+            filename_template.as_deref(),
+            dry_run,
+            effective_format,
+            ctx.case_insensitive_mode,
+        ),
     }
 }

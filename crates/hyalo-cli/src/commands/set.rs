@@ -74,10 +74,10 @@ pub(crate) fn is_date_typed_property(name: &str) -> bool {
 
 /// Returns `true` when `value` is exactly a YYYY-MM-DD ISO 8601 date.
 ///
-/// Delegates to `hyalo_core::util::is_iso8601_date` so `set` and the
+/// Delegates to `hyalo_core::is_iso8601_date` so `set` and the
 /// HYALO003 lint rule agree on what counts as a date.
 pub(crate) fn looks_like_date(value: &str) -> bool {
-    hyalo_core::util::is_iso8601_date(value)
+    hyalo_core::is_iso8601_date(value)
 }
 
 /// Returns `true` when `value` has the `YYYY-MM-DD` structural shape
@@ -297,7 +297,7 @@ pub fn set(
     dry_run: bool,
     validate: bool,
     schema: Option<&SchemaConfig>,
-    case_insensitive_mode: hyalo_core::case_index::CaseInsensitiveMode,
+    case_insensitive_mode: hyalo_core::CaseInsensitiveMode,
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
     if property_args.is_empty() && tag_args.is_empty() {
@@ -441,7 +441,7 @@ pub fn set(
         // `[schema] exempt` globs fold case the same way `hyalo okf index`
         // treats `INDEX.md` on case-insensitive filesystems (macOS/Windows
         // default).
-        let case_insensitive = hyalo_core::case_index::mode_enabled(case_insensitive_mode, dir);
+        let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
         for (full_path, rel_path) in &files {
             // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are not
             // subject to schema validation.
@@ -682,6 +682,7 @@ pub fn set(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use std::fs;
@@ -753,7 +754,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let out = match outcome {
@@ -799,7 +800,7 @@ status: draft
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
 
@@ -835,7 +836,7 @@ status: done
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -874,7 +875,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -916,7 +917,7 @@ tags:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -953,7 +954,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -981,7 +982,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1004,7 +1005,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1028,7 +1029,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1052,7 +1053,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1082,7 +1083,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
 
@@ -1119,7 +1120,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1166,7 +1167,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1207,7 +1208,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1247,7 +1248,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1285,7 +1286,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         match outcome {
@@ -1314,7 +1315,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1338,7 +1339,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1362,7 +1363,7 @@ title: Note
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::UserError(_)));
@@ -1429,7 +1430,7 @@ type: post
             false,
             true, // validate = true
             Some(&schema),
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(
@@ -1494,7 +1495,7 @@ type: post
             false,
             true, // validate = true
             Some(&schema),
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(
@@ -1536,7 +1537,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         match outcome {
@@ -1574,7 +1575,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
@@ -1605,7 +1606,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1641,7 +1642,7 @@ versions:
             false,
             false,
             None,
-            hyalo_core::case_index::CaseInsensitiveMode::Off,
+            hyalo_core::CaseInsensitiveMode::Off,
         )
         .unwrap();
         let CommandOutcome::Success { output: out, .. } = outcome else {
@@ -1650,4 +1651,163 @@ versions:
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(parsed.get("note").is_none() || parsed["note"].is_null());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo set` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `files_from` and `index_flags` were consumed earlier in `run.rs`
+/// (snapshot loading) and never reach here.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    file_positional: Vec<String>,
+    properties: Vec<String>,
+    tag: Vec<String>,
+    mut file: Vec<String>,
+    glob: Vec<String>,
+    iteration: Option<String>,
+    where_properties: Vec<String>,
+    where_tags: Vec<String>,
+    dry_run: bool,
+    validate: bool,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    let index_path = ctx.index_path;
+    use crate::dispatch::parse_where_filters;
+
+    if !file_positional.is_empty() {
+        file = file_positional;
+    }
+    let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                effective_format,
+                &e,
+                None,
+                None,
+                None,
+            )));
+        }
+    };
+    let do_validate = validate || ctx.validate_on_write;
+    // iter-235: `--iteration <ID>` resolves the file to mutate from the
+    // type schema's filename_template, then must select exactly one
+    // file (set is a single-target mutation — ambiguous matches are an
+    // error, unlike find which returns all). Resolved here, before the
+    // generic `set` call, so set sees a normal file list and `--where-*`
+    // still filters within it.
+    let mut resolved_files: Option<Vec<String>> = None;
+    if let Some(id_str) = iteration {
+        match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
+            Ok(id) => {
+                match crate::commands::iteration::resolve_iteration_globs(
+                    ctx.schema,
+                    &id,
+                    effective_format,
+                ) {
+                    crate::commands::iteration::IterationGlobs::Globs(g) => {
+                        match crate::commands::collect_files(dir, &[], &g, effective_format)? {
+                            crate::commands::FilesOrOutcome::Files(pairs) => {
+                                let paths: Vec<String> =
+                                    pairs.into_iter().map(|(_, rel)| rel).collect();
+                                match paths.len() {
+                                    0 => {
+                                        return Ok(CommandOutcome::UserError(
+                                            crate::output::format_error(
+                                                effective_format,
+                                                &format!(
+                                                    "no file found for iteration {id} \
+                                                         (resolved globs: {})",
+                                                    g.join(", ")
+                                                ),
+                                                Some(&id_str),
+                                                Some(
+                                                    "check the iteration number, or list candidates with `hyalo find --iteration <ID>`",
+                                                ),
+                                                None,
+                                            ),
+                                        ));
+                                    }
+                                    1 => {
+                                        resolved_files = Some(paths);
+                                    }
+                                    _ => {
+                                        let mut listed = paths.clone();
+                                        listed.sort();
+                                        return Ok(CommandOutcome::UserError(
+                                            crate::output::format_error(
+                                                effective_format,
+                                                &format!(
+                                                    "iteration {id} matches multiple files — \
+                                                         pass a letter suffix to disambiguate, \
+                                                         or use --file/--glob to target one directly"
+                                                ),
+                                                Some(&id_str),
+                                                Some(&format!(
+                                                    "candidates:\n{}",
+                                                    listed
+                                                        .iter()
+                                                        .map(|p| format!("  - {p}"))
+                                                        .collect::<Vec<_>>()
+                                                        .join("\n")
+                                                )),
+                                                None,
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
+                        }
+                    }
+                    crate::commands::iteration::IterationGlobs::Outcome(o) => {
+                        return Ok(o);
+                    }
+                }
+            }
+            Err(e) => {
+                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    effective_format,
+                    &e.to_string(),
+                    Some(&id_str),
+                    Some(
+                        "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
+                    ),
+                    None,
+                )));
+            }
+        }
+    }
+    let (set_files, set_globs): (&[String], &[String]) = match resolved_files {
+        Some(ref paths) => (paths.as_slice(), &[]),
+        None => (&file, &glob),
+    };
+    set(
+        dir,
+        &properties,
+        &tag,
+        set_files,
+        set_globs,
+        &where_prop_filters,
+        &where_tags,
+        effective_format,
+        snapshot_index,
+        index_path,
+        dry_run,
+        do_validate,
+        // Always pass the schema: `do_validate` still gates the blocking
+        // pre-validation pass, but the (non-blocking) enum/pattern
+        // advisory note needs the schema even without --validate
+        // (iter-181 task 1).
+        Some(ctx.schema),
+        ctx.case_insensitive_mode,
+    )
 }

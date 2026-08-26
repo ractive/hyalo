@@ -157,7 +157,7 @@ fn section_not_found_hint(query: &str, available: &[String]) -> String {
         // A substring match is what `--section` actually does, so rank those
         // first regardless of length difference.
         let contains = usize::from(!text.contains(&needle));
-        (contains, hyalo_core::util::levenshtein(&text, &needle))
+        (contains, hyalo_core::levenshtein(&text, &needle))
     });
 
     let shown: Vec<&str> = ranked
@@ -437,6 +437,7 @@ pub fn run(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -788,5 +789,66 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].len(), 7); // heading + intro + code block (4 lines) + after code
         assert!(sections[0].contains(&"# This is a comment, not a heading".to_owned()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo read` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+pub(crate) fn run_command(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    selection: crate::cli::inputs::InputSelection,
+    section: Option<String>,
+    lines: Option<String>,
+    frontmatter: bool,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
+
+    // iter-238: `--iteration <ID>` on single-file commands resolves to
+    // exactly one file before the generic input resolution runs.
+    let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+        &selection,
+        dir,
+        ctx.schema,
+        effective_format,
+    ) {
+        Ok(s) => s,
+        Err(outcome) => return Ok(outcome),
+    };
+    match resolve_inputs(
+        &selection,
+        dir,
+        ctx.configured_dir_str,
+        snapshot_index.as_ref(),
+        &ResolutionPolicy::Single { allow_glob: false },
+        effective_format,
+        false,
+    )? {
+        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+        ResolvedInputsOrOutcome::Resolved(r) => {
+            ctx.files_from_counters = r.counters;
+            let (_full, file) = r
+                .files
+                .into_iter()
+                .next()
+                .context("Single resolution returned no files")?;
+            run(
+                dir,
+                &file,
+                section.as_deref(),
+                lines.as_deref(),
+                frontmatter,
+                effective_format,
+                ctx.user_format,
+            )
+        }
     }
 }

@@ -391,6 +391,7 @@ pub fn append(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use std::fs;
@@ -1150,4 +1151,63 @@ versions:
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert!(!content.contains("versions.fpt"), "content:\n{content}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo append` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `files_from` and `index_flags` were consumed earlier in `run.rs`
+/// (snapshot loading) and never reach here.
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    file_positional: Vec<String>,
+    properties: Vec<String>,
+    mut file: Vec<String>,
+    glob: Vec<String>,
+    where_properties: Vec<String>,
+    where_tags: Vec<String>,
+    dry_run: bool,
+    validate: bool,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    let index_path = ctx.index_path;
+    use crate::dispatch::parse_where_filters;
+
+    if !file_positional.is_empty() {
+        file = file_positional;
+    }
+    let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(CommandOutcome::UserError(crate::output::format_error(
+                effective_format,
+                &e,
+                None,
+                None,
+                None,
+            )));
+        }
+    };
+    let do_validate = validate || ctx.validate_on_write;
+    append(
+        dir,
+        &properties,
+        &file,
+        &glob,
+        &where_prop_filters,
+        &where_tags,
+        effective_format,
+        snapshot_index,
+        index_path,
+        dry_run,
+        do_validate,
+        if do_validate { Some(ctx.schema) } else { None },
+    )
 }

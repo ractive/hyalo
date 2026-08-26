@@ -2,6 +2,7 @@
 
 mod build;
 mod filter_index;
+pub(crate) mod run;
 mod sort;
 
 pub use filter_index::{filter_index_entries, needs_body};
@@ -11,12 +12,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::output::{CommandOutcome, Format};
+use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::bm25::{
     Bm25InvertedIndex, DocumentInput, PreTokenizedInput, TOKENIZER_VERSION, create_stemmer,
     is_low_discriminative, parse_language, query_is_operator_only, resolve_language,
     tokenize_document,
 };
-use hyalo_core::case_index::CaseInsensitiveIndex;
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
 use hyalo_core::filter::{self, Fields, FindTaskFilter, PropertyFilter, SortField};
@@ -208,13 +209,9 @@ pub fn find(
             } else {
                 return Ok(CommandOutcome::UserError(crate::output::format_error(
                     format,
-                    &hyalo_core::fs_util::outside_vault_message_with_dir(
-                        "file",
-                        None,
-                        &canonical_dir,
-                    ),
+                    &hyalo_core::outside_vault_message_with_dir("file", None, &canonical_dir),
                     Some(f),
-                    Some(&hyalo_core::fs_util::outside_vault_hint(&canonical_dir)),
+                    Some(&hyalo_core::outside_vault_hint(&canonical_dir)),
                     None,
                 )));
             }

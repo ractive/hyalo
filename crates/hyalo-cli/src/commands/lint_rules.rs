@@ -633,6 +633,7 @@ fn schema_has_completed_status(schema: &hyalo_core::schema::SchemaConfig) -> boo
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use hyalo_core::schema::SchemaConfig;
@@ -928,5 +929,76 @@ mod tests {
     fn activation_for_hyalo001_is_none() {
         let empty = SchemaConfig::default();
         assert!(activation_for("HYALO001", &empty).is_none());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo lint-rules` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: Option<crate::cli::args::LintRulesAction>,
+) -> Result<CommandOutcome> {
+    let effective_format = ctx.effective_format;
+
+    let action = action.unwrap_or(crate::cli::args::LintRulesAction::List {
+        enabled_only: false,
+        disabled_only: false,
+        rule_prefix: None,
+    });
+    let md_engine = hyalo_mdlint::HyaloLintEngine::create()
+        .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
+    match action {
+        crate::cli::args::LintRulesAction::List {
+            enabled_only,
+            disabled_only,
+            rule_prefix,
+        } => Ok(crate::commands::lint_rules::list_rules(
+            ctx.config_dir,
+            &md_engine,
+            ctx.md_lint,
+            ctx.schema,
+            enabled_only,
+            disabled_only,
+            rule_prefix.as_deref(),
+            effective_format,
+        )),
+        crate::cli::args::LintRulesAction::Show { rule_id } => {
+            Ok(crate::commands::lint_rules::show_rule(
+                &rule_id,
+                &md_engine,
+                ctx.md_lint,
+                ctx.schema,
+                ctx.user_format,
+            ))
+        }
+        crate::cli::args::LintRulesAction::Set {
+            rule_id,
+            enabled,
+            severity,
+            dry_run,
+        } => crate::commands::lint_rules::set_rule(
+            ctx.config_dir,
+            &rule_id,
+            enabled,
+            severity.as_deref(),
+            dry_run,
+            &md_engine,
+            ctx.md_lint,
+            ctx.user_format,
+        ),
+        crate::cli::args::LintRulesAction::Remove { rule_id, dry_run } => {
+            crate::commands::lint_rules::remove_rule(
+                ctx.config_dir,
+                &rule_id,
+                dry_run,
+                &md_engine,
+                ctx.md_lint,
+                ctx.user_format,
+            )
+        }
     }
 }

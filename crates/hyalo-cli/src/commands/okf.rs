@@ -361,7 +361,7 @@ pub fn run_index(
         for plan in &changed {
             let full = dir.join(&plan.rel_path);
             if let Err(err) =
-                hyalo_core::fs_util::atomic_write_within(dir, &full, plan.new_content.as_bytes())
+                hyalo_core::atomic_write_within(dir, &full, plan.new_content.as_bytes())
             {
                 crate::warn::warn(format!(
                     "failed to write {}: {} — skipping this file, continuing",
@@ -1011,7 +1011,7 @@ pub fn run_log(
     let new_content = prepend_log_entry(&old_content, &today, &entry_line);
 
     if apply {
-        hyalo_core::fs_util::atomic_write_within(dir, &full, new_content.as_bytes())
+        hyalo_core::atomic_write_within(dir, &full, new_content.as_bytes())
             .with_context(|| format!("failed to write {rel_path}"))?;
     }
 
@@ -1243,7 +1243,7 @@ fn normalize_vault_rel(dir: &Path, raw: &str) -> std::result::Result<String, Str
     {
         return Err(format!(
             "{}: {raw}",
-            hyalo_core::fs_util::outside_vault_message("path", None)
+            hyalo_core::outside_vault_message("path", None)
         ));
     }
     Ok(normalized.to_owned())
@@ -1328,6 +1328,7 @@ pub fn now_timestamp_tz() -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
 
@@ -1361,7 +1362,7 @@ mod tests {
     fn timestamp_is_offset_form() {
         let ts = now_timestamp_tz();
         assert!(ts.ends_with("+00:00"), "got {ts}");
-        assert!(hyalo_core::util::is_iso8601_datetime_tz(&ts), "got {ts}");
+        assert!(hyalo_core::is_iso8601_datetime_tz(&ts), "got {ts}");
     }
 
     #[test]
@@ -1789,5 +1790,57 @@ mod tests {
     #[test]
     fn indent_continuation_crlf() {
         assert_eq!(indent_continuation("a\r\nb"), "a\n  b");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo okf` dispatch arm, extracted verbatim from `dispatch.rs`.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: crate::cli::args::OkfAction,
+) -> Result<CommandOutcome> {
+    let effective_format = ctx.effective_format;
+    use hyalo_core::mode_enabled;
+
+    match action {
+        crate::cli::args::OkfAction::Index {
+            scope,
+            apply,
+            dry_run: _,
+            replace,
+        } => {
+            let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
+            let (outcome, exit_override) = crate::commands::okf::run_index(
+                ctx.dir,
+                scope.as_deref(),
+                apply,
+                replace,
+                ctx.okf_ignore,
+                case_insensitive,
+                effective_format,
+            )?;
+            if let Some(code) = exit_override {
+                ctx.exit_code_override = Some(code);
+            }
+            Ok(outcome)
+        }
+        crate::cli::args::OkfAction::Log {
+            target,
+            message,
+            action: log_action,
+            apply,
+            dry_run: _,
+        } => crate::commands::okf::run_log(
+            ctx.dir,
+            target.as_deref(),
+            &message,
+            log_action.as_deref(),
+            apply,
+            effective_format,
+        ),
     }
 }

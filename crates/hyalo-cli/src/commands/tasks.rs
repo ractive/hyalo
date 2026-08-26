@@ -1,7 +1,9 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
+use crate::cli::args::TaskAction;
+use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::resolve_error_to_outcome;
 use crate::commands::section_scanner::SectionScanner;
 use crate::output::{CommandOutcome, Format};
@@ -448,6 +450,7 @@ fn patch_index(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
     use super::*;
     use std::fs;
@@ -690,5 +693,294 @@ mod tests {
         assert!(out.contains("\"status\": \"?\"") || out.contains("\"status\":\"?\""));
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
         assert_eq!(content, original, "file was modified during --dry-run");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo task` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `index_flags` on each sub-action was consumed earlier in `run.rs`
+/// (snapshot loading) and never reaches here.
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    action: TaskAction,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    let index_path = ctx.index_path;
+
+    {
+        match action {
+            TaskAction::Read {
+                selection,
+                line,
+                section,
+                all,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => {
+                let configured_dir = ctx.configured_dir_str;
+                // iter-238: `--iteration <ID>` support (single-file command).
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
+                match resolve_inputs(
+                    &selection,
+                    dir,
+                    configured_dir,
+                    snapshot_index.as_ref(),
+                    &ResolutionPolicy::Single { allow_glob: false },
+                    effective_format,
+                    false,
+                )? {
+                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                    ResolvedInputsOrOutcome::Resolved(r) => {
+                        ctx.files_from_counters = r.counters;
+                        let (_full, file) = r
+                            .files
+                            .into_iter()
+                            .next()
+                            .context("Single resolution returned no files")?;
+                        crate::commands::tasks::task_read(
+                            dir,
+                            &file,
+                            &line,
+                            section.as_deref(),
+                            all,
+                            effective_format,
+                        )
+                    }
+                }
+            }
+            TaskAction::Toggle {
+                selection,
+                line,
+                section,
+                all,
+                dry_run,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => {
+                if selection.files_from.is_some() && !all && section.is_none() {
+                    let out = crate::output::format_error(
+                        effective_format,
+                        "--files-from requires --all or --section",
+                        None,
+                        Some(
+                            "try: --files-from <list> --all   or   --files-from <list> --section <heading>",
+                        ),
+                        Some(
+                            "multi-file inputs need a selection that composes across files (--all or --section)",
+                        ),
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+                let configured_dir = ctx.configured_dir_str;
+                // iter-238: `--iteration <ID>` support — resolves to exactly
+                // one file, which then takes the single-file path below.
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
+                match resolve_inputs(
+                    &selection,
+                    dir,
+                    configured_dir,
+                    snapshot_index.as_ref(),
+                    &ResolutionPolicy::SingleOrMany,
+                    effective_format,
+                    false,
+                )? {
+                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                    ResolvedInputsOrOutcome::Resolved(r) => {
+                        ctx.files_from_counters.clone_from(&r.counters);
+                        if r.files.len() == 1 {
+                            // Single file: delegate directly — no wrapping.
+                            let (_full_path, rel) = &r.files[0];
+                            crate::commands::tasks::task_toggle(
+                                dir,
+                                rel,
+                                &line,
+                                section.as_deref(),
+                                all,
+                                effective_format,
+                                snapshot_index,
+                                index_path,
+                                dry_run,
+                            )
+                        } else {
+                            // Multi-file: collect each file's raw results into a
+                            // flat array and let the pipeline wrap it in the
+                            // standard `{"results": [...], "total": N}` envelope.
+                            // `total` matches the flattened item count (consistent
+                            // with other list-shaped outputs and `--count`).
+                            let mut flat: Vec<serde_json::Value> = Vec::new();
+                            for (_full_path, rel) in &r.files {
+                                let outcome = crate::commands::tasks::task_toggle(
+                                    dir,
+                                    rel,
+                                    &line,
+                                    section.as_deref(),
+                                    all,
+                                    effective_format,
+                                    snapshot_index,
+                                    index_path,
+                                    dry_run,
+                                )?;
+                                match outcome {
+                                    CommandOutcome::Success { output, .. } => {
+                                        let val: serde_json::Value = serde_json::from_str(&output)
+                                            .unwrap_or(serde_json::Value::Null);
+                                        match val {
+                                            serde_json::Value::Array(items) => {
+                                                flat.extend(items);
+                                            }
+                                            other => flat.push(other),
+                                        }
+                                    }
+                                    other => return Ok(other),
+                                }
+                            }
+                            let total = flat.len() as u64;
+                            let output = serde_json::to_string(&flat)
+                                .context("failed to serialize multi-file task toggle output")?;
+                            Ok(CommandOutcome::success_with_total(output, total))
+                        }
+                    }
+                }
+            }
+            TaskAction::Set {
+                selection,
+                line,
+                section,
+                all,
+                status,
+                dry_run,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => {
+                if selection.files_from.is_some() && !all && section.is_none() {
+                    let out = crate::output::format_error(
+                        effective_format,
+                        "--files-from requires --all or --section",
+                        None,
+                        Some(
+                            "try: --files-from <list> --all --status <c>   or   --files-from <list> --section <heading> --status <c>",
+                        ),
+                        Some(
+                            "multi-file inputs need a selection that composes across files (--all or --section)",
+                        ),
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+                if status.chars().count() != 1 {
+                    let out = crate::output::format_error(
+                        effective_format,
+                        "--status must be a single character",
+                        None,
+                        Some("example: --status '?' or --status '-'"),
+                        None,
+                    );
+                    return Ok(CommandOutcome::UserError(out));
+                }
+                // chars().count() == 1 guarantees next() returns Some.
+                let ch = status
+                    .chars()
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
+
+                let configured_dir = ctx.configured_dir_str;
+                // iter-238: `--iteration <ID>` support — resolves to exactly
+                // one file, which then takes the single-file path below.
+                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+                    &selection,
+                    dir,
+                    ctx.schema,
+                    effective_format,
+                ) {
+                    Ok(s) => s,
+                    Err(outcome) => return Ok(outcome),
+                };
+                match resolve_inputs(
+                    &selection,
+                    dir,
+                    configured_dir,
+                    snapshot_index.as_ref(),
+                    &ResolutionPolicy::SingleOrMany,
+                    effective_format,
+                    false,
+                )? {
+                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+                    ResolvedInputsOrOutcome::Resolved(r) => {
+                        ctx.files_from_counters.clone_from(&r.counters);
+                        if r.files.len() == 1 {
+                            // Single file: delegate directly — no wrapping.
+                            let (_full_path, rel) = &r.files[0];
+                            crate::commands::tasks::task_set_status(
+                                dir,
+                                rel,
+                                &line,
+                                section.as_deref(),
+                                all,
+                                ch,
+                                effective_format,
+                                snapshot_index,
+                                index_path,
+                                dry_run,
+                            )
+                        } else {
+                            // Multi-file: collect each file's raw results into a
+                            // flat array and let the pipeline wrap it in the
+                            // standard `{"results": [...], "total": N}` envelope.
+                            // `total` matches the flattened item count.
+                            let mut flat: Vec<serde_json::Value> = Vec::new();
+                            for (_full_path, rel) in &r.files {
+                                let outcome = crate::commands::tasks::task_set_status(
+                                    dir,
+                                    rel,
+                                    &line,
+                                    section.as_deref(),
+                                    all,
+                                    ch,
+                                    effective_format,
+                                    snapshot_index,
+                                    index_path,
+                                    dry_run,
+                                )?;
+                                match outcome {
+                                    CommandOutcome::Success { output, .. } => {
+                                        let val: serde_json::Value = serde_json::from_str(&output)
+                                            .unwrap_or(serde_json::Value::Null);
+                                        match val {
+                                            serde_json::Value::Array(items) => {
+                                                flat.extend(items);
+                                            }
+                                            other => flat.push(other),
+                                        }
+                                    }
+                                    other => return Ok(other),
+                                }
+                            }
+                            let total = flat.len() as u64;
+                            let output = serde_json::to_string(&flat)
+                                .context("failed to serialize multi-file task set output")?;
+                            Ok(CommandOutcome::success_with_total(output, total))
+                        }
+                    }
+                }
+            }
+        }
     }
 }

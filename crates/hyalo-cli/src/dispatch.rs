@@ -2,26 +2,21 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cli::args::{
-    ChangelogAction, Commands, FindFilters, IndexFlags, LinksAction, LintRulesAction, MadrAction,
-    OkfAction, PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction,
-    resolve_single_file,
-};
-use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
+use crate::cli::args::Commands;
 use crate::commands::{
-    IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
+    append as append_commands, backlinks as backlinks_commands, changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
-    lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
-    remove as remove_commands, resolve_index, set as set_commands, summary as summary_commands,
-    tags as tag_commands, tasks as task_commands,
+    lint_rules as lint_rules_commands, madr as madr_commands, mv as mv_commands,
+    okf as okf_commands, properties, read as read_commands, remove as remove_commands,
+    set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
+    types as types_commands, views as views_commands,
 };
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::bm25::parse_language;
-use hyalo_core::case_index::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 use hyalo_core::filter;
-use hyalo_core::index::{ScanOptions, SnapshotIndex, VaultIndex as _};
+use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
+use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
 
 /// Default output limit for list commands when no `--limit` is passed and no
 /// `default_limit` is set in `.hyalo.toml`.
@@ -218,7 +213,7 @@ pub(crate) struct CommandContext<'a> {
 /// 4. `DEFAULT_OUTPUT_LIMIT` — hard-coded fallback
 ///
 /// Returns `None` for unlimited, `Some(n)` for an effective cap.
-fn resolve_limit(
+pub(crate) fn resolve_limit(
     cli_limit: Option<usize>,
     config_default: Option<usize>,
     programmatic: bool,
@@ -253,7 +248,7 @@ pub(crate) fn patch_index_for_modified_files_pub(
 /// into an [`lint_commands::ExtFileLintResult`] (new rule_groups shape).
 ///
 /// View violations are grouped under the synthetic rule id `SCHEMA`.
-fn adapt_view_result_to_ext(
+pub(crate) fn adapt_view_result_to_ext(
     result: &lint_commands::FileLintResult,
 ) -> lint_commands::ExtFileLintResult {
     let violations: Vec<lint_commands::BodyViolation> = result
@@ -305,7 +300,7 @@ fn adapt_view_result_to_ext(
 ///
 /// Deserializes the JSON, prepends the new file result, updates `files_with_violations`
 /// and `total`, then re-serializes.
-fn inject_ext_file_result(
+pub(crate) fn inject_ext_file_result(
     outcome: CommandOutcome,
     extra: &lint_commands::ExtFileLintResult,
 ) -> Result<CommandOutcome> {
@@ -424,7 +419,7 @@ fn inject_ext_file_result(
 /// --apply`, `links auto --apply`) need both or `backlinks`/`find --fields
 /// links` would keep returning pre-mutation results until a full
 /// `create-index` rebuild. Flushes to disk once at the end.
-fn patch_index_for_modified_files(
+pub(crate) fn patch_index_for_modified_files(
     snapshot_index: &mut Option<SnapshotIndex>,
     index_path: Option<&Path>,
     dir: &Path,
@@ -455,7 +450,7 @@ fn patch_index_for_modified_files(
 /// `.source()` cause under a top-level `"invalid regex in property filter: ..."`
 /// context; passing that cause into `format_error` puts the caret detail in the
 /// `cause` field (iter-181 task 5) instead of dropping it.
-fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOutcome {
+pub(crate) fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOutcome {
     // Use the *root* cause (last link in the chain) so the regex engine's own
     // message — the one carrying the caret/position — reaches the user, not the
     // intermediate `"invalid regex pattern: ..."` wrapper. The chain's first link
@@ -476,7 +471,7 @@ fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -> CommandOu
 
 /// Parse `--where-property` filters and validate `--where-tag` names.
 /// Returns an error string on invalid input.
-fn parse_where_filters(
+pub(crate) fn parse_where_filters(
     where_properties: &[String],
     where_tags: &[String],
 ) -> Result<Vec<filter::PropertyFilter>, String> {
@@ -497,11 +492,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let effective_format = ctx.effective_format;
     // Capture the active conformance profile before borrowing `ctx.snapshot_index`
     // mutably below (the lint arm needs it while that mutable borrow is live).
-    let profile_active = |name: &str| ctx.lint_profiles.iter().any(|p| p == name);
-    let okf_profile_active = profile_active("okf");
-    let madr_profile_active = profile_active("madr");
-    let skills_profile_active = profile_active("skills");
-    let changelog_profile_active = profile_active("changelog");
     let snapshot_index = &mut *ctx.snapshot_index;
     let index_path = ctx.index_path;
 
@@ -510,311 +500,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             pattern,
             file_positional,
             view: _, // resolved before dispatch
-            filters: mut filters_raw,
+            filters,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // Merge positional files into filters (clap prevents positional+--file
-            // and positional+--glob at parse time; a view may have set glob though).
-            if !file_positional.is_empty() {
-                if !filters_raw.glob.is_empty() {
-                    crate::warn::warn(
-                        "positional file arguments override the view's --glob; \
-                         glob filter has been ignored",
-                    );
-                }
-                filters_raw.file = file_positional;
-                filters_raw.glob.clear(); // file overrides view's glob
-            }
-            let FindFilters {
-                pattern: _, // pattern is handled in run.rs before dispatch
-                regexp,
-                properties,
-                tag,
-                task,
-                sections,
-                file,
-                glob,
-                fields,
-                sort,
-                reverse,
-                limit,
-                broken_links,
-                strict,
-                orphan,
-                dead_end,
-                title,
-                language,
-                filenames_only,
-                filenames0,
-                iteration,
-                files_from: _, // resolved in run.rs before dispatch
-            } = filters_raw;
-            if orphan && dead_end {
-                crate::warn::warn(
-                    "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
-                );
-            }
-            // Resolve --iteration <ID> into glob patterns from the schema's
-            // type filename_templates (iter-235). The globs join the --glob
-            // set with OR semantics (positive globs are unioned), so
-            // `--iteration 206` is just another way to scope the same find.
-            let mut glob = glob;
-            if let Some(id_str) = iteration {
-                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
-                    Ok(id) => {
-                        match crate::commands::iteration::resolve_iteration_globs(
-                            ctx.schema,
-                            &id,
-                            effective_format,
-                        ) {
-                            crate::commands::iteration::IterationGlobs::Globs(g) => {
-                                glob.extend(g);
-                            }
-                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
-                                return Ok(o);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            Some(&id_str),
-                            Some(
-                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
-                            ),
-                            None,
-                        )));
-                    }
-                }
-            }
-            // Parse property filters
-            let prop_filters: Vec<filter::PropertyFilter> = match properties
-                .iter()
-                .map(|s| filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(property_filter_error_outcome(&e, effective_format));
-                }
-            };
-            // Parse task filter
-            let task_filter = match task.as_deref().map(filter::parse_task_filter) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-                None => None,
-            };
-            // Parse fields
-            let parsed_fields = match filter::Fields::parse(&fields) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            // Parse sort
-            let sort_field = match sort.as_deref().map(filter::parse_sort) {
-                Some(Ok(f)) => Some(f),
-                Some(Err(e)) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e.to_string(),
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-                None => None,
-            };
-            // Parse section filters
-            let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
-                .iter()
-                .map(|s| hyalo_core::heading::SectionFilter::parse(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-
-            for t in &tag {
-                if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &msg,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            }
-
-            // Validate --language flag and config language against supported languages.
-            if let Some(ref lang) = language
-                && let Err(e) = parse_language(lang)
-            {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &format!("invalid --language value {lang:?}: {e}"),
-                    None,
-                    None,
-                    None,
-                )));
-            }
-            if let Some(cfg_lang) = ctx.config_language
-                && let Err(e) = parse_language(cfg_lang)
-            {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
-                    None,
-                    None,
-                    None,
-                )));
-            }
-
-            // Strip the dir prefix from --file args so that
-            // filter_index_entries matches vault-relative paths.
-            let file: Vec<String> = file
-                .into_iter()
-                .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
-                .collect();
-
-            let sort_needs_backlinks =
-                matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
-            let sort_needs_links =
-                matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
-            let sort_needs_title = matches!(sort_field.as_ref(), Some(filter::SortField::Title));
-            let has_task_filter = task_filter.is_some();
-            let has_section_filter = !section_filters.is_empty();
-            let has_title_filter = title.is_some();
-            // BM25 pattern search requires reading file bodies for each candidate.
-            let has_bm25_search = pattern.is_some();
-            let needs_body =
-                find_commands::needs_body(&parsed_fields, has_task_filter, has_section_filter)
-                    || sort_needs_links
-                    || sort_needs_title
-                    || broken_links
-                    || orphan
-                    || dead_end
-                    || has_title_filter
-                    || has_bm25_search;
-            let needs_full_vault =
-                parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
-            // The link graph is only built when scan_body is true, so
-            // backlinks / backlink-sort always require body scanning.
-            let scan_body = needs_body || needs_full_vault;
-            let needs_stem_map = find_needs_stem_map(
-                broken_links,
-                orphan,
-                dead_end,
-                parsed_fields.links,
-                sort_needs_links,
-            );
-            match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &file,
-                &glob,
-                effective_format,
-                site_prefix,
-                needs_full_vault,
-                &ScanOptions {
-                    scan_body,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(resolved) => {
-                    let ci = maybe_case_index(
-                        ctx.case_insensitive_mode,
-                        dir,
-                        needs_stem_map,
-                        resolved.as_snapshot(),
-                    );
-                    let mut outcome = find_commands::find(
-                        resolved.as_index(),
-                        dir,
-                        site_prefix,
-                        pattern.as_deref(),
-                        regexp.as_deref(),
-                        &prop_filters,
-                        &tag,
-                        task_filter.as_ref(),
-                        &section_filters,
-                        &file,
-                        &glob,
-                        &parsed_fields,
-                        sort_field.as_ref(),
-                        reverse,
-                        resolve_limit(limit, ctx.config_default_limit, ctx.programmatic_output),
-                        broken_links,
-                        orphan,
-                        dead_end,
-                        title.as_deref(),
-                        effective_format,
-                        language.as_deref(),
-                        ctx.config_language,
-                        ci.as_ref(),
-                    )?;
-                    // UX-2 (dogfood pre3): `--strict` gives any `find` query
-                    // (most commonly `--broken-links`) a CI-gateable exit
-                    // code — before this, `find --broken-links` always
-                    // exited 0 even when it reported findings, so a vault
-                    // whose only defect was a dead heading anchor passed CI
-                    // silently.
-                    if strict
-                        && let CommandOutcome::Success {
-                            total: Some(total), ..
-                        } = &outcome
-                        && *total > 0
-                    {
-                        ctx.exit_code_override = Some(1);
-                    }
-                    // iter-235: `--filenames-only` projects the find result
-                    // set onto raw file paths (one per line, no envelope,
-                    // no count, no hints). It runs *after* the `--strict`
-                    // check above, so `find --filenames-only --strict`
-                    // still flips the exit code (1 when results exist) —
-                    // the CI-gate + filename-list use case. RawOutput bypasses
-                    // the JSON pipeline entirely (no jq, no count, no hints,
-                    // no envelope), which is exactly the point: an agent or
-                    // shell pipeline wants bare paths, nothing else.
-                    //
-                    // iter-238: `--filenames0` is the NUL-delimited sibling
-                    // (`find -print0` precedent) for `xargs -0` / newline-safe
-                    // consumption; identical semantics otherwise.
-                    if filenames_only {
-                        outcome = crate::commands::find::project_filenames_only(outcome);
-                    } else if filenames0 {
-                        outcome = crate::commands::find::project_filenames0(outcome);
-                    }
-                    Ok(outcome)
-                }
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            }
+            // ARCH-1 (iter-225): the ~310-line arm body now lives in
+            // `commands::find::run` — dispatch only forwards the parsed args.
+            find_commands::run::run(ctx, pattern, file_positional, filters)
         }
         Commands::Read {
             selection,
@@ -823,546 +514,44 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             frontmatter,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // iter-238: `--iteration <ID>` on single-file commands resolves to
-            // exactly one file before the generic input resolution runs.
-            let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                &selection,
-                dir,
-                ctx.schema,
-                effective_format,
-            ) {
-                Ok(s) => s,
-                Err(outcome) => return Ok(outcome),
-            };
-            match resolve_inputs(
-                &selection,
-                dir,
-                ctx.configured_dir_str,
-                snapshot_index.as_ref(),
-                &ResolutionPolicy::Single { allow_glob: false },
-                effective_format,
-                false,
-            )? {
-                ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                ResolvedInputsOrOutcome::Resolved(r) => {
-                    ctx.files_from_counters = r.counters;
-                    let (_full, file) = r
-                        .files
-                        .into_iter()
-                        .next()
-                        .context("Single resolution returned no files")?;
-                    read_commands::run(
-                        dir,
-                        &file,
-                        section.as_deref(),
-                        lines.as_deref(),
-                        frontmatter,
-                        effective_format,
-                        ctx.user_format,
-                    )
-                }
-            }
+            // ARCH-1 (iter-225): the arm body now lives in
+            // `commands::read::run_command`.
+            read_commands::run_command(ctx, selection, section, lines, frontmatter)
         }
         Commands::Properties {
             glob: bare_glob,
             limit: bare_limit,
             action,
         } => {
-            // M-8: bare `hyalo properties` IS `properties summary`, so it takes
-            // the summary flags COMMAND REFERENCE documents for it rather than
-            // rejecting them at parse time.
-            let action = action.unwrap_or(PropertiesAction::Summary {
-                glob: bare_glob,
-                limit: bare_limit,
-                index_flags: IndexFlags::default(),
-            });
-            match action {
-                PropertiesAction::Summary {
-                    ref glob,
-                    limit: cli_limit,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    false,
-                    &ScanOptions {
-                        scan_body: false,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                properties::properties_summary(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                    resolve_limit(
-                                        cli_limit,
-                                        ctx.config_default_limit,
-                                        ctx.programmatic_output,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        properties::properties_summary(
-                            &build.index,
-                            None,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                        )
-                    }
-                    IndexResolution::Outcome(outcome) => Ok(outcome),
-                },
-                PropertiesAction::Rename {
-                    from,
-                    to,
-                    glob,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => properties::properties_rename(
-                    dir,
-                    &from,
-                    &to,
-                    &glob,
-                    dry_run,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::properties::run`.
+            properties::run(ctx, bare_glob, bare_limit, action)
         }
         Commands::Tags {
             glob: bare_glob,
             limit: bare_limit,
             action,
         } => {
-            // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
-            let action = action.unwrap_or(TagsAction::Summary {
-                glob: bare_glob,
-                limit: bare_limit,
-                index_flags: IndexFlags::default(),
-            });
-            match action {
-                TagsAction::Summary {
-                    ref glob,
-                    limit: cli_limit,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    false,
-                    &ScanOptions {
-                        scan_body: false,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                tag_commands::tags_summary(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                    resolve_limit(
-                                        cli_limit,
-                                        ctx.config_default_limit,
-                                        ctx.programmatic_output,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        tag_commands::tags_summary(
-                            &build.index,
-                            None,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                        )
-                    }
-                    IndexResolution::Outcome(outcome) => Ok(outcome),
-                },
-                TagsAction::Rename {
-                    from,
-                    to,
-                    glob,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => tag_commands::tags_rename(
-                    dir,
-                    &from,
-                    &to,
-                    &glob,
-                    dry_run,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.
+            tag_commands::run(ctx, bare_glob, bare_limit, action)
         }
         Commands::Task { action } => {
-            match action {
-                TaskAction::Read {
-                    selection,
-                    line,
-                    section,
-                    all,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => {
-                    let configured_dir = ctx.configured_dir_str;
-                    // iter-238: `--iteration <ID>` support (single-file command).
-                    let selection =
-                        match crate::commands::iteration::selection_with_iteration_resolved(
-                            &selection,
-                            dir,
-                            ctx.schema,
-                            effective_format,
-                        ) {
-                            Ok(s) => s,
-                            Err(outcome) => return Ok(outcome),
-                        };
-                    match resolve_inputs(
-                        &selection,
-                        dir,
-                        configured_dir,
-                        snapshot_index.as_ref(),
-                        &ResolutionPolicy::Single { allow_glob: false },
-                        effective_format,
-                        false,
-                    )? {
-                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                        ResolvedInputsOrOutcome::Resolved(r) => {
-                            ctx.files_from_counters = r.counters;
-                            let (_full, file) = r
-                                .files
-                                .into_iter()
-                                .next()
-                                .context("Single resolution returned no files")?;
-                            task_commands::task_read(
-                                dir,
-                                &file,
-                                &line,
-                                section.as_deref(),
-                                all,
-                                effective_format,
-                            )
-                        }
-                    }
-                }
-                TaskAction::Toggle {
-                    selection,
-                    line,
-                    section,
-                    all,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => {
-                    if selection.files_from.is_some() && !all && section.is_none() {
-                        let out = crate::output::format_error(
-                            effective_format,
-                            "--files-from requires --all or --section",
-                            None,
-                            Some(
-                                "try: --files-from <list> --all   or   --files-from <list> --section <heading>",
-                            ),
-                            Some(
-                                "multi-file inputs need a selection that composes across files (--all or --section)",
-                            ),
-                        );
-                        return Ok(CommandOutcome::UserError(out));
-                    }
-                    let configured_dir = ctx.configured_dir_str;
-                    // iter-238: `--iteration <ID>` support — resolves to exactly
-                    // one file, which then takes the single-file path below.
-                    let selection =
-                        match crate::commands::iteration::selection_with_iteration_resolved(
-                            &selection,
-                            dir,
-                            ctx.schema,
-                            effective_format,
-                        ) {
-                            Ok(s) => s,
-                            Err(outcome) => return Ok(outcome),
-                        };
-                    match resolve_inputs(
-                        &selection,
-                        dir,
-                        configured_dir,
-                        snapshot_index.as_ref(),
-                        &ResolutionPolicy::SingleOrMany,
-                        effective_format,
-                        false,
-                    )? {
-                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                        ResolvedInputsOrOutcome::Resolved(r) => {
-                            ctx.files_from_counters.clone_from(&r.counters);
-                            if r.files.len() == 1 {
-                                // Single file: delegate directly — no wrapping.
-                                let (_full_path, rel) = &r.files[0];
-                                task_commands::task_toggle(
-                                    dir,
-                                    rel,
-                                    &line,
-                                    section.as_deref(),
-                                    all,
-                                    effective_format,
-                                    snapshot_index,
-                                    index_path,
-                                    dry_run,
-                                )
-                            } else {
-                                // Multi-file: collect each file's raw results into a
-                                // flat array and let the pipeline wrap it in the
-                                // standard `{"results": [...], "total": N}` envelope.
-                                // `total` matches the flattened item count (consistent
-                                // with other list-shaped outputs and `--count`).
-                                let mut flat: Vec<serde_json::Value> = Vec::new();
-                                for (_full_path, rel) in &r.files {
-                                    let outcome = task_commands::task_toggle(
-                                        dir,
-                                        rel,
-                                        &line,
-                                        section.as_deref(),
-                                        all,
-                                        effective_format,
-                                        snapshot_index,
-                                        index_path,
-                                        dry_run,
-                                    )?;
-                                    match outcome {
-                                        CommandOutcome::Success { output, .. } => {
-                                            let val: serde_json::Value =
-                                                serde_json::from_str(&output)
-                                                    .unwrap_or(serde_json::Value::Null);
-                                            match val {
-                                                serde_json::Value::Array(items) => {
-                                                    flat.extend(items);
-                                                }
-                                                other => flat.push(other),
-                                            }
-                                        }
-                                        other => return Ok(other),
-                                    }
-                                }
-                                let total = flat.len() as u64;
-                                let output = serde_json::to_string(&flat)
-                                    .context("failed to serialize multi-file task toggle output")?;
-                                Ok(CommandOutcome::success_with_total(output, total))
-                            }
-                        }
-                    }
-                }
-                TaskAction::Set {
-                    selection,
-                    line,
-                    section,
-                    all,
-                    status,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => {
-                    if selection.files_from.is_some() && !all && section.is_none() {
-                        let out = crate::output::format_error(
-                            effective_format,
-                            "--files-from requires --all or --section",
-                            None,
-                            Some(
-                                "try: --files-from <list> --all --status <c>   or   --files-from <list> --section <heading> --status <c>",
-                            ),
-                            Some(
-                                "multi-file inputs need a selection that composes across files (--all or --section)",
-                            ),
-                        );
-                        return Ok(CommandOutcome::UserError(out));
-                    }
-                    if status.chars().count() != 1 {
-                        let out = crate::output::format_error(
-                            effective_format,
-                            "--status must be a single character",
-                            None,
-                            Some("example: --status '?' or --status '-'"),
-                            None,
-                        );
-                        return Ok(CommandOutcome::UserError(out));
-                    }
-                    // chars().count() == 1 guarantees next() returns Some.
-                    let ch = status
-                        .chars()
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
-
-                    let configured_dir = ctx.configured_dir_str;
-                    // iter-238: `--iteration <ID>` support — resolves to exactly
-                    // one file, which then takes the single-file path below.
-                    let selection =
-                        match crate::commands::iteration::selection_with_iteration_resolved(
-                            &selection,
-                            dir,
-                            ctx.schema,
-                            effective_format,
-                        ) {
-                            Ok(s) => s,
-                            Err(outcome) => return Ok(outcome),
-                        };
-                    match resolve_inputs(
-                        &selection,
-                        dir,
-                        configured_dir,
-                        snapshot_index.as_ref(),
-                        &ResolutionPolicy::SingleOrMany,
-                        effective_format,
-                        false,
-                    )? {
-                        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                        ResolvedInputsOrOutcome::Resolved(r) => {
-                            ctx.files_from_counters.clone_from(&r.counters);
-                            if r.files.len() == 1 {
-                                // Single file: delegate directly — no wrapping.
-                                let (_full_path, rel) = &r.files[0];
-                                task_commands::task_set_status(
-                                    dir,
-                                    rel,
-                                    &line,
-                                    section.as_deref(),
-                                    all,
-                                    ch,
-                                    effective_format,
-                                    snapshot_index,
-                                    index_path,
-                                    dry_run,
-                                )
-                            } else {
-                                // Multi-file: collect each file's raw results into a
-                                // flat array and let the pipeline wrap it in the
-                                // standard `{"results": [...], "total": N}` envelope.
-                                // `total` matches the flattened item count.
-                                let mut flat: Vec<serde_json::Value> = Vec::new();
-                                for (_full_path, rel) in &r.files {
-                                    let outcome = task_commands::task_set_status(
-                                        dir,
-                                        rel,
-                                        &line,
-                                        section.as_deref(),
-                                        all,
-                                        ch,
-                                        effective_format,
-                                        snapshot_index,
-                                        index_path,
-                                        dry_run,
-                                    )?;
-                                    match outcome {
-                                        CommandOutcome::Success { output, .. } => {
-                                            let val: serde_json::Value =
-                                                serde_json::from_str(&output)
-                                                    .unwrap_or(serde_json::Value::Null);
-                                            match val {
-                                                serde_json::Value::Array(items) => {
-                                                    flat.extend(items);
-                                                }
-                                                other => flat.push(other),
-                                            }
-                                        }
-                                        other => return Ok(other),
-                                    }
-                                }
-                                let total = flat.len() as u64;
-                                let output = serde_json::to_string(&flat)
-                                    .context("failed to serialize multi-file task set output")?;
-                                Ok(CommandOutcome::success_with_total(output, total))
-                            }
-                        }
-                    }
-                }
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::tasks::run`.
+            task_commands::run(ctx, action)
         }
         Commands::Summary {
             glob,
             recent,
             depth,
             index_flags: _, // consumed in run.rs before dispatch
-        } => match resolve_index(
-            snapshot_index.as_ref(),
-            dir,
-            &[],
-            &glob,
-            effective_format,
-            site_prefix,
-            true,
-            &ScanOptions {
-                scan_body: true,
-                bm25_tokenize: false,
-                default_language: None,
-                frontmatter_link_props: ctx.frontmatter_link_props,
-            },
-        )? {
-            IndexResolution::Resolved(resolved) => {
-                // Summary always reports orphan/dead-end counts which rely on
-                // wikilink resolution, so the stem map is always needed.
-                let ci =
-                    maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
-                summary_commands::summary(
-                    dir,
-                    resolved.as_index(),
-                    &glob,
-                    recent,
-                    depth,
-                    site_prefix,
-                    effective_format,
-                    ctx.schema,
-                    ctx.lint_ignore,
-                    ci.as_ref(),
-                )
-            }
-            IndexResolution::Outcome(outcome) => Ok(outcome),
-        },
+        } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::summary::run`.
+            summary_commands::run(ctx, glob, recent, depth)
+        }
         Commands::Set {
             file_positional,
             properties,
             tag,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             iteration,
@@ -1372,145 +561,26 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             validate,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            let do_validate = validate || ctx.validate_on_write;
-            // iter-235: `--iteration <ID>` resolves the file to mutate from the
-            // type schema's filename_template, then must select exactly one
-            // file (set is a single-target mutation — ambiguous matches are an
-            // error, unlike find which returns all). Resolved here, before the
-            // generic `set` call, so set sees a normal file list and `--where-*`
-            // still filters within it.
-            let mut resolved_files: Option<Vec<String>> = None;
-            if let Some(id_str) = iteration {
-                match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
-                    Ok(id) => {
-                        match crate::commands::iteration::resolve_iteration_globs(
-                            ctx.schema,
-                            &id,
-                            effective_format,
-                        ) {
-                            crate::commands::iteration::IterationGlobs::Globs(g) => {
-                                match crate::commands::collect_files(
-                                    dir,
-                                    &[],
-                                    &g,
-                                    effective_format,
-                                )? {
-                                    crate::commands::FilesOrOutcome::Files(pairs) => {
-                                        let paths: Vec<String> =
-                                            pairs.into_iter().map(|(_, rel)| rel).collect();
-                                        match paths.len() {
-                                            0 => {
-                                                return Ok(CommandOutcome::UserError(
-                                                    crate::output::format_error(
-                                                        effective_format,
-                                                        &format!(
-                                                            "no file found for iteration {id} \
-                                                             (resolved globs: {})",
-                                                            g.join(", ")
-                                                        ),
-                                                        Some(&id_str),
-                                                        Some(
-                                                            "check the iteration number, or list candidates with `hyalo find --iteration <ID>`",
-                                                        ),
-                                                        None,
-                                                    ),
-                                                ));
-                                            }
-                                            1 => {
-                                                resolved_files = Some(paths);
-                                            }
-                                            _ => {
-                                                let mut listed = paths.clone();
-                                                listed.sort();
-                                                return Ok(CommandOutcome::UserError(
-                                                    crate::output::format_error(
-                                                        effective_format,
-                                                        &format!(
-                                                            "iteration {id} matches multiple files — \
-                                                             pass a letter suffix to disambiguate, \
-                                                             or use --file/--glob to target one directly"
-                                                        ),
-                                                        Some(&id_str),
-                                                        Some(&format!(
-                                                            "candidates:\n{}",
-                                                            listed
-                                                                .iter()
-                                                                .map(|p| format!("  - {p}"))
-                                                                .collect::<Vec<_>>()
-                                                                .join("\n")
-                                                        )),
-                                                        None,
-                                                    ),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
-                                }
-                            }
-                            crate::commands::iteration::IterationGlobs::Outcome(o) => {
-                                return Ok(o);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            Some(&id_str),
-                            Some(
-                                "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
-                            ),
-                            None,
-                        )));
-                    }
-                }
-            }
-            let (set_files, set_globs): (&[String], &[String]) = match resolved_files {
-                Some(ref paths) => (paths.as_slice(), &[]),
-                None => (&file, &glob),
-            };
-            set_commands::set(
-                dir,
-                &properties,
-                &tag,
-                set_files,
-                set_globs,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::set::run`.
+            set_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                tag,
+                file,
+                glob,
+                iteration,
+                where_properties,
+                where_tags,
                 dry_run,
-                do_validate,
-                // Always pass the schema: `do_validate` still gates the blocking
-                // pre-validation pass, but the (non-blocking) enum/pattern
-                // advisory note needs the schema even without --validate
-                // (iter-181 task 1).
-                Some(ctx.schema),
-                ctx.case_insensitive_mode,
+                validate,
             )
         }
         Commands::Remove {
             file_positional,
             properties,
             tag,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             where_properties,
@@ -1518,39 +588,23 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             dry_run,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            remove_commands::remove(
-                dir,
-                &properties,
-                &tag,
-                &file,
-                &glob,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::remove::run`.
+            remove_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                tag,
+                file,
+                glob,
+                where_properties,
+                where_tags,
                 dry_run,
             )
         }
         Commands::Append {
             file_positional,
             properties,
-            mut file,
+            file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
             where_properties,
@@ -1559,35 +613,17 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             validate,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            if !file_positional.is_empty() {
-                file = file_positional;
-            }
-            let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        &e,
-                        None,
-                        None,
-                        None,
-                    )));
-                }
-            };
-            let do_validate = validate || ctx.validate_on_write;
-            append_commands::append(
-                dir,
-                &properties,
-                &file,
-                &glob,
-                &where_prop_filters,
-                &where_tags,
-                effective_format,
-                snapshot_index,
-                index_path,
+            // ARCH-1 (iter-225): the arm body now lives in `commands::append::run`.
+            append_commands::run(
+                ctx,
+                file_positional,
+                properties,
+                file,
+                glob,
+                where_properties,
+                where_tags,
                 dry_run,
-                do_validate,
-                if do_validate { Some(ctx.schema) } else { None },
+                validate,
             )
         }
         Commands::Backlinks {
@@ -1595,64 +631,8 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             limit: cli_limit,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // iter-238: `--iteration <ID>` support (single-file command).
-            let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                &selection,
-                dir,
-                ctx.schema,
-                effective_format,
-            ) {
-                Ok(s) => s,
-                Err(outcome) => return Ok(outcome),
-            };
-            match resolve_inputs(
-                &selection,
-                dir,
-                ctx.configured_dir_str,
-                snapshot_index.as_ref(),
-                &ResolutionPolicy::Single { allow_glob: false },
-                effective_format,
-                mode_enabled(ctx.case_insensitive_mode, dir),
-            )? {
-                ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                ResolvedInputsOrOutcome::Resolved(r) => {
-                    ctx.files_from_counters = r.counters;
-                    let (_full, file) = r
-                        .files
-                        .into_iter()
-                        .next()
-                        .context("Single resolution returned no files")?;
-                    match resolve_index(
-                        snapshot_index.as_ref(),
-                        dir,
-                        &[],
-                        &[],
-                        effective_format,
-                        site_prefix,
-                        true,
-                        &ScanOptions {
-                            scan_body: true,
-                            bm25_tokenize: false,
-                            default_language: None,
-                            frontmatter_link_props: ctx.frontmatter_link_props,
-                        },
-                    )? {
-                        IndexResolution::Resolved(resolved) => backlinks_commands::backlinks(
-                            resolved.as_index(),
-                            &file,
-                            dir,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                            mode_enabled(ctx.case_insensitive_mode, dir),
-                        ),
-                        IndexResolution::Outcome(outcome) => Ok(outcome),
-                    }
-                }
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::backlinks::run`.
+            backlinks_commands::run(ctx, selection, cli_limit)
         }
         Commands::Mv {
             file_positional,
@@ -1670,143 +650,22 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             allow_ambiguous,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // Resolve the destination from either the positional DEST alias or
-            // the --to flag (iter-181 task 5). clap enforces they are mutually
-            // exclusive and that DEST requires the positional source; a missing
-            // destination (neither form given) is reported here.
-            let Some(to) = to.or(to_positional) else {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    "no destination provided: pass DEST positionally (e.g. `hyalo mv old.md new.md`) or --to <path>",
-                    None,
-                    None,
-                    None,
-                )));
-            };
-            // Parse property filters for batch mode
-            let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
-                .iter()
-                .map(|s| hyalo_core::filter::parse_property_filter(s))
-                .collect::<Result<Vec<_>, _>>()
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    return Ok(property_filter_error_outcome(&e, effective_format));
-                }
-            };
-            // Build type filters as additional property filters (type=<value>)
-            let type_filters: Vec<hyalo_core::filter::PropertyFilter> = {
-                let mut tf = Vec::new();
-                for t in &r#type {
-                    match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
-                        Ok(f) => tf.push(f),
-                        Err(e) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    }
-                }
-                tf
-            };
-            let all_prop_filters: Vec<hyalo_core::filter::PropertyFilter> =
-                prop_filters.into_iter().chain(type_filters).collect();
-
-            let has_selectors = !glob.is_empty() || !all_prop_filters.is_empty() || !tag.is_empty();
-            let has_file = file_positional.is_some() || file.is_some();
-
-            if !has_selectors && !has_file {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    "no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)",
-                    None,
-                    None,
-                    None,
-                )));
-            }
-
-            let is_batch = has_selectors;
-
-            if is_batch {
-                // Validate tag filters.
-                for t in &tag {
-                    if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &msg,
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                }
-
-                // --dry-run and --apply are mutually exclusive (also enforced by clap).
-                let effective_apply = apply && !dry_run;
-
-                mv_commands::mv_batch(
-                    dir,
-                    file_positional.as_deref(),
-                    file.as_deref(),
-                    &glob,
-                    &all_prop_filters,
-                    &tag,
-                    &to,
-                    effective_apply,
-                    &on_conflict,
-                    effective_format,
-                    site_prefix,
-                    snapshot_index,
-                    index_path,
-                    allow_ambiguous,
-                )
-            } else {
-                // `mv` has an asymmetric default: single-file mode writes
-                // immediately, batch mode defaults to dry-run and needs
-                // `--apply` to commit. Accepting `--apply` here as a silent
-                // no-op hid that asymmetry from anyone who learned the batch
-                // form first — they had no way to tell whether the flag was
-                // doing the work or the default was (iter-192, DEC-192-mv-apply).
-                if apply {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        effective_format,
-                        "single-file mv applies by default; use --dry-run to preview",
-                        None,
-                        Some(
-                            "--apply is only meaningful in batch mode (--glob/--property/--tag/--type), which defaults to dry-run",
-                        ),
-                        None,
-                    )));
-                }
-                let file = match resolve_single_file(file_positional, file) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &e.to_string(),
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                };
-                let effective_dry_run = dry_run;
-                mv_commands::mv(
-                    dir,
-                    &file,
-                    &to,
-                    effective_dry_run,
-                    ctx.user_format,
-                    site_prefix,
-                    snapshot_index,
-                    index_path,
-                    allow_ambiguous,
-                )
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::mv::run`.
+            mv_commands::run(
+                ctx,
+                file_positional,
+                file,
+                to_positional,
+                to,
+                glob,
+                properties,
+                tag,
+                r#type,
+                dry_run,
+                apply,
+                on_conflict,
+                allow_ambiguous,
+            )
         }
         Commands::CreateIndex {
             output,
@@ -1828,140 +687,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             effective_format,
             allow_outside_vault,
         ),
-        Commands::Links { action } => match action.unwrap_or(LinksAction::Fix {
-            dry_run: true,
-            apply: false,
-            threshold: 0.8,
-            apply_fuzzy: false,
-            min_confidence: None,
-            glob: vec![],
-            ignore_target: vec![],
-            expand_short_form: false,
-            index_flags: IndexFlags::default(),
-        }) {
-            LinksAction::Fix {
-                dry_run: _,
-                apply,
-                threshold,
-                apply_fuzzy,
-                min_confidence,
-                glob,
-                ignore_target,
-                expand_short_form,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                // Scope the immutable borrow of snapshot_index (via resolve_index)
-                // so we can borrow it mutably for index updates afterwards.
-                let (outcome, modified_files, had_failures) = match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    &[],
-                    effective_format,
-                    site_prefix,
-                    true,
-                    &ScanOptions {
-                        scan_body: true,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(resolved) => {
-                        // `links fix` is entirely about link resolution.
-                        let ci = maybe_case_index(
-                            ctx.case_insensitive_mode,
-                            dir,
-                            true,
-                            resolved.as_snapshot(),
-                        );
-                        links_commands::links_fix(
-                            resolved.as_index(),
-                            dir,
-                            site_prefix,
-                            &glob,
-                            !apply,
-                            threshold,
-                            &ignore_target,
-                            effective_format,
-                            ci.as_ref(),
-                            expand_short_form,
-                            links_commands::FuzzyApply {
-                                apply_fuzzy,
-                                min_confidence,
-                                config_min_confidence: ctx.config_fuzzy_min_confidence,
-                            },
-                        )?
-                    }
-                    IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
-                };
-                // L-11: a mid-batch write failure yields a non-zero exit code
-                // even though the envelope is emitted in full.
-                if had_failures {
-                    ctx.exit_code_override = Some(1);
-                }
-                // resolved is dropped — safe to borrow snapshot_index mutably.
-                patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
-                Ok(outcome)
-            }
-            LinksAction::Auto {
-                dry_run: _,
-                apply,
-                min_length,
-                exclude_title,
-                first_only,
-                no_first_only,
-                exclude_target_glob,
-                no_warn_common_titles,
-                file,
-                glob,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                let (outcome, modified_files, had_failures) = match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    &[],
-                    effective_format,
-                    site_prefix,
-                    true,
-                    &ScanOptions {
-                        scan_body: false,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(resolved) => links_commands::links_auto(
-                        resolved.as_index(),
-                        dir,
-                        apply,
-                        &links_commands::AutoFilters {
-                            min_length,
-                            cli_exclude_titles: &exclude_title,
-                            cli_exclude_target_globs: &exclude_target_glob,
-                            cli_first_only: first_only,
-                            cli_no_first_only: no_first_only,
-                            config_exclude_titles: ctx.auto_link_exclude_titles,
-                            config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
-                            config_first_only: ctx.auto_link_first_only,
-                            cli_no_warn_common_titles: no_warn_common_titles,
-                            config_warn_common_titles: ctx.auto_link_warn_common_titles,
-                        },
-                        file.as_deref(),
-                        &glob,
-                        effective_format,
-                    )?,
-                    IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
-                };
-                // L-11: partial write failure ⇒ non-zero exit code.
-                if had_failures {
-                    ctx.exit_code_override = Some(1);
-                }
-                patch_index_for_modified_files(snapshot_index, index_path, dir, &modified_files)?;
-                Ok(outcome)
-            }
-        },
+        Commands::Links { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::links::run`.
+            links_commands::run(ctx, action)
+        }
         Commands::Lint {
             file_positional,
             file,
@@ -1983,465 +712,29 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             profile: _,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
-            // --strict flag wins over config value; config value is the fallback.
-            let effective_strict = lint_strict_flag || ctx.lint_strict;
-            // Resolve --type to a glob pattern from its filename_template.
-            let type_glob: Option<String> = if let Some(type_name) = lint_type {
-                use hyalo_core::filename_template::FilenameTemplate;
-                match ctx.schema.types.get(&type_name) {
-                    Some(ts) => match &ts.filename_template {
-                        Some(template_str) => match FilenameTemplate::parse(template_str) {
-                            Ok(tpl) => Some(tpl.to_glob()),
-                            Err(e) => {
-                                return Ok(crate::output::CommandOutcome::UserError(
-                                    crate::output::format_error(
-                                        ctx.user_format,
-                                        &format!(
-                                            "invalid filename_template for type '{type_name}': {e}"
-                                        ),
-                                        None,
-                                        None,
-                                        None,
-                                    ),
-                                ));
-                            }
-                        },
-                        None => {
-                            return Ok(crate::output::CommandOutcome::UserError(
-                                crate::output::format_error(
-                                    ctx.user_format,
-                                    &format!("type '{type_name}' has no filename_template defined"),
-                                    None,
-                                    Some(
-                                        "set one with: hyalo types set <name> --filename-template <pattern>",
-                                    ),
-                                    None,
-                                ),
-                            ));
-                        }
-                    },
-                    None => {
-                        return Ok(crate::output::CommandOutcome::UserError(
-                            crate::output::format_error(
-                                ctx.user_format,
-                                &format!("unknown type '{type_name}'"),
-                                None,
-                                Some("run `hyalo types list` to see available types"),
-                                None,
-                            ),
-                        ));
-                    }
-                }
-            } else {
-                None
-            };
-
-            // Build the file list. Positional args are treated as --file
-            // targets (repeatable), preserving their command-line order ahead
-            // of any --file values.
-            let mut files_arg: Vec<String> = file_positional;
-            files_arg.extend(file);
-            // --type expands to a glob that overrides file/glob args.
-            let effective_glob: Vec<String> = if let Some(g) = type_glob {
-                vec![g]
-            } else {
-                glob
-            };
-
-            let mut file_pairs = match crate::commands::collect_files(
-                dir,
-                &files_arg,
-                &effective_glob,
-                ctx.user_format,
-            )? {
-                crate::commands::FilesOrOutcome::Files(f) => f,
-                crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
-            };
-
-            // Reach a repo-root CHANGELOG.md that lives *outside* the vault dir.
-            // When the changelog profile is active and `[changelog] path`
-            // resolves to a file the vault walk can't see (the common
-            // docs-subdir layout), add it to the lint set so
-            // `lint --profile changelog` validates the real file without
-            // `--dir .` gymnastics. Only for an unscoped run (no explicit
-            // `--file`/`--glob`), so a targeted lint is never surprised by an
-            // extra file.
-            if files_arg.is_empty()
-                && effective_glob.is_empty()
-                && ctx.lint_profiles.iter().any(|p| p == "changelog")
-                && let Ok(changelog_file) = crate::commands::changelog::resolve_changelog_file(
-                    dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                )
-                && changelog_file.is_file()
-            {
-                let rel = hyalo_core::discovery::relative_path(dir, &changelog_file);
-                // Only inject when the file is outside the vault dir (a relative
-                // path that climbs out, or an absolute one) — an in-vault
-                // CHANGELOG.md was already discovered by the walk.
-                let outside = rel.starts_with("..") || std::path::Path::new(&rel).is_absolute();
-                let already = file_pairs.iter().any(|(p, _)| p == &changelog_file);
-                if outside && !already {
-                    let display = changelog_file
-                        .file_name()
-                        .map_or_else(|| rel.clone(), |n| n.to_string_lossy().into_owned());
-                    file_pairs.push((changelog_file, display));
-                }
-            }
-
-            let fix_mode = if fix {
-                if dry_run {
-                    lint_commands::FixMode::DryRun
-                } else {
-                    lint_commands::FixMode::Apply
-                }
-            } else {
-                lint_commands::FixMode::Off
-            };
-
-            // Filter out files matching `[lint] ignore` entries.
-            //
-            // Each entry is matched against the vault-relative path (with `/`
-            // separators) as a glob: `vendor/**/*.md`, `legacy/known-bad.md`,
-            // `templates/*.md`. An entry without glob meta-characters is matched
-            // literally (exact path equality on the normalized path).
-            // `--file`/positional args are "explicit": the user named them
-            // directly rather than sweeping a glob. When an explicit file is
-            // excluded by `[lint] ignore` it must produce a visible notice, not
-            // a silent `0 files checked` (df-scale silent-drop family).
-            let explicit_named = !files_arg.is_empty();
-            // UX-1 (dogfood pre3): how many files `[lint] ignore` dropped from
-            // this run, regardless of scope. Zero when there is no `[lint]
-            // ignore` at all (the branch below never runs).
-            let mut lint_ignored_count: usize = 0;
-            let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
-                file_pairs
-            } else {
-                use globset::{GlobBuilder, GlobSetBuilder};
-                let mut builder = GlobSetBuilder::new();
-                let mut build_failed = false;
-                for pat in ctx.lint_ignore {
-                    match GlobBuilder::new(pat)
-                        .literal_separator(true)
-                        .backslash_escape(true)
-                        .build()
-                    {
-                        Ok(g) => {
-                            builder.add(g);
-                        }
-                        Err(e) => {
-                            crate::warn::warn(format!(
-                                "invalid [lint] ignore pattern {pat:?}: {e}"
-                            ));
-                            build_failed = true;
-                        }
-                    }
-                }
-                let set = if build_failed {
-                    None
-                } else {
-                    builder.build().ok()
-                };
-                // UX-1 (dogfood pre3): a `--glob` sweep is just as "explicit"
-                // as `--file` when it comes to the *all-matches-ignored* case
-                // — the user asked for a specific set of files by name or by
-                // pattern either way, and getting back an empty, vacuously
-                // green lint run with no explanation is the same silent-drop
-                // trap regardless of which form they used.
-                let explicit_glob = !effective_glob.is_empty();
-                match set {
-                    Some(set) => {
-                        let mut ignored_named: Vec<String> = Vec::new();
-                        let before = file_pairs.len();
-                        let kept: Vec<_> = file_pairs
-                            .into_iter()
-                            .filter(|(_, rel)| {
-                                let norm = rel.replace('\\', "/");
-                                let matched = set.is_match(&norm);
-                                if matched && (explicit_named || explicit_glob) {
-                                    ignored_named.push(norm);
-                                }
-                                !matched
-                            })
-                            .collect();
-                        // UX-1: unconditional count, regardless of how the
-                        // file set was scoped — feeds the bare-sweep summary
-                        // line ("N files checked (M ignored by [lint]
-                        // ignore)") so a full-vault run stops hiding how much
-                        // of the vault it silently skipped.
-                        lint_ignored_count = before - kept.len();
-                        // Notice for an explicit scope (named files, or a
-                        // --glob whose matches are *entirely* ignored)
-                        // silently excluded by `[lint] ignore` — otherwise the
-                        // run reports `0 files checked, no issues` with no
-                        // hint why. A --glob that only partially matches the
-                        // ignore list stays quiet here: the bare-sweep count
-                        // above already makes the exclusion visible without
-                        // the noise of naming every match.
-                        let glob_all_ignored = explicit_glob && !explicit_named && kept.is_empty();
-                        if !ignored_named.is_empty() && (explicit_named || glob_all_ignored) {
-                            let list = ignored_named.join(", ");
-                            let plural = if ignored_named.len() == 1 {
-                                "file"
-                            } else {
-                                "files"
-                            };
-                            crate::warn::warn(format!(
-                                "{} named {plural} excluded by [lint] ignore (not linted): {list}",
-                                ignored_named.len()
-                            ));
-                        }
-                        kept
-                    }
-                    // If building the set failed (warning already emitted above),
-                    // fall back to no filtering rather than silently ignoring
-                    // potentially relevant files.
-                    None => file_pairs,
-                }
-            };
-
-            // Decide which lint path to use: extended (body+frontmatter) or legacy.
-            // The extended path is used whenever the new flags are active OR when the
-            // engine is available.  We always use the extended path now.
-            let md_engine = hyalo_mdlint::HyaloLintEngine::create()
-                .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
-
-            // M-10: `--rule` names a rule id, so validate it the way
-            // `lint-rules show` does instead of silently linting with a filter
-            // that matches nothing (an unknown id used to exit 0 with "no
-            // issues found", which reads as "clean" in CI). The match is
-            // case-insensitive and canonicalizes to the catalog spelling so
-            // `--rule hyalo006` behaves exactly like `--rule HYALO006`.
-            let rule = match rule {
-                Some(raw) => match md_engine.rule_entry_ci(&raw) {
-                    Some(entry) => Some(entry.id.clone()),
-                    None => {
-                        return Ok(crate::output::CommandOutcome::UserError(
-                            crate::output::format_error(
-                                ctx.user_format,
-                                &format!("no such rule: {raw}"),
-                                None,
-                                Some("run `hyalo lint-rules list` to see available rules"),
-                                None,
-                            ),
-                        ));
-                    }
-                },
-                None => None,
-            };
-            // iter-210 BUG-5: a prefix that selects no rule is as much a typo
-            // as an unknown `--rule` id, and it used to be *worse* than one:
-            // the empty filter fell through to "no filtering", so `--rule-prefix
-            // nope` warned and then ran every MD rule anyway at exit 0. Fail it
-            // with the same error shape as `--rule`. The match is
-            // case-insensitive, so a matching family is unaffected.
-            if let Some(prefix) = rule_prefix.as_deref()
-                && md_engine.rules_matching_prefix_ci(prefix).is_empty()
-            {
-                return Ok(crate::output::CommandOutcome::UserError(
-                    crate::output::format_error(
-                        ctx.user_format,
-                        &format!("no rule matches prefix: {prefix}"),
-                        None,
-                        Some("run `hyalo lint-rules list` to see available rules"),
-                        None,
-                    ),
-                ));
-            }
-
-            // `--format github` emits one annotation per violation, so every
-            // finding must be materialized: force `detailed` and lift the
-            // per-rule / per-file caps. Otherwise the summary-mode truncation
-            // would silently drop annotations from the PR check.
-            let github_output = ctx.user_format == crate::output::Format::Github;
-
-            let max_per_rule_eff = if github_output {
-                // `usize::MAX`, not `0` — the fix-mode output path uses
-                // `.take(n)`/`.min(n)` to cap violations shown per rule, so `0`
-                // would truncate every rule group to zero shown violations and
-                // silently drop annotations. The non-fix path separately bypasses
-                // this cap via `opts.detailed`, but fix-mode does not, so the
-                // sentinel must mean "unlimited" in both paths.
-                usize::MAX
-            } else {
-                max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule())
-            };
-            // CLI --limit overrides the config max_files when provided.
-            // `--limit 0` is documented as "unlimited" (matches `--count
-            // --limit 0`): map it to `usize::MAX` so it lifts the file cap
-            // instead of truncating the list to zero (ff-rdp B5, mapl BUG-4).
-            let max_files_eff = match cli_limit {
-                Some(0) => usize::MAX,
-                Some(n) => n,
-                None if github_output => usize::MAX,
-                None => ctx.md_lint.max_files(),
-            };
-
-            // HYALO006 (broken-link): build the vault-wide resolution context
-            // ONCE per invocation, but only when the rule will actually run —
-            // i.e. it is enabled (no `[lint.rules.HYALO006] enabled = false`)
-            // AND selected by any `--rule` / `--rule-prefix` filter. Building it
-            // means seeding a case/stem index (from the snapshot when `--index`
-            // is active, else a single disk walk) — never per file.
-            let hyalo006_enabled = ctx
-                .md_lint
-                .rules
-                .get(lint_commands::RULE_ID_BROKEN_LINK)
-                .and_then(hyalo_mdlint::RuleOverride::enabled)
-                .unwrap_or(true);
-            let hyalo006_selected = match (&rule, &rule_prefix) {
-                (Some(r), _) => r == lint_commands::RULE_ID_BROKEN_LINK,
-                (None, Some(p)) => lint_commands::RULE_ID_BROKEN_LINK
-                    .to_ascii_uppercase()
-                    .starts_with(&p.to_ascii_uppercase()),
-                (None, None) => true,
-            };
-            let link_lint_ctx = if hyalo006_enabled && hyalo006_selected {
-                let case_index = maybe_case_index(
-                    ctx.case_insensitive_mode,
-                    dir,
-                    true,
-                    (*snapshot_index).as_ref(),
-                )
-                .unwrap_or_default();
-                crate::commands::link_lint::LinkLintContext::new(
-                    dir,
-                    site_prefix.map(str::to_owned),
-                    case_index,
-                )
-            } else {
-                None
-            };
-
-            let mut ext_opts = lint_commands::ExtLintOptions {
-                fix: fix_mode,
-                detailed: detailed || github_output,
-                rule_filter: rule.as_deref(),
-                rule_prefix: rule_prefix.as_deref(),
-                max_per_rule: max_per_rule_eff,
-                max_files: max_files_eff,
-                fix_rules: &fix_rule,
-                snapshot_index,
-                index_path,
-                vault_dir: dir,
-                strict: effective_strict,
-                // The active profile is resolved in run.rs (CLI `--profile`
-                // overlay OR `[lint] profile` in config); captured above.
-                okf_profile: okf_profile_active,
-                madr_profile: madr_profile_active,
-                skills_profile: skills_profile_active,
-                changelog_profile: changelog_profile_active,
-                // Resolved once per `hyalo lint` invocation (not re-probed
-                // per file) so `[schema] exempt` globs fold case the same way
-                // `hyalo okf index` treats `INDEX.md` on case-insensitive
-                // filesystems (macOS/Windows default).
-                case_insensitive: mode_enabled(ctx.case_insensitive_mode, dir),
-                link_lint_ctx,
-                files_ignored: lint_ignored_count,
-            };
-
-            let (outcome, mut counts) = lint_commands::lint_files_extended(
-                &filtered_pairs,
-                ctx.schema,
-                &md_engine,
-                ctx.md_lint,
-                &mut ext_opts,
-            )?;
-
-            // Additional config-level lint: check view definitions AND that
-            // [schema] itself parses (review round finding 2 — a malformed
-            // [schema] block used to be only a stderr warning, so `lint
-            // --strict` could exit 0 on a vault whose schema validation was
-            // silently disabled). Merged into one `.hyalo.toml` pseudo-file
-            // result so both kinds of config-level problem show up together
-            // rather than as two separate file entries.
-            let mut config_result: Option<lint_commands::FileLintResult> =
-                lint_commands::validate_views(ctx.config_dir);
-            if let Some(schema_result) =
-                lint_commands::validate_schema_config(ctx.config_dir, effective_strict)
-            {
-                match &mut config_result {
-                    Some(existing) => existing.violations.extend(schema_result.violations),
-                    None => config_result = Some(schema_result),
-                }
-            }
-            let outcome = if let Some(config_result) = config_result {
-                for v in &config_result.violations {
-                    match v.severity {
-                        lint_commands::Severity::Error => counts.errors += 1,
-                        lint_commands::Severity::Warn => counts.warnings += 1,
-                    }
-                }
-                counts.files_with_issues += 1;
-                // Adapt into the new shape — inject as a file with a SCHEMA group.
-                let adapted = adapt_view_result_to_ext(&config_result);
-                inject_ext_file_result(outcome, &adapted)?
-            } else {
-                outcome
-            };
-
-            // Signal exit code 1 when errors remain after fixes (set before returning).
-            if counts.errors > 0 {
-                ctx.exit_code_override = Some(1);
-            }
-
-            Ok(outcome)
+            // ARCH-1 (iter-225): the ~390-line arm body now lives in
+            // `commands::lint::run`.
+            lint_commands::run(
+                ctx,
+                file_positional,
+                file,
+                glob,
+                lint_type,
+                fix,
+                dry_run,
+                cli_limit,
+                detailed,
+                rule,
+                rule_prefix,
+                max_per_rule,
+                fix_rule,
+                lint_strict_flag,
+            )
         }
         Commands::LintRules { action } => {
-            let action = action.unwrap_or(LintRulesAction::List {
-                enabled_only: false,
-                disabled_only: false,
-                rule_prefix: None,
-            });
-            let md_engine = hyalo_mdlint::HyaloLintEngine::create()
-                .map_err(|e| anyhow::anyhow!("failed to create lint engine: {e}"))?;
-            match action {
-                LintRulesAction::List {
-                    enabled_only,
-                    disabled_only,
-                    rule_prefix,
-                } => Ok(lint_rules_commands::list_rules(
-                    ctx.config_dir,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.schema,
-                    enabled_only,
-                    disabled_only,
-                    rule_prefix.as_deref(),
-                    effective_format,
-                )),
-                LintRulesAction::Show { rule_id } => Ok(lint_rules_commands::show_rule(
-                    &rule_id,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.schema,
-                    ctx.user_format,
-                )),
-                LintRulesAction::Set {
-                    rule_id,
-                    enabled,
-                    severity,
-                    dry_run,
-                } => lint_rules_commands::set_rule(
-                    ctx.config_dir,
-                    &rule_id,
-                    enabled,
-                    severity.as_deref(),
-                    dry_run,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.user_format,
-                ),
-                LintRulesAction::Remove { rule_id, dry_run } => lint_rules_commands::remove_rule(
-                    ctx.config_dir,
-                    &rule_id,
-                    dry_run,
-                    &md_engine,
-                    ctx.md_lint,
-                    ctx.user_format,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in
+            // `commands::lint_rules::run`.
+            lint_rules_commands::run(ctx, action)
         }
         // `Init`, `Deinit`, and `Completion` are handled as early returns before dispatch is called.
         Commands::Init { .. } => unreachable!("Init is dispatched before this match reached"),
@@ -2450,339 +743,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             unreachable!("Completion is dispatched before this match reached")
         }
         Commands::Views { action } => {
-            let action = action.unwrap_or(ViewsAction::List);
-            match action {
-                ViewsAction::List => {
-                    crate::commands::views::list_views(ctx.config_dir, effective_format)
-                }
-                ViewsAction::Set {
-                    name,
-                    pattern,
-                    mut filters,
-                } => {
-                    if pattern.is_some() && filters.regexp.is_some() {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            "PATTERN and --regexp are mutually exclusive",
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                    filters.pattern = pattern;
-                    crate::commands::views::set_view(
-                        ctx.config_dir,
-                        &name,
-                        &filters,
-                        effective_format,
-                    )
-                }
-                ViewsAction::Remove { name } => {
-                    crate::commands::views::remove_view(ctx.config_dir, &name, effective_format)
-                }
-                ViewsAction::Run {
-                    name,
-                    pattern: cli_pattern,
-                    mut filters,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => {
-                    // A positional PATTERN is part of the *overlay*, so it
-                    // overrides the view's saved pattern exactly as a
-                    // `--tag` typed alongside `find --view` overrides
-                    // nothing and extends instead (iter-213, BUG-14): the
-                    // help promised `views run <view> <pattern>` was the
-                    // same query as `find <pattern> --view <view>`, and
-                    // until now the positional was rejected outright.
-                    filters.pattern = cli_pattern;
-                    // Load the named view and merge the CLI overlay on top.
-                    let views = crate::commands::views::load_views(ctx.config_dir);
-                    match views.get(&name) {
-                        Some(base) => {
-                            let overlay = std::mem::take(&mut filters);
-                            filters = base.clone();
-                            filters.merge_from(&overlay);
-                        }
-                        None => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &format!("unknown view '{name}'"),
-                                None,
-                                Some("run 'hyalo views list' to see available views"),
-                                None,
-                            )));
-                        }
-                    }
-                    // Propagate the view's saved pattern to the BM25 search.
-                    let pattern = filters.pattern.clone();
-                    let FindFilters {
-                        regexp,
-                        properties,
-                        tag,
-                        task,
-                        sections,
-                        file,
-                        glob,
-                        fields,
-                        sort,
-                        reverse,
-                        limit,
-                        broken_links,
-                        strict,
-                        orphan,
-                        dead_end,
-                        title,
-                        language,
-                        ..
-                    } = filters;
-                    if orphan && dead_end {
-                        crate::warn::warn(
-                            "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
-                        );
-                    }
-                    for t in &tag {
-                        if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &msg,
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    }
-                    if let Some(ref lang) = language
-                        && let Err(e) = parse_language(lang)
-                    {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &format!("invalid --language value {lang:?}: {e}"),
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                    if let Some(cfg_lang) = ctx.config_language
-                        && let Err(e) = parse_language(cfg_lang)
-                    {
-                        return Ok(CommandOutcome::UserError(crate::output::format_error(
-                            effective_format,
-                            &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
-                            None,
-                            None,
-                            None,
-                        )));
-                    }
-                    let prop_filters: Vec<filter::PropertyFilter> = match properties
-                        .iter()
-                        .map(|s| filter::parse_property_filter(s))
-                        .collect::<Result<Vec<_>, _>>()
-                    {
-                        Ok(f) => f,
-                        Err(e) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    };
-                    let task_filter = match task.as_deref().map(filter::parse_task_filter) {
-                        Some(Ok(f)) => Some(f),
-                        Some(Err(e)) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                        None => None,
-                    };
-                    let parsed_fields = match filter::Fields::parse(&fields) {
-                        Ok(f) => f,
-                        Err(e) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    };
-                    let sort_field = match sort.as_deref().map(filter::parse_sort) {
-                        Some(Ok(f)) => Some(f),
-                        Some(Err(e)) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e.to_string(),
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                        None => None,
-                    };
-                    let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
-                        .iter()
-                        .map(|s| hyalo_core::heading::SectionFilter::parse(s))
-                        .collect::<Result<Vec<_>, _>>()
-                    {
-                        Ok(f) => f,
-                        Err(e) => {
-                            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                                effective_format,
-                                &e,
-                                None,
-                                None,
-                                None,
-                            )));
-                        }
-                    };
-                    let file: Vec<String> = file
-                        .into_iter()
-                        .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
-                        .collect();
-                    let sort_needs_backlinks =
-                        matches!(sort_field.as_ref(), Some(filter::SortField::BacklinksCount));
-                    let sort_needs_links =
-                        matches!(sort_field.as_ref(), Some(filter::SortField::LinksCount));
-                    let sort_needs_title =
-                        matches!(sort_field.as_ref(), Some(filter::SortField::Title));
-                    let has_task_filter = task_filter.is_some();
-                    let has_section_filter = !section_filters.is_empty();
-                    let has_bm25_search = pattern.is_some();
-                    let has_title_filter = title.is_some();
-                    let needs_body = find_commands::needs_body(
-                        &parsed_fields,
-                        has_task_filter,
-                        has_section_filter,
-                    ) || sort_needs_links
-                        || sort_needs_title
-                        || broken_links
-                        || orphan
-                        || dead_end
-                        || has_title_filter
-                        || has_bm25_search;
-                    let needs_full_vault =
-                        parsed_fields.backlinks || sort_needs_backlinks || orphan || dead_end;
-                    let scan_body = needs_body || needs_full_vault;
-                    match resolve_index(
-                        snapshot_index.as_ref(),
-                        dir,
-                        &file,
-                        &glob,
-                        effective_format,
-                        site_prefix,
-                        needs_full_vault,
-                        &ScanOptions {
-                            scan_body,
-                            bm25_tokenize: false,
-                            default_language: None,
-                            frontmatter_link_props: ctx.frontmatter_link_props,
-                        },
-                    )? {
-                        IndexResolution::Resolved(resolved) => {
-                            // Views may invoke any find flag combination, so be
-                            // conservative and always seed the stem map. Cheap
-                            // when a snapshot index is available.
-                            let ci = maybe_case_index(
-                                ctx.case_insensitive_mode,
-                                dir,
-                                true,
-                                resolved.as_snapshot(),
-                            );
-                            let outcome = find_commands::find(
-                                resolved.as_index(),
-                                dir,
-                                site_prefix,
-                                pattern.as_deref(),
-                                regexp.as_deref(),
-                                &prop_filters,
-                                &tag,
-                                task_filter.as_ref(),
-                                &section_filters,
-                                &file,
-                                &glob,
-                                &parsed_fields,
-                                sort_field.as_ref(),
-                                reverse,
-                                resolve_limit(
-                                    limit,
-                                    ctx.config_default_limit,
-                                    ctx.programmatic_output,
-                                ),
-                                broken_links,
-                                orphan,
-                                dead_end,
-                                title.as_deref(),
-                                effective_format,
-                                language.as_deref(),
-                                ctx.config_language,
-                                ci.as_ref(),
-                            )?;
-                            // PR #251 review M4: `views run` used to silently
-                            // drop `--strict` (the destructure above fell
-                            // into `..`) — `views set gate --broken-links
-                            // --strict` persisted `strict: true` into the
-                            // saved view, but `views run gate` still exited 0
-                            // forever while `find --view gate` correctly
-                            // exited 1: a CI gate that silently stopped
-                            // gating the moment it was saved as a view. Same
-                            // exit-code logic as `Commands::Find` (UX-2).
-                            if strict
-                                && let CommandOutcome::Success {
-                                    total: Some(total), ..
-                                } = &outcome
-                                && *total > 0
-                            {
-                                ctx.exit_code_override = Some(1);
-                            }
-                            Ok(outcome)
-                        }
-                        IndexResolution::Outcome(outcome) => Ok(outcome),
-                    }
-                }
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::views::run`.
+            views_commands::run(ctx, action)
         }
         Commands::Types { action } => {
-            let action = action.unwrap_or(TypesAction::List);
-            match action {
-                TypesAction::List => Ok(crate::commands::types::list_types(ctx.schema)),
-                TypesAction::Show { type_name } => Ok(crate::commands::types::show_type(
-                    &type_name,
-                    ctx.schema,
-                    effective_format,
-                )),
-                TypesAction::Remove { type_name } => crate::commands::types::remove_type(
-                    ctx.config_dir,
-                    &type_name,
-                    effective_format,
-                ),
-                TypesAction::Set {
-                    type_name,
-                    required,
-                    default,
-                    property_type,
-                    property_values,
-                    filename_template,
-                    dry_run,
-                } => crate::commands::types::set_type(
-                    ctx.config_dir,
-                    &type_name,
-                    &required,
-                    &default,
-                    &property_type,
-                    &property_values,
-                    filename_template.as_deref(),
-                    dry_run,
-                    effective_format,
-                    ctx.case_insensitive_mode,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::types::run`.
+            types_commands::run(ctx, action)
         }
         Commands::New {
             r#type,
@@ -2797,137 +763,19 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             index_path,
             effective_format,
         ),
-        Commands::Okf { action } => match action {
-            OkfAction::Index {
-                scope,
-                apply,
-                dry_run: _,
-                replace,
-            } => {
-                let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
-                let (outcome, exit_override) = crate::commands::okf::run_index(
-                    ctx.dir,
-                    scope.as_deref(),
-                    apply,
-                    replace,
-                    ctx.okf_ignore,
-                    case_insensitive,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-            OkfAction::Log {
-                target,
-                message,
-                action: log_action,
-                apply,
-                dry_run: _,
-            } => crate::commands::okf::run_log(
-                ctx.dir,
-                target.as_deref(),
-                &message,
-                log_action.as_deref(),
-                apply,
-                effective_format,
-            ),
-        },
-        Commands::Madr { action } => match action {
-            MadrAction::Toc {
-                adr_dir,
-                apply,
-                dry_run: _,
-                replace,
-            } => {
-                let (outcome, exit_override) = crate::commands::madr::run_toc(
-                    ctx.dir,
-                    adr_dir.as_deref(),
-                    apply,
-                    replace,
-                    ctx.schema,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-        },
-        Commands::Changelog { action } => match action {
-            ChangelogAction::Release {
-                version,
-                date,
-                apply,
-                dry_run: _,
-            } => {
-                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                    effective_format,
-                ) {
-                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                };
-                let boundary_root = crate::commands::changelog::changelog_boundary_root(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                );
-                let (outcome, exit_override) = crate::commands::changelog::run_release(
-                    &changelog_file,
-                    &boundary_root,
-                    &version,
-                    date.as_deref(),
-                    apply,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-            ChangelogAction::Add {
-                category,
-                message,
-                wrap,
-                apply,
-                dry_run: _,
-            } => {
-                let changelog_file = match crate::commands::changelog::resolve_changelog_target(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                    effective_format,
-                ) {
-                    crate::commands::changelog::ChangelogTarget::Path(p) => p,
-                    crate::commands::changelog::ChangelogTarget::Refused(o) => return Ok(o),
-                };
-                let boundary_root = crate::commands::changelog::changelog_boundary_root(
-                    ctx.dir,
-                    ctx.config_dir,
-                    ctx.changelog_path,
-                );
-                let (outcome, exit_override) = crate::commands::changelog::run_add(
-                    &changelog_file,
-                    &boundary_root,
-                    &category,
-                    &message,
-                    wrap,
-                    apply,
-                    &ctx.lint_profiles,
-                    effective_format,
-                )?;
-                if let Some(code) = exit_override {
-                    ctx.exit_code_override = Some(code);
-                }
-                Ok(outcome)
-            }
-        },
+        Commands::Okf { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::okf::run`.
+            okf_commands::run(ctx, action)
+        }
+        Commands::Madr { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in `commands::madr::run`.
+            madr_commands::run(ctx, action)
+        }
+        Commands::Changelog { action } => {
+            // ARCH-1 (iter-225): the arm body now lives in
+            // `commands::changelog::run`.
+            changelog_commands::run(ctx, action)
+        }
         // Config is dispatched as an early-return in run.rs before dispatch() is called.
         Commands::Config { .. } => unreachable!("Config command is handled before dispatch"),
     }

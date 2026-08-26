@@ -29,9 +29,9 @@ pub fn check_datetime_properties(pairs: &[(&str, &str, bool)]) -> Vec<(String, S
         .iter()
         .filter_map(|(k, v, is_tz)| {
             let ok = if *is_tz {
-                hyalo_core::util::is_iso8601_datetime_tz(v)
+                hyalo_core::is_iso8601_datetime_tz(v)
             } else {
-                hyalo_core::util::is_iso8601_datetime(v)
+                hyalo_core::is_iso8601_datetime(v)
             };
             if ok {
                 None

@@ -107,3 +107,82 @@ pub fn backlinks(
         total,
     ))
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo backlinks` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    selection: crate::cli::inputs::InputSelection,
+    cli_limit: Option<usize>,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let site_prefix = ctx.site_prefix;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
+    use crate::commands::{IndexResolution, resolve_index};
+    use crate::dispatch::resolve_limit;
+    use hyalo_core::index::ScanOptions;
+    use hyalo_core::mode_enabled;
+
+    // iter-238: `--iteration <ID>` support (single-file command).
+    let selection = match crate::commands::iteration::selection_with_iteration_resolved(
+        &selection,
+        dir,
+        ctx.schema,
+        effective_format,
+    ) {
+        Ok(s) => s,
+        Err(outcome) => return Ok(outcome),
+    };
+    match resolve_inputs(
+        &selection,
+        dir,
+        ctx.configured_dir_str,
+        snapshot_index.as_ref(),
+        &ResolutionPolicy::Single { allow_glob: false },
+        effective_format,
+        mode_enabled(ctx.case_insensitive_mode, dir),
+    )? {
+        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
+        ResolvedInputsOrOutcome::Resolved(r) => {
+            ctx.files_from_counters = r.counters;
+            let (_full, file) = r
+                .files
+                .into_iter()
+                .next()
+                .context("Single resolution returned no files")?;
+            match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                &[],
+                effective_format,
+                site_prefix,
+                true,
+                &ScanOptions {
+                    scan_body: true,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
+                },
+            )? {
+                IndexResolution::Resolved(resolved) => backlinks(
+                    resolved.as_index(),
+                    &file,
+                    dir,
+                    effective_format,
+                    resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
+                    mode_enabled(ctx.case_insensitive_mode, dir),
+                ),
+                IndexResolution::Outcome(outcome) => Ok(outcome),
+            }
+        }
+    }
+}

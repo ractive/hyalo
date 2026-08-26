@@ -50,7 +50,7 @@ pub fn create_index(
         if !canonical_parent.starts_with(&canonical_dir) {
             let out = crate::output::format_error(
                 format,
-                &hyalo_core::fs_util::outside_vault_message("output path", Some(&canonical_parent)),
+                &hyalo_core::outside_vault_message("output path", Some(&canonical_parent)),
                 Some(&index_path.display().to_string()),
                 Some("use --allow-outside-vault to override"),
                 None,
@@ -119,7 +119,7 @@ pub fn create_index(
         // `.hyalo-case-probe-*` behind, invisible to `hyalo find`. `create-index`
         // is the one command that already writes to the vault, so it is the
         // natural place to clean up.
-        hyalo_core::case_index::sweep_stale_case_probes(dir);
+        hyalo_core::sweep_stale_case_probes(dir);
     }
     if wrote_to_default && let Ok(stale) = find_stale_indexes(dir) {
         for (stale_path, stale_vault, stale_ts) in stale {

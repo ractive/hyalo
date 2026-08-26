@@ -62,7 +62,7 @@ pub(crate) fn refuse_escaping_write(
     hint: Option<&str>,
     format: Format,
 ) -> Result<Option<CommandOutcome>> {
-    let Some(target) = hyalo_core::fs_util::escaping_write_target(dir, full)? else {
+    let Some(target) = hyalo_core::escaping_write_target(dir, full)? else {
         return Ok(None);
     };
     // iter-235: name the vault dir in the message and offer the relative-path
@@ -72,12 +72,12 @@ pub(crate) fn refuse_escaping_write(
     // hint text.
     let effective_hint: Option<String> = match hint {
         Some(h) => Some(h.to_owned()),
-        None => Some(hyalo_core::fs_util::outside_vault_hint(dir)),
+        None => Some(hyalo_core::outside_vault_hint(dir)),
     };
     Ok(Some(CommandOutcome::UserError(
         crate::output::format_error(
             format,
-            &hyalo_core::fs_util::outside_vault_message_with_dir(subject, Some(&target), dir),
+            &hyalo_core::outside_vault_message_with_dir(subject, Some(&target), dir),
             Some(display),
             effective_hint.as_deref(),
             None,
@@ -185,11 +185,17 @@ pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
 #[must_use]
 pub(crate) fn profile_lint_hint(profile: &str, active_profiles: &[String], note: &str) -> String {
     let redundant = active_profiles.iter().any(|p| p == profile);
-    if redundant {
-        format!("hyalo lint  # {note}")
+    // ARCH-4 (iter-225): the command half goes through `HintBuilder` (argv +
+    // `shell_quote`) so it cannot drift from the real `hyalo lint` surface;
+    // only the trailing `# note` comment is appended by hand.
+    let cmd = if redundant {
+        crate::hints::HintBuilder::cmd("lint").build()
     } else {
-        format!("hyalo lint --profile {profile}  # {note}")
-    }
+        crate::hints::HintBuilder::cmd("lint")
+            .flag_value("--profile", profile)
+            .build()
+    };
+    format!("{cmd}  # {note}")
 }
 use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild, SnapshotIndex, VaultIndex};
 use std::path::{Path, PathBuf};
@@ -675,13 +681,13 @@ pub fn resolve_error_to_outcome(
         FileResolveError::OutsideVault { path, resolved } => {
             CommandOutcome::UserError(crate::output::format_error(
                 format,
-                &hyalo_core::fs_util::outside_vault_message_with_dir(
+                &hyalo_core::outside_vault_message_with_dir(
                     "file",
                     resolved.as_deref().map(std::path::Path::new),
                     dir,
                 ),
                 Some(&path),
-                Some(&hyalo_core::fs_util::outside_vault_hint(dir)),
+                Some(&hyalo_core::outside_vault_hint(dir)),
                 None,
             ))
         }

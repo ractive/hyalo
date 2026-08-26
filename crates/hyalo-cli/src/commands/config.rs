@@ -186,19 +186,27 @@ pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
     // config file, a bare `hyalo summary` run from the same CWD reads that very
     // file — re-emitting `--dir <configured>` adds nothing and, before
     // iter-201, actively changed which config applied (H-4).
-    let suffix = if report.dir_overridden && dir != "." {
-        format!(" --dir {}", crate::hints::shell_quote(&dir))
+    // ARCH-4 (iter-225): built through `HintBuilder` so these hints can no
+    // longer drift from the real CLI surface — the argv is validated against
+    // the actual clap parser in `hints::tests::hint_builder_commands_parse`.
+    let summary = crate::hints::HintBuilder::cmd("summary");
+    let types_list = crate::hints::HintBuilder::cmd("types list");
+    let (summary, types_list) = if report.dir_overridden && dir != "." {
+        (
+            summary.flag_value("--dir", &dir),
+            types_list.flag_value("--dir", &dir),
+        )
     } else {
-        String::new()
+        (summary, types_list)
     };
     vec![
         crate::hints::Hint::new(
             "Overview of the vault this config points at".to_owned(),
-            format!("hyalo summary{suffix}"),
+            summary.build(),
         ),
         crate::hints::Hint::new(
             "Schema types lint will enforce".to_owned(),
-            format!("hyalo types list{suffix}"),
+            types_list.build(),
         ),
     ]
 }
