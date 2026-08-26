@@ -3,12 +3,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::cli::args::{
-    ChangelogAction, Commands, IndexFlags, LintRulesAction, MadrAction,
-    OkfAction, PropertiesAction, TagsAction, TypesAction,
+    ChangelogAction, Commands, LintRulesAction, MadrAction, OkfAction, TypesAction,
 };
 use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::{
-    IndexResolution, ResolvedIndex, append as append_commands, backlinks as backlinks_commands,
+    IndexResolution, append as append_commands, backlinks as backlinks_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
     find as find_commands, links as links_commands, lint as lint_commands,
     lint_rules as lint_rules_commands, mv as mv_commands, properties, read as read_commands,
@@ -526,180 +525,16 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             limit: bare_limit,
             action,
         } => {
-            // M-8: bare `hyalo properties` IS `properties summary`, so it takes
-            // the summary flags COMMAND REFERENCE documents for it rather than
-            // rejecting them at parse time.
-            let action = action.unwrap_or(PropertiesAction::Summary {
-                glob: bare_glob,
-                limit: bare_limit,
-                index_flags: IndexFlags::default(),
-            });
-            match action {
-                PropertiesAction::Summary {
-                    ref glob,
-                    limit: cli_limit,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    false,
-                    &ScanOptions {
-                        scan_body: false,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                properties::properties_summary(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                    resolve_limit(
-                                        cli_limit,
-                                        ctx.config_default_limit,
-                                        ctx.programmatic_output,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        properties::properties_summary(
-                            &build.index,
-                            None,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                        )
-                    }
-                    IndexResolution::Outcome(outcome) => Ok(outcome),
-                },
-                PropertiesAction::Rename {
-                    from,
-                    to,
-                    glob,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => properties::properties_rename(
-                    dir,
-                    &from,
-                    &to,
-                    &glob,
-                    dry_run,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::properties::run`.
+            properties::run(ctx, bare_glob, bare_limit, action)
         }
         Commands::Tags {
             glob: bare_glob,
             limit: bare_limit,
             action,
         } => {
-            // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
-            let action = action.unwrap_or(TagsAction::Summary {
-                glob: bare_glob,
-                limit: bare_limit,
-                index_flags: IndexFlags::default(),
-            });
-            match action {
-                TagsAction::Summary {
-                    ref glob,
-                    limit: cli_limit,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => match resolve_index(
-                    snapshot_index.as_ref(),
-                    dir,
-                    &[],
-                    glob,
-                    effective_format,
-                    site_prefix,
-                    false,
-                    &ScanOptions {
-                        scan_body: false,
-                        bm25_tokenize: false,
-                        default_language: None,
-                        frontmatter_link_props: ctx.frontmatter_link_props,
-                    },
-                )? {
-                    IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
-                        let filtered =
-                            find_commands::filter_index_entries(idx.entries(), &[], glob);
-                        match filtered {
-                            Err(e) => Err(e),
-                            Ok(filtered) => {
-                                let paths: Vec<String> =
-                                    filtered.iter().map(|e| e.rel_path.clone()).collect();
-                                let file_filter = if glob.is_empty() {
-                                    None
-                                } else {
-                                    Some(paths.as_slice())
-                                };
-                                tag_commands::tags_summary(
-                                    idx,
-                                    file_filter,
-                                    effective_format,
-                                    resolve_limit(
-                                        cli_limit,
-                                        ctx.config_default_limit,
-                                        ctx.programmatic_output,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
-                        tag_commands::tags_summary(
-                            &build.index,
-                            None,
-                            effective_format,
-                            resolve_limit(
-                                cli_limit,
-                                ctx.config_default_limit,
-                                ctx.programmatic_output,
-                            ),
-                        )
-                    }
-                    IndexResolution::Outcome(outcome) => Ok(outcome),
-                },
-                TagsAction::Rename {
-                    from,
-                    to,
-                    glob,
-                    dry_run,
-                    index_flags: _, // consumed in run.rs before dispatch
-                } => tag_commands::tags_rename(
-                    dir,
-                    &from,
-                    &to,
-                    &glob,
-                    dry_run,
-                    effective_format,
-                    snapshot_index,
-                    index_path,
-                ),
-            }
+            // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.
+            tag_commands::run(ctx, bare_glob, bare_limit, action)
         }
         Commands::Task { action } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::tasks::run`.

@@ -504,3 +504,116 @@ title: Good Note
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Dispatch handler (ARCH-1, iter-225)
+// ---------------------------------------------------------------------------
+
+/// The `hyalo properties` dispatch arm, extracted verbatim from `dispatch.rs`.
+/// `index_flags` was consumed earlier in `run.rs` (snapshot loading).
+use crate::cli::args::PropertiesAction;
+
+pub(crate) fn run(
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+    bare_glob: Vec<String>,
+    bare_limit: Option<usize>,
+    action: Option<PropertiesAction>,
+) -> Result<CommandOutcome> {
+    let dir = ctx.dir;
+    let site_prefix = ctx.site_prefix;
+    let effective_format = ctx.effective_format;
+    let snapshot_index = &mut *ctx.snapshot_index;
+    let index_path = ctx.index_path;
+    use crate::commands::{IndexResolution, ResolvedIndex, resolve_index};
+    use crate::dispatch::resolve_limit;
+    use crate::cli::args::IndexFlags;
+    use hyalo_core::index::ScanOptions;
+    use crate::commands::find as find_commands;
+
+
+        // M-8: bare `hyalo properties` IS `properties summary`, so it takes
+        // the summary flags COMMAND REFERENCE documents for it rather than
+        // rejecting them at parse time.
+        let action = action.unwrap_or(PropertiesAction::Summary {
+            glob: bare_glob,
+            limit: bare_limit,
+            index_flags: IndexFlags::default(),
+        });
+        match action {
+            PropertiesAction::Summary {
+                ref glob,
+                limit: cli_limit,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => match resolve_index(
+                snapshot_index.as_ref(),
+                dir,
+                &[],
+                glob,
+                effective_format,
+                site_prefix,
+                false,
+                &ScanOptions {
+                    scan_body: false,
+                    bm25_tokenize: false,
+                    default_language: None,
+                    frontmatter_link_props: ctx.frontmatter_link_props,
+                },
+            )? {
+                IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)) => {
+                    let filtered =
+                        find_commands::filter_index_entries(idx.entries(), &[], glob);
+                    match filtered {
+                        Err(e) => Err(e),
+                        Ok(filtered) => {
+                            let paths: Vec<String> =
+                                filtered.iter().map(|e| e.rel_path.clone()).collect();
+                            let file_filter = if glob.is_empty() {
+                                None
+                            } else {
+                                Some(paths.as_slice())
+                            };
+                            properties_summary(
+                                idx,
+                                file_filter,
+                                effective_format,
+                                resolve_limit(
+                                    cli_limit,
+                                    ctx.config_default_limit,
+                                    ctx.programmatic_output,
+                                ),
+                            )
+                        }
+                    }
+                }
+                IndexResolution::Resolved(ResolvedIndex::Scanned(build)) => {
+                    properties_summary(
+                        &build.index,
+                        None,
+                        effective_format,
+                        resolve_limit(
+                            cli_limit,
+                            ctx.config_default_limit,
+                            ctx.programmatic_output,
+                        ),
+                    )
+                }
+                IndexResolution::Outcome(outcome) => Ok(outcome),
+            },
+            PropertiesAction::Rename {
+                from,
+                to,
+                glob,
+                dry_run,
+                index_flags: _, // consumed in run.rs before dispatch
+            } => properties_rename(
+                dir,
+                &from,
+                &to,
+                &glob,
+                dry_run,
+                effective_format,
+                snapshot_index,
+                index_path,
+            ),
+        }
+}
