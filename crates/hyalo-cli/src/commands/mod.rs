@@ -185,11 +185,17 @@ pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
 #[must_use]
 pub(crate) fn profile_lint_hint(profile: &str, active_profiles: &[String], note: &str) -> String {
     let redundant = active_profiles.iter().any(|p| p == profile);
-    if redundant {
-        format!("hyalo lint  # {note}")
+    // ARCH-4 (iter-225): the command half goes through `HintBuilder` (argv +
+    // `shell_quote`) so it cannot drift from the real `hyalo lint` surface;
+    // only the trailing `# note` comment is appended by hand.
+    let cmd = if redundant {
+        crate::hints::HintBuilder::cmd("lint").build()
     } else {
-        format!("hyalo lint --profile {profile}  # {note}")
-    }
+        crate::hints::HintBuilder::cmd("lint")
+            .flag_value("--profile", profile)
+            .build()
+    };
+    format!("{cmd}  # {note}")
 }
 use hyalo_core::index::{ScanOptions, ScannedIndex, ScannedIndexBuild, SnapshotIndex, VaultIndex};
 use std::path::{Path, PathBuf};

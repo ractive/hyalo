@@ -517,14 +517,132 @@ fn push_find_sort(parts: &mut Vec<String>, ctx: &HintContext) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// HintBuilder (ARCH-4, iter-225)
+// ---------------------------------------------------------------------------
+
+/// Argv-based builder for the `cmd` string of a [`Hint`].
+///
+/// Before iter-225, hint commands were hand-assembled `String`s — parallel
+/// copies of the CLI surface that could (and once did) reference flags the
+/// real command does not accept (`tags --limit 0`), which is exactly why
+/// `tests/e2e/hint_execution.rs` exists. `HintBuilder` is the single path
+/// forward: the command is assembled as an *argv vector* and serialized
+/// through [`shell_quote`], and [`HintBuilder::argv`] exposes that vector so
+/// tests can feed it straight back into the real clap parser
+/// (`crate::cli::args::Cli::try_parse_from`) — a hinted command that would
+/// not run is now a unit-test failure, not an e2e-spawn discovery.
+///
+/// All new/edited hints must go through this API; the guard test
+/// `no_raw_hyalo_command_literals` in this file fails the suite when a new
+/// hand-written `"hyalo …"` string literal appears in non-test source.
+#[derive(Debug, Clone)]
+pub struct HintBuilder {
+    parts: Vec<String>,
+}
+
+impl HintBuilder {
+    /// Start a command: `hyalo <subcommand>` (or a subcommand group like
+    /// `hyalo task toggle` — pass the words one by one via [`Self::raw`]).
+    #[must_use]
+    pub fn cmd(subcommand: &str) -> Self {
+        let mut parts = vec!["hyalo".to_owned()];
+        parts.extend(subcommand.split_whitespace().map(str::to_owned));
+        Self { parts }
+    }
+
+    /// Append one shell-quoted argument (paths, patterns, values).
+    #[must_use]
+    pub fn arg(mut self, arg: &str) -> Self {
+        self.parts.push(shell_quote(arg));
+        self
+    }
+
+    /// Append pre-formed, unquoted tokens (flags like `--dry-run`, already
+    /// validated enum values). Use sparingly — prefer [`Self::flag`] and
+    /// [`Self::flag_value`].
+    #[must_use]
+    pub fn raw(mut self, token: &str) -> Self {
+        self.parts.push(token.to_owned());
+        self
+    }
+
+    /// Append a bare flag, e.g. `--apply`.
+    #[must_use]
+    pub fn flag(self, flag: &str) -> Self {
+        self.raw(flag)
+    }
+
+    /// Append a flag and its shell-quoted value, e.g. `--rule HYALO006`.
+    #[must_use]
+    pub fn flag_value(self, flag: &str, value: &str) -> Self {
+        self.raw(flag).arg(value)
+    }
+
+    /// Append multiple shell-quoted arguments at once.
+    #[must_use]
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for a in args {
+            self.parts.push(shell_quote(a.as_ref()));
+        }
+        self
+    }
+
+    /// The raw argv vector (including the leading `"hyalo"`), for feeding
+    /// into the real clap parser in tests.
+    #[must_use]
+    pub fn argv(&self) -> &[String] {
+        &self.parts
+    }
+
+    /// Serialize to the display string: space-joined, each value already
+    /// shell-quoted by [`shell_quote`].
+    #[must_use]
+    pub fn build(&self) -> String {
+        self.parts.join(" ")
+    }
+
+    // --- crate-internal plumbing used by the `build_command_*` family ---
+    // The family predates the builder and composes shared `push_*` helpers
+    // over a `Vec<String>`; these accessors let it migrate without
+    // duplicating the argv/serialisation rules (ARCH-4, iter-225).
+
+    /// A builder holding only the `hyalo` program token.
+    pub(crate) fn empty() -> Self {
+        Self {
+            parts: vec!["hyalo".to_owned()],
+        }
+    }
+
+    /// Append one raw (unquoted) token in place.
+    pub(crate) fn push_raw(&mut self, token: &str) {
+        self.parts.push(token.to_owned());
+    }
+
+    /// Append one shell-quoted token in place.
+    pub(crate) fn push_quoted(&mut self, token: &str) {
+        self.parts.push(shell_quote(token));
+    }
+
+    /// Append the context's global flags (`--dir`, `--format`, `--hints`) and
+    /// serialize. The last thing every derived hint does (iter-213, UX-5).
+    pub(crate) fn finish(mut self, ctx: &HintContext) -> String {
+        push_global_flags(&mut self.parts, ctx);
+        self.build()
+    }
+}
+
 /// Build a command that intentionally omits `--glob` (for file-specific hints).
 fn build_command_no_glob(ctx: &HintContext, args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    let mut b = HintBuilder::empty();
     for arg in args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Build a command where `file_arg` is a positional file path following `subcommand_args`.
@@ -537,84 +655,80 @@ fn build_command_with_file(
     file_arg: &str,
     trailing_args: &[&str],
 ) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    let mut b = HintBuilder::empty();
     for arg in subcommand_args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
-    push_file_positional(&mut parts, file_arg);
+    push_file_positional(&mut b.parts, file_arg);
     for arg in trailing_args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Build a command that propagates `--glob` when present.
 fn build_command_with_glob(ctx: &HintContext, args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    let mut b = HintBuilder::empty();
     for arg in args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Like `build_command_with_glob` but also preserves `--file` / positional file
 /// targets so that lint hints don't widen scope from a single file to the whole
 /// vault.
 fn build_command_with_glob_and_files(ctx: &HintContext, args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    let mut b = HintBuilder::empty();
     for arg in args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
     for ft in &ctx.file_targets {
-        parts.push(shell_quote(ft));
+        b.push_quoted(ft);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Build a `find` command that preserves the caller's existing filters (property,
 /// tag, task, file targets) plus `--glob`, then appends `extra_args`.  Use this for
 /// hints like sort and limit that refine the current query without changing its scope.
 fn build_find_command_preserving_filters(ctx: &HintContext, extra_args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    let mut b = HintBuilder::cmd("find");
     for pf in &ctx.property_filters {
-        parts.push("--property".to_owned());
-        parts.push(shell_quote(pf));
+        b.push_raw("--property");
+        b.push_quoted(pf);
     }
     for tf in &ctx.tag_filters {
-        parts.push("--tag".to_owned());
-        parts.push(shell_quote(tf));
+        b.push_raw("--tag");
+        b.push_quoted(tf);
     }
     if let Some(task) = &ctx.task_filter {
-        parts.push("--task".to_owned());
-        parts.push(shell_quote(task));
+        b.push_raw("--task");
+        b.push_quoted(task);
     }
     for ft in &ctx.file_targets {
-        parts.push("--file".to_owned());
-        parts.push(shell_quote(ft));
+        b.push_raw("--file");
+        b.push_quoted(ft);
     }
-    push_find_graph_filters(&mut parts, ctx);
-    push_find_sort(&mut parts, ctx);
+    push_find_graph_filters(&mut b.parts, ctx);
+    push_find_sort(&mut b.parts, ctx);
     for arg in extra_args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
-    push_find_index_file(&mut parts, ctx);
+    push_find_index_file(&mut b.parts, ctx);
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Render a snapshot-index path for a hint command, preferring the shortest
@@ -667,68 +781,66 @@ fn push_find_index_file(parts: &mut Vec<String>, ctx: &HintContext) {
 /// derived hints (narrow-by-tag / filter-by-status) that must compose with the
 /// current query rather than replace it.
 fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
+    let mut b = HintBuilder::cmd("find");
     if let Some(pat) = &ctx.body_pattern {
-        parts.push(shell_quote(pat));
+        b.push_quoted(pat);
     }
     for pf in &ctx.property_filters {
-        parts.push("--property".to_owned());
-        parts.push(shell_quote(pf));
+        b.push_raw("--property");
+        b.push_quoted(pf);
     }
     for tf in &ctx.tag_filters {
-        parts.push("--tag".to_owned());
-        parts.push(shell_quote(tf));
+        b.push_raw("--tag");
+        b.push_quoted(tf);
     }
     if let Some(task) = &ctx.task_filter {
-        parts.push("--task".to_owned());
-        parts.push(shell_quote(task));
+        b.push_raw("--task");
+        b.push_quoted(task);
     }
     for ft in &ctx.file_targets {
-        parts.push("--file".to_owned());
-        parts.push(shell_quote(ft));
+        b.push_raw("--file");
+        b.push_quoted(ft);
     }
-    push_find_graph_filters(&mut parts, ctx);
-    push_find_sort(&mut parts, ctx);
+    push_find_graph_filters(&mut b.parts, ctx);
+    push_find_sort(&mut b.parts, ctx);
     for arg in extra_args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
-    push_find_index_file(&mut parts, ctx);
+    push_find_index_file(&mut b.parts, ctx);
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Build a `find` command that replaces the body search pattern with `new_pattern`
 /// while preserving all other existing filters (property, tag, task, file targets,
 /// glob). The pattern is inserted as a positional argument immediately after `find`.
 fn build_find_command_with_pattern(ctx: &HintContext, new_pattern: &str) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned(), "find".to_owned()];
-    parts.push(shell_quote(new_pattern));
+    let mut b = HintBuilder::cmd("find");
+    b.push_quoted(new_pattern);
     for pf in &ctx.property_filters {
-        parts.push("--property".to_owned());
-        parts.push(shell_quote(pf));
+        b.push_raw("--property");
+        b.push_quoted(pf);
     }
     for tf in &ctx.tag_filters {
-        parts.push("--tag".to_owned());
-        parts.push(shell_quote(tf));
+        b.push_raw("--tag");
+        b.push_quoted(tf);
     }
     if let Some(task) = &ctx.task_filter {
-        parts.push("--task".to_owned());
-        parts.push(shell_quote(task));
+        b.push_raw("--task");
+        b.push_quoted(task);
     }
     for ft in &ctx.file_targets {
-        parts.push("--file".to_owned());
-        parts.push(shell_quote(ft));
+        b.push_raw("--file");
+        b.push_quoted(ft);
     }
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Push a file argument that is safe as a positional arg.
@@ -1145,24 +1257,21 @@ fn auto_view_name(ctx: &HintContext) -> String {
 
 /// Build the `hyalo views set <name> <filters…>` command string.
 fn build_views_set_command(ctx: &HintContext, view_name: &str) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
-    parts.push("views".to_owned());
-    parts.push("set".to_owned());
-    parts.push(shell_quote(view_name));
+    let mut b = HintBuilder::cmd("views set");
+    b.push_quoted(view_name);
     for pf in &ctx.property_filters {
-        parts.push("--property".to_owned());
-        parts.push(shell_quote(pf));
+        b.push_raw("--property");
+        b.push_quoted(pf);
     }
     for tf in &ctx.tag_filters {
-        parts.push("--tag".to_owned());
-        parts.push(shell_quote(tf));
+        b.push_raw("--tag");
+        b.push_quoted(tf);
     }
     if let Some(task) = &ctx.task_filter {
-        parts.push("--task".to_owned());
-        parts.push(shell_quote(task));
+        b.push_raw("--task");
+        b.push_quoted(task);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Suggest saving the current query as a view when at least two
@@ -2169,34 +2278,33 @@ fn per_rule_hint(ctx: &HintContext, rule_id: &str, worst_file: Option<&str>) -> 
 /// Build a lint command that preserves `--rule`, `--rule-prefix`, `--fix-rule`, glob, and
 /// file targets from the current context, then appends `args`.
 fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> String {
-    let mut parts: Vec<String> = vec!["hyalo".to_owned()];
+    let mut b = HintBuilder::empty();
     for arg in args {
-        parts.push(shell_quote(arg));
+        b.push_quoted(arg);
     }
     // Preserve rule/prefix/fix-rule filters from the original invocation.
     if let Some(rule) = &ctx.lint_rule
         && !args.contains(&"--rule")
     {
-        parts.push("--rule".to_owned());
-        parts.push(shell_quote(rule));
+        b.push_raw("--rule");
+        b.push_quoted(rule);
     }
     if let Some(prefix) = &ctx.lint_rule_prefix {
-        parts.push("--rule-prefix".to_owned());
-        parts.push(shell_quote(prefix));
+        b.push_raw("--rule-prefix");
+        b.push_quoted(prefix);
     }
     for fr in &ctx.lint_fix_rules {
-        parts.push("--fix-rule".to_owned());
-        parts.push(shell_quote(fr));
+        b.push_raw("--fix-rule");
+        b.push_quoted(fr);
     }
     for glob in &ctx.glob {
-        parts.push("--glob".to_owned());
-        parts.push(shell_quote(glob));
+        b.push_raw("--glob");
+        b.push_quoted(glob);
     }
     for ft in &ctx.file_targets {
-        parts.push(shell_quote(ft));
+        b.push_quoted(ft);
     }
-    push_global_flags(&mut parts, ctx);
-    parts.join(" ")
+    b.finish(ctx)
 }
 
 /// Accumulate rule violation counts from a named array field in a file JSON object.
@@ -2764,6 +2872,157 @@ mod tests {
 
     fn ctx(source: HintSource) -> HintContext {
         HintContext::new(source)
+    }
+
+
+    // -----------------------------------------------------------------------
+    // HintBuilder (ARCH-4, iter-225)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hint_builder_basic_serialization() {
+        let b = HintBuilder::cmd("lint")
+            .flag_value("--rule", "HYALO006")
+            .flag("--detailed");
+        assert_eq!(b.build(), "hyalo lint --rule HYALO006 --detailed");
+    }
+
+    #[test]
+    fn hint_builder_quotes_shell_specials() {
+        let b = HintBuilder::cmd("find").flag_value("--property", "status=todo now");
+        assert_eq!(b.build(), "hyalo find --property 'status=todo now'");
+    }
+
+    #[test]
+    fn hint_builder_subcommand_groups() {
+        let b = HintBuilder::cmd("task toggle").arg("todo.md").flag("--all");
+        assert_eq!(b.build(), "hyalo task toggle todo.md --all");
+        assert_eq!(b.argv(), &["hyalo", "task", "toggle", "todo.md", "--all"]);
+    }
+
+    /// The typed half of ARCH-4: a command assembled through `HintBuilder`
+    /// must be accepted by the *real* clap parser. This is the in-process
+    /// version of what `tests/e2e/hint_execution.rs` proves by spawning the
+    /// binary — the `tags --limit 0` drift (a hint that satisfied a substring
+    /// assertion but failed to run) is now a unit-test failure the moment it
+    /// is written.
+    #[test]
+    fn hint_builder_commands_parse() {
+        let cases: Vec<(String, Vec<String>)> = vec![
+            ("hyalo summary".to_owned(), vec![]),
+            ("hyalo types list".to_owned(), vec![]),
+            (
+                "hyalo lint".to_owned(),
+                vec!["--rule".to_owned(), "HYALO006".to_owned(), "--detailed".to_owned()],
+            ),
+            (
+                "hyalo find".to_owned(),
+                vec![
+                    "--broken-links".to_owned(),
+                    "--strict".to_owned(),
+                    "--limit".to_owned(),
+                    "0".to_owned(),
+                ],
+            ),
+            (
+                "hyalo task toggle".to_owned(),
+                vec!["todo.md".to_owned(), "--all".to_owned()],
+            ),
+            (
+                "hyalo tags summary".to_owned(),
+                vec!["--limit".to_owned(), "0".to_owned()],
+            ),
+            (
+                "hyalo set".to_owned(),
+                vec![
+                    "--property".to_owned(),
+                    "status=done".to_owned(),
+                    "--file".to_owned(),
+                    "notes/a.md".to_owned(),
+                ],
+            ),
+            (
+                "hyalo create-index".to_owned(),
+                vec!["--dir".to_owned(), "/my/vault".to_owned()],
+            ),
+        ];
+        for (subcommand, extra) in cases {
+            let subcommand = subcommand.strip_prefix("hyalo ").unwrap_or(&subcommand);
+            let mut b = HintBuilder::cmd(subcommand);
+            for arg in &extra {
+                b = b.raw(arg);
+            }
+            let argv: Vec<String> = b.argv().to_vec();
+            <crate::cli::args::Cli as clap::Parser>::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("hint does not parse: {argv:?}: {e}"));
+        }
+    }
+
+    /// ARCH-4 drift guard: no NEW hand-written `"hyalo …"` command strings in
+    /// non-test source. Every hint command must go through [`HintBuilder`] so
+    /// the argv stays shell-quoted and parseable. A failure here means a new
+    /// hand-assembled hint was added — build it with `HintBuilder::cmd(...)`
+    /// instead (the remaining matches below are prose/starts_with checks, not
+    /// commands, and are allow-listed).
+    #[test]
+    fn no_raw_hyalo_command_literals() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let allow: &[(&str, &str)] = &[
+            // starts_with() checks, not literals of hint commands
+            ("cli/help.rs", "if !trimmed.starts_with(\"hyalo \") {"),
+            // prose in an error message, not a command
+            (
+                "commands/mod.rs",
+                "\"hyalo does not support dotted path syntax for nested properties — --property \\",
+            ),
+            // warn.rs messages name the program, they are not commands
+            ("warn.rs", "\"hyalo is configured with dir = \\\"{dir_display}\\\".\\n  \\"),
+        ];
+        let mut offenders = Vec::new();
+        let mut stack = vec![src_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let entries = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(std::ffi::OsStr::to_str) != Some("rs") {
+                    continue;
+                }
+                let rel = path
+                    .strip_prefix(&src_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                // Skip test modules — their fixtures legitimately quote commands.
+                let text = match text.find("#[cfg(test)]") {
+                    Some(i) => &text[..i],
+                    None => &text[..],
+                };
+                for (n, line) in text.lines().enumerate() {
+                    let t = line.trim_start();
+                    if t.starts_with("//") || t.starts_with("//!") {
+                        continue;
+                    }
+                    if line.contains("\"hyalo ") {
+                        let key = (rel.as_str(), t);
+                        if !allow.contains(&key) {
+                            offenders.push(format!("{}:{}: {}", rel, n + 1, t));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "raw hyalo command string literals found (build hint commands with \
+             HintBuilder::cmd(...) instead — ARCH-4, iter-225):\n{}",
+            offenders.join("\n")
+        );
     }
 
     fn ctx_with_dir(source: HintSource, dir: &str) -> HintContext {
