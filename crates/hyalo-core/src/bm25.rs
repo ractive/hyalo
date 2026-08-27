@@ -152,7 +152,11 @@ pub fn create_stemmer(lang: StemLanguage) -> Stemmer {
 /// v1: whole-alphanumeric-run tokens (original). v2: scriptio-continua runs
 /// (CJK ideographs, Hiragana/Katakana, Hangul) are additionally split into
 /// overlapping character bigrams instead of one unmatchable giant token.
-pub const TOKENIZER_VERSION: u32 = 2;
+/// v3 (iter-243 BUG-4): the raw body collected during `create-index`
+/// now includes code-fence delimiter lines and `%%` comment-fence lines
+/// (matching `frontmatter::body_only`), so corpus statistics (avgdl, term
+/// frequencies) agree between the `--index` fast path and a fresh disk scan.
+pub const TOKENIZER_VERSION: u32 = 3;
 
 /// Returns `true` for codepoints from scripts conventionally written without
 /// spaces between words ("scriptio continua"): CJK ideographs (including

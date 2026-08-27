@@ -9,6 +9,44 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Index/disk parity bugfix wave (iter-243, dogfood v0.20.0).** Four
+  bugs with one theme — `--index` output must be indistinguishable from a
+  disk scan:
+  - **BUG-1 (upsert on miss):** every mutating command (`set`, `set --tag`,
+    `task toggle`, `append`, `remove`, `lint --fix`, `links fix --apply`,
+    `mv`, `tags rename`) now inserts a full entry (frontmatter, tasks,
+    links, graph edges) for a file the snapshot index has never seen —
+    previously only files the index already knew were refreshed, so a file
+    created by an editor/Obsidian and then mutated through hyalo stayed
+    invisible to every indexed read and never contributed links to the
+    graph. `links fix`/`links auto` additionally upsert unknown files during
+    their pre-discovery heal pass, so broken links in un-indexed files are
+    found and fixed under `--index` too.
+  - **BUG-2 (`links fix` trust + `applied` semantics):** the pre-discovery
+    heal (iter-241's detection half) now also covers files the index does
+    not know, and `applied` in `links fix` output means "something was
+    actually written", not "apply mode was requested": a `fixes: 0`
+    `--apply` run reports `applied: false` in JSON and `Applied: no (no
+    fixes written — nothing to apply)` in text (dry runs say
+    `Applied: no (dry run)`).
+  - **BUG-5 (backlinks order):** `backlinks` results are sorted by
+    `(source, line)` on both the index and disk paths, so the two outputs
+    are byte-identical after a mutation wave and stable across refreshes
+    (the persisted graph's insertion order used to depend on which files a
+    journal refresh happened to rewrite).
+  - **BUG-4 (BM25 corpus drift, partially):** `create-index`'s BM25 body
+    collection now includes code-fence delimiter lines (`` ```rust ``) and
+    `%%` comment-fence lines, exactly matching what the disk-scan corpus
+    builder tokenizes (`frontmatter::body_only`), so scores are identical
+    between `--index` and disk scan on a fresh index (`TOKENIZER_VERSION`
+    is bumped to 3 so pre-existing snapshots re-tokenize from disk).
+    Remaining drift *after* mutations is timeboxed-out: the persisted
+    inverted index cannot be cheaply updated incrementally (entries' tokens
+    are stripped once an inverted index exists), so a rebuilt index is
+    needed for exact post-mutation parity — see the dogfood note.
+
 ### Changed
 
 - **Lint subsystem moved into `hyalo-mdlint`; one `MutationJournal` owns

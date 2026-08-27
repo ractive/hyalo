@@ -957,12 +957,12 @@ fn links_fix_text_format() {
 }
 
 /// BUG-2 (review of iter-225/226): `links fix --apply` reported "Applied: yes"
-/// even when zero fixes were actually written — `applied` is documented
-/// (iter-216 D-4) to mean "apply mode was used", not "something landed on
-/// disk", but the text output didn't say so. `setup_vault`'s only fixable
-/// link (d.md's fuzzy match) is excluded from a plain `--apply` (no
-/// `--apply-fuzzy`/`--min-confidence`), so this run applies 0 fixes — the
-/// text must make that explicit rather than reading as a false "it worked".
+/// BUG-2 (iter-243): `applied` means "something was actually written", not
+/// "apply mode was used". `setup_vault`'s only fixable link (d.md's fuzzy
+/// match) is excluded from a plain `--apply` (no `--apply-fuzzy`/
+/// `--min-confidence`), so this run applies 0 fixes — the text must read as
+/// "no fixes written", not "Applied: yes". (Pre-iter-243 the text said
+/// `Applied: yes (0 fixes)`, which an agent misread as "vault repaired".)
 #[test]
 fn links_fix_apply_with_zero_fixes_reports_fix_count() {
     let tmp = setup_vault();
@@ -987,8 +987,8 @@ fn links_fix_apply_with_zero_fixes_reports_fix_count() {
     );
     let text = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
     assert!(
-        text.contains("Applied: yes (0 fixes)"),
-        "an --apply run with zero fixes must not read as a plain 'Applied: yes' — got:\n{text}"
+        text.contains("Applied: no (no fixes written"),
+        "an --apply run with zero fixes must read as 'no fixes written', not 'Applied: yes' — got:\n{text}"
     );
 }
 

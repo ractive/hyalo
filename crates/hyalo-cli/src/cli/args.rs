@@ -64,10 +64,14 @@ pub(crate) struct IndexFlags {
     ///
     /// Mutation commands (set, remove, append, task, mv, tags rename,
     /// properties rename, links fix) still read/write individual files on disk
-    /// but also patch the index entry in-place after each mutation — keeping
-    /// the index current for subsequent queries. `links fix`/`links auto`
-    /// additionally mtime-check every indexed entry before their discovery
-    /// pass and rescan files that changed on disk since create-index (with a
+    /// but also patch the index in-place after each mutation — keeping
+    /// the index current for subsequent queries. A file the index has never
+    /// seen (created by an editor or Obsidian since the last create-index)
+    /// is *upserted*: its full entry and outgoing links are inserted, not
+    /// dropped, so indexed reads match a disk scan after the mutation.
+    /// `links fix`/`links auto` additionally mtime-check every indexed entry
+    /// before their discovery pass, rescan files that changed on disk since
+    /// create-index, and upsert files the index does not know yet (with a
     /// warning), so an externally edited vault is not silently trusted.
     ///
     /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo

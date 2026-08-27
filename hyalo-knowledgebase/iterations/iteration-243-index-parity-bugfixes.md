@@ -8,7 +8,7 @@ tags:
   - index
   - mutation-journal
   - testing
-status: planned
+status: completed
 branch: iter-243/index-parity-bugfixes
 ---
 
@@ -41,55 +41,55 @@ snapshot-index/MutationJournal stack from iters 226/241.
 
 ## Tasks
 
-- [ ] BUG-1 — MutationJournal refresh upserts on miss: after a successful
+- [x] BUG-1 — MutationJournal refresh upserts on miss: after a successful
       write, a file absent from the index gets a full entry (frontmatter,
       tasks, links) inserted, not just existing entries refreshed
-- [ ] BUG-1 — e2e tests per mutating command (`set`, `set --tag`,
+- [x] BUG-1 — e2e tests per mutating command (`set`, `set --tag`,
       `task toggle`, `append`, `remove`, `lint --fix`, `links fix --apply`,
       `mv`, `tags rename`): mutate an index-unknown file with `--index`,
       then `find --file` / `backlinks` via index match the disk scan
       (reuse the dogfood diff-harness method: indexed vs disk JSON for
       find/backlinks/summary queries)
-- [ ] BUG-2 — heal half: when the pre-discovery mtime check (iter-241)
+- [x] BUG-2 — heal half: when the pre-discovery mtime check (iter-241)
       detects drift, rescan the drifted entries so `links fix --apply
       --apply-fuzzy --index` actually finds and fixes editor-introduced
       broken links (dogfood BUG-2 repro must pass end-to-end)
-- [ ] BUG-2 — `applied` in the `links fix` output means "something was
+- [x] BUG-2 — `applied` in the `links fix` output means "something was
       applied", not "apply mode"; `fixes: 0` must report `applied: false`
       in both text and JSON
-- [ ] BUG-5 — `backlinks` sorted by `(source, line)` on both the index and
+- [x] BUG-5 — `backlinks` sorted by `(source, line)` on both the index and
       disk paths so outputs are diffable and stable across refreshes
-- [ ] BUG-4 (TIMEBOXED to half a day) — find and fix the divergent BM25
+- [x] BUG-4 (TIMEBOXED to half a day) — find and fix the divergent BM25
       corpus statistic (avg doc length / token count) between index and
       disk paths; if root cause isn't found in the box, close the task as
       "investigated, not fixed" and leave the dogfood note updated — do
       not let it stall the iteration
-- [ ] Record BUG-3 as closed-by-removal in the dogfood note
-- [ ] E2e tests for every changed command surface; existing tests stay
+- [x] Record BUG-3 as closed-by-removal in the dogfood note
+- [x] E2e tests for every changed command surface; existing tests stay
       green
-- [ ] Keep help text, COMMAND REFERENCE, CHANGELOG [Unreleased] in sync
+- [x] Keep help text, COMMAND REFERENCE, CHANGELOG [Unreleased] in sync
       with any output changes (`applied` semantics, backlinks order)
-- [ ] `cargo fmt` / `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt` / `cargo clippy --workspace --all-targets -- -D warnings`
       / `cargo test --workspace -q` clean; xtask gates green
       (`check-help-drift`, `check-command-reference`,
       `check-mutation-journal`)
-- [ ] Dogfood the release build against this vault and the scratch-copy
+- [x] Dogfood the release build against this vault and the scratch-copy
       diff harness before merge; update the dogfood note's BUG list
 
 ## Acceptance criteria
 
-- [ ] The dogfood BUG-1 repro passes: `set` (and every other mutating
+- [x] The dogfood BUG-1 repro passes: `set` (and every other mutating
       command) on an index-unknown file makes that file findable via
       `--index` (`total: 1`, not 0) and its outgoing links appear in
       `backlinks` via `--index` — matching disk scan exactly
-- [ ] The dogfood BUG-2 repro passes: editor-appended broken `[[…]]` is
+- [x] The dogfood BUG-2 repro passes: editor-appended broken `[[…]]` is
       discovered and fixed by `links fix --apply --apply-fuzzy --index`,
       no silent trust, `applied` reflects actual fixes
-- [ ] `backlinks <target> --index` output is byte-identical to the disk
+- [x] `backlinks <target> --index` output is byte-identical to the disk
       scan after a mutation wave (same entries, same order)
-- [ ] BUG-4 either fixed (identical BM25 scores, both paths, pre- and
+- [x] BUG-4 either fixed (identical BM25 scores, both paths, pre- and
       post-mutation) or explicitly timeboxed-out with an updated note
-- [ ] All quality gates green; PR merged through the standard flow
+- [x] All quality gates green; PR merged through the standard flow
 
 ## Non-goals
 
@@ -106,3 +106,55 @@ snapshot-index/MutationJournal stack from iters 226/241.
 - [[iterations/iteration-240-review-followups-bugfixes]]
 - [[iterations/iteration-241-stale-index-detection-and-ux-fixes]]
 - [[iterations/iteration-242-remove-iteration-flag]]
+- [[iterations/iteration-244-index-remaining-deferrals]]
+
+## Outcome
+
+Closed via PR (branch `iter-243/index-parity-bugfixes`). Most of the
+journal's upsert-on-miss (`update_entry`, `update_task`, `rescan_modified`)
+had already landed in earlier iterations; iter-243 closes the two remaining
+gaps and the rest of the wave:
+
+- **BUG-1**: `MutationJournal::rename_entry` now upserts when the source is
+  index-unknown (`mv`), and the `links fix`/`links auto` pre-discovery heal
+  upserts files missing from the snapshot (new
+  `hyalo_core::index::files_missing_from_snapshot` +
+  `MutationJournal::add_entry_with_links`), so broken links in un-indexed
+  files are discovered and fixed under `--index`.
+- **BUG-2**: heal extended to unknown files (above); `applied` now means
+  "something was written" (`!dry_run && !applied_fixes.is_empty()`), text
+  says `Applied: no (no fixes written — nothing to apply)` /
+  `Applied: no (dry run)`.
+- **BUG-5**: `LinkGraph::backlinks`/`backlinks_ci` sort by
+  `(source, line, written target)` — both paths identical and stable.
+- **BUG-4**: root cause was `BodyCollector` silently dropping code-fence
+  delimiter lines (` ```rust `) and `%%` comment-fence lines that
+  `body_only` includes; new `FileVisitor::on_raw_body_line` hook collects
+  the full raw body, `TOKENIZER_VERSION` → 3 (old snapshots re-tokenize
+  from disk). Fresh-index scores are byte-identical. Post-mutation drift
+  is timeboxed-out: the persisted inverted index cannot be updated
+  incrementally (entry tokens are stripped once it exists) — documented in
+  the dogfood note.
+- **BUG-3**: recorded closed-by-removal in the dogfood note (`--iteration`
+  deleted in iter-242 / DEC-242).
+
+Tests: `tests/e2e/iteration243_followups.rs` (15 tests: one upsert test per
+mutating command, heal + applied semantics text/JSON, backlinks
+byte-parity, BM25 byte-parity), plus core unit tests
+(`bm25_tokens_match_body_only_tokenization`,
+`files_missing_from_snapshot_reports_unindexed_files`,
+`backlinks_sorted_by_source_then_line`, `backlinks_ci_sorted_by_source_then_line`).
+
+## Carry-over
+
+Deferred to [[iterations/iteration-244-index-remaining-deferrals]]:
+
+- BUG-4 post-mutation BM25 drift (explicit timebox-out above — persisted
+  inverted index cannot be updated incrementally)
+- UX-3 (nested YAML dot-path filters) and UX-6 (MDN case-insensitive
+  resolve) — the two dogfood UX findings still parked
+- Review finding: `hyalo new` records the created file without
+  registering its outgoing links in the persisted graph (last write path
+  without the BUG-1 upsert-with-links guarantee)
+
+(UX-5 is moot — `--iteration` removed in iter-242 / DEC-242.)

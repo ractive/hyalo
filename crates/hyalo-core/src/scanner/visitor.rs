@@ -84,6 +84,21 @@ pub trait FileVisitor {
         ScanAction::Continue
     }
 
+    /// Called for **every** body-region line, regardless of class — plain
+    /// body text, fenced-code content, code-fence delimiter lines, and
+    /// `%%` comment-fence lines alike — with the raw, unstripped line text.
+    ///
+    /// This is the BM25-parity hook (iter-243 BUG-4): the corpus builder in
+    /// `find`'s disk path tokenizes [`crate::frontmatter::body_only`] — the
+    /// raw byte range after frontmatter, fences and comments included. A
+    /// visitor that collects raw body text for tokenization must see exactly
+    /// those lines, so implement this instead of pairing `on_body_line`
+    /// with `on_code_block_line` (which never receive fence delimiters or
+    /// `%%` comment lines).
+    fn on_raw_body_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {
+        ScanAction::Continue
+    }
+
     /// Called for each line inside a fenced code block (between open/close fences).
     /// Default: no-op. Override this to receive code block content.
     fn on_code_block_line(&mut self, _raw: &str, _line_num: usize) -> ScanAction {

@@ -67,12 +67,18 @@ intervention).
    (`word\n next`, `Journal<'\n_>`), garbling thinking into one fragment
    per line. Char-level heuristics (as in pi's TUI fix) fail on
    code-heavy thinking (punctuation, CamelCase). **Fix**: statistical
-   per-block detection — newline density > 0.5 per token ⇒ join all
-   single newlines (word-boundary `\n ` → space, bare `\n` → join),
-   preserve `\n\n+` paragraphs; clean blocks pass verbatim.
-   Self-disabling when the provider stops corrupting. Removal: delete
-   `glm_reasoning_fix.py` (json-events.sh falls back to verbatim) or
-   `RALPH_GLM_FIX=0`.
+   per-block detection — newline density > 0.5 per token ⇒ corrupted.
+   **Update 2026-08-27**: a second variant appeared — tokens separated by
+   `\n\n` (blank lines), which the density detector catches but the
+   original normalizer then *preserved* as paragraph breaks, so the garble
+   survived. Fix v2: within corrupted blocks, compute words-per-line; if
+   ≤ 3 (real prose paragraphs average many more), *flatten* mode — all
+   newline runs collapse to single spaces, and sentence-final punctuation
+   (`.?!`) re-introduces paragraph breaks. The original single-newline
+   pattern (words-per-line ~1) also routes to flatten; clean blocks still
+   pass verbatim. Self-disabling when the provider stops corrupting.
+   Removal: delete `glm_reasoning_fix.py` (json-events.sh falls back to
+   verbatim) or `RALPH_GLM_FIX=0`.
 
 ## Operational notes
 

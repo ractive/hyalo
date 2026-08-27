@@ -140,7 +140,7 @@ live pi install (see [[iterations/iteration-239-pi-install-verification]]).
 
 ## Bugs Found
 
-### BUG-1: `--index` mutations never insert an entry for a file the index does not know (MEDIUM-HIGH)
+### BUG-1: `--index` mutations never insert an entry for a file the index does not know (MEDIUM-HIGH) — **FIXED in iter-243**
 
 Repro (scratch copy of own KB):
 
@@ -163,7 +163,7 @@ its outgoing links never enter the graph. Workaround: `create-index` again.
 This is the iter-226 ARCH-3 territory — the journal knows the rel_path and
 that the write succeeded; an upsert on miss closes it.
 
-### BUG-2: `links fix --apply --index` trusts a stale index silently (MEDIUM)
+### BUG-2: `links fix --apply --index` trusts a stale index silently (MEDIUM) — **FIXED in iter-243**
 
 Append a broken `[[…]]` to an indexed file with an editor, then
 `hyalo links fix --apply --apply-fuzzy --index` → `broken: 0`, `applied:
@@ -176,7 +176,7 @@ read-only commands already have for incompatible snapshots. Related cosmetic:
 "apply mode", not "something was applied", which is exactly what an agent
 will misread.
 
-### BUG-3: `--iteration abc` says the ID is empty (LOW)
+### BUG-3: `--iteration abc` says the ID is empty (LOW) — **CLOSED BY REMOVAL** (`--iteration` deleted in iter-242 / DEC-242)
 
 `hyalo read --iteration abc` → `iteration ID is empty (expected digits
 optionally followed by letters, e.g. 206, 01, 16b)`. The ID is not empty; the
@@ -184,7 +184,7 @@ validator strips non-digits and reports on the remainder. Same message from
 `find --iteration abc` and `set --iteration abc`. Say `invalid iteration ID
 "abc"`.
 
-### BUG-4: BM25 scores differ between `--index` and disk scan (LOW)
+### BUG-4: BM25 scores differ between `--index` and disk scan (LOW) — **PARTIALLY FIXED in iter-243** (fresh-index parity fixed via `on_raw_body_line` + TOKENIZER_VERSION 3; post-mutation drift timeboxed-out: the persisted inverted index cannot be incrementally updated because per-entry tokens are stripped once it exists — rebuild with `create-index` for exact parity)
 
 `hyalo find dogfood --limit 5 --index` vs without: same ranking, scores differ
 in the 4th decimal (`1.33928` vs `1.33902`) on a fresh index, drifting further
@@ -192,7 +192,7 @@ after mutations (`1.34366`). Some corpus statistic (avg doc length or token
 count) is computed differently on the two paths. Harmless today; can flip
 ties, and makes indexed-vs-disk output non-diffable.
 
-### BUG-5: `backlinks` order differs between `--index` and disk after a refresh (LOW)
+### BUG-5: `backlinks` order differs between `--index` and disk after a refresh (LOW) — **FIXED in iter-243** (sorted by `(source, line)` on both paths)
 
 After `tags rename --index` touches a linking file, that file's entries move to
 a different position in `backlinks <target> --index` than in the disk scan

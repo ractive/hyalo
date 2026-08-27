@@ -1,0 +1,87 @@
+---
+title: "Iteration 244 — index remaining deferrals: BUG-4 post-mutation BM25 drift, UX-3 dot-paths, UX-6 MDN case-insensitive, `new` link-graph upsert"
+type: iteration
+date: 2026-08-27
+tags:
+  - iteration
+  - index
+  - deferred
+  - link-graph
+status: planned
+branch: iter-244/index-remaining-deferrals
+---
+
+# Iteration 244 — index remaining deferrals
+
+## Goal
+
+Clear the deferrals carried out of [[iterations/iteration-243-index-parity-bugfixes]]
+and the still-parked items from
+[[dogfood-results/dogfood-v0200-arch-refactors-and-agent-cli-followups]].
+
+## Context
+
+- BUG-4 was fixed in iter-243 for the fresh-index path (`on_raw_body_line`
+  + `TOKENIZER_VERSION` 3); the **post-mutation** drift is the last
+  index/disk-parity gap. The persisted inverted index strips per-entry
+  tokens, so mutations cannot update corpus statistics incrementally today.
+- UX-3 and UX-6 are the two UX findings from the v0.20.0 dogfood wave
+  that no iteration has picked up yet (iter-241 fixed UX-1/2/4; UX-5's
+  `--iteration` flag was removed in iter-242 / DEC-242, closing it).
+- Carry-over from the iter-243 review: `hyalo new` records the created
+  file via `MutationJournal::add_entry` (no link-graph registration), so
+  outgoing wikilinks in a new file are invisible to `backlinks --index`
+  until a full `create-index` — the last mutating write path without
+  BUG-1's upsert-with-links guarantee.
+
+## Tasks
+
+- [ ] `new` — journal records brand-new files with
+      `insert_or_replace_entry_with_links` (rename `add_entry` usage or
+      add a `add_entry_with_links` call) so a template's outgoing links
+      enter the persisted graph; e2e test: `new` a file whose template
+      links an indexed target, then `backlinks --index` must match disk
+- [ ] BUG-4 (carry-over) — post-mutation BM25 parity: design and
+      implement incremental corpus-statistic maintenance (retain per-entry
+      tokens in the snapshot, or maintain sufficient statistics — total
+      doc length, df — in the inverted index header); e2e test: BM25
+      scores byte-identical between `--index` and disk after a mutation
+      wave
+- [ ] UX-3 — nested YAML dot-path property filters: either support
+      `--property 'a.b=v'` traversal or reject dotted keys with a hint
+      pointing at the `key~=serialized` workaround; e2e tests for both
+      the supported and rejected forms
+- [ ] UX-6 — case-insensitive link resolution option
+      (`[links.case_insensitive]` in `.hyalo.toml` or
+      `links fix --case-insensitive`) that treats case-fold-resolving
+      targets as resolved rather than fixable, so MDN-style vaults don't
+      offer ~50k rewrite plans; e2e test with a case-folded directory
+      layout
+
+## Acceptance criteria
+
+- [ ] `backlinks <target> --index` sees outgoing links of files created
+      by `hyalo new` without a rebuild
+- [ ] `find <query> --index` scores are byte-identical to the disk scan
+      after a mutating wave, without an intervening `create-index`
+- [ ] `find --property 'a.b=v'` either returns correct results or exits
+      with a clear hint (never a silent `No results`)
+- [ ] A vault with case-fold-resolving link targets under
+      `[links.case_insensitive]` reports 0 case-mismatch fixes in
+      `links fix --dry-run`
+- [ ] All quality gates green (`cargo fmt` / `cargo clippy --workspace
+      --all-targets -- -D warnings` / `cargo test --workspace -q`, xtask
+      `check-*` gates)
+
+## Non-goals
+
+- Rebuilding or re-versioning the snapshot format beyond what the
+  incremental-statistics design requires
+- UX-2/UX-4/UX-5 follow-ups — fixed (or moot) in iters 241/242
+
+## Links
+
+- [[iterations/iteration-243-index-parity-bugfixes]]
+- [[dogfood-results/dogfood-v0200-arch-refactors-and-agent-cli-followups]]
+- [[iterations/iteration-241-stale-index-detection-and-ux-fixes]]
+- [[iterations/iteration-242-remove-iteration-flag]]

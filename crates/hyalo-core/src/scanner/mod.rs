@@ -662,6 +662,15 @@ fn dispatch_body_line(
     active: &mut [bool],
     state: &mut BodyState,
 ) {
+    // BUG-4 (iter-243): every body-region line — including fence delimiters
+    // and `%%` comment fences — is announced raw first, so a raw-body
+    // collector sees exactly the lines `frontmatter::body_only` contains.
+    for (i, v) in visitors.iter_mut().enumerate() {
+        if active[i] && v.on_raw_body_line(line, line_num) == ScanAction::Stop {
+            active[i] = false;
+        }
+    }
+
     // Code fences take highest priority — %% inside a code block is literal.
     if let Some((fence_char, fence_count)) = state.fence {
         if is_closing_fence(line, fence_char, fence_count) {
