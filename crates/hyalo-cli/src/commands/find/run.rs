@@ -65,47 +65,12 @@ pub(crate) fn run(
         language,
         filenames_only,
         filenames0,
-        iteration,
         files_from: _, // resolved in run.rs before dispatch
     } = filters_raw;
     if orphan && dead_end {
         crate::warn::warn(
             "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
         );
-    }
-    // Resolve --iteration <ID> into glob patterns from the schema's
-    // type filename_templates (iter-235). The globs join the --glob
-    // set with OR semantics (positive globs are unioned), so
-    // `--iteration 206` is just another way to scope the same find.
-    let mut glob = glob;
-    if let Some(id_str) = iteration {
-        match hyalo_core::iteration_id::parse_iteration_id(&id_str) {
-            Ok(id) => {
-                match crate::commands::iteration::resolve_iteration_globs(
-                    ctx.schema,
-                    &id,
-                    effective_format,
-                ) {
-                    crate::commands::iteration::IterationGlobs::Globs(g) => {
-                        glob.extend(g);
-                    }
-                    crate::commands::iteration::IterationGlobs::Outcome(o) => {
-                        return Ok(o);
-                    }
-                }
-            }
-            Err(e) => {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    effective_format,
-                    &e.to_string(),
-                    Some(&id_str),
-                    Some(
-                        "pass a bare integer (206), zero-padded integer (01), or integer + letter suffix (16b)",
-                    ),
-                    None,
-                )));
-            }
-        }
     }
     // Parse property filters
     let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties

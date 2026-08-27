@@ -10,7 +10,7 @@
 //!   [`types`], [`tasks`], [`heading`], [`anchor`], [`links`] (and the
 //!   link-fixing family: [`auto_link`], [`link_fix`], [`link_graph`],
 //!   [`link_rewrite`], [`link_score`]), [`bm25`], [`content_search`],
-//!   [`filename_template`], [`iteration_id`], [`scanner`].
+//!   [`filename_template`], [`scanner`].
 //! - **Plumbing modules** ([`case_index`], [`common_words`], [`fs_util`],
 //!   `util`, `warn`) are `pub(crate)`; the handful of items the CLI needs
 //!   cross-crate are re-exported at the root below. This keeps every
@@ -35,7 +35,6 @@ pub mod frontmatter;
 pub(crate) mod fs_util;
 pub mod heading;
 pub mod index;
-pub mod iteration_id;
 pub mod link_fix;
 pub mod link_graph;
 pub mod link_resolve;

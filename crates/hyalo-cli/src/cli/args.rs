@@ -465,7 +465,7 @@ pub(crate) struct FindFilters {
     /// the exit code (1 when results exist), so `find --property status=planned
     /// --filenames-only --strict` is a CI gate that lists the offenders and
     /// fails. Combines with every other filter (`--property`, `--tag`,
-    /// `--iteration`, `--glob`, `--broken-links`, …) exactly as `find`
+    /// `--glob`, `--broken-links`, …) exactly as `find`
     /// normally does.
     #[arg(
         long,
@@ -488,28 +488,6 @@ pub(crate) struct FindFilters {
     #[arg(long, conflicts_with_all = ["jq", "count", "filenames_only"])]
     #[serde(skip_serializing_if = "is_false")]
     pub filenames0: bool,
-    /// Resolve a sequence-keyed document by its natural ID instead of a glob:
-    /// `--iteration 206` expands to `iterations/iteration-206-*.md` using the
-    /// type schema's `filename_template` `{n}` slot. Accepts a bare integer
-    /// (`206`), a zero-padded integer (`01`), or an integer + letter suffix
-    /// (`16b`). The ID is substituted verbatim, so `01` matches
-    /// `iteration-01-*` (not `iteration-1-*`) and `16b` matches only
-    /// `iteration-16b-*`. A bare `16` matches `iteration-16-*` and *not*
-    /// `iteration-16b-*` (the letter suffix is a separate identifier) — but
-    /// a bare unpadded integer also matches its zero-padded spelling
-    /// (`2` → `iteration-02-*` too), and a `**/` recursive fallback reaches
-    /// files archived in subdirectories of the template's directory.
-    ///
-    /// Every configured type whose template carries an `{n}` placeholder is
-    /// consulted; the union of their globs is the filter (OR among types, then
-    /// AND with the other filters). `--iteration` without any matching
-    /// template is a clear error naming the configured templates.
-    ///
-    /// In `find` this is a filter (returns every match); in `set` it selects
-    /// the file to mutate and errors unless exactly one match is found.
-    #[arg(long, value_name = "ID")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub iteration: Option<String>,
 }
 
 impl FindFilters {
@@ -567,9 +545,6 @@ impl FindFilters {
         // two projections together, so at most one can ever be set.
         self.filenames_only = self.filenames_only || overlay.filenames_only;
         self.filenames0 = self.filenames0 || overlay.filenames0;
-        if overlay.iteration.is_some() {
-            self.iteration.clone_from(&overlay.iteration);
-        }
     }
 }
 
@@ -643,20 +618,17 @@ pub(crate) enum Commands {
             --filenames0 is the NUL-delimited sibling (GNU `find -print0` precedent): each\n\
             path ends in \u{00} instead of \n, safe for filenames containing newlines; pair it\n\
             with `xargs -0`. Same zero-results/conflict/--strict rules as --filenames-only.\n\
-            ITERATION ADDRESSING: --iteration <ID> resolves a sequence-keyed document by its\n\
-            natural key (`--iteration 206` → `iterations/iteration-206-*.md`) using the\n\
-            type schema's filename_template {n} slot. Accepts a bare integer (206), zero-\n\
-            padded integer (01), or integer + letter suffix (16b). Bare `16` matches\n\
-            `iteration-16-*` and NOT `iteration-16b-*` (the suffix is a separate id). A bare
-            unpadded integer also matches its zero-padded spelling (`2` → `iteration-02-*`
-            too), and all variants fall back to a `**/` recursive form so archived files
-            (`iterations/done/iteration-02-*.md`) stay reachable.\n\
+            SEQUENCE-KEYED FILES (iterations, decisions, ...): address them by glob, and remember\n\
+            the number may be zero-padded and the file archived in a subdirectory —\n\
+            `find --glob '**/iteration-02-*.md'` reaches both `iterations/iteration-2-*.md`\n\
+            and `iterations/done/iteration-02-links.md`.\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
             - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
-            - For iteration lookups, prefer --iteration <N> over `--property 'title~=N'` — the\n\
-              frontmatter title is typically `Iteration N: …`, which does not contain `iteration-N`.\n\
+            - For sequence-keyed lookups, prefer a filename glob (`--glob '**/iteration-206-*.md'`) over\n\
+              `--property 'title~=206'` — the frontmatter title is typically `Iteration 206: …`,\n\
+              which does not contain `iteration-206`.\n\
             POSITIONAL ARGUMENTS: The first positional argument is always PATTERN (body text search), not a file path. \
             Subsequent positional arguments are treated as FILE targets. \
             To filter by file without a body search, use --file instead of a positional argument.\n\
@@ -672,8 +644,6 @@ pub(crate) enum Commands {
             \u{00a0} hyalo find --section 'Tasks' --task todo\n\
             \u{00a0} hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'\n\
             \u{00a0} hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
-            \u{00a0} hyalo find --iteration 206                          # natural-key lookup, no glob\n\
-            \u{00a0} hyalo find --iteration 206 --filenames-only          # the common agent idiom\n\
             \u{00a0} git diff --name-only origin/main | hyalo find --files-from -")]
     Find {
         /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran"); results sorted by relevance
@@ -707,8 +677,7 @@ pub(crate) enum Commands {
             \u{00a0} hyalo read notes/todo.md\n\
             \u{00a0} hyalo read --file notes/todo.md --section Tasks\n\
             \u{00a0} hyalo read --file notes/todo.md --lines 1:20\n\
-            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json\n\
-            \u{00a0} hyalo read --iteration 206   # natural-key addressing, resolves to exactly one file"
+            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json"
     )]
     Read {
         #[command(flatten)]
@@ -1004,12 +973,11 @@ Repeatable (AND).\n\
             \u{00a0} hyalo set --property tags=[a,b,c] --file notes/todo.md\n\
             \u{00a0} hyalo set --tag reviewed --glob 'research/**/*.md'\n\
             \u{00a0} hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\
-            \u{00a0} hyalo set --property due=2026-12-31 --validate --file notes/todo.md\n\
-            \u{00a0} hyalo set --iteration 206 --property status=completed"
+            \u{00a0} hyalo set --property due=2026-12-31 --validate --file notes/todo.md"
     )]
     Set {
         /// Target file(s) as positional argument(s) — alternative to --file
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file", "files_from", "iteration"])]
+        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file", "files_from"])]
         file_positional: Vec<String>,
         /// Property to set: K=V (type inferred from V). Repeatable
         #[arg(short, long = "property", value_name = "K=V")]
@@ -1017,34 +985,16 @@ Repeatable (AND).\n\
         /// Tag to add (idempotent). Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        /// Resolve the file to mutate by its iteration natural key — e.g.
-        /// `--iteration 206` expands to `iterations/iteration-206-*.md`
-        /// using the type schema's `filename_template` `{n}` slot. Accepts a
-        /// bare integer (`206`), zero-padded integer (`01`), or integer +
-        /// letter suffix (`16b`). The ID is substituted verbatim.
-        ///
-        /// A *competing* file selector: conflicts with `--file`, the
-        /// positional FILE, `--glob`, and `--files-from` (pass exactly one
-        /// of them). `--where-property` / `--where-tag` still compose with
-        /// `--iteration` — they filter *within* the selected file, not
-        /// across files, so `set --iteration 206 --where-property status=planned`
-        /// mutates iteration 206 only if its status is `planned`.
-        ///
-        /// Unlike `find --iteration` (which returns every match), `set` errors
-        /// unless the ID resolves to exactly one file; an ambiguous match
-        /// lists the candidates so the caller can disambiguate by suffix.
-        #[arg(long, value_name = "ID", conflicts_with_all = ["file_positional", "file", "glob", "files_from"])]
-        iteration: Option<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from", "iteration"], help = FILE_FLAG_DOC)]
+        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with_all = ["file", "files_from", "iteration"])]
+        #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
-        /// Mutually exclusive with --file, positional FILE, --glob, and --iteration.
+        /// Mutually exclusive with --file, positional FILE, and --glob.
         /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
         /// Input is deduplicated; results follow first-seen order.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob", "iteration"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
         /// Filter: only mutate files whose frontmatter property matches (repeatable, AND). Same syntax as find --property
         #[arg(long = "where-property", value_name = "FILTER")]
@@ -2507,7 +2457,7 @@ pub(crate) enum TaskAction {
           hyalo task read note.md --section Tasks\n  \
           hyalo task read note.md --all\n  \
           hyalo task read --file note.md --line 5\n  \
-          hyalo task read --iteration 206 --section Tasks   # natural-key addressing (iter-238)")]
+          hyalo task read --file iterations/iteration-206-planning.md --section Tasks")]
     Read {
         #[command(flatten)]
         selection: InputSelection,
@@ -2537,8 +2487,7 @@ pub(crate) enum TaskAction {
           hyalo task toggle note.md --all\n  \
           hyalo task toggle --file note.md --line 5\n  \
           hyalo task toggle --files-from list.txt --section Tasks\n  \
-          hyalo task toggle --glob 'iterations/*.md' --all\n  \
-          hyalo task toggle --iteration 206 --all           # natural-key addressing (iter-238)"
+          hyalo task toggle --glob 'iterations/*.md' --all"
     )]
     Toggle {
         #[command(flatten)]

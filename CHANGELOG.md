@@ -907,6 +907,7 @@ already complied (`total = modified + skipped`) and are unchanged.
   `inject_ext_file_result` when the extended lint path took over — it had no
   callers at all, not even a test. `FixMode`, `lint_files_with_options`, and
   `lint_files_extended` are untouched and still live.
+- **`--iteration <ID>` natural-key addressing removed** (iter-242 / DEC-242, featureitis verdict on iter-235's flag). The flag — a third addressing mechanism next to `--file`/`--glob` whose zero-padding, letter-suffix, and `**/` recursion fallback rules were harder to predict than the glob it replaced — is gone from `find`, `set`, `read`, `task`, and `backlinks`, along with `hyalo-core::iteration_id` and the `FilenameTemplate` ID-glob helpers. Address sequence-keyed documents with a plain glob instead: `find --glob '**/iteration-02-*.md'` (the recursive form reaches zero-padded and archived files such as `iterations/done/iteration-02-links.md`); `read`/`set` take the same pattern via `--file` after a `find`, or the exact path. Help text and the bundled skills now teach this pattern directly.
 
 ### Fixed
 

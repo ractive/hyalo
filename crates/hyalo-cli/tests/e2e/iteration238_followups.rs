@@ -1,11 +1,10 @@
-//! Iteration 238 — agent-CLI ergonomics follow-ups: `find --filenames0` and
-//! `--iteration <ID>` on `read`, `task`, and `backlinks`.
+//! Iteration 238 follow-ups that survived iter-242: `find --filenames0`,
+//! the NUL-delimited sibling of `--filenames-only` (GNU `find -print0`
+//! precedent) for `xargs -0` / newline-safe consumption.
 //!
-//! Both fold in carry-over candidates deliberately deferred out of
-//! iteration 235 (`hyalo-knowledgebase/iterations/iteration-238-agent-cli-followups`):
-//! a NUL-delimited sibling of `--filenames-only` for `xargs -0` / newline-safe
-//! consumption, and natural-key addressing for the single-file commands the
-//! ralph-loop workflow touches every run (read a plan, tick its tasks).
+//! The `--iteration <ID>` natural-key addressing that shipped in the same
+//! iteration was removed again in iter-242 — sequence-keyed files are
+//! addressed with a plain `--glob`.
 
 use std::fs;
 use std::process::{Command, Stdio};
@@ -77,7 +76,12 @@ fn filenames0_terminates_each_path_with_nul() {
     let vault = setup_iteration_vault();
     let output = hyalo_no_hints()
         .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["find", "--iteration", "206", "--filenames0"])
+        .args([
+            "find",
+            "--glob",
+            "iterations/iteration-206-*.md",
+            "--filenames0",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", stderr(&output));
@@ -107,8 +111,8 @@ fn filenames0_round_trips_through_xargs0() {
             "find",
             "--property",
             "status=planned",
-            "--iteration",
-            "206",
+            "--glob",
+            "iterations/iteration-206-*.md",
             "--filenames0",
         ])
         .stdout(Stdio::piped())
@@ -261,8 +265,8 @@ fn filenames0_conflicts_with_filenames_only_jq_count_and_format_json() {
         .args(["--dir", dir])
         .args([
             "find",
-            "--iteration",
-            "206",
+            "--glob",
+            "iterations/iteration-206-*.md",
             "--filenames0",
             "--format",
             "text",
@@ -275,251 +279,6 @@ fn filenames0_conflicts_with_filenames_only_jq_count_and_format_json() {
         b"iterations/iteration-206-agent-cli.md\0".to_vec()
     );
 }
-
-#[test]
-fn filenames0_composes_with_iteration_filter() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["find", "--iteration", "206", "--filenames0"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(
-        output.stdout,
-        b"iterations/iteration-206-agent-cli.md\0".to_vec()
-    );
-}
-
-// ===========================================================================
-// --iteration <ID> on read / task / backlinks (single-file commands)
-// ===========================================================================
-
-#[test]
-fn read_iteration_resolves_single_file() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "206"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Body 206"), "{stdout}");
-    assert!(!stdout.contains("Note body"), "{stdout}");
-}
-
-#[test]
-fn read_iteration_combines_with_section_and_frontmatter_flags() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "206", "--frontmatter"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("title: Iter 206"), "{stdout}");
-}
-
-#[test]
-fn read_iteration_conflicts_with_file_and_glob_at_parse_time() {
-    let vault = setup_iteration_vault();
-    let dir = vault.path().to_str().unwrap();
-
-    for conflicting in [
-        vec!["read", "--iteration", "206", "notes/random.md"],
-        vec!["read", "--iteration", "206", "--file", "notes/random.md"],
-        vec!["read", "--iteration", "206", "--glob", "**/*.md"],
-    ] {
-        let out = hyalo_no_hints()
-            .args(["--dir", dir])
-            .args(&conflicting)
-            .output()
-            .unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(2),
-            "{conflicting:?}: {}",
-            stderr(&out)
-        );
-    }
-}
-
-#[test]
-fn read_iteration_no_match_errors_naming_resolved_glob() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "999"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let err = stderr(&output);
-    assert!(err.contains("no file found for iteration 999"), "{err}");
-    assert!(
-        err.contains("iterations/iteration-999-*.md"),
-        "must name the resolved glob: {err}"
-    );
-}
-
-#[test]
-fn read_iteration_invalid_id_rejected() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "not-an-id"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-}
-
-/// BUG-3 (review of iter-225/226): `--iteration abc` (non-empty but with no
-/// leading digit) used to be misreported as "iteration ID is empty", which
-/// is inaccurate — the input isn't empty, it's just not numeric. The error
-/// must name the actual problem and echo the offending value.
-#[test]
-fn read_iteration_non_numeric_id_reports_accurate_error() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "abc"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let err = stderr(&output);
-    assert!(
-        err.contains("'abc' is not numeric"),
-        "must name the actual problem, not report an empty ID: {err}"
-    );
-    assert!(
-        !err.contains("iteration ID is empty"),
-        "must not misreport a non-empty, non-numeric ID as empty: {err}"
-    );
-}
-
-#[test]
-fn read_iteration_ambiguous_match_lists_candidates() {
-    let vault = setup_iteration_vault();
-    write_md(
-        vault.path(),
-        "iterations/iteration-206-x-dup.md",
-        md!(r"
----
-title: Iter 206 dup
-type: iteration
-status: planned
----
-Dup body.
-"),
-    );
-    write_md(
-        vault.path(),
-        "iterations/iteration-206b-second.md",
-        md!(r"
----
-title: Iter 206b second
-type: iteration
-status: planned
----
-Suffix body.
-"),
-    );
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "206"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    let err = stderr(&output);
-    assert!(err.contains("matches multiple files"), "{err}");
-    assert!(err.contains("iteration-206-agent-cli.md"), "{err}");
-    assert!(err.contains("iteration-206-x-dup.md"), "{err}");
-
-    // Letter suffix disambiguates — same contract as set --iteration.
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["read", "--iteration", "206b"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Suffix body"), "{stdout}");
-}
-
-#[test]
-fn task_toggle_iteration_resolves_and_toggles() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["task", "toggle", "--iteration", "206", "--all"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"done\": true"), "{stdout}");
-    // The file was actually mutated through the resolved path.
-    let body =
-        fs::read_to_string(vault.path().join("iterations/iteration-206-agent-cli.md")).unwrap();
-    // --all toggles every task: "one" becomes done, "two" was done and reopens.
-    assert!(body.contains("- [x] one\n- [ ] two"), "{body}");
-}
-
-/// `task set --iteration` was covered by unit tests but had no e2e
-/// coverage, unlike `task toggle --iteration` and `task read --iteration`
-/// right above/below it.
-#[test]
-fn task_set_iteration_resolves_and_sets() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args([
-            "task",
-            "set",
-            "--iteration",
-            "206",
-            "--all",
-            "--status",
-            "?",
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"status\": \"?\""), "{stdout}");
-    // The file was actually mutated through the resolved path.
-    let body =
-        fs::read_to_string(vault.path().join("iterations/iteration-206-agent-cli.md")).unwrap();
-    assert!(body.contains("- [?] one\n- [?] two"), "{body}");
-}
-
-#[test]
-fn task_read_iteration_resolves() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["task", "read", "--iteration", "206", "--all"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("one") && stdout.contains("two"), "{stdout}");
-}
-
-#[test]
-fn backlinks_iteration_resolves_single_file() {
-    let vault = setup_iteration_vault();
-    let output = hyalo_no_hints()
-        .args(["--dir", vault.path().to_str().unwrap()])
-        .args(["backlinks", "--iteration", "206"])
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("iteration-206-agent-cli.md"), "{stdout}");
-}
-
-// ---------------------------------------------------------------------------
 
 fn stderr(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()

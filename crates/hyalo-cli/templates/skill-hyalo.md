@@ -78,6 +78,13 @@ hyalo find --title "/^Design/i"        # regex on displayed title
 
 `--glob` supports negation with `!` prefix to exclude files: `--glob '!**/draft-*'`.
 
+`--glob` is also how you address sequence-keyed documents (iterations, decisions, ...):
+the number may be zero-padded and the file archived in a subdirectory, so prefer the
+recursive form — `find --glob '**/iteration-02-*.md'` reaches both `iterations/iteration-2-*.md`
+and `iterations/done/iteration-02-links.md`. (`--file` is exact, `--glob` is the only
+globbing flag; single-file commands like `read`/`set` have no `--glob` — resolve with
+`find --glob ... --filenames-only`, then pass the exact path.)
+
 `--sort` controls result ordering. Available: `file` (default), `modified`, `date`, `title`,
 `backlinks_count`, `links_count`, or `property:<KEY>` for any frontmatter property. Add
 `--reverse` to flip the direction.

@@ -9,7 +9,6 @@ pub mod files_from;
 pub mod find;
 pub mod init;
 pub(crate) mod inputs;
-pub(crate) mod iteration;
 pub mod journal;
 pub mod links;
 pub mod lint;

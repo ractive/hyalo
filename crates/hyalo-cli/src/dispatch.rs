@@ -507,7 +507,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             file,
             glob,
             files_from: _, // resolved in run.rs before dispatch
-            iteration,
             where_properties,
             where_tags,
             dry_run,
@@ -522,7 +521,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 tag,
                 file,
                 glob,
-                iteration,
                 where_properties,
                 where_tags,
                 dry_run,
