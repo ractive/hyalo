@@ -2373,8 +2373,60 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
             .or_else(|| data.get("files_with_issues"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        // UX-4 (dogfood v0.20.0): when errors exist anywhere in the run but
+        // the truncated `files[]` slice shows none (or not all) of them,
+        // say so in the hint — a "4 errors" count in the summary line with
+        // zero visible error lines reads like a bug otherwise. With the
+        // errors-first display sort this only fires when there are more
+        // error-carrying files than the cap, but it keeps the listing honest
+        // in that case too.
+        let listed_errors: u64 = data
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map_or(0, |files| {
+                files
+                    .iter()
+                    .map(|file| {
+                        file.get("rule_groups")
+                            .and_then(|rg| rg.as_array())
+                            .map_or(0, |groups| {
+                                groups
+                                    .iter()
+                                    .map(|g| {
+                                        g.get("violations").and_then(|v| v.as_array()).map_or(
+                                            0,
+                                            |vs| {
+                                                vs.iter()
+                                                    .filter(|v| {
+                                                        v.get("severity")
+                                                            .and_then(serde_json::Value::as_str)
+                                                            == Some("error")
+                                                    })
+                                                    .count()
+                                                    as u64
+                                            },
+                                        )
+                                    })
+                                    .sum::<u64>()
+                            })
+                    })
+                    .sum()
+            });
+        let total_errors = data
+            .get("errors")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let description = if total_errors > listed_errors {
+            let hidden = total_errors - listed_errors;
+            let err_label = if hidden == 1 { "error" } else { "errors" };
+            format!(
+                "Show all {total_violations} files with issues ({hidden} {err_label} hidden by the file cap)"
+            )
+        } else {
+            format!("Show all {total_violations} files with issues (no limit)")
+        };
         hints.push(Hint::new(
-            format!("Show all {total_violations} files with issues (no limit)"),
+            description,
             build_command_with_glob_and_files(ctx, &["lint", "--limit", "0"]),
         ));
     }
@@ -3902,6 +3954,37 @@ mod tests {
     }
 
     // --- hints_for_lint ---
+
+    #[test]
+    fn lint_hints_name_hidden_errors_when_truncated() {
+        // UX-4 (dogfood v0.20.0): the truncated `files[]` slice shows only
+        // warnings, but the authoritative count is `errors: 4` — the
+        // show-all hint must say the errors are hidden, or the summary line
+        // reads like a bug.
+        let c = ctx(HintSource::Lint);
+        let data = json!({
+            "files": [{
+                "file": "warn-only.md",
+                "rule_groups": [{
+                    "rule": "MD040",
+                    "violations": [{"severity": "warn", "message": "fenced code block should have a language"}]
+                }]
+            }],
+            "files_truncated": true,
+            "files_with_violations": 60,
+            "errors": 4,
+            "warnings": 7716
+        });
+        let hints = generate_hints(&c, &data, None);
+        let show_all = hints
+            .iter()
+            .find(|h| h.cmd.contains("--limit 0"))
+            .expect("show-all hint should be present");
+        assert!(
+            show_all.description.contains("4 errors hidden"),
+            "hint should name the hidden errors: {show_all:?}"
+        );
+    }
 
     #[test]
     fn lint_hints_suggest_fix_when_violations() {

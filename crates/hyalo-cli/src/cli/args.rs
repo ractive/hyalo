@@ -65,7 +65,10 @@ pub(crate) struct IndexFlags {
     /// Mutation commands (set, remove, append, task, mv, tags rename,
     /// properties rename, links fix) still read/write individual files on disk
     /// but also patch the index entry in-place after each mutation — keeping
-    /// the index current for subsequent queries.
+    /// the index current for subsequent queries. `links fix`/`links auto`
+    /// additionally mtime-check every indexed entry before their discovery
+    /// pass and rescan files that changed on disk since create-index (with a
+    /// warning), so an externally edited vault is not silently trusted.
     ///
     /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
     /// falls back to a full disk scan automatically.
@@ -492,7 +495,10 @@ pub(crate) struct FindFilters {
     /// (`16b`). The ID is substituted verbatim, so `01` matches
     /// `iteration-01-*` (not `iteration-1-*`) and `16b` matches only
     /// `iteration-16b-*`. A bare `16` matches `iteration-16-*` and *not*
-    /// `iteration-16b-*` (the letter suffix is a separate identifier).
+    /// `iteration-16b-*` (the letter suffix is a separate identifier) — but
+    /// a bare unpadded integer also matches its zero-padded spelling
+    /// (`2` → `iteration-02-*` too), and a `**/` recursive fallback reaches
+    /// files archived in subdirectories of the template's directory.
     ///
     /// Every configured type whose template carries an `{n}` placeholder is
     /// consulted; the union of their globs is the filter (OR among types, then
@@ -641,7 +647,10 @@ pub(crate) enum Commands {
             natural key (`--iteration 206` → `iterations/iteration-206-*.md`) using the\n\
             type schema's filename_template {n} slot. Accepts a bare integer (206), zero-\n\
             padded integer (01), or integer + letter suffix (16b). Bare `16` matches\n\
-            `iteration-16-*` and NOT `iteration-16b-*` (the suffix is a separate id).\n\
+            `iteration-16-*` and NOT `iteration-16b-*` (the suffix is a separate id). A bare
+            unpadded integer also matches its zero-padded spelling (`2` → `iteration-02-*`
+            too), and all variants fall back to a `**/` recursive form so archived files
+            (`iterations/done/iteration-02-*.md`) stay reachable.\n\
             COMMON MISTAKES:\n\
             - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
@@ -1445,7 +1454,10 @@ Repeatable (AND).\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default — summary mode groups violations by `(file, rule)` and caps\n\
             output at 3 violations per rule and 50 files (configurable via `[lint]` and\n\
-            `--max-per-rule`). Use --detailed for full per-violation output. Use --format json\n\
+            `--max-per-rule`). Files are listed error-first (then by violation count),\n\
+            so a display cap can never hide the run's errors behind warnings-only\n\
+            files; when errors are still truncated away, the show-all hint names how\n\
+            many. Use --detailed for full per-violation output. Use --format json\n\
             for a JSON payload with `rule_groups`, `violations`, `rules_fired`,\n\
             `files_with_violations`, `files_truncated`, and `files_ignored` (files dropped by\n\
             `[lint] ignore`, appended to the text summary line as \"(N ignored by [lint]\n\

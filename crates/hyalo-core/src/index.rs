@@ -1123,6 +1123,148 @@ pub fn newest_shallow_dir_mtime(dir: &Path) -> Option<u64> {
     newest
 }
 
+/// Parse an ISO 8601 UTC timestamp as written by [`format_iso8601`]
+/// (`YYYY-MM-DDTHH:MM:SSZ`) back to whole Unix seconds.
+///
+/// Returns `None` for anything that does not match that exact shape —
+/// callers treat an unparseable stored mtime as "unknown", never as "stale"
+/// or "current".
+fn parse_iso8601_secs(s: &str) -> Option<u64> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    let num = |range: std::ops::Range<usize>| -> Option<u64> {
+        let mut v: u64 = 0;
+        for &b in &bytes[range] {
+            if !b.is_ascii_digit() {
+                return None;
+            }
+            v = v * 10 + u64::from(b - b'0');
+        }
+        Some(v)
+    };
+    let year = num(0..4)?;
+    let month = num(5..7)?;
+    let day = num(8..10)?;
+    let hh = num(11..13)?;
+    let mm = num(14..16)?;
+    let ss = num(17..19)?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 59 {
+        return None;
+    }
+    // Days since 1970-01-01 from civil date (Howard Hinnant's algorithm),
+    // the same math `format_iso8601` uses in reverse.
+    let y = i64::try_from(year).ok()? - i64::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400).cast_unsigned();
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era * 146_097 + doe.cast_signed() - 719_468).cast_unsigned();
+    Some(days * 86_400 + hh * 3_600 + mm * 60 + ss)
+}
+
+/// Entries of a snapshot whose file on disk is newer than the indexed mtime.
+///
+/// BUG-2 (dogfood v0.20.0) detection half: an in-place edit of an indexed
+/// file (by hand, by Obsidian, by anything but hyalo's own journaled write
+/// paths) leaves every directory mtime untouched, so the shallow
+/// [`newest_shallow_dir_mtime`] probe cannot see it — yet the stored
+/// `links` field and link-graph edges describe the *old* body, and
+/// `links fix --apply --index` would report `broken: 0` for a link that was
+/// added seconds ago. This per-entry mtime comparison catches exactly that:
+/// one `stat` per indexed file, no content read.
+///
+/// A file whose stored mtime cannot be parsed, or whose file no longer
+/// exists, is not reported — the former is "unknown", the latter is the
+/// caller's deletion handling, not staleness.
+pub fn files_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
+    let mut stale = Vec::new();
+    for entry in index.entries() {
+        let rel = entry.rel_path.as_str();
+        let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
+            continue;
+        };
+        let Ok(meta) = std::fs::metadata(dir.join(rel)) else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+            continue;
+        };
+        if disk.as_secs() > indexed.saturating_add(STALENESS_TOLERANCE_SECS) {
+            stale.push(rel.to_owned());
+        }
+    }
+    stale
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::*;
+
+    #[test]
+    fn iso8601_round_trips() {
+        for secs in [0_u64, 1, 86_400, 1_700_000_000, 1_759_276_800] {
+            assert_eq!(parse_iso8601_secs(&format_iso8601(secs)), Some(secs));
+        }
+    }
+
+    #[test]
+    fn iso8601_rejects_malformed() {
+        for bad in [
+            "",
+            "2026-08-27",
+            "2026-08-27T10:00:00",
+            "not-a-date",
+            "2026-13-01T00:00:00Z",
+            "2026-08-27T25:00:00Z",
+        ] {
+            assert_eq!(parse_iso8601_secs(bad), None, "{bad} should not parse");
+        }
+    }
+
+    #[test]
+    fn modified_since_snapshot_detects_edited_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, "---\ntitle: a\n---\n\nbody\n").unwrap();
+        let files = vec![(file.clone(), "a.md".to_owned())];
+        let build = crate::index::ScannedIndex::build(
+            &files,
+            None,
+            &crate::index::ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let snap_path = dir.path().join(".hyalo-index");
+        let vault = dir.path().to_string_lossy().to_string();
+        SnapshotIndex::save(&build.index, &snap_path, &vault, None, None).unwrap();
+        let index = SnapshotIndex::load(&snap_path).unwrap().unwrap();
+        assert!(files_modified_since_snapshot(&index, dir.path()).is_empty());
+        // Same-second touch: within tolerance, not stale.
+        std::fs::write(&file, "---\ntitle: a\n---\n\nbody v2\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::fs::write(&file, "---\ntitle: a\n---\n\nbody v3\n").unwrap();
+        let stale = files_modified_since_snapshot(&index, dir.path());
+        assert_eq!(stale, vec!["a.md".to_owned()]);
+    }
+}
+
 /// Scan `dir` for `.hyalo-index` files whose creator PID is no longer running.
 ///
 /// Returns a list of `(path, vault_dir, created_at)` tuples for stale files.

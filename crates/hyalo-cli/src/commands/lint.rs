@@ -521,8 +521,20 @@ pub fn lint_files_extended(
         journal.flush()?;
     }
 
+    let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
+
     // Sort by total violations descending (worst offenders first).
-    all_results.sort_by_key(|r| std::cmp::Reverse(r.total_violations));
+    // UX-4 (dogfood v0.20.0): error-carrying files sort ahead of
+    // warning-only files (then by total violations) — the display cap
+    // drops the least severe files first, so "4 errors" hidden behind a
+    // 50-file listing of pure warnings can no longer happen.
+    all_results.sort_by_key(|r| {
+        let (errors, _) = count_file_errors_warnings(r, is_fix_mode);
+        (
+            std::cmp::Reverse(errors),
+            std::cmp::Reverse(r.total_violations),
+        )
+    });
 
     // Cap files.
     let total_files_with_violations = all_results
@@ -536,8 +548,6 @@ pub fn lint_files_extended(
     // from `files_checked > max_files` (as this did before iter-210 BUG-6)
     // false-positived on every clean vault larger than the limit.
     let files_truncated = total_files_with_violations > opts.max_files;
-
-    let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
 
     // Authoritative error/warning totals, computed over EVERY result *before*
     // the display list is capped to `max_files`. The per-file display loops
@@ -1058,6 +1068,18 @@ fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usize) {
 /// reflects the true whole-vault state, not just the first `max_files`
 /// shown.
 fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (usize, usize) {
+    results
+        .iter()
+        .map(|r| count_file_errors_warnings(r, is_fix_mode))
+        .fold((0, 0), |(e, w), (fe, fw)| (e + fe, w + fw))
+}
+
+/// One file's contribution to [`count_errors_warnings`] — (errors, warnings).
+///
+/// Also used by the display ordering (UX-4, dogfood v0.20.0): files that
+/// carry *errors* sort ahead of warning-only files so a display cap can
+/// never push the run's errors out of the listed slice.
+fn count_file_errors_warnings(r: &PerFileLintResult, is_fix_mode: bool) -> (usize, usize) {
     let mut errors = 0usize;
     let mut warnings = 0usize;
     let mut tally = |severity: &str| {
@@ -1067,24 +1089,22 @@ fn count_errors_warnings(results: &[PerFileLintResult], is_fix_mode: bool) -> (u
             warnings += 1;
         }
     };
-    for r in results {
-        for (rule_id, violations) in &r.violations_by_rule {
-            if is_fix_mode {
-                if rule_id == "SCHEMA" {
-                    // Post-fix SCHEMA remainder, or all originals if no fix pass ran.
-                    let remaining = r.post_fix_schema_remaining.as_ref().unwrap_or(violations);
-                    for v in remaining {
-                        tally(&v.severity);
-                    }
-                } else {
-                    for v in violations.iter().filter(|v| !v.fixed) {
-                        tally(&v.severity);
-                    }
-                }
-            } else {
-                for v in violations {
+    for (rule_id, violations) in &r.violations_by_rule {
+        if is_fix_mode {
+            if rule_id == "SCHEMA" {
+                // Post-fix SCHEMA remainder, or all originals if no fix pass ran.
+                let remaining = r.post_fix_schema_remaining.as_ref().unwrap_or(violations);
+                for v in remaining {
                     tally(&v.severity);
                 }
+            } else {
+                for v in violations.iter().filter(|v| !v.fixed) {
+                    tally(&v.severity);
+                }
+            }
+        } else {
+            for v in violations {
+                tally(&v.severity);
             }
         }
     }

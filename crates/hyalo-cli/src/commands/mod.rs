@@ -609,7 +609,11 @@ fn not_found_hint(path: &str) -> &'static str {
     if path.is_empty() {
         "empty path — check shell quoting"
     } else {
-        "paths are vault-relative; run `hyalo find --file <glob>` to locate it"
+        // UX-1 (dogfood v0.20.0): `--file` is an exact vault-relative path,
+        // not a glob — `--glob` is the flag that globs, so the hint must
+        // say `--glob` or the suggested command itself fails with
+        // "file not found".
+        "paths are vault-relative; run `hyalo find --glob <glob>` to locate it"
     }
 }
 

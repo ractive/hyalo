@@ -203,6 +203,65 @@ impl FilenameTemplate {
         out
     }
 
+    /// Zero-pad width the template requests for the `{n}` slot (`{n:04}`
+    /// → `Some(4)`), if any `{n}` placeholder carries one.
+    #[must_use]
+    pub fn n_pad_width(&self) -> Option<usize> {
+        self.segments.iter().find_map(|seg| match seg {
+            Segment::Placeholder(Placeholder::N { pad }) => (*pad > 0).then_some(*pad),
+            _ => None,
+        })
+    }
+
+    /// All glob patterns that can address iteration `id` through this
+    /// template, most specific first (UX-2, dogfood v0.20.0).
+    ///
+    /// The primary glob is [`to_glob_for_id`] verbatim. Two fallback
+    /// families follow, each only when it can differ from what precedes
+    /// it:
+    ///
+    /// - a **zero-padded** variant — a vault whose historical files are
+    ///   `iteration-02-links.md` while the template renders `iteration-{n}`
+    ///   (unpadded) leaves `--iteration 2` unmatched even though the
+    ///   natural key is obvious. Padding width is `max(2, template pad)`;
+    ///   only added when `id` is a bare unpadded integer.
+    /// - a **recursive** variant per glob produced above — the template's
+    ///   directory becomes `**`, so an archived `iterations/done/
+    ///   iteration-02-links.md` is still reachable when the live template
+    ///   points at `iterations/`. Only added when the template has
+    ///   directory components.
+    ///
+    /// Consumers union these globs, so order affects only diagnostics
+    /// ("resolved globs: …") — never what matches.
+    #[must_use]
+    pub fn to_glob_variants_for_id(&self, id: &str) -> Vec<String> {
+        let mut globs = vec![self.to_glob_for_id(id)];
+        let unpadded_int = !id.is_empty()
+            && id.starts_with(|c: char| c.is_ascii_digit() && c != '0')
+            && id.chars().all(|c| c.is_ascii_digit());
+        if unpadded_int {
+            let width = self.n_pad_width().map_or(2, |w| w.max(2));
+            if width > id.len() {
+                let padded = format!("{id:0>width$}");
+                let padded_glob = self.to_glob_for_id(&padded);
+                if !globs.contains(&padded_glob) {
+                    globs.push(padded_glob);
+                }
+            }
+        }
+        let mut recursive = Vec::new();
+        for g in &globs {
+            if let Some((_, base)) = g.rsplit_once('/') {
+                let rg = format!("**/{base}");
+                if !globs.contains(&rg) && !recursive.contains(&rg) {
+                    recursive.push(rg);
+                }
+            }
+        }
+        globs.extend(recursive);
+        globs
+    }
+
     /// Returns `true` if the given relative path matches this template.
     ///
     /// Path separators are normalized to `/` for matching, so templates can
@@ -451,6 +510,57 @@ mod tests {
     fn to_glob_for_id_date_placeholder_becomes_star() {
         let t = FilenameTemplate::parse("journal/{date}-{n}.md").unwrap();
         assert_eq!(t.to_glob_for_id("42"), "journal/*-42.md");
+    }
+
+    #[test]
+    fn to_glob_variants_for_id_pads_and_recurses() {
+        let t = FilenameTemplate::parse("iterations/iteration-{n}-{slug}.md").unwrap();
+        // Raw form first, then zero-padded, then recursive fallbacks.
+        assert_eq!(
+            t.to_glob_variants_for_id("2"),
+            vec![
+                "iterations/iteration-2-*.md".to_owned(),
+                "iterations/iteration-02-*.md".to_owned(),
+                "**/iteration-2-*.md".to_owned(),
+                "**/iteration-02-*.md".to_owned(),
+            ]
+        );
+        // Already-wide ID: no padded duplicate.
+        assert_eq!(
+            t.to_glob_variants_for_id("206"),
+            vec![
+                "iterations/iteration-206-*.md".to_owned(),
+                "**/iteration-206-*.md".to_owned(),
+            ]
+        );
+        // Letter-suffixed ID: no padding, but recursion still applies.
+        assert_eq!(
+            t.to_glob_variants_for_id("16b"),
+            vec![
+                "iterations/iteration-16b-*.md".to_owned(),
+                "**/iteration-16b-*.md".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn to_glob_variants_for_id_respects_template_pad_width() {
+        let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
+        assert_eq!(
+            t.to_glob_variants_for_id("16"),
+            vec![
+                "decisions/16-*.md".to_owned(),
+                "decisions/0016-*.md".to_owned(),
+                "**/16-*.md".to_owned(),
+                "**/0016-*.md".to_owned(),
+            ]
+        );
+        // A template with no directory component gains no recursive variant.
+        let flat = FilenameTemplate::parse("note-{n}.md").unwrap();
+        assert_eq!(
+            flat.to_glob_variants_for_id("7"),
+            vec!["note-7.md".to_owned(), "note-07.md".to_owned()]
+        );
     }
 
     #[test]
