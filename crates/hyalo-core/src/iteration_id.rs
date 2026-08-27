@@ -36,8 +36,13 @@ pub struct IterationId {
 /// Errors from [`parse_iteration_id`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IterationIdParseError {
-    /// The identifier was empty or contained no leading digits.
+    /// The identifier was empty (or all whitespace).
     Empty,
+    /// The identifier was non-empty but had no leading digit (e.g. `"abc"`).
+    /// `raw` echoes the offending input. Kept distinct from [`Self::Empty`]
+    /// so the error names what was actually wrong instead of misreporting a
+    /// non-empty string as an empty one (BUG-3, review of iter-225/226).
+    NotNumeric { raw: String },
     /// The identifier contained characters outside the `digits [letters]`
     /// grammar. `raw` echoes the offending input; `reason` names the rule.
     Invalid { raw: String, reason: &'static str },
@@ -49,6 +54,10 @@ impl fmt::Display for IterationIdParseError {
             Self::Empty => write!(
                 f,
                 "iteration ID is empty (expected digits optionally followed by letters, e.g. 206, 01, 16b)"
+            ),
+            Self::NotNumeric { raw } => write!(
+                f,
+                "iteration ID '{raw}' is not numeric (expected digits optionally followed by letters, e.g. 206, 01, 16b)"
             ),
             Self::Invalid { raw, reason } => {
                 write!(
@@ -107,9 +116,11 @@ impl fmt::Display for IterationId {
 /// Parse an `--iteration <ID>` natural-key identifier.
 ///
 /// Grammar: `[0-9]+` (one or more digits) followed by `[a-zA-Z]*` (zero or
-/// more letters). An empty input or one with no leading digits is
-/// [`IterationIdParseError::Empty`]; any non-digit/non-letter character after
-/// the digits is [`IterationIdParseError::Invalid`].
+/// more letters). An empty (or whitespace-only) input is
+/// [`IterationIdParseError::Empty`]; a non-empty input with no leading digit
+/// (e.g. `"abc"`) is [`IterationIdParseError::NotNumeric`]; any non-digit/
+/// non-letter character after the digits is
+/// [`IterationIdParseError::Invalid`].
 ///
 /// ```
 /// use hyalo_core::iteration_id::{parse_iteration_id, IterationId};
@@ -130,7 +141,7 @@ pub fn parse_iteration_id(s: &str) -> Result<IterationId, IterationIdParseError>
         i += 1;
     }
     if i == 0 {
-        return Err(IterationIdParseError::Empty);
+        return Err(IterationIdParseError::NotNumeric { raw: s.to_owned() });
     }
     let digits = &s[..i];
     let mut j = i;
@@ -209,10 +220,24 @@ mod tests {
     }
 
     #[test]
-    fn no_leading_digit_rejected_as_empty() {
-        // A leading letter has no digit run at all → Empty.
-        assert_eq!(parse_iteration_id("b16"), Err(IterationIdParseError::Empty));
-        assert_eq!(parse_iteration_id("abc"), Err(IterationIdParseError::Empty));
+    fn no_leading_digit_rejected_as_not_numeric() {
+        // A leading letter has no digit run at all → NotNumeric, not Empty
+        // (BUG-3, review of iter-225/226): the input is non-empty, so the
+        // error must say so rather than misreporting it as an empty ID.
+        assert_eq!(
+            parse_iteration_id("b16"),
+            Err(IterationIdParseError::NotNumeric {
+                raw: "b16".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_iteration_id("abc"),
+            Err(IterationIdParseError::NotNumeric {
+                raw: "abc".to_owned()
+            })
+        );
+        let err = parse_iteration_id("abc").unwrap_err();
+        assert!(err.to_string().contains("'abc' is not numeric"), "{err}");
     }
 
     #[test]

@@ -137,14 +137,18 @@ fn join(names: &[&str]) -> String {
 /// Returns `Ok` with the (possibly unchanged) selection, or `Err` with a
 /// ready-to-return user-error outcome. Internal I/O failures surface through
 /// `collect_files`, which already formats them as error outcomes.
+///
+/// Takes `sel` by value: every call site already owns its `InputSelection`
+/// (destructured from a command's parameters), so moving it through avoids
+/// a clone on the common (`--iteration` unset) path.
 pub(crate) fn selection_with_iteration_resolved(
-    sel: &InputSelection,
+    sel: InputSelection,
     dir: &Path,
     schema: &SchemaConfig,
     format: Format,
 ) -> Result<InputSelection, CommandOutcome> {
     let Some(id_str) = sel.iteration.as_deref() else {
-        return Ok(sel.clone());
+        return Ok(sel);
     };
     let id = match parse_iteration_id(id_str) {
         Ok(id) => id,

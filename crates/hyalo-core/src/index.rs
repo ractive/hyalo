@@ -521,6 +521,29 @@ impl SnapshotIndex {
     }
 
     /// Scan a file at `full_path` and insert (or replace) its entry under
+    /// `rel_path`, maintaining sorted order. Returns the file's `FileLinks`
+    /// for callers that want to update the link graph themselves.
+    fn insert_or_replace_entry_impl(
+        &mut self,
+        full_path: &Path,
+        rel_path: &str,
+    ) -> Result<Option<FileLinks>> {
+        let fm_props = self.effective_frontmatter_link_props();
+        let (entry, file_links) = scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+        if let Some(&idx) = self.path_index.get(rel_path) {
+            self.entries[idx] = entry;
+        } else {
+            let pos = self
+                .entries
+                .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
+                .unwrap_or_else(|i| i);
+            self.entries.insert(pos, entry);
+            self.rebuild_path_index();
+        }
+        Ok(file_links)
+    }
+
+    /// Scan a file at `full_path` and insert (or replace) its entry under
     /// `rel_path`, maintaining sorted order.
     ///
     /// Use this after creating a brand-new file (e.g. from `hyalo new`) so the
@@ -532,20 +555,33 @@ impl SnapshotIndex {
     /// and the file body will only be returned for indexed text searches,
     /// after the next full `create-index` rebuild. This matches the behaviour
     /// of [`SnapshotIndex::refresh_entry`] and the other in-place mutation
-    /// helpers (set/append/lint --fix).
+    /// helpers (set/append/lint --fix). Callers that need the link graph kept
+    /// current immediately should use
+    /// [`Self::insert_or_replace_entry_with_links`] instead.
     pub fn insert_or_replace_entry(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
-        let fm_props = self.effective_frontmatter_link_props();
-        let (entry, _file_links) =
-            scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
-        if let Some(&idx) = self.path_index.get(rel_path) {
-            self.entries[idx] = entry;
-        } else {
-            let pos = self
-                .entries
-                .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
-                .unwrap_or_else(|i| i);
-            self.entries.insert(pos, entry);
-            self.rebuild_path_index();
+        self.insert_or_replace_entry_impl(full_path, rel_path)?;
+        Ok(())
+    }
+
+    /// Like [`Self::insert_or_replace_entry`], but also registers the file's
+    /// outbound links in the persisted [`crate::link_graph::LinkGraph`] —
+    /// one disk scan, entry and graph both current.
+    ///
+    /// Use this to *upsert* an entry for a file the index has never seen
+    /// (e.g. a file created outside `hyalo new`, or present before the
+    /// index existed) from a mutating command that must keep backlink
+    /// queries accurate without a full `create-index` rebuild.
+    ///
+    /// Idempotent: replaces any existing entry/edges for `rel_path` first.
+    pub fn insert_or_replace_entry_with_links(
+        &mut self,
+        full_path: &Path,
+        rel_path: &str,
+    ) -> Result<()> {
+        let file_links = self.insert_or_replace_entry_impl(full_path, rel_path)?;
+        self.graph.remove_source(rel_path);
+        if let Some(fl) = file_links {
+            self.insert_graph_links(fl);
         }
         Ok(())
     }

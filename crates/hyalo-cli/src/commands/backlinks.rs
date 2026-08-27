@@ -133,7 +133,7 @@ pub(crate) fn run(
 
     // iter-238: `--iteration <ID>` support (single-file command).
     let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-        &selection,
+        selection,
         dir,
         ctx.schema,
         effective_format,

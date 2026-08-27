@@ -374,6 +374,30 @@ fn read_iteration_invalid_id_rejected() {
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
 }
 
+/// BUG-3 (review of iter-225/226): `--iteration abc` (non-empty but with no
+/// leading digit) used to be misreported as "iteration ID is empty", which
+/// is inaccurate — the input isn't empty, it's just not numeric. The error
+/// must name the actual problem and echo the offending value.
+#[test]
+fn read_iteration_non_numeric_id_reports_accurate_error() {
+    let vault = setup_iteration_vault();
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args(["read", "--iteration", "abc"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("'abc' is not numeric"),
+        "must name the actual problem, not report an empty ID: {err}"
+    );
+    assert!(
+        !err.contains("iteration ID is empty"),
+        "must not misreport a non-empty, non-numeric ID as empty: {err}"
+    );
+}
+
 #[test]
 fn read_iteration_ambiguous_match_lists_candidates() {
     let vault = setup_iteration_vault();
@@ -439,6 +463,34 @@ fn task_toggle_iteration_resolves_and_toggles() {
         fs::read_to_string(vault.path().join("iterations/iteration-206-agent-cli.md")).unwrap();
     // --all toggles every task: "one" becomes done, "two" was done and reopens.
     assert!(body.contains("- [x] one\n- [ ] two"), "{body}");
+}
+
+/// `task set --iteration` was covered by unit tests but had no e2e
+/// coverage, unlike `task toggle --iteration` and `task read --iteration`
+/// right above/below it.
+#[test]
+fn task_set_iteration_resolves_and_sets() {
+    let vault = setup_iteration_vault();
+    let output = hyalo_no_hints()
+        .args(["--dir", vault.path().to_str().unwrap()])
+        .args([
+            "task",
+            "set",
+            "--iteration",
+            "206",
+            "--all",
+            "--status",
+            "?",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"status\": \"?\""), "{stdout}");
+    // The file was actually mutated through the resolved path.
+    let body =
+        fs::read_to_string(vault.path().join("iterations/iteration-206-agent-cli.md")).unwrap();
+    assert!(body.contains("- [?] one\n- [?] two"), "{body}");
 }
 
 #[test]

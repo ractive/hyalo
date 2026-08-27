@@ -77,6 +77,28 @@ and this project adheres to
 
 ### Fixed
 
+- **`--index` mutations (`set`/`append`/`remove`/`task toggle`/`task set`/
+  `lint --fix`) now upsert a file the persisted index has never seen**
+  (review of iter-225/226, BUG-1). Only `new --index` inserted a brand-new
+  entry; every other mutating command's `MutationJournal` refresh patched
+  an *existing* entry only, so mutating a file created after `create-index`
+  (or present before the index existed) silently dropped it from the
+  persisted index — `find --file <it> --index` reported 0 results even
+  though the on-disk write succeeded. The journal now inserts a fresh entry
+  (with link-graph registration) whenever the mutated file isn't already
+  indexed.
+- **`links fix --apply` no longer reads as a false "it worked" when it
+  applied zero fixes** (review of iter-225/226, BUG-2). `applied` in the
+  JSON envelope still means "apply mode was used" (iter-216 D-4, unchanged
+  for backward compatibility — use the `applied_fixes`/`fixes` counts to
+  tell whether anything actually landed), but the text-format summary line
+  now reads `Applied: yes (0 fixes)` instead of a bare `Applied: yes` that
+  looked identical to a run which actually rewrote links.
+- **`--iteration <ID>` with a non-numeric value no longer reports "iteration
+  ID is empty"** (review of iter-225/226, BUG-3). `--iteration abc` used to
+  collapse into the same "empty" error as `--iteration ""`; the parser now
+  distinguishes a genuinely empty ID from a non-empty one with no leading
+  digit and reports `iteration ID 'abc' is not numeric` instead.
 - **A heading containing a template expression is never reported as a dead
   anchor** (iter-215, carried over from iter-211's known limitation). A
   Liquid/Jinja heading (`## {% data variables.product.prodname_pro %}`)
