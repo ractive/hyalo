@@ -58,19 +58,19 @@ impl PropertyFilter {
     /// Return true if the given property map satisfies this filter.
     pub fn matches(&self, props: &IndexMap<String, Value>) -> bool {
         match self {
-            PropertyFilter::Absent { key } => !props.contains_key(key),
+            PropertyFilter::Absent { key } => resolve_prop(props, key).is_none(),
             PropertyFilter::RegexMatch { key, pattern } => {
-                let Some(yaml_val) = props.get(key) else {
+                let Some(yaml_val) = resolve_prop(props, key) else {
                     return false;
                 };
                 yaml_value_regex_match(yaml_val, pattern)
             }
             PropertyFilter::Scalar { name, op, value } => {
                 if *op == FilterOp::Exists {
-                    return props.contains_key(name);
+                    return resolve_prop(props, name).is_some();
                 }
 
-                let Some(yaml_val) = props.get(name) else {
+                let Some(yaml_val) = resolve_prop(props, name) else {
                     return false;
                 };
                 let filter_val = value.as_deref().unwrap_or("");
@@ -148,6 +148,33 @@ impl PropertyFilter {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Resolve a property key against a frontmatter map, supporting nested
+/// dot-path traversal (UX-3, iter-244).
+///
+/// `a.b=v` first tries the literal key `"a.b"` (a flat map may genuinely
+/// contain dotted keys), then falls back to walking the nested map: `a.b`
+/// matches `{a: {b: …}}`. Traversal only descends through JSON objects —
+/// `a.b` against `{a: [1,2]}` does not resolve. A missing segment yields
+/// `None`, which the callers turn into the same verdict as a missing flat
+/// key (fails `Scalar`/`RegexMatch`, passes `Absent`).
+fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option<&'a Value> {
+    if let Some(v) = props.get(key) {
+        return Some(v);
+    }
+    if !key.contains('.') {
+        return None;
+    }
+    let mut segments = key.split('.');
+    let first = segments.next()?;
+    let mut current = props.get(first)?;
+    for segment in segments {
+        current = current.as_object()?.get(segment)?;
+    }
+    Some(current)
 }
 
 // ---------------------------------------------------------------------------

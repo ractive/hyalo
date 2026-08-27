@@ -25,12 +25,20 @@ struct LinksConfig {
     frontmatter_properties: Option<Vec<String>>,
     /// Case-insensitive link resolution mode.
     ///
-    /// Accepted values: `"auto"` (default), `"true"`, `"false"`.
+    /// Accepted values: `"auto"` (default), `"true"`, `"false"`, or a
+    /// `[links.case_insensitive]` sub-table (UX-6, iter-244) with a `resolve`
+    /// boolean.
     /// - `"auto"` — enables fallback only on case-insensitive filesystems.
     /// - `"true"` — always enable case-insensitive fallback.
     /// - `"false"` — always disable; exact-match only.
+    /// - `[links.case_insensitive] resolve = true` — enable the fallback
+    ///   always, *and* treat links that only resolve by case folding as
+    ///   resolved rather than fixable: MDN-style vaults (case-folded
+    ///   directory layouts on macOS/Windows) otherwise offer tens of
+    ///   thousands of `link-case-mismatch` rewrite plans for links that work
+    ///   fine in every downstream tool.
     #[serde(default)]
-    case_insensitive: Option<String>,
+    case_insensitive: Option<CaseInsensitiveSetting>,
     /// Persistent `hyalo links auto` preferences (`[links.auto]`).
     #[serde(default)]
     auto: Option<AutoLinksConfig>,
@@ -42,6 +50,30 @@ struct LinksConfig {
     /// `--min-confidence` on the command line wins over this value.
     #[serde(default)]
     fuzzy_min_confidence: Option<f64>,
+}
+
+/// `[links] case_insensitive` setting — either the classic mode string
+/// (`"auto"` / `"true"` / `"false"`) or the `[links.case_insensitive]`
+/// sub-table form (UX-6, iter-244).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum CaseInsensitiveSetting {
+    /// Classic scalar form: the resolution mode.
+    Mode(String),
+    /// Sub-table form: `[links.case_insensitive] resolve = true` — enables
+    /// the case-insensitive fallback AND treats case-fold-resolving targets
+    /// as resolved (no `link-case-mismatch` fixes offered).
+    Table(CaseInsensitiveTable),
+}
+
+/// Body of the `[links.case_insensitive]` sub-table.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaseInsensitiveTable {
+    /// Treat case-fold-resolving link targets as resolved rather than
+    /// fixable, so `links fix` offers no `link-case-mismatch` rewrites.
+    #[serde(default)]
+    resolve: bool,
 }
 
 /// Auto-link configuration from `[links.auto]` in `.hyalo.toml` (iter-195a).
@@ -272,6 +304,10 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) pi_session_summary: bool,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub(crate) case_insensitive_mode: CaseInsensitiveMode,
+    /// `[links.case_insensitive] resolve` (or the `links fix
+    /// --case-insensitive` flag, OR-combined): treat case-fold-resolving
+    /// link targets as resolved rather than fixable (UX-6, iter-244).
+    pub(crate) case_insensitive_resolve: bool,
     /// Titles `hyalo links auto` never links, from `[links.auto] exclude_titles`.
     /// Unioned with `--exclude-title` (flags extend, never replace).
     pub(crate) auto_link_exclude_titles: Vec<String>,
@@ -358,6 +394,7 @@ impl PartialEq for ResolvedDefaults {
             && self.default_limit == other.default_limit
             && self.pi_session_summary == other.pi_session_summary
             && self.case_insensitive_mode == other.case_insensitive_mode
+            && self.case_insensitive_resolve == other.case_insensitive_resolve
             && self.fuzzy_min_confidence == other.fuzzy_min_confidence
     }
 }
@@ -382,6 +419,7 @@ impl ResolvedDefaults {
             default_limit: None,
             pi_session_summary: false,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
+            case_insensitive_resolve: false,
             auto_link_exclude_titles: Vec::new(),
             auto_link_exclude_target_globs: Vec::new(),
             auto_link_first_only: false,
@@ -758,15 +796,22 @@ pub(crate) fn load_config() -> ResolvedDefaults {
     }
 }
 
-/// Parse the `[links] case_insensitive` value into a [`CaseInsensitiveMode`].
+/// Parse the `[links] case_insensitive` setting into a mode and a
+/// "treat case-fold-resolving targets as resolved" flag (UX-6, iter-244).
 ///
-/// Returns `Ok(None)` when the key is absent, `Ok(Some(mode))` on success,
-/// and `Err(...)` when the value is not one of `"auto"`, `"true"`, or `"false"`.
-fn parse_case_insensitive_mode(raw: Option<&str>) -> anyhow::Result<CaseInsensitiveMode> {
+/// - Absent → `(Auto, false)`.
+/// - `"auto"`/`"true"`/`"false"` → `(mode, false)`.
+/// - `[links.case_insensitive] resolve = <bool>` → `(On, resolve)` — the
+///   sub-table form always enables the fallback (explicit opt-in).
+fn parse_case_insensitive_setting(
+    raw: Option<&CaseInsensitiveSetting>,
+) -> anyhow::Result<(CaseInsensitiveMode, bool)> {
     match raw {
-        None => Ok(CaseInsensitiveMode::Auto),
-        Some(s) => CaseInsensitiveMode::parse(s)
+        None => Ok((CaseInsensitiveMode::Auto, false)),
+        Some(CaseInsensitiveSetting::Mode(s)) => CaseInsensitiveMode::parse(s)
+            .map(|m| (m, false))
             .with_context(|| format!("[links] case_insensitive = {s:?}")),
+        Some(CaseInsensitiveSetting::Table(t)) => Ok((CaseInsensitiveMode::On, t.resolve)),
     }
 }
 
@@ -924,17 +969,15 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let schema = parse_schema_from_toml(cfg.schema.as_ref());
 
     // Parse [links] fields — borrow before moving.
-    let case_insensitive_mode = match parse_case_insensitive_mode(
-        cfg.links
-            .as_ref()
-            .and_then(|l| l.case_insensitive.as_deref()),
+    let (case_insensitive_mode, case_insensitive_resolve) = match parse_case_insensitive_setting(
+        cfg.links.as_ref().and_then(|l| l.case_insensitive.as_ref()),
     ) {
-        Ok(m) => m,
+        Ok(v) => v,
         Err(e) => {
             crate::warn::warn(format!(
                 "invalid [links] case_insensitive in .hyalo.toml: {e}"
             ));
-            CaseInsensitiveMode::Auto
+            (CaseInsensitiveMode::Auto, false)
         }
     };
 
@@ -1003,6 +1046,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         schema,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
+        case_insensitive_resolve,
         auto_link_exclude_titles: links_auto.exclude_titles,
         auto_link_exclude_target_globs: links_auto.exclude_target_globs,
         auto_link_first_only: links_auto.first_only.unwrap_or(false),

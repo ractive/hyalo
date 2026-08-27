@@ -7,7 +7,7 @@ tags:
   - index
   - deferred
   - link-graph
-status: planned
+status: completed
 branch: iter-244/index-remaining-deferrals
 ---
 
@@ -36,54 +36,54 @@ and the still-parked items from
 
 ## Tasks
 
-- [ ] `new` — journal records brand-new files with
+- [x] `new` — journal records brand-new files with
       `insert_or_replace_entry_with_links` (rename `add_entry` usage or
       add a `add_entry_with_links` call) so a template's outgoing links
       enter the persisted graph; e2e test: `new` a file whose template
       links an indexed target, then `backlinks --index` must match disk
-- [ ] BUG-4 (carry-over) — post-mutation BM25 parity: design and
+- [x] BUG-4 (carry-over) — post-mutation BM25 parity: design and
       implement incremental corpus-statistic maintenance (retain per-entry
       tokens in the snapshot, or maintain sufficient statistics — total
       doc length, df — in the inverted index header); e2e test: BM25
       scores byte-identical between `--index` and disk after a mutation
       wave
-- [ ] UX-3 — nested YAML dot-path property filters: either support
+- [x] UX-3 — nested YAML dot-path property filters: either support
       `--property 'a.b=v'` traversal or reject dotted keys with a hint
       pointing at the `key~=serialized` workaround; e2e tests for both
       the supported and rejected forms
-- [ ] UX-6 — case-insensitive link resolution option
+- [x] UX-6 — case-insensitive link resolution option
       (`[links.case_insensitive]` in `.hyalo.toml` or
       `links fix --case-insensitive`) that treats case-fold-resolving
       targets as resolved rather than fixable, so MDN-style vaults don't
       offer ~50k rewrite plans; e2e test with a case-folded directory
       layout
-- [ ] Hygiene — fix the stray `status: planned` on
+- [x] Hygiene — fix the stray `status: planned` on
       `iterations/done/iteration-13-read-command.md` (only false
       "planned" file left in the vault; set to `completed`)
-- [ ] Hygiene — clear the 8 pre-existing KB lint warnings (MD018 in
+- [x] Hygiene — clear the 8 pre-existing KB lint warnings (MD018 in
       decision-log via `hyalo lint --fix`, HYALO002s in old iteration
       files); `hyalo lint` reports zero warnings on this vault
-- [ ] Packaging — honor the DEC-101 version discipline for the root
+- [x] Packaging — honor the DEC-101 version discipline for the root
       manifest change (PR #279): bump `pi-package/package.json` (and the
       root manifest) to 0.1.1 with a CHANGELOG entry
 
 ## Acceptance criteria
 
-- [ ] `backlinks <target> --index` sees outgoing links of files created
+- [x] `backlinks <target> --index` sees outgoing links of files created
       by `hyalo new` without a rebuild
-- [ ] `find <query> --index` scores are byte-identical to the disk scan
+- [x] `find <query> --index` scores are byte-identical to the disk scan
       after a mutating wave, without an intervening `create-index`
-- [ ] `find --property 'a.b=v'` either returns correct results or exits
+- [x] `find --property 'a.b=v'` either returns correct results or exits
       with a clear hint (never a silent `No results`)
-- [ ] A vault with case-fold-resolving link targets under
+- [x] A vault with case-fold-resolving link targets under
       `[links.case_insensitive]` reports 0 case-mismatch fixes in
       `links fix --dry-run`
-- [ ] All quality gates green (`cargo fmt` / `cargo clippy --workspace
+- [x] All quality gates green (`cargo fmt` / `cargo clippy --workspace
       --all-targets -- -D warnings` / `cargo test --workspace -q`, xtask
       `check-*` gates)
-- [ ] `hyalo find --property status=planned` returns only genuine plans
+- [x] `hyalo find --property status=planned` returns only genuine plans
       (199/209), not iteration-13; `hyalo lint` reports 0 warnings
-- [ ] `pi-package/package.json` and the root `package.json` both read
+- [x] `pi-package/package.json` and the root `package.json` both read
       version 0.1.1 with a matching CHANGELOG entry
 
 ## Non-goals
@@ -96,6 +96,24 @@ and the still-parked items from
   the only guarantee; document nothing, add no locking
 - No v0.21.0 release cut in this iteration (release decision is a
   separate owner call; see DEC-101's tag-pin advice waiting on it)
+
+## Outcome
+
+- **UX-3**: implemented full dot-path *traversal* (not rejection):
+  `a.b=v` first tries the literal flat key, then walks nested mappings.
+  Applies to `Scalar`, `Absent`, and `RegexMatch` filters alike.
+- **UX-6**: implemented as `[links.case_insensitive] resolve = true`
+  (sub-table — the scalar `[links] case_insensitive` string key already
+  exists, so the table form is the only way to carry both) plus a
+  `links fix --case-insensitive` run flag (OR-combined). All
+  `case_mismatch` fixes are drained from the report; relocations keep
+  their own bucket.
+- **BUG-4**: snapshot format unchanged — per-entry tokens stay stripped at
+  write time; incremental re-scans re-tokenize when a BM25 index is
+  present, and the journal flush rebuilds the inverted index from
+  re-scanned tokens ∪ tokens reconstructed from the old postings
+  (`Bm25InvertedIndex::reconstruct_all_tokens`). BM25 ties now break by
+  path so `--index`/disk ordering is deterministic.
 
 ## Links
 

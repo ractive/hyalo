@@ -131,11 +131,14 @@ impl<'a> MutationJournal<'a> {
     /// Record a freshly created file (the `new` write path).
     ///
     /// Scans `full_path` from disk and inserts a complete entry under
-    /// `rel_path` (replacing any stale leftover). No-op when no index is
-    /// loaded.
+    /// `rel_path` (replacing any stale leftover), registering the file's
+    /// outbound links in the persisted [`LinkGraph`] so a template's wikilinks
+    /// are visible to `backlinks --index` without a full `create-index`
+    /// rebuild (iter-244 — the last mutating write path without BUG-1's
+    /// upsert-with-links guarantee). No-op when no index is loaded.
     pub fn add_entry(&mut self, rel_path: &str, full_path: &Path) -> Result<()> {
         if let Some(idx) = self.index.as_mut() {
-            idx.insert_or_replace_entry(full_path, rel_path)?;
+            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
             self.dirty = true;
         }
         Ok(())
@@ -297,10 +300,16 @@ impl<'a> MutationJournal<'a> {
     ///
     /// Called exactly once, at the end of the mutating command. No-op when
     /// clean or when no index/path is available.
+    ///
+    /// BUG-4 (iter-244): before saving, the persisted BM25 inverted index is
+    /// rebuilt from the current entries so corpus statistics (N, df, avgdl)
+    /// match a fresh `create-index` build — otherwise `find --index` scores
+    /// would drift from a disk scan after every mutation wave.
     pub fn flush(&mut self) -> Result<()> {
         if self.dirty
             && let (Some(idx), Some(idx_path)) = (self.index.as_mut(), self.index_path)
         {
+            idx.rebuild_bm25_index();
             idx.save_to(idx_path)?;
         }
         Ok(())

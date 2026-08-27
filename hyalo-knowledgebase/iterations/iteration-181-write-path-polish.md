@@ -48,7 +48,7 @@ alone, together they make the tool feel predictable for agents.
 
 ### 5. Query ergonomics (LOWs from own-KB agent) [3/4]
 
-- [ ] `--property 'p>=v'` on non-numeric/non-date values emits a note
+- (deferred) `--property 'p>=v'` on non-numeric/non-date values emits a note
   that the comparison is lexicographic — not implemented in this PR (no
   code/test evidence in the diff); deferred to a future CLI iteration
   (explicitly re-scoped OUT of iteration 182, which is KB-hygiene-only —

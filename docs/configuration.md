@@ -96,6 +96,22 @@ casing (`[[Foo]]` → `foo.md`) still resolves:
 | `"true"` | Always resolve case-insensitively |
 | `"false"` | Never resolve case-insensitively — casing must match exactly |
 
+Instead of (or in addition to) the scalar value, a `[links.case_insensitive]`
+sub-table is accepted:
+
+```toml
+[links.case_insensitive]
+resolve = true
+```
+
+The sub-table form always enables the case-insensitive fallback **and** treats
+case-fold-resolving targets as *resolved* rather than fixable: `hyalo links fix`
+reports no `link-case-mismatch` rewrites for them. Use this on MDN-style vaults
+whose case-folded directory layouts (`en-US` written as `en-us`) otherwise make
+a dry run offer tens of thousands of casing rewrites that every downstream
+tool would resolve fine anyway. The same effect for a single run is the
+`links fix --case-insensitive` flag.
+
 Under `"auto"`, hyalo detects case behaviour with **stat calls only**: it looks
 up an existing vault entry (or the vault directory itself) under a
 case-flipped name and checks whether it lands on the same object. Read-only

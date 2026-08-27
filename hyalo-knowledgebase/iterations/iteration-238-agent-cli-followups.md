@@ -59,11 +59,11 @@ only) or 237 (pi package distribution, template only), which are both
 
 Post-merge verifications and deferred decisions from iter-237 (folded here so they are not silently forgotten). All five were **triaged and deferred** in iter-238: each requires mutating the owner's live global pi installation or a real follow-up update cycle, which an autonomous iteration run cannot safely do; see Out of scope for the notes.
 
-- [ ] Verify the git-source install end-to-end once iter-237 is merged: `pi install git:github.com/ractive/hyalo` from a scratch checkout, confirm tool + skills register, then tick AC-1 of iter-237
-- [ ] Verify `pi update --extensions` delivers a pushed change to that install (trivial marker change, e.g. package.json version bump), then tick AC-2 of iter-237
-- [ ] Decide the tag-per-release pinning strategy after the first real update cycle (DEC-101 carry-over): tag naming, whether README recommends a tag ref over main HEAD
-- [ ] (Conditional) `hyalo doctor`-style check reporting extension/hyalo version compatibility drift — only if dogfooding shows drift confusion
-- [ ] (Conditional, from iter-236 via 237) `--jq` passthrough on `hyalo_find` and a `hyalo_lint` typed tool — only if observed model friction justifies
+- (deferred) Verify the git-source install end-to-end once iter-237 is merged: `pi install git:github.com/ractive/hyalo` from a scratch checkout, confirm tool + skills register, then tick AC-1 of iter-237
+- (deferred) Verify `pi update --extensions` delivers a pushed change to that install (trivial marker change, e.g. package.json version bump), then tick AC-2 of iter-237
+- (deferred) Decide the tag-per-release pinning strategy after the first real update cycle (DEC-101 carry-over): tag naming, whether README recommends a tag ref over main HEAD
+- (deferred, conditional) `hyalo doctor`-style check reporting extension/hyalo version compatibility drift — only if dogfooding shows drift confusion
+- (deferred, conditional) `--jq` passthrough on `hyalo_find` and a `hyalo_lint` typed tool — only if observed model friction justifies
 
 ## Carry-over from [[iterations/iteration-234-lint-dead-output-cleanup]]
 

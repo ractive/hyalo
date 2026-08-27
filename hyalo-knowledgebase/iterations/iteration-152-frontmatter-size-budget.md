@@ -114,7 +114,7 @@ as the suggested next step.
 - [x] Update `set` / `append` / `new` `--help` with the budget number
 - [x] `cargo fmt && cargo clippy --workspace --all-targets -- -D
       warnings && cargo test --workspace -q` clean
-- [ ] Mark `status=completed`, move to `iterations/done/` (handled at merge time)
+- [x] Mark `status=completed`, move to `iterations/done/` (handled at merge time)
 
 ## Acceptance Criteria
 

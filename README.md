@@ -146,6 +146,9 @@ hyalo summary
 # Full-text search (BM25 ranked, boolean operators) and frontmatter filters
 hyalo find "retry OR timeout -deprecated"
 hyalo find --property status=draft --tag research
+# Nested properties filter by dot-path: contact.email=x@y.z traverses
+# `contact: {email: ...}`; a literal dotted key in a flat map wins first
+hyalo find --property contact.email=team@example.com
 # Compact filename-only projection for agents / shell pipelines
 hyalo find --property status=planned --filenames-only | sort
 # Sequence-keyed documents: glob by number (recursively reaches archived files)
