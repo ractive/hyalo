@@ -208,11 +208,16 @@ For the [pi](https://github.com/earendil-works/pi-coding-agent) coding agent, th
 pi install git:github.com/ractive/hyalo
 ```
 
-This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus the `hyalo` and `hyalo-tidy` skills. Updates are delivered independently of hyalo releases:
+From **hyalo ≥ 0.21** on, pin the release tag matching your binary instead
+(recommended — the extension's expected output shapes track the binary, so a
+matched tag avoids extension/binary drift; the tag form needs ≥ v0.21.0,
+earlier tags predate the root package manifest):
 
 ```sh
-pi update --extensions
+pi install git:github.com/ractive/hyalo@v0.21.0
 ```
+
+This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus the `hyalo` and `hyalo-tidy` skills. A main-HEAD install updates independently of hyalo releases via `pi update --extensions`; a pinned-tag install moves only on an explicit re-pin (`pi install git:…@vX.Y.Z`).
 
 A `hyalo` binary on `PATH` is required (any recent release; typed tools need ≥ 0.21). See `pi-package/README.md` for details.
 

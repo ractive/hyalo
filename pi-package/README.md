@@ -11,10 +11,22 @@ these same files (via `include_str!`) and writes them to `.pi/` with
 pi install git:github.com/ractive/hyalo
 ```
 
-This installs the `hyalo` extension (generic + typed tools:
-`hyalo`, `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`, plus a
-post-write lint guardrail) and the `hyalo` / `hyalo-tidy` skills. Updates are
-delivered with `pi update --extensions` (or `pi update --all`).
+From **hyalo ≥ 0.21** on, pin the release tag matching your binary instead
+(recommended — the extension's expected output shapes track the binary, so
+a matched tag avoids extension/binary drift):
+
+```sh
+pi install git:github.com/ractive/hyalo@v0.21.0
+```
+
+(The tag form needs ≥ v0.21.0; earlier release tags predate the root package
+manifest that git installs require.) This registers the `hyalo` extension
+(generic + typed tools: `hyalo_find`,
+`hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus
+the `hyalo` and `hyalo-tidy` skills. A main-HEAD install updates with
+`pi update --extensions`; a pinned-tag install moves only when you re-pin
+with a new `pi install git:…@vX.Y.Z` (pi reconciles pinned refs but never
+moves them).
 
 If you don't want a git dependency, run `hyalo init --pi` inside your vault
 instead — it writes a vendored copy of these same files. The downside: the
