@@ -57,6 +57,15 @@ and the still-parked items from
       targets as resolved rather than fixable, so MDN-style vaults don't
       offer ~50k rewrite plans; e2e test with a case-folded directory
       layout
+- [ ] Hygiene — fix the stray `status: planned` on
+      `iterations/done/iteration-13-read-command.md` (only false
+      "planned" file left in the vault; set to `completed`)
+- [ ] Hygiene — clear the 8 pre-existing KB lint warnings (MD018 in
+      decision-log via `hyalo lint --fix`, HYALO002s in old iteration
+      files); `hyalo lint` reports zero warnings on this vault
+- [ ] Packaging — honor the DEC-101 version discipline for the root
+      manifest change (PR #279): bump `pi-package/package.json` (and the
+      root manifest) to 0.1.1 with a CHANGELOG entry
 
 ## Acceptance criteria
 
@@ -72,12 +81,21 @@ and the still-parked items from
 - [ ] All quality gates green (`cargo fmt` / `cargo clippy --workspace
       --all-targets -- -D warnings` / `cargo test --workspace -q`, xtask
       `check-*` gates)
+- [ ] `hyalo find --property status=planned` returns only genuine plans
+      (199/209), not iteration-13; `hyalo lint` reports 0 warnings
+- [ ] `pi-package/package.json` and the root `package.json` both read
+      version 0.1.1 with a matching CHANGELOG entry
 
 ## Non-goals
 
 - Rebuilding or re-versioning the snapshot format beyond what the
   incremental-statistics design requires
 - UX-2/UX-4/UX-5 follow-ups — fixed (or moot) in iters 241/242
+- Concurrency (two simultaneous mutating hyalo processes on one vault) —
+  out of scope per owner verdict 2026-08-27: single-writer atomicity is
+  the only guarantee; document nothing, add no locking
+- No v0.21.0 release cut in this iteration (release decision is a
+  separate owner call; see DEC-101's tag-pin advice waiting on it)
 
 ## Links
 
