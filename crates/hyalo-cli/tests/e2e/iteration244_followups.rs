@@ -369,3 +369,61 @@ fn links_fix_case_insensitive_reports_zero_case_mismatches() {
         "config `[links.case_insensitive] resolve = true` must suppress case-mismatch fixes: {json}"
     );
 }
+
+/// The `--case-insensitive` flag must be a true one-shot equivalent of
+/// `[links.case_insensitive] resolve = true`: it forces the case-insensitive
+/// fallback **on** (so case-fold-resolving links are classified as case
+/// mismatches, not broken) *and* drains the mismatch bucket. The config is
+/// set to `"false"` so the test discriminates on every filesystem — without
+/// the flag forcing the fallback on, the case-folded link is reported as
+/// broken (not a case mismatch) regardless of the host filesystem's casing.
+#[test]
+fn links_fix_case_insensitive_flag_alone_forces_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_case_folded_vault(&tmp);
+    // Explicitly Off: on a case-sensitive filesystem (Linux CI) this fails
+    // without the flag-forces-fallback behaviour — the case-folded link is
+    // then reported as broken, not as a drained case mismatch. On a
+    // case-insensitive host FS (macOS) the link resolves either way, so the
+    // test is vacuously green there; the strictness lives in Linux CI.
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[links]\ncase_insensitive = \"false\"\n",
+    )
+    .unwrap();
+    create_index(&tmp);
+
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path().to_str().unwrap())
+        .args(["links", "fix", "--dry-run", "--case-insensitive"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "flag alone must make the case-folded link resolved: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: Value = serde_json::from_slice(&output.stdout).expect("stdout must be JSON");
+    let fixes = json["results"]["case_mismatches"]
+        .as_u64()
+        .or_else(|| json["results"]["case_mismatch_count"].as_u64())
+        .or_else(|| json["results"]["fixes"].as_array().map(|a| a.len() as u64))
+        .unwrap_or(0);
+    let broken = json["results"]["broken"]
+        .as_u64()
+        .or_else(|| {
+            json["results"]["broken_fixes"]
+                .as_array()
+                .map(|a| a.len() as u64)
+        })
+        .unwrap_or(0);
+    assert_eq!(
+        fixes, 0,
+        "no case-mismatch fixes may be offered under the flag: {json}"
+    );
+    assert_eq!(
+        broken, 0,
+        "the case-folded link must not be reported as broken either: {json}"
+    );
+}

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::cli::args::LinksAction;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::CaseInsensitiveIndex;
+use hyalo_core::CaseInsensitiveMode;
 use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
@@ -1857,12 +1858,20 @@ pub(crate) fn run(
             )? {
                 IndexResolution::Resolved(resolved) => {
                     // `links fix` is entirely about link resolution.
-                    let ci = maybe_case_index(
-                        ctx.case_insensitive_mode,
-                        dir,
-                        true,
-                        resolved.as_snapshot(),
-                    );
+                    // UX-6 (iter-244): the `--case-insensitive` flag is the
+                    // one-shot form of `[links.case_insensitive] resolve =
+                    // true`, which forces the fallback mode On — without
+                    // this, on a case-sensitive filesystem under `auto`, the
+                    // fallback stays off and case-fold-resolving links land
+                    // in the *broken* bucket, leaving the drain below a
+                    // silent no-op. Config `resolve = true` already implies
+                    // mode On via the sub-table parse.
+                    let ci_mode = if case_insensitive {
+                        CaseInsensitiveMode::On
+                    } else {
+                        ctx.case_insensitive_mode
+                    };
+                    let ci = maybe_case_index(ci_mode, dir, true, resolved.as_snapshot());
                     links_fix(
                         resolved.as_index(),
                         dir,
