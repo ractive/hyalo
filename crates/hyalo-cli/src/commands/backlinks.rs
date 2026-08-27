@@ -131,16 +131,6 @@ pub(crate) fn run(
     use hyalo_core::index::ScanOptions;
     use hyalo_core::mode_enabled;
 
-    // iter-238: `--iteration <ID>` support (single-file command).
-    let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-        selection,
-        dir,
-        ctx.schema,
-        effective_format,
-    ) {
-        Ok(s) => s,
-        Err(outcome) => return Ok(outcome),
-    };
     match resolve_inputs(
         &selection,
         dir,

@@ -812,17 +812,6 @@ pub(crate) fn run_command(
     let snapshot_index = &mut *ctx.snapshot_index;
     use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 
-    // iter-238: `--iteration <ID>` on single-file commands resolves to
-    // exactly one file before the generic input resolution runs.
-    let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-        selection,
-        dir,
-        ctx.schema,
-        effective_format,
-    ) {
-        Ok(s) => s,
-        Err(outcome) => return Ok(outcome),
-    };
     match resolve_inputs(
         &selection,
         dir,

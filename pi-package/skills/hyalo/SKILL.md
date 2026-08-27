@@ -35,6 +35,12 @@ Use the generic **hyalo** tool (subcommand + args) only for operations the typed
 don't cover: summary, lint, mv, links, views, types, backlinks, --jq filters, bulk
 mutations (`--glob`, `--where-property`), etc.
 
+`--glob` is how you address sequence-keyed documents (iterations, decisions, ...): the
+number may be zero-padded and the file archived in a subdirectory, so prefer the
+recursive form — `find --glob '**/iteration-02-*.md'` reaches both
+`iterations/iteration-2-*.md` and `iterations/done/iteration-02-links.md`.
+(`--file` is exact; `--glob` is the only globbing flag.)
+
 Its killer features are combined filtering (e.g.
 `hyalo find -e "regex" --property status!=done --tag feature`) which you can't easily
 replicate with read/edit/grep/write, and bulk mutations (`hyalo set --where-property`) that replace

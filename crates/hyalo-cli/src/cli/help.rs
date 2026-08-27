@@ -47,15 +47,14 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
                [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
-               [-f/--file F | -g/--glob G | --iteration ID] [--filenames-only | --filenames0] [--fields ...] [--sort ...] [--reverse] [--strict] [-n/--limit N]
+               [-f/--file F | -g/--glob G] [--filenames-only | --filenames0] [--fields ...] [--sort ...] [--reverse] [--strict] [-n/--limit N]
 
   Read (display file body content, read-only):
     hyalo read FILE [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
     hyalo read -f/--file F [...]                                  Flag form; FILE positional is equivalent
-    hyalo read --iteration ID [...]                               Natural-key form; resolves to exactly one file
 
   Set (create or overwrite, mutates files):
-    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G | --iteration ID] [--where-property FILTER ...] [--where-tag T ...] [--dry-run] [--validate]
+    hyalo set  -p/--property K=V [-p ...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...] [--dry-run] [--validate]
 
   Remove (delete properties/tags, mutates files):
     hyalo remove -p/--property K|K=V [...] [-t/--tag T ...] [-f/--file F | -g/--glob G] [--where-property FILTER ...] [--where-tag T ...] [--dry-run]
@@ -78,12 +77,10 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo task read       -f/--file F -l/--line N           Read task at a line
     hyalo task toggle     -f/--file F -l/--line N           Toggle completion
     hyalo task set        -f/--file F -l/--line N -s/--status C
-    (each also accepts --iteration ID instead of -f/--file/FILE: natural-key single-file addressing)
 
   Backlinks (reverse link lookup, read-only):
     hyalo backlinks FILE [-n/--limit N]
     hyalo backlinks -f/--file F [...]                             Flag form; FILE positional is equivalent
-    hyalo backlinks --iteration ID [...]                          Natural-key form; resolves to exactly one file
 
   Links (link operations):
     hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)

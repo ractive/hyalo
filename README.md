@@ -148,13 +148,11 @@ hyalo find "retry OR timeout -deprecated"
 hyalo find --property status=draft --tag research
 # Compact filename-only projection for agents / shell pipelines
 hyalo find --property status=planned --filenames-only | sort
-# Natural-key lookup of a sequence-numbered document (respects filename_template)
-hyalo find --iteration 206 --filenames-only
+# Sequence-keyed documents: glob by number (recursively reaches archived files)
+hyalo find --glob '**/iteration-206-*.md' --filenames-only
 
 # Bulk-update metadata
 hyalo set --property status=reviewed --where-tag research
-# Address a sequence-numbered document by its natural key (no glob math)
-hyalo set --iteration 206 --property status=completed
 
 # Move or rename — every [[wikilink]] and [markdown](link) across the vault is rewritten
 hyalo mv old/path.md archive/path.md

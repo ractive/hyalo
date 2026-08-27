@@ -665,16 +665,6 @@ pub(crate) fn run(
                 index_flags: _, // consumed in run.rs before dispatch
             } => {
                 let configured_dir = ctx.configured_dir_str;
-                // iter-238: `--iteration <ID>` support (single-file command).
-                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    selection,
-                    dir,
-                    ctx.schema,
-                    effective_format,
-                ) {
-                    Ok(s) => s,
-                    Err(outcome) => return Ok(outcome),
-                };
                 match resolve_inputs(
                     &selection,
                     dir,
@@ -726,17 +716,6 @@ pub(crate) fn run(
                     return Ok(CommandOutcome::UserError(out));
                 }
                 let configured_dir = ctx.configured_dir_str;
-                // iter-238: `--iteration <ID>` support — resolves to exactly
-                // one file, which then takes the single-file path below.
-                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    selection,
-                    dir,
-                    ctx.schema,
-                    effective_format,
-                ) {
-                    Ok(s) => s,
-                    Err(outcome) => return Ok(outcome),
-                };
                 match resolve_inputs(
                     &selection,
                     dir,
@@ -842,17 +821,6 @@ pub(crate) fn run(
                     .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
 
                 let configured_dir = ctx.configured_dir_str;
-                // iter-238: `--iteration <ID>` support — resolves to exactly
-                // one file, which then takes the single-file path below.
-                let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    selection,
-                    dir,
-                    ctx.schema,
-                    effective_format,
-                ) {
-                    Ok(s) => s,
-                    Err(outcome) => return Ok(outcome),
-                };
                 match resolve_inputs(
                     &selection,
                     dir,

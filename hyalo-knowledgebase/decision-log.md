@@ -3010,3 +3010,31 @@ created or deleted after `create-index` remain the shallow probe's job
 (warn at load); a full-walk reconciliation is `create-index`. Other
 mutating commands (`set`/`append`/…) write the file they mutate, so their
 journal refresh already sees current disk state — no check needed there.
+
+## DEC-242: `--iteration <ID>` natural-key addressing is removed, not extended (2026-08-27)
+
+Implemented in [[iterations/iteration-242-remove-iteration-flag]], reversing
+iter-235 (and its iter-238/iter-241 widenings).
+
+**Why.** The owner's verdict on reviewing iter-241's UX-2 widening: the flag
+was featureitis. It was a third file-addressing mechanism alongside
+`--file`/`--glob`, and its matching rules — verbatim ID, zero-padding
+fallback, letter-suffix separation, `**/` recursive fallback for archived
+files — had grown to four interacting rules that are harder to predict than
+the one glob the user could have written themselves. An agent CLI's surface
+should be small and predictable; a convenience alias that requires a mental
+model to use correctly is a net cost. The glob replacement is one sentence of
+documentation: `find --glob '**/iteration-02-*.md'` reaches padded and
+archived files alike.
+
+**What stays.** The `{n}` filename_template feature itself (used by `new`,
+type inference, and schema lint), `--filenames-only`/`--filenames0`, and the
+iteration-*schema* ergonomics. Only the addressing flag is removed, along
+with `hyalo-core::iteration_id` and the `FilenameTemplate` ID-glob helpers
+that existed solely to serve it.
+
+**Lesson recorded for future flag proposals:** when the motivating complaint
+is "the agent doesn't know the vault layout", the fix is teaching (help text,
+skills), not a new selector. Convenience flags for agents are a bad trade —
+the agent doesn't mind typing 40 characters; it minds not being able to
+predict behavior.
