@@ -1726,6 +1726,50 @@ pub(crate) fn run(
     use crate::dispatch::maybe_case_index;
     use hyalo_core::index::ScanOptions;
 
+    // DEC-241 (BUG-2 detection): an in-place edit of an indexed file is
+    // invisible to the shallow directory-mtime probe, yet `links fix`'s
+    // discovery pass reads links from the *index*, so a stale entry made
+    // `--apply --index` report `broken: 0` for a link added seconds ago —
+    // silently, exit 0, file untouched. Before any discovery happens,
+    // compare every indexed entry's stored mtime against the file on disk
+    // (one stat per file) and rescan the drifted ones from disk, so the
+    // pass sees the current bodies. The refresh is in-memory only for a
+    // dry run; `--apply` persists it through the journal like any other
+    // index write.
+    let stale_index_files = snapshot_index.as_ref().map_or_else(Vec::new, |idx| {
+        hyalo_core::index::files_modified_since_snapshot(idx, dir)
+    });
+    if !stale_index_files.is_empty() {
+        let n = stale_index_files.len();
+        let plural = if n == 1 { "file" } else { "files" };
+        let apply_run = matches!(
+            action,
+            Some(LinksAction::Fix { apply: true, .. } | LinksAction::Auto { apply: true, .. })
+        );
+        // PR #277 review N-2: the tail depends on what happens to the
+        // refreshed entries — `--apply` persists them through the journal,
+        // a dry run keeps them in memory only.
+        let tail = if apply_run {
+            "refreshing from disk and persisting for this run"
+        } else {
+            "refreshing from disk for this run — re-run create-index when convenient"
+        };
+        crate::warn::warn(format!(
+            "index is stale: {n} {plural} changed on disk since create-index \
+             (e.g. {}); {tail}",
+            stale_index_files[0]
+        ));
+        let mut journal =
+            crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
+        journal.rescan_modified(dir, &stale_index_files)?;
+        // Persist the refreshed entries only when this run already writes
+        // (apply mode); a dry run leaves the snapshot file untouched.
+        if apply_run {
+            journal.flush()?;
+        }
+        // Journal dropped here: a dry run keeps the refresh in memory only.
+    }
+
     match action.unwrap_or(LinksAction::Fix {
         dry_run: true,
         apply: false,

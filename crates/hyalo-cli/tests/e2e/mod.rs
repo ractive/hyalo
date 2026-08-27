@@ -29,6 +29,7 @@ mod index;
 mod index_journal;
 mod init;
 mod iteration238_followups;
+mod iteration241_followups;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

@@ -27,9 +27,11 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     // no-reversed-links — a genuinely reversed link `(text)[url]` breaks
     // rendering, hence error. Known false-positive class: literal regex or
     // math prose that writes `)[` (e.g. a character class `[)]` after a group)
-    // can trip the detector. It stays error because the autofix only rewrites a
-    // real reversed-link shape; when it misfires on regex text, disable it for
-    // that file via `[lint.rules] MD011 = false` or fence the sample as code.
+    // can trip the detector. Those are suppressed in `lint_body` when the
+    // parenthesized text carries regex metacharacters AND the bracketed part
+    // does not look like a link destination (see `is_regex_false_positive`);
+    // anything else that still misfires can be disabled per file via
+    // `[lint.rules] MD011 = false`.
     ("MD011", DiagSeverity::Error),
     ("MD012", DiagSeverity::Warn),  // no-multiple-blanks
     ("MD018", DiagSeverity::Warn),  // no-missing-space-atx
@@ -647,6 +649,16 @@ impl HyaloLintEngine {
 
                 let sev = effective_severity(rule_id);
                 for v in violations {
+                    // UX-4 (dogfood v0.20.0): upstream MD011 flags regex/math
+                    // prose like `(3rd|[Tt]hird)[-_]` as a "reversed link".
+                    // The reversal autofix would rewrite the regex into
+                    // broken syntax, so suppress the diagnostic when the
+                    // parenthesized "text" part contains characters that a
+                    // reversed *link* text essentially never carries but a
+                    // regex alternation/character class always does.
+                    if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
+                        continue;
+                    }
                     // Upstream MD047 hard-codes "\n" for the missing-EOF-newline
                     // insertion and never fires on CRLF files with extra
                     // trailing blank lines (see `md047_fix`), so CRLF bodies
@@ -776,6 +788,53 @@ const BYTE_COLUMN_RULE_IDS: &[&str] = &["MD010", "MD042", "MD052"];
 /// for a byte offset upstream computed honestly, but a corrupted/mismatched
 /// input must not panic) falls back to the original byte column rather than
 /// silently reporting a wrong one.
+/// MD011 false-positive detector (UX-4, dogfood v0.20.0).
+///
+/// Upstream MD011's message is
+/// `Reversed link syntax: ({text})[{url}]. Should be: [{text}]({url})`.
+/// This extracts the `{(text})[{url}]` fragment and answers whether it
+/// looks like regex/math prose rather than a link:
+///
+/// - the parenthesized **text** carries regex metacharacters (`|`, `[`, `]`)
+///   — a shape link text essentially never has, but a regex alternation or
+///   character class (e.g. `(3rd|[Tt]hird)[-_]`) always does; **and**
+/// - the bracketed **url** does NOT look like a link destination (no
+///   `scheme://`, and no `/`, `./`, `#`, or `mailto:` prefix) — regex prose
+///   like `[-_]` or `[ .,]` has a non-URL right side, while every genuine
+///   reversed link the rule exists for carries a real destination there
+///   (PR #277 review M-2: the text check alone also suppressed genuine
+///   reversed links with bracketed text, e.g. `(see [docs])[https://…]`).
+///
+/// Unparseable messages (a different MD011 shape, or a version bump)
+/// report `false` so nothing is suppressed by accident.
+fn is_regex_false_positive(message: &str) -> bool {
+    let Some(start) = message.find("syntax: ").map(|i| i + "syntax: ".len()) else {
+        return false;
+    };
+    let Some(end) = message[start..].find(". Should be: ") else {
+        return false;
+    };
+    let fragment = &message[start..start + end];
+    // Fragment shape: `({text})[{url}]`.
+    let Some(stripped) = fragment
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return false;
+    };
+    // The `)[` boundary splits the parenthesized text from the bracketed url.
+    let Some((text, url)) = stripped.split_once(")[") else {
+        return false;
+    };
+    let text_is_regexish = text.contains('|') || text.contains('[') || text.contains(']');
+    let url_is_destination = url.contains("://")
+        || url.starts_with('/')
+        || url.starts_with("./")
+        || url.starts_with('#')
+        || url.starts_with("mailto:");
+    text_is_regexish && !url_is_destination
+}
+
 fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
     let byte_offset = byte_col_1based.saturating_sub(1);
     line.get(..byte_offset)
@@ -1248,6 +1307,53 @@ mod tests {
         let fix = d.fix.as_ref().expect("MD011 fix should convert");
         let fixed = apply(body, fix);
         assert_eq!(fixed, "café [some text](http://example.com) end.\n");
+    }
+
+    #[test]
+    fn md011_suppresses_regex_prose_false_positive() {
+        // UX-4 (dogfood v0.20.0): GH Docs had 4 MD011 "errors" that were
+        // regex character classes / alternations in prose, not links.
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "Matches (3rd|[Tt]hird)[-_] and (2nd|[Ss]econd)[ .,]\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.is_empty(),
+            "regex prose must not be flagged: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn md011_flags_reversed_link_with_bracketed_text_and_real_url() {
+        // Review M-2 (PR #277): a genuine reversed link whose *text* happens
+        // to carry `[`/`]` must stay flagged — the suppression additionally
+        // requires a non-URL bracketed part.
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "see (the [docs] page)[https://example.com] now.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().any(|d| d.rule_id == "MD011"),
+            "a genuine reversed link with bracketed text must still be flagged"
+        );
+    }
+
+    #[test]
+    fn md011_flags_reversed_link_without_regex_metacharacters() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "see (the docs)[https://example.com] now.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().any(|d| d.rule_id == "MD011"),
+            "a genuine reversed link must still be flagged"
+        );
     }
 
     // --- md047_fix must handle CRLF terminators ---

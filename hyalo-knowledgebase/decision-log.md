@@ -2971,3 +2971,42 @@ as ground truth, so `links fix --apply --index` on a vault edited externally
 since `create-index` reports `broken: 0` without warning. Detection (mtime
 comparison vs. warning vs. refuse) is a separate decision, carried over in
 iteration 240's out-of-scope list.
+
+## DEC-241: stale-index detection for `links fix`/`links auto` is a per-entry mtime check + rescan, not a refusal (2026-08-27)
+
+BUG-2's detection half from
+[[dogfood-results/dogfood-v0200-arch-refactors-and-agent-cli-followups]],
+implemented in [[iterations/iteration-241-stale-index-detection-and-ux-fixes]].
+
+**The problem.** The load-time staleness probe
+(`newest_shallow_dir_mtime`, M-6) only sees directory mtimes, which move on
+file create/rename/delete — an *in-place edit* of an indexed note leaves
+every directory mtime untouched, so a `links fix --apply --index` run could
+report `broken: 0` for a link added seconds earlier and exit 0 with no
+warning. DEC-240 closed the same bug's `applied`-semantics half; this is
+the detection half.
+
+**The decision.** Before `links fix`/`links auto` run their discovery pass
+against a loaded snapshot, compare every indexed entry's stored `modified`
+(ISO 8601, written at scan time) with the file's current disk mtime — one
+`stat` per entry, no content read, with the same 1-second tolerance as the
+shallow probe. Drifted files are refreshed from disk through the existing
+`MutationJournal::rescan_modified` (entry + link graph, DEC-226's path),
+then discovery sees current bodies. A warning names the drift ("index is
+stale: N file(s) changed on disk since create-index"). The refresh is
+persisted under `--apply` (the run already writes) and in-memory only for a
+dry run, so a preview never mutates the snapshot file.
+
+**Why not refuse.** Refusing with "re-run create-index" is safe but hostile
+to the agent-CLI use case — the journal already has everything needed to
+do the correct thing in one per-file scan, and the run remains correct
+without a full rebuild. A warning-only alternative (no rescan) was rejected
+because it leaves the actual failure intact: `broken: 0` with a warning is
+still the wrong answer.
+
+**Scope.** Only the `links` discovery pass gets the mtime check — it is the
+one read path whose *results* are computed from indexed link data. Files
+created or deleted after `create-index` remain the shallow probe's job
+(warn at load); a full-walk reconciliation is `create-index`. Other
+mutating commands (`set`/`append`/…) write the file they mutate, so their
+journal refresh already sees current disk state — no check needed there.

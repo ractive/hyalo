@@ -35,10 +35,12 @@ pub(crate) enum IterationGlobs {
 /// `filename_template`s.
 ///
 /// Iterates every type with a `filename_template` containing an `{n}`
-/// placeholder and substitutes the ID (verbatim) into that slot, with `*`
-/// for the other placeholders. A vault with a single `iteration` type whose
-/// template is `iterations/iteration-{n}-{slug}.md` resolves `--iteration
-/// 206` to `["iterations/iteration-206-*.md"]`.
+/// placeholder and substitutes the ID into that slot, with `*` for the other
+/// placeholders (plus zero-padded and `**/` recursive fallback variants —
+/// see [`FilenameTemplate::to_glob_variants_for_id`], UX-2). A vault with a
+/// single `iteration` type whose template is
+/// `iterations/iteration-{n}-{slug}.md` resolves `--iteration 206` to
+/// `["iterations/iteration-206-*.md", "**/iteration-206-*.md"]`.
 ///
 /// When no type has a template with an `{n}` slot, returns an error outcome
 /// naming the types that *do* have a template (so the user can see what to
@@ -71,7 +73,10 @@ pub(crate) fn resolve_iteration_globs(
         };
         if tpl.has_n_placeholder() {
             n_types.push(name);
-            globs.push(tpl.to_glob_for_id(id.raw()));
+            // UX-2 (dogfood v0.20.0): also match zero-padded IDs and files
+            // archived under subdirectories of the template's directory —
+            // `--iteration 2` must reach `iterations/done/iteration-02-*.md`.
+            globs.extend(tpl.to_glob_variants_for_id(id.raw()));
         } else {
             templated_types.push(name);
         }
@@ -250,7 +255,12 @@ mod tests {
         let schema = schema_with_iteration(Some("iterations/iteration-{n}-{slug}.md"));
         let id = hyalo_core::iteration_id::parse_iteration_id("206").unwrap();
         match resolve_iteration_globs(&schema, &id, Format::Text) {
-            IterationGlobs::Globs(g) => assert_eq!(g, vec!["iterations/iteration-206-*.md"]),
+            // Primary glob first, then the UX-2 `**/` recursive fallback that
+            // reaches files archived under the template's directory.
+            IterationGlobs::Globs(g) => assert_eq!(
+                g,
+                vec!["iterations/iteration-206-*.md", "**/iteration-206-*.md"]
+            ),
             other @ IterationGlobs::Outcome(_) => panic!("expected globs, got {other:?}"),
         }
     }
@@ -260,7 +270,28 @@ mod tests {
         let schema = schema_with_iteration(Some("iterations/iteration-{n}-{slug}.md"));
         let id = hyalo_core::iteration_id::parse_iteration_id("16b").unwrap();
         match resolve_iteration_globs(&schema, &id, Format::Text) {
-            IterationGlobs::Globs(g) => assert_eq!(g, vec!["iterations/iteration-16b-*.md"]),
+            IterationGlobs::Globs(g) => assert_eq!(
+                g,
+                vec!["iterations/iteration-16b-*.md", "**/iteration-16b-*.md"]
+            ),
+            other @ IterationGlobs::Outcome(_) => panic!("expected globs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolves_bare_integer_with_padded_and_recursive_fallbacks() {
+        let schema = schema_with_iteration(Some("iterations/iteration-{n}-{slug}.md"));
+        let id = hyalo_core::iteration_id::parse_iteration_id("2").unwrap();
+        match resolve_iteration_globs(&schema, &id, Format::Text) {
+            IterationGlobs::Globs(g) => assert_eq!(
+                g,
+                vec![
+                    "iterations/iteration-2-*.md",
+                    "iterations/iteration-02-*.md",
+                    "**/iteration-2-*.md",
+                    "**/iteration-02-*.md"
+                ]
+            ),
             other @ IterationGlobs::Outcome(_) => panic!("expected globs, got {other:?}"),
         }
     }
