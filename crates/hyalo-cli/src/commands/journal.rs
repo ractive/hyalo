@@ -141,6 +141,20 @@ impl<'a> MutationJournal<'a> {
         Ok(())
     }
 
+    /// Like [`Self::add_entry`], but also registers the file's outbound
+    /// links in the persisted [`LinkGraph`] — entry and graph both current.
+    ///
+    /// BUG-1 (iter-243): used by the `links` heal pass to upsert files the
+    /// snapshot never knew, so the discovery pass reads exactly the links a
+    /// disk scan would find.
+    pub fn add_entry_with_links(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
+        if let Some(idx) = self.index.as_mut() {
+            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
+            self.dirty = true;
+        }
+        Ok(())
+    }
+
     /// Record a file move/rename (the `mv` write path).
     ///
     /// Moves the entry (re-scanning the moved file at its new path),
@@ -161,8 +175,12 @@ impl<'a> MutationJournal<'a> {
 
         // 1. Move the entry: remove old key, re-scan the moved file, insert
         //    under new key (single path-index rebuild via rename_entry).
+        //    BUG-1 (iter-243): a file the index never knew (created by an
+        //    editor before any create-index saw it) must not silently vanish
+        //    from the index by this move — upsert it at the new path, entry
+        //    and link graph, like every other mutating write path.
         if !idx.rename_entry(dir, old_rel, new_rel)? {
-            return Ok(());
+            idx.insert_or_replace_entry_with_links(&dir.join(new_rel), new_rel)?;
         }
 
         // 2. Re-scan each file that had links rewritten. The moved file

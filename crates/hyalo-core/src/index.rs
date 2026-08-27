@@ -1230,6 +1230,36 @@ pub fn files_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<S
     stale
 }
 
+/// Files present under `dir` (per [`crate::discovery::discover_files`]) but
+/// absent from `index` — files created outside hyalo after the last
+/// `create-index`.
+///
+/// BUG-1 (iter-243): a mutating command under `--index` can write such a
+/// file, and read paths that resolve links through the snapshot would never
+/// see it. Discovery is the same directory walk the disk scan uses, so the
+/// result is exactly what a scan would have found.
+#[must_use]
+pub fn files_missing_from_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
+    let Ok(files) = crate::discovery::discover_files(dir) else {
+        return Vec::new();
+    };
+    files
+        .into_iter()
+        .filter_map(|f| {
+            let rel = f
+                .strip_prefix(dir)
+                .unwrap_or(&f)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if index.get(&rel).is_some() {
+                None
+            } else {
+                Some(rel)
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod iso_tests {
     use super::*;
@@ -1576,15 +1606,16 @@ impl FileVisitor for BodyCollector {
         self.active
     }
 
-    fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
-        if !self.buf.is_empty() {
-            self.buf.push('\n');
-        }
-        self.buf.push_str(raw);
-        ScanAction::Continue
-    }
-
-    fn on_code_block_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
+    /// BUG-4 (iter-243): collect **every** body-region line raw — including
+    /// code-fence delimiters (` ```rust `) and `%%` comment-fence lines — so
+    /// the accumulated body is byte-for-byte the lines
+    /// [`crate::frontmatter::body_only`] contains, and `create-index`
+    /// tokenization is indistinguishable from the disk-scan corpus builder
+    /// in `find` (which tokenizes `body_only`). The previous pair of
+    /// `on_body_line`/`on_code_block_line` callbacks silently dropped the
+    /// fence delimiters and comment lines, drifting avgdl/df between the
+    /// `--index` and disk paths (dogfood v0.20.0 BUG-4).
+    fn on_raw_body_line(&mut self, raw: &str, _line_num: usize) -> ScanAction {
         if !self.buf.is_empty() {
             self.buf.push('\n');
         }
@@ -1737,6 +1768,87 @@ See [[a]] for details.
             (tmp.path().join("b.md"), "b.md".to_owned()),
         ];
         (tmp, files)
+    }
+
+    /// BUG-4 (iter-243): `create-index`'s BM25 tokenization and the disk-scan
+    /// corpus builder in `find` (which tokenizes `frontmatter::body_only`)
+    /// must produce identical token streams — the raw body collected during
+    /// the scan pass must contain exactly the lines `body_only` does,
+    /// including code-fence delimiter lines and `%%` comment lines.
+    #[test]
+    fn bm25_tokens_match_body_only_tokenization() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = "tricky.md";
+        let content = md!(r"
+---
+title: Tricky
+---
+# Tricky
+
+Text with a fenced block below.
+
+```rust
+fn main() {}
+```
+
+%% hidden comment %%
+
+<!-- html comment -->
+
+Plain prose ends here.
+");
+        let full = tmp.path().join(rel);
+        fs::write(&full, content).unwrap();
+
+        let (entry, _) = scan_one_file(&full, rel, true, true, None, &[]).unwrap();
+        let indexed = entry.bm25_tokens.clone().unwrap();
+
+        let title = entry
+            .properties
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .unwrap_or_default();
+        let body = crate::frontmatter::body_only(content).to_owned();
+        let disk = crate::bm25::tokenize_document(crate::bm25::DocumentInput {
+            rel_path: rel.to_owned(),
+            title,
+            body,
+            language: crate::bm25::resolve_language(None, None, None),
+        })
+        .tokens;
+
+        assert_eq!(
+            indexed, disk,
+            "create-index tokens and body_only tokenization must agree"
+        );
+    }
+
+    /// BUG-1 (iter-243): files present on disk but absent from the snapshot
+    /// must be reported so callers can upsert them.
+    #[test]
+    fn files_missing_from_snapshot_reports_unindexed_files() {
+        let (tmp, files) = setup_vault();
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let snap_path = tmp.path().join(".snap");
+        SnapshotIndex::save(&build.index, &snap_path, "/vault", None, None).unwrap();
+        let snap = SnapshotIndex::load(&snap_path).unwrap().unwrap();
+
+        assert!(files_missing_from_snapshot(&snap, tmp.path()).is_empty());
+
+        fs::write(tmp.path().join("c.md"), "---\ntitle: C\n---\n\n# C\n").unwrap();
+        let missing = files_missing_from_snapshot(&snap, tmp.path());
+        assert_eq!(missing, vec!["c.md".to_owned()]);
     }
 
     #[test]

@@ -479,7 +479,12 @@ pub fn links_fix(
         "ignored": ignored_count,
         "fixes": certain_fixes,
         "unfixable_links": unfixable_links,
-        "applied": !dry_run,
+        "applied": !dry_run && !applied_fixes.is_empty(),
+        // BUG-2 (iter-243): `applied` means "something was actually written",
+        // not "apply mode was requested" — an agent reading `applied: true`
+        // next to `fixes: 0` misread the old meaning and concluded the vault
+        // was repaired. Apply mode is reported by `dry_run: false`; whether
+        // any fix landed is `applied` (and `applied_fixes` lists them).
         // iter-216 D-4: every other mutating command reports `dry_run`, and a
         // caller that switches between `links fix`, `links auto` and `set`
         // should not have to know that this one spells it `applied` inverted.
@@ -1739,6 +1744,14 @@ pub(crate) fn run(
     let stale_index_files = snapshot_index.as_ref().map_or_else(Vec::new, |idx| {
         hyalo_core::index::files_modified_since_snapshot(idx, dir)
     });
+    // BUG-1 (iter-243): files created outside hyalo since the last
+    // `create-index` are invisible to every link query resolved through the
+    // snapshot — including this command's own discovery pass. Upsert them
+    // (entry + link graph) so `links fix --index` sees exactly the broken
+    // links a disk scan would.
+    let missing_index_files = snapshot_index.as_ref().map_or_else(Vec::new, |idx| {
+        hyalo_core::index::files_missing_from_snapshot(idx, dir)
+    });
     if !stale_index_files.is_empty() {
         let n = stale_index_files.len();
         let plural = if n == 1 { "file" } else { "files" };
@@ -1759,9 +1772,27 @@ pub(crate) fn run(
              (e.g. {}); {tail}",
             stale_index_files[0]
         ));
+    }
+    if !stale_index_files.is_empty() || !missing_index_files.is_empty() {
+        let apply_run = matches!(
+            action,
+            Some(LinksAction::Fix { apply: true, .. } | LinksAction::Auto { apply: true, .. })
+        );
         let mut journal =
             crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
         journal.rescan_modified(dir, &stale_index_files)?;
+        if !missing_index_files.is_empty() {
+            let m = missing_index_files.len();
+            let mplural = if m == 1 { "file" } else { "files" };
+            crate::warn::warn(format!(
+                "index is missing {m} {mplural} created outside hyalo \
+                 (e.g. {}); adding {mplural} from disk",
+                missing_index_files[0]
+            ));
+            for rel in &missing_index_files {
+                journal.add_entry_with_links(&dir.join(rel), rel)?;
+            }
+        }
         // Persist the refreshed entries only when this run already writes
         // (apply mode); a dry run leaves the snapshot file untouched.
         if apply_run {

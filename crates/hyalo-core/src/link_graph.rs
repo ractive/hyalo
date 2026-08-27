@@ -266,6 +266,15 @@ impl LinkGraph {
                 break;
             }
         }
+        // BUG-5 (iter-243): deterministic order on every path — the graph's
+        // insertion order depends on which entries a mutation journal
+        // refresh happened to rewrite, so an `--index` run and a disk scan
+        // of the same vault could list the same backlinks in a different
+        // order. Sort by (source, line) so both paths are byte-identical
+        // and stable across refreshes.
+        results.sort_by(|a, b| {
+            (&a.source, a.line, &a.link.target).cmp(&(&b.source, b.line, &b.link.target))
+        });
         results
     }
 
@@ -298,6 +307,11 @@ impl LinkGraph {
             results.extend(entries);
         }
 
+        // BUG-5 (iter-243): same deterministic (source, line) order as
+        // [`backlinks_ci`] — see the comment there.
+        results.sort_by(|a, b| {
+            (&a.source, a.line, &a.link.target).cmp(&(&b.source, b.line, &b.link.target))
+        });
         results
     }
 
@@ -912,6 +926,51 @@ mod tests {
     use super::*;
     use std::fmt::Write as _;
     use std::fs;
+
+    /// BUG-5 (iter-243): backlinks must come back sorted by (source, line)
+    /// regardless of the graph's insertion order, so an index refreshed by
+    /// a mutation journal and a fresh disk scan produce identical listings.
+    #[test]
+    fn backlinks_sorted_by_source_then_line() {
+        let vault = create_vault(&[
+            ("target.md", "# Target\n"),
+            ("z.md", "See [[target]] first\n\nAlso [[target]] again\n"),
+            ("a.md", "See [[target]]\n"),
+            ("m.md", "See [[target]] twice\n\nAnd [[target]] here\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        let entries: Vec<(String, usize)> = graph
+            .backlinks("target")
+            .iter()
+            .map(|e| (e.source.to_string_lossy().replace('\\', "/"), e.line))
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("a.md".to_string(), 1),
+                ("m.md".to_string(), 1),
+                ("m.md".to_string(), 3),
+                ("z.md".to_string(), 1),
+                ("z.md".to_string(), 3),
+            ]
+        );
+    }
+
+    #[test]
+    fn backlinks_ci_sorted_by_source_then_line() {
+        let vault = create_vault(&[
+            ("Target.md", "# Target\n"),
+            ("z.md", "See [[target]]\n"),
+            ("a.md", "See [[TARGET]]\n"),
+        ]);
+        let graph = LinkGraph::build(vault.path(), None, None).unwrap().graph;
+        let sources: Vec<String> = graph
+            .backlinks_ci("target")
+            .iter()
+            .map(|e| e.source.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(sources, vec!["a.md", "z.md"]);
+    }
 
     fn create_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
