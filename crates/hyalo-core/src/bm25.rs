@@ -673,6 +673,55 @@ impl Bm25InvertedIndex {
         self.ranked_matches(query, stemmer)
     }
 
+    /// Reconstruct every document's full ordered token list from postings.
+    ///
+    /// The snapshot format strips per-entry `bm25_tokens` when a persisted
+    /// inverted index is present (roughly halves snapshot size), so a loaded
+    /// snapshot's entries carry no tokens — yet a mutation wave must be able
+    /// to rebuild the inverted index without re-reading the whole vault from
+    /// disk (BUG-4, iter-244). Postings store, per (term, doc), the position
+    /// of every occurrence, which is exactly enough to invert back to the
+    /// original ordered token list.
+    ///
+    /// One pass over all postings: O(total postings), no per-document scans.
+    #[must_use]
+    pub fn reconstruct_all_tokens(&self) -> std::collections::HashMap<&str, Vec<String>> {
+        use std::collections::HashMap;
+
+        let mut by_doc: HashMap<u32, Vec<(u32, &str)>> = HashMap::new();
+        for (term, posts) in &self.postings {
+            for p in posts {
+                if !p.positions.is_empty() {
+                    let entry = by_doc.entry(p.doc_id).or_default();
+                    for &pos in &p.positions {
+                        entry.push((pos, term.as_str()));
+                    }
+                }
+            }
+        }
+
+        let mut out: HashMap<&str, Vec<String>> = HashMap::with_capacity(self.doc_paths.len());
+        for (doc_id, path) in self.doc_paths.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let doc_id = doc_id as u32;
+            // Each (position, term) pair is unique per doc: a posting pushes
+            // one pair per occurrence, and positions within a posting list are
+            // strictly increasing, so two postings for the same doc can never
+            // claim the same position. A stable sort by position therefore
+            // restores the original token order exactly.
+            if let Some(mut parts) = by_doc.remove(&doc_id) {
+                parts.sort_unstable_by_key(|&(pos, _)| pos);
+                out.insert(
+                    path.as_str(),
+                    parts.into_iter().map(|(_, t)| t.to_owned()).collect(),
+                );
+            } else {
+                out.insert(path.as_str(), Vec::new());
+            }
+        }
+        out
+    }
+
     /// Returns the total number of documents in the index.
     pub fn doc_count(&self) -> usize {
         self.doc_paths.len()
@@ -862,10 +911,17 @@ impl Bm25InvertedIndex {
             })
             .collect();
 
+        // Sort by score (desc), then by rel_path (asc) so ties are broken
+        // deterministically: scores are accumulated through a HashMap, so an
+        // unstable score-only sort would order equal-scoring documents by
+        // HashMap iteration order — different between a persisted index and a
+        // fresh disk build, breaking `--index`/disk output parity (BUG-4,
+        // iter-244).
         matches.sort_unstable_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.rel_path.cmp(&b.rel_path))
         });
         matches
     }
@@ -965,6 +1021,84 @@ pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BUG-4 (iter-244): token lists reconstructed from postings must be
+    /// identical to the tokens that built the index — snapshot entries have
+    /// their `bm25_tokens` stripped at write time, so a post-mutation rebuild
+    /// inverts the postings back into tokens for every untouched entry.
+    #[test]
+    fn reconstruct_all_tokens_round_trips_build_inputs() {
+        let docs = vec![
+            PreTokenizedInput {
+                rel_path: "a.md".to_owned(),
+                tokens: vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()],
+            },
+            PreTokenizedInput {
+                rel_path: "b.md".to_owned(),
+                tokens: vec!["beta".to_owned()],
+            },
+            PreTokenizedInput {
+                rel_path: "empty.md".to_owned(),
+                tokens: vec![],
+            },
+        ];
+        let index = Bm25InvertedIndex::build_from_tokens(docs);
+        let reconstructed = index.reconstruct_all_tokens();
+        assert_eq!(reconstructed.len(), 3);
+        assert_eq!(
+            reconstructed.get("a.md").unwrap(),
+            &vec!["alpha".to_owned(), "beta".to_owned(), "alpha".to_owned()]
+        );
+        assert_eq!(reconstructed.get("b.md").unwrap(), &vec!["beta".to_owned()]);
+        assert_eq!(
+            reconstructed.get("empty.md").unwrap(),
+            &Vec::<String>::new()
+        );
+    }
+
+    /// Scores must be identical between an index built from the original
+    /// token lists and one rebuilt from postings-reconstructed tokens.
+    #[test]
+    fn scores_unchanged_after_postings_reconstruction() {
+        let docs = vec![
+            PreTokenizedInput {
+                rel_path: "a.md".to_owned(),
+                tokens: vec!["rust".to_owned(), "memory".to_owned(), "rust".to_owned()],
+            },
+            PreTokenizedInput {
+                rel_path: "b.md".to_owned(),
+                tokens: vec!["rust".to_owned(), "rust".to_owned(), "rust".to_owned()],
+            },
+            PreTokenizedInput {
+                rel_path: "c.md".to_owned(),
+                tokens: vec!["memory".to_owned()],
+            },
+        ];
+        let original = Bm25InvertedIndex::build_from_tokens(docs);
+        let reconstructed_tokens = original.reconstruct_all_tokens();
+        let rebuilt_docs: Vec<PreTokenizedInput> = ["a.md", "b.md", "c.md"]
+            .into_iter()
+            .map(|p| PreTokenizedInput {
+                rel_path: p.to_owned(),
+                tokens: reconstructed_tokens.get(p).unwrap().clone(),
+            })
+            .collect();
+        let rebuilt = Bm25InvertedIndex::build_from_tokens(rebuilt_docs);
+
+        let stemmer = make_stemmer(StemLanguage::English);
+        let s1 = original.score("rust OR memory", &stemmer);
+        let s2 = rebuilt.score("rust OR memory", &stemmer);
+        let to_pairs = |v: Vec<Bm25Match>| {
+            v.into_iter()
+                .map(|m| (m.rel_path, m.score))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            to_pairs(s1),
+            to_pairs(s2),
+            "scores must be identical after reconstruction"
+        );
+    }
 
     fn make_stemmer(lang: StemLanguage) -> Stemmer {
         Stemmer::create(lang.to_algorithm())

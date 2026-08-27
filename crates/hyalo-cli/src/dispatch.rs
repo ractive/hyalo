@@ -159,6 +159,11 @@ pub(crate) struct CommandContext<'a> {
     pub md_lint: &'a hyalo_mdlint::LintConfig,
     /// Case-insensitive link resolution mode from `[links] case_insensitive`.
     pub case_insensitive_mode: CaseInsensitiveMode,
+    /// `[links.case_insensitive] resolve` OR the `links fix
+    /// --case-insensitive` flag (UX-6, iter-244): treat case-fold-resolving
+    /// link targets as resolved rather than fixable, so `links fix` offers
+    /// no `link-case-mismatch` rewrites for MDN-style case-folded vaults.
+    pub case_insensitive_resolve: bool,
     /// Persisted `hyalo links auto` exclusions and preference from
     /// `[links.auto]` in `.hyalo.toml` (iter-195a). Unioned with the CLI flags
     /// in the `links auto` dispatch arm.

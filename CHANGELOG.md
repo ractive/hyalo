@@ -9,7 +9,42 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Iteration 244 — index remaining deferrals.**
+  - **UX-3: nested dot-path property filters.** `--property 'a.b=v'` now
+    traverses nested YAML mappings (`contact.email=team@example.com`
+    matches `contact: {email: …}`) across `find` and every filter consumer;
+    a literal dotted key in a flat map still takes precedence over
+    traversal.
+  - **UX-6: case-insensitive link resolution mode.** `links fix
+    --case-insensitive` (or `[links.case_insensitive] resolve = true` in
+    `.hyalo.toml`) treats links that resolve only by case folding as
+    resolved rather than fixable, so MDN-style vaults with case-folded
+    directory layouts no longer offer a `link-case-mismatch` rewrite plan
+    per link in `links fix --dry-run`.
+
+### Changed
+
+- **pi package 0.1.1.** Root `package.json` and `pi-package/package.json`
+  bumped to 0.1.1 (DEC-101 version discipline for the root-manifest change
+  in PR #279), so `pi update --extensions` on a pinned git install can
+  observe a pushed change.
+
 ### Fixed
+
+- **BUG-4 (carry-over): post-mutation BM25 parity.** After a mutation wave
+  under `--index`, `find --index` scores are byte-identical to a disk scan
+  without an intervening `create-index`: incremental re-scans re-tokenize
+  bodies when the snapshot carries a BM25 index, and the journal flush
+  rebuilds the persisted inverted index from (re-scanned ∪
+  postings-reconstructed) tokens. BM25 result ordering is now deterministic
+  (ties broken by path) on both the index and disk paths.
+- **`new` link-graph upsert.** A file created by `hyalo new` now registers
+  its template's outgoing wikilinks (frontmatter link properties such as
+  `related`) in the persisted link graph, so `backlinks --index` sees them
+  without a full rebuild — the last mutating write path without the iter-243
+  upsert-with-links guarantee.
 
 - **Index/disk parity bugfix wave (iter-243, dogfood v0.20.0).** Four
   bugs with one theme — `--index` output must be indistinguishable from a

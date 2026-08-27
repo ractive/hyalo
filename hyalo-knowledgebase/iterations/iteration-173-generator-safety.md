@@ -117,7 +117,7 @@ adding it after the fact.
 - [x] `okf index --help` documents adopt/`--replace`/ignore; README OKF
   section updated; okf skill template's maintenance loop reflects adopt
   semantics
-- [ ] Retrospective task: adapt iteration-174/175 plans to what landed here
+- (deferred) Retrospective task: adapt iteration-174/175 plans to what landed here
   - [deferred — follow-up: iter-174]
 
 ## Acceptance criteria

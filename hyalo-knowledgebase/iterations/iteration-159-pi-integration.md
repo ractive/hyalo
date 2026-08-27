@@ -53,7 +53,7 @@ Add `--pi` flag to `hyalo init` command to install pi skill artifacts, mirroring
   - [x] Review diff for any issues
   - [x] Ensure all tests pass
 
-- [ ] Dogfood: Migrate personal pi skills from `~/.claude/skills/` to `~/.pi/skills/`:
+- [x] Dogfood: Migrate personal pi skills from `~/.claude/skills/` to `~/.pi/skills/`:
   - [x] Create `~/.pi/skills/create-pr/SKILL.md`
   - [x] Create `~/.pi/skills/merge-pr/SKILL.md`
   - [x] Create `~/.pi/skills/review-pr/SKILL.md`

@@ -46,6 +46,77 @@ mod tests {
         assert_scalar(&f, "status", FilterOp::Eq, Some("planned"));
     }
 
+    // ------------------------------------------------------------------
+    // UX-3 (iter-244): nested dot-path property filters
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn dot_path_eq_traverses_nested_map() {
+        let f = parse_property_filter("a.b=v").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        let mut inner = serde_json::Map::new();
+        inner.insert("b".to_owned(), serde_json::Value::String("v".to_owned()));
+        props.insert("a".to_owned(), serde_json::Value::Object(inner));
+        assert!(f.matches(&props));
+    }
+
+    #[test]
+    fn dot_path_eq_wrong_value_does_not_match() {
+        let f = parse_property_filter("a.b=v").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        let mut inner = serde_json::Map::new();
+        inner.insert("b".to_owned(), serde_json::Value::String("w".to_owned()));
+        props.insert("a".to_owned(), serde_json::Value::Object(inner));
+        assert!(!f.matches(&props));
+    }
+
+    #[test]
+    fn dot_path_literal_dotted_key_wins_over_traversal() {
+        // A flat map may genuinely contain a dotted key — the literal key is
+        // checked first, before any traversal.
+        let f = parse_property_filter("a.b=flat").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        props.insert(
+            "a.b".to_owned(),
+            serde_json::Value::String("flat".to_owned()),
+        );
+        assert!(f.matches(&props));
+    }
+
+    #[test]
+    fn dot_path_absent_matches_when_nested_key_missing() {
+        let f = parse_property_filter("!a.b").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        props.insert(
+            "a".to_owned(),
+            serde_json::Value::String("scalar".to_owned()),
+        );
+        assert!(f.matches(&props));
+    }
+
+    #[test]
+    fn dot_path_exists_and_regex_traverse() {
+        let f = parse_property_filter("a.b").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        let mut inner = serde_json::Map::new();
+        inner.insert("b".to_owned(), serde_json::Value::String("x".to_owned()));
+        props.insert("a".to_owned(), serde_json::Value::Object(inner));
+        assert!(f.matches(&props));
+
+        let r = parse_property_filter("a.b~=^x$").unwrap();
+        assert!(r.matches(&props));
+    }
+
+    #[test]
+    fn dot_path_missing_segment_fails_scalar_filter() {
+        let f = parse_property_filter("a.c=v").unwrap();
+        let mut props = indexmap::IndexMap::new();
+        let mut inner = serde_json::Map::new();
+        inner.insert("b".to_owned(), serde_json::Value::String("v".to_owned()));
+        props.insert("a".to_owned(), serde_json::Value::Object(inner));
+        assert!(!f.matches(&props));
+    }
+
     #[test]
     fn parse_not_eq() {
         let f = parse_property_filter("status!=superseded").unwrap();

@@ -2304,6 +2304,18 @@ pub(crate) enum LinksAction {
         /// whole vault and does not require the full path.
         #[arg(long)]
         expand_short_form: bool,
+        /// Treat links that resolve only by case folding as resolved rather
+        /// than fixable (UX-6, iter-244).
+        ///
+        /// On case-folded vault layouts (MDN-style `en-US` vs `en-us`
+        /// directories on macOS/Windows), a plain `links fix --dry-run`
+        /// offers a `link-case-mismatch` rewrite plan for every such link —
+        /// tens of thousands of no-op rewrites on a large checkout. With
+        /// this flag those links count as resolved and the report comes back
+        /// clean. Same effect persistently via
+        /// `[links.case_insensitive] resolve = true` in `.hyalo.toml`.
+        #[arg(long)]
+        case_insensitive: bool,
         #[command(flatten)]
         index_flags: IndexFlags,
     },

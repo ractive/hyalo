@@ -392,6 +392,60 @@ impl SnapshotIndex {
         })
     }
 
+    /// BM25 scan arguments for an incremental re-scan of `rel_path` (BUG-4,
+    /// iter-244).
+    ///
+    /// When the snapshot carries a persisted BM25 inverted index, a re-scanned
+    /// entry must come back with fresh `bm25_tokens` — otherwise a mutation
+    /// wave leaves the inverted index rebuilt from stale tokens and
+    /// `find --index` scores drift from a disk scan. The previous entry's
+    /// `bm25_language` is passed as the scan's default language so an
+    /// unchanged language config keeps producing identical tokens (frontmatter
+    /// `language` still wins inside [`scan_one_file`]).
+    fn bm25_scan_args(&self, rel_path: &str) -> (bool, Option<String>) {
+        (
+            self.bm25_index.is_some(),
+            self.path_index
+                .get(rel_path)
+                .and_then(|&i| self.entries[i].bm25_language.clone()),
+        )
+    }
+
+    /// Rebuild the persisted BM25 inverted index from the current entries
+    /// (BUG-4, iter-244). No-op when this snapshot has no BM25 index.
+    ///
+    /// Entries mutated since load carry fresh `bm25_tokens` (incremental
+    /// re-scans tokenize when a BM25 index is present). Entries the mutation
+    /// wave never touched had their tokens stripped at snapshot-write time —
+    /// their tokens are reconstructed from the *old* inverted index's
+    /// postings, which is exactly what a no-change rebuild would produce.
+    ///
+    /// Call once after a mutation wave, before [`Self::save_to`], so corpus
+    /// statistics (N, per-term df, avgdl, doc lengths) match a fresh
+    /// `create-index` build and `find --index` scores stay byte-identical to
+    /// a disk scan without an intervening rebuild.
+    pub fn rebuild_bm25_index(&mut self) {
+        let Some(old) = self.bm25_index.as_ref() else {
+            return;
+        };
+        let reconstructed = old.reconstruct_all_tokens();
+        let docs: Vec<crate::bm25::PreTokenizedInput> = self
+            .entries
+            .iter()
+            .filter_map(|e| {
+                let tokens = e
+                    .bm25_tokens
+                    .clone()
+                    .or_else(|| reconstructed.get(e.rel_path.as_str()).cloned())?;
+                Some(crate::bm25::PreTokenizedInput {
+                    rel_path: e.rel_path.clone(),
+                    tokens,
+                })
+            })
+            .collect();
+        self.bm25_index = Some(crate::bm25::Bm25InvertedIndex::build_from_tokens(docs));
+    }
+
     /// Re-scan a single file and replace its index entry.
     ///
     /// Returns the `FileLinks` for the re-scanned file so the caller can
@@ -410,7 +464,15 @@ impl SnapshotIndex {
             return Ok(None);
         };
         let fm_props = self.effective_frontmatter_link_props();
-        let (entry, file_links) = scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+        let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
+        let (entry, file_links) = scan_one_file(
+            full_path,
+            rel_path,
+            true,
+            bm25_tokenize,
+            default_language.as_deref(),
+            &fm_props,
+        )?;
         self.entries[idx] = entry;
         Ok(file_links)
     }
@@ -438,9 +500,9 @@ impl SnapshotIndex {
     /// `properties`, `tags`, and `modified` are left untouched — callers that
     /// already know the new values in memory (e.g. `set`/`append`/`remove`)
     /// should patch those directly, since they don't require a disk read.
-    /// `bm25_tokens`/`bm25_language` are also left untouched: those are only
-    /// populated by `create-index --bm25` and this incremental refresh never
-    /// re-tokenizes the body.
+    /// `bm25_tokens`/`bm25_language` are refreshed from the re-scan when the
+    /// snapshot carries a BM25 inverted index (BUG-4, iter-244); without one
+    /// they stay untouched, as only `create-index --bm25` populates them.
     ///
     /// This closes the gap where a frontmatter link property (`related`,
     /// `depends-on`, ...) mutated via `set`/`append`/`remove`/`lint --fix`
@@ -455,13 +517,27 @@ impl SnapshotIndex {
             return Ok(false);
         };
         let fm_props = self.effective_frontmatter_link_props();
-        let (scanned, file_links) =
-            scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+        let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
+        let (scanned, file_links) = scan_one_file(
+            full_path,
+            rel_path,
+            true,
+            bm25_tokenize,
+            default_language.as_deref(),
+            &fm_props,
+        )?;
 
         let entry = &mut self.entries[idx];
         entry.sections = scanned.sections;
         entry.tasks = scanned.tasks;
         entry.links = scanned.links;
+        // BUG-4 (iter-244): keep BM25 tokens current alongside the body so a
+        // post-mutation rebuild of the inverted index scores this file as a
+        // fresh disk scan would. Only touched when the snapshot is a BM25
+        // snapshot (`scan_one_file` returns `None` otherwise).
+        entry.bm25_tokens = scanned.bm25_tokens;
+        entry.bm25_language = scanned.bm25_language;
+        entry.bm25_tokenizer_version = scanned.bm25_tokenizer_version;
 
         self.graph.remove_source(rel_path);
         if let Some(fl) = file_links {
@@ -529,7 +605,15 @@ impl SnapshotIndex {
         rel_path: &str,
     ) -> Result<Option<FileLinks>> {
         let fm_props = self.effective_frontmatter_link_props();
-        let (entry, file_links) = scan_one_file(full_path, rel_path, true, false, None, &fm_props)?;
+        let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
+        let (entry, file_links) = scan_one_file(
+            full_path,
+            rel_path,
+            true,
+            bm25_tokenize,
+            default_language.as_deref(),
+            &fm_props,
+        )?;
         if let Some(&idx) = self.path_index.get(rel_path) {
             self.entries[idx] = entry;
         } else {
@@ -550,13 +634,15 @@ impl SnapshotIndex {
     /// snapshot index sees the file without a full rebuild. When `rel_path` is
     /// already present, the existing entry is replaced in-place (idempotent).
     ///
-    /// The link graph and persisted BM25 inverted index are **not** touched —
-    /// outbound links from the new file will only appear in backlink queries,
-    /// and the file body will only be returned for indexed text searches,
-    /// after the next full `create-index` rebuild. This matches the behaviour
-    /// of [`SnapshotIndex::refresh_entry`] and the other in-place mutation
-    /// helpers (set/append/lint --fix). Callers that need the link graph kept
-    /// current immediately should use
+    /// The link graph is **not** touched — outbound links from the new file
+    /// will only appear in backlink queries after the next full `create-index`
+    /// rebuild, or immediately when using
+    /// [`Self::insert_or_replace_entry_with_links`]. BM25 tokens are
+    /// re-scanned when the snapshot carries a BM25 inverted index (BUG-4,
+    /// iter-244), so a `new` file's body enters the rebuilt corpus statistics.
+    /// This matches the behaviour of [`SnapshotIndex::refresh_entry`] and the
+    /// other in-place mutation helpers (set/append/lint --fix). Callers that
+    /// need the link graph kept current immediately should use
     /// [`Self::insert_or_replace_entry_with_links`] instead.
     pub fn insert_or_replace_entry(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
         self.insert_or_replace_entry_impl(full_path, rel_path)?;
@@ -607,8 +693,15 @@ impl SnapshotIndex {
         // Scan first — if this fails, the index is left untouched.
         let full_path = dir.join(new_rel);
         let fm_props = self.effective_frontmatter_link_props();
-        let (entry, _file_links) =
-            scan_one_file(&full_path, new_rel, true, false, None, &fm_props)?;
+        let (bm25_tokenize, default_language) = self.bm25_scan_args(old_rel);
+        let (entry, _file_links) = scan_one_file(
+            &full_path,
+            new_rel,
+            true,
+            bm25_tokenize,
+            default_language.as_deref(),
+            &fm_props,
+        )?;
 
         // Remove without triggering a path-index rebuild.
         self.entries.remove(old_idx);

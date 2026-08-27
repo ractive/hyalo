@@ -98,7 +98,7 @@ Open questions to resolve at implementation time (not blocking the plan):
 - [x] `hyalo init --pi` update path: after installing the vendored copy,
       print the `pi install git:github.com/ractive/hyalo` hint (one line,
       only when `.pi/` is being created, not on every re-run).
-- [ ] End-to-end verify in a scratch checkout: `pi install
+- (deferred) End-to-end verify in a scratch checkout: `pi install
       git:github.com/ractive/hyalo` (or local path equivalent), confirm the
       `hyalo` tool registers, the lint guardrail fires, and `pi list` shows
       the package; then `pi update` picks up a pushed change.

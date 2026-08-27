@@ -1,7 +1,7 @@
 ---
 branch: iter-13/read-command
 date: 2026-03-22
-status: deferred
+status: completed
 tags:
 - iteration
 - cli

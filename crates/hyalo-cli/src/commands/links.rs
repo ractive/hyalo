@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::cli::args::LinksAction;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::CaseInsensitiveIndex;
+use hyalo_core::CaseInsensitiveMode;
 use hyalo_core::discovery;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_fix::{LinkMatcher, apply_fixes, detect_broken_links_from_index, plan_fixes};
@@ -138,9 +139,22 @@ pub fn links_fix(
     case_index: Option<&CaseInsensitiveIndex>,
     expand_short_form: bool,
     fuzzy: FuzzyApply,
+    case_insensitive_resolve: bool,
 ) -> Result<(CommandOutcome, Vec<String>, bool)> {
-    let report =
+    let mut report =
         detect_broken_links_from_index(dir, index, site_prefix, case_index, expand_short_form);
+
+    // UX-6 (iter-244): under case-insensitive resolution mode, links that
+    // resolve by case folding are *resolved* — the filesystem answers them,
+    // Obsidian/Hugo answer them, and only hyalo's canonical-casing check
+    // disagrees. Drain the whole case-mismatch bucket (path-casing fixes and
+    // short-form stem-casing fixes alike) so a case-folded MDN-style vault
+    // doesn't offer tens of thousands of rewrites for links that work.
+    // Every entry in `case_mismatches` is by construction a casing-only fix
+    // (relocations live in their own bucket and are kept).
+    if case_insensitive_resolve && !report.case_mismatches.is_empty() {
+        report.case_mismatches.clear();
+    }
 
     // NEW-9 (dogfood pre3): a `site_prefix` that demonstrably strips nothing
     // useful turns a misconfiguration into a wall of "broken" links with no
@@ -1810,6 +1824,7 @@ pub(crate) fn run(
         glob: vec![],
         ignore_target: vec![],
         expand_short_form: false,
+        case_insensitive: false,
         index_flags: IndexFlags::default(),
     }) {
         LinksAction::Fix {
@@ -1821,6 +1836,7 @@ pub(crate) fn run(
             glob,
             ignore_target,
             expand_short_form,
+            case_insensitive,
             index_flags: _, // consumed in run.rs before dispatch
         } => {
             // Scope the immutable borrow of snapshot_index (via resolve_index)
@@ -1842,12 +1858,20 @@ pub(crate) fn run(
             )? {
                 IndexResolution::Resolved(resolved) => {
                     // `links fix` is entirely about link resolution.
-                    let ci = maybe_case_index(
-                        ctx.case_insensitive_mode,
-                        dir,
-                        true,
-                        resolved.as_snapshot(),
-                    );
+                    // UX-6 (iter-244): the `--case-insensitive` flag is the
+                    // one-shot form of `[links.case_insensitive] resolve =
+                    // true`, which forces the fallback mode On — without
+                    // this, on a case-sensitive filesystem under `auto`, the
+                    // fallback stays off and case-fold-resolving links land
+                    // in the *broken* bucket, leaving the drain below a
+                    // silent no-op. Config `resolve = true` already implies
+                    // mode On via the sub-table parse.
+                    let ci_mode = if case_insensitive {
+                        CaseInsensitiveMode::On
+                    } else {
+                        ctx.case_insensitive_mode
+                    };
+                    let ci = maybe_case_index(ci_mode, dir, true, resolved.as_snapshot());
                     links_fix(
                         resolved.as_index(),
                         dir,
@@ -1864,6 +1888,7 @@ pub(crate) fn run(
                             min_confidence,
                             config_min_confidence: ctx.config_fuzzy_min_confidence,
                         },
+                        ctx.case_insensitive_resolve || case_insensitive,
                     )?
                 }
                 IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
