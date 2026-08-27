@@ -106,6 +106,7 @@ snapshot-index/MutationJournal stack from iters 226/241.
 - [[iterations/iteration-240-review-followups-bugfixes]]
 - [[iterations/iteration-241-stale-index-detection-and-ux-fixes]]
 - [[iterations/iteration-242-remove-iteration-flag]]
+- [[iterations/iteration-244-index-remaining-deferrals]]
 
 ## Outcome
 
@@ -143,3 +144,17 @@ byte-parity, BM25 byte-parity), plus core unit tests
 (`bm25_tokens_match_body_only_tokenization`,
 `files_missing_from_snapshot_reports_unindexed_files`,
 `backlinks_sorted_by_source_then_line`, `backlinks_ci_sorted_by_source_then_line`).
+
+## Carry-over
+
+Deferred to [[iterations/iteration-244-index-remaining-deferrals]]:
+
+- BUG-4 post-mutation BM25 drift (explicit timebox-out above — persisted
+  inverted index cannot be updated incrementally)
+- UX-3 (nested YAML dot-path filters) and UX-6 (MDN case-insensitive
+  resolve) — the two dogfood UX findings still parked
+- Review finding: `hyalo new` records the created file without
+  registering its outgoing links in the persisted graph (last write path
+  without the BUG-1 upsert-with-links guarantee)
+
+(UX-5 is moot — `--iteration` removed in iter-242 / DEC-242.)
