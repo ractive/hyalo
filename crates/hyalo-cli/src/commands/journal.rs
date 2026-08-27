@@ -160,8 +160,10 @@ impl<'a> MutationJournal<'a> {
     /// Moves the entry (re-scanning the moved file at its new path),
     /// re-scans every file whose links were rewritten by the move, and
     /// renames the link graph's path keys/sources — so backlink and link
-    /// queries stay accurate. No-op when no index is loaded or `old_rel`
-    /// was never indexed.
+    /// queries stay accurate. No-op when no index is loaded. When `old_rel`
+    /// was never indexed, the moved file is upserted at `new_rel` instead
+    /// (BUG-1, iter-243): the move must not make an index-unknown file
+    /// invisible.
     pub fn rename_entry(
         &mut self,
         dir: &Path,
