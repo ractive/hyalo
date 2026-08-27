@@ -67,14 +67,6 @@ impl Placeholder {
     }
 }
 
-/// Render a sequence number for an `{n}` / `{n:0W}` placeholder: zero-padded to
-/// `pad` digits (no padding when `pad == 0`). Reusable by callers that expand a
-/// template into a concrete filename (e.g. `hyalo new` auto-numbering).
-#[must_use]
-pub fn render_number(value: u64, pad: usize) -> String {
-    format!("{value:0pad$}")
-}
-
 /// A parsed filename template.
 #[derive(Debug, Clone)]
 pub struct FilenameTemplate {
@@ -347,14 +339,6 @@ mod tests {
         let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
         // The glob for a padded number is the same permissive digit-run form.
         assert_eq!(t.to_glob(), "decisions/[0-9][0-9]*-*.md");
-    }
-
-    #[test]
-    fn render_number_zero_pads() {
-        assert_eq!(render_number(1, 4), "0001");
-        assert_eq!(render_number(42, 4), "0042");
-        assert_eq!(render_number(12345, 4), "12345");
-        assert_eq!(render_number(7, 0), "7");
     }
 
     #[test]

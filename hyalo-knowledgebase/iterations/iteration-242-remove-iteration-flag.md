@@ -40,9 +40,9 @@ globbing sequence-keyed files directly (`--glob '**/iteration-02-*.md'`).
 
 - [ ] `hyalo find --iteration 206` fails with clap's "unexpected argument"
       error on every command that had the flag
-- [ ] `hyalo read --glob 'iterations/iteration-206-*.md'` and
-      `find --glob '**/iteration-02-*.md'` are the documented replacement
-      and work
+- [ ] The documented replacement works: `hyalo find --glob '**/iteration-02-*.md'
+      --filenames-only` resolves the file, then `hyalo read --file <path>` (or a
+      positional path) reads it
 - [ ] No `--iteration` string remains in help text, README, COMMAND
       REFERENCE, skills, or the pi package
 
