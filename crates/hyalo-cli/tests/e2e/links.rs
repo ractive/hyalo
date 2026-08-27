@@ -956,6 +956,42 @@ fn links_fix_text_format() {
     );
 }
 
+/// BUG-2 (review of iter-225/226): `links fix --apply` reported "Applied: yes"
+/// even when zero fixes were actually written — `applied` is documented
+/// (iter-216 D-4) to mean "apply mode was used", not "something landed on
+/// disk", but the text output didn't say so. `setup_vault`'s only fixable
+/// link (d.md's fuzzy match) is excluded from a plain `--apply` (no
+/// `--apply-fuzzy`/`--min-confidence`), so this run applies 0 fixes — the
+/// text must make that explicit rather than reading as a false "it worked".
+#[test]
+fn links_fix_apply_with_zero_fixes_reports_fix_count() {
+    let tmp = setup_vault();
+    let output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path()
+                .to_str()
+                .expect("temp path should be valid UTF-8"),
+            "links",
+            "fix",
+            "--apply",
+            "--format",
+            "text",
+        ])
+        .output()
+        .expect("hyalo links fix --apply --format text should run");
+    assert!(
+        output.status.success(),
+        "links fix --apply exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).expect("stdout should be valid UTF-8");
+    assert!(
+        text.contains("Applied: yes (0 fixes)"),
+        "an --apply run with zero fixes must not read as a plain 'Applied: yes' — got:\n{text}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // links fix: threshold controls fuzzy matching
 // ---------------------------------------------------------------------------

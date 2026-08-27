@@ -667,7 +667,7 @@ pub(crate) fn run(
                 let configured_dir = ctx.configured_dir_str;
                 // iter-238: `--iteration <ID>` support (single-file command).
                 let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    &selection,
+                    selection,
                     dir,
                     ctx.schema,
                     effective_format,
@@ -729,7 +729,7 @@ pub(crate) fn run(
                 // iter-238: `--iteration <ID>` support — resolves to exactly
                 // one file, which then takes the single-file path below.
                 let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    &selection,
+                    selection,
                     dir,
                     ctx.schema,
                     effective_format,
@@ -845,7 +845,7 @@ pub(crate) fn run(
                 // iter-238: `--iteration <ID>` support — resolves to exactly
                 // one file, which then takes the single-file path below.
                 let selection = match crate::commands::iteration::selection_with_iteration_resolved(
-                    &selection,
+                    selection,
                     dir,
                     ctx.schema,
                     effective_format,

@@ -25,3 +25,5 @@ jobs:
         run: cargo run -p xtask -- check-command-reference
       - name: Check bundled skills pass the skills profile
         run: cargo run -p xtask -- check-bundled-skills
+      - name: Check mutating commands go through MutationJournal
+        run: cargo run -p xtask -- check-mutation-journal

@@ -38,7 +38,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use hyalo_core::filter::extract_tags;
-use hyalo_core::index::{SnapshotIndex, format_modified};
+use hyalo_core::index::{SnapshotIndex, VaultIndex as _, format_modified};
 use hyalo_core::types::TaskInfo;
 
 /// Owns index maintenance for one mutating command invocation.
@@ -101,25 +101,30 @@ impl<'a> MutationJournal<'a> {
     /// `depends-on`, …) feed the graph, so a property mutation can change
     /// outbound edges.
     ///
-    /// No-op when no index is loaded or the entry is not present (e.g. a
-    /// newly created file that has not been indexed yet — use
-    /// [`Self::add_entry`] for those).
+    /// Upserts: if `rel_path` is not yet present (a file created outside
+    /// `hyalo new`, or on disk before the index was built), it is inserted
+    /// from a fresh disk scan rather than silently dropped — a mutation
+    /// under `--index` must never leave the index missing the file it just
+    /// wrote. No-op only when no index is loaded at all.
     pub fn update_entry(
         &mut self,
         rel_path: &str,
         props: IndexMap<String, Value>,
         full_path: &Path,
     ) -> Result<()> {
-        if let Some(idx) = self.index.as_mut()
-            && let Some(entry) = idx.get_mut(rel_path)
-        {
+        let Some(idx) = self.index.as_mut() else {
+            return Ok(());
+        };
+        if let Some(entry) = idx.get_mut(rel_path) {
             let new_tags = extract_tags(&props);
             entry.properties = props;
             entry.tags = new_tags;
             entry.modified = format_modified(full_path)?;
             idx.refresh_links(full_path, rel_path)?;
-            self.dirty = true;
+        } else {
+            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
         }
+        self.dirty = true;
         Ok(())
     }
 
@@ -185,11 +190,22 @@ impl<'a> MutationJournal<'a> {
     /// rescan is needed. Batched: nothing is written to disk until
     /// [`Self::flush`], so a multi-file toggle saves once.
     ///
-    /// No-op when no index is loaded or the entry is not present.
+    /// Upserts: if `rel_path` is not yet present, the write this method
+    /// records has already landed on disk (callers invoke this after
+    /// `toggle_tasks`/`set_tasks_status`), so a fresh disk scan already
+    /// reflects the post-toggle state — insert it and register its links
+    /// rather than dropping the mutation. No-op only when no index is
+    /// loaded at all.
     pub fn update_task(&mut self, full_path: &Path, rel_path: &str, info: &TaskInfo) -> Result<()> {
-        if let Some(idx) = self.index.as_mut()
-            && let Some(entry) = idx.get_mut(rel_path)
-        {
+        let Some(idx) = self.index.as_mut() else {
+            return Ok(());
+        };
+        if idx.get(rel_path).is_none() {
+            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
+            self.dirty = true;
+            return Ok(());
+        }
+        if let Some(entry) = idx.get_mut(rel_path) {
             if let Some(task) = entry.tasks.iter_mut().find(|t| t.line == info.line) {
                 task.status = info.status;
                 task.done = info.done;
@@ -231,6 +247,9 @@ impl<'a> MutationJournal<'a> {
     /// link graph's outbound edges. Files that fail to rescan produce a
     /// warning and are skipped (best-effort, matching the pre-journal
     /// behaviour). No-op when no index is loaded.
+    ///
+    /// Upserts: an entry not yet present is inserted from a fresh disk scan
+    /// (with link-graph registration) instead of being silently skipped.
     pub fn rescan_modified(&mut self, dir: &Path, modified_files: &[String]) -> Result<()> {
         if modified_files.is_empty() {
             return Ok(());
@@ -239,9 +258,13 @@ impl<'a> MutationJournal<'a> {
             return Ok(());
         };
         for rel in modified_files {
-            match idx.refresh_entry_and_links(dir, rel) {
-                Ok(true) => self.dirty = true,
-                Ok(false) => {} // not in index, nothing to update
+            let result = if idx.get(rel).is_some() {
+                idx.refresh_entry_and_links(dir, rel).map(|_| ())
+            } else {
+                idx.insert_or_replace_entry_with_links(&dir.join(rel), rel)
+            };
+            match result {
+                Ok(()) => self.dirty = true,
                 Err(e) => {
                     eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
                 }
@@ -267,7 +290,6 @@ impl<'a> MutationJournal<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyalo_core::index::VaultIndex as _;
     use std::fs;
 
     fn make_vault(dir: &Path, name: &str) -> String {

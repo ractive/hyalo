@@ -328,3 +328,82 @@ fn mutations_without_index_still_succeed() {
         .to_owned();
     assert!(output.status.success());
 }
+
+// ---------------------------------------------------------------------------
+// BUG-1: a mutation on a file the index has never seen must upsert it into
+// the persisted index (entry AND link graph) instead of silently dropping
+// the mutation. Repro: `create-index`, then create a new file afterwards
+// and mutate it with `--index` — the pre-fix journal only patched entries
+// that were already present, so `find --file ... --index` returned 0
+// results even though the on-disk file had just been written.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_upserts_unindexed_file_into_persisted_index() {
+    let tmp = setup();
+    create_index(&tmp);
+    // Created *after* create-index — the snapshot has never seen this file.
+    std::fs::write(
+        tmp.path().join("ext.md"),
+        "---\ntitle: External\nrelated: '[[beta]]'\n---\n\n# External\n",
+    )
+    .unwrap();
+    run(
+        &tmp,
+        &[
+            "set",
+            "--property",
+            "status=done",
+            "--file",
+            "ext.md",
+            "--index",
+        ],
+    );
+
+    let (_, json) = run(
+        &tmp,
+        &[
+            "find",
+            "--file",
+            "ext.md",
+            "--fields",
+            "properties",
+            "--index",
+        ],
+    );
+    assert_eq!(
+        json["total"],
+        serde_json::json!(1),
+        "ext.md was not upserted into the persisted index by `set --index`: {json}"
+    );
+    assert_eq!(
+        json["results"][0]["properties"]["status"],
+        serde_json::json!("done")
+    );
+    // The file's frontmatter `related` link must also be registered in the
+    // persisted link graph, not just the entry.
+    assert_backlink_sources(&tmp, "beta.md", &["ext.md"]);
+}
+
+#[test]
+fn task_toggle_upserts_unindexed_file_into_persisted_index() {
+    let tmp = setup();
+    create_index(&tmp);
+    // Created *after* create-index — the snapshot has never seen this file.
+    std::fs::write(
+        tmp.path().join("ext.md"),
+        "---\ntitle: External\n---\n\n# External\n\n- [ ] todo\n",
+    )
+    .unwrap();
+    run(&tmp, &["task", "toggle", "--file", "ext.md", "--all"]);
+
+    let (_, json) = run(
+        &tmp,
+        &["task", "read", "--file", "ext.md", "--all", "--index"],
+    );
+    assert_eq!(
+        json["results"]["done"],
+        serde_json::json!(true),
+        "ext.md's task was not upserted into the persisted index: {json}"
+    );
+}

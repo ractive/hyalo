@@ -62,7 +62,7 @@ pub use case_index::{
     CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled, sweep_stale_case_probes,
 };
 /// Common-word heuristic for `links auto` advisory notes.
-pub use common_words::{MIN_COMMON_WORD_LEN, is_common_word};
+pub use common_words::is_common_word;
 /// Vault-boundary file writing and refusal messaging (was `hyalo_core::fs_util`).
 pub use fs_util::{
     atomic_write_within, escaping_write_target, outside_vault_hint, outside_vault_message,
