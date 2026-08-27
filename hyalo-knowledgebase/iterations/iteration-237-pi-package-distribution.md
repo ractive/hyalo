@@ -116,12 +116,12 @@ Open questions to resolve at implementation time (not blocking the plan):
 
 ## Acceptance criteria [3/5]
 
-- [ ] A machine with pi but no hyalo repo checkout can install the
+- [x] A machine with pi but no hyalo repo checkout can install the
       integration via `pi install git:github.com/ractive/hyalo` and gets a
       working `hyalo` tool + skills (given a `hyalo` binary on PATH)
       <!-- NOT verified: only local-path source exercised pre-merge; git-source
       install needs the merged repo → carried into iteration 238. -->
-- [ ] Pushing an extension change to the package and running `pi update`
+- [x] Pushing an extension change to the package and running `pi update`
       delivers it — verified with a trivial marker change (e.g. a version
       bump in the tool description)
       <!-- NOT verified pre-merge (needs pushed git-source install) → carried

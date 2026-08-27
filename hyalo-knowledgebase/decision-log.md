@@ -2809,6 +2809,26 @@ Main-branch HEAD is acceptable as the ref for now; a tag strategy is a
 carry-over. Minimum-hyalo-version requirements are documented in
 `pi-package/README.md` (typed tools need ≥ 0.21).
 
+**Correction + tag strategy (resolved 2026-08-27, iter-239):** the original
+premise "a top-level `pi-package/` directory … is a valid pi package" was
+half right: pi only reads the **clone root** for a `package.json` manifest
+or convention directories, so the manifest at `pi-package/package.json` was
+invisible to `pi install git:…` — the package registered but loaded zero
+extensions/skills. Fixed with a root `package.json` manifest pointing into
+`pi-package/` (single source of truth unchanged, verified live: all five
+tools + skills load from the global git install, and a pushed change was
+delivered by `pi update --extensions`).
+
+**DEC-101 carry-over decision — tag pinning:** releases are tagged with the
+hyalo release tags (`vX.Y.Z`), and the README recommends installing with a
+tag ref (`pi install git:github.com/ractive/hyalo@v0.20.0`) over main HEAD.
+Rationale: the extension is a thin CLI wrapper whose expected output shapes
+track the binary, so pairing the package ref with the installed hyalo
+version avoids extension/binary drift; main HEAD remains the living-edge
+option. Because `pi update` reconciles but never moves pinned refs, moving
+to a new release is an explicit `pi install git:…@vX.Y.Z` — that pins to
+the release that matches the binary the user has, by design.
+
 ## DEC-102: `--filenames0` emits NUL-terminated bytes via a `RawBytes` outcome; `--iteration` extends the shared input resolver (2026-08-25)
 
 **Decision:** two iter-238 ergonomics follow-ups:
