@@ -2934,3 +2934,40 @@ pre-journal persistence token reappears outside the sanctioned files, or
 stale-link-graph regression (`index.rs:439`'s recorded bug class) is pinned
 by e2e tests in `tests/e2e/index_journal.rs` that mutate via each path and
 assert the persisted graph is current.
+
+## DEC-240: MutationJournal upserts unknown files; JSON `applied` keeps its "apply mode" meaning (2026-08-27)
+
+Two follow-ups from the independent review of iter-225/226 recorded in
+[[iterations/iteration-240-review-followups-bugfixes]] (code: PR #275).
+
+**Journal refresh is an upsert, not a patch.** DEC-226 made every mutating
+command go through `MutationJournal`, but its `update_entry`/`update_task`/
+`rescan_modified` still guarded on "entry already present" — a file created
+after `create-index` (or by anything other than `hyalo new --index`) was
+written to disk and then silently dropped from the persisted index, so
+`find --file <it> --index` returned nothing. The `--index` help promises the
+index is "patched in-place, keeping it current"; a write path that can leave
+the index missing the file it just wrote violates that. Decision: when the
+mutated file is not in the index, the journal inserts it from a fresh disk
+scan **and** registers its outbound edges in the persisted link graph
+(`SnapshotIndex::insert_or_replace_entry_with_links`). The older
+`insert_or_replace_entry` deliberately leaves the graph alone (it serves
+`hyalo new`, whose body has no links yet) and stays as-is. Body text still
+enters the BM25 index only on the next full `create-index`, unchanged from
+DEC-226.
+
+Rejected alternative: refusing the mutation with "file not indexed, run
+create-index" — safe but hostile; the journal already has everything it needs
+to do the right thing in one scan.
+
+**`applied` in `links fix` JSON stays "apply mode was used".** The dogfood
+session read `applied: true` with `fixes: 0` as a false success. The iter-216
+D-4 contract defines `applied` as the mode flag, and consumers key off the
+`fixes`/`applied_fixes` counts for "did anything land". Changing the boolean's
+meaning would break that contract for no information gain; instead the *text*
+summary — the only place the two were indistinguishable — now prints
+`Applied: yes (N fixes)`. **Still open:** the journal trusts the loaded index
+as ground truth, so `links fix --apply --index` on a vault edited externally
+since `create-index` reports `broken: 0` without warning. Detection (mtime
+comparison vs. warning vs. refuse) is a separate decision, carried over in
+iteration 240's out-of-scope list.

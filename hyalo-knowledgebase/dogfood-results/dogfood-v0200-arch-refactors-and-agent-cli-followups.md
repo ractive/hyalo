@@ -12,6 +12,7 @@ related:
   - "[[iterations/iteration-234-lint-dead-output-cleanup]]"
   - "[[iterations/iteration-237-pi-package-distribution]]"
   - "[[iterations/iteration-238-agent-cli-followups]]"
+  - "[[iterations/iteration-240-review-followups-bugfixes]]"
 ---
 
 # Dogfood v0.20.0 — arch refactors, agent-CLI follow-ups, links perf
