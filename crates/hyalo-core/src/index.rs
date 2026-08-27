@@ -1160,6 +1160,27 @@ fn parse_iso8601_secs(s: &str) -> Option<u64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hh > 23 || mm > 59 || ss > 59 {
         return None;
     }
+    // Reject impossible day-of-month values (PR #277 review N-1): a bare
+    // 1..=31 check would silently accept `2026-02-31` and fold it into
+    // March 3, desynchronizing the stored mtime from the real one.
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month: [u64; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day > days_in_month[usize::try_from(month - 1).ok()?] {
+        return None;
+    }
     // Days since 1970-01-01 from civil date (Howard Hinnant's algorithm),
     // the same math `format_iso8601` uses in reverse.
     let y = i64::try_from(year).ok()? - i64::from(month <= 2);
@@ -1215,7 +1236,17 @@ mod iso_tests {
 
     #[test]
     fn iso8601_round_trips() {
-        for secs in [0_u64, 1, 86_400, 1_700_000_000, 1_759_276_800] {
+        // 1_709_164_800 = 2024-02-29T00:00:00Z — the leap-day case (PR #277
+        // review N-1), plus the day right after it.
+        for secs in [
+            0_u64,
+            1,
+            86_400,
+            1_700_000_000,
+            1_709_164_800,
+            1_709_251_200,
+            1_759_276_800,
+        ] {
             assert_eq!(parse_iso8601_secs(&format_iso8601(secs)), Some(secs));
         }
     }
@@ -1229,6 +1260,10 @@ mod iso_tests {
             "not-a-date",
             "2026-13-01T00:00:00Z",
             "2026-08-27T25:00:00Z",
+            // Day beyond the month's length (PR #277 review N-1).
+            "2026-02-31T00:00:00Z",
+            "2023-02-29T00:00:00Z",
+            "2026-04-31T00:00:00Z",
         ] {
             assert_eq!(parse_iso8601_secs(bad), None, "{bad} should not parse");
         }

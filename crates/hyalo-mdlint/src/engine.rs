@@ -28,7 +28,8 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     // rendering, hence error. Known false-positive class: literal regex or
     // math prose that writes `)[` (e.g. a character class `[)]` after a group)
     // can trip the detector. Those are suppressed in `lint_body` when the
-    // parenthesized text carries regex metacharacters (`|`, `[`, `]`);
+    // parenthesized text carries regex metacharacters AND the bracketed part
+    // does not look like a link destination (see `is_regex_false_positive`);
     // anything else that still misfires can be disabled per file via
     // `[lint.rules] MD011 = false`.
     ("MD011", DiagSeverity::Error),
@@ -791,12 +792,21 @@ const BYTE_COLUMN_RULE_IDS: &[&str] = &["MD010", "MD042", "MD052"];
 ///
 /// Upstream MD011's message is
 /// `Reversed link syntax: ({text})[{url}]. Should be: [{text}]({url})`.
-/// This extracts the `{(text})[{url}]` fragment and answers whether its
-/// parenthesized text part carries regex metacharacters (`|`, `[`, `]`) —
-/// a shape link text essentially never has, but a regex alternation or
-/// character class (e.g. `(3rd|[Tt]hird)[-_]`) always does. Unparseable
-/// messages (a different MD011 shape, or a version bump) report `false`
-/// so nothing is suppressed by accident.
+/// This extracts the `{(text})[{url}]` fragment and answers whether it
+/// looks like regex/math prose rather than a link:
+///
+/// - the parenthesized **text** carries regex metacharacters (`|`, `[`, `]`)
+///   — a shape link text essentially never has, but a regex alternation or
+///   character class (e.g. `(3rd|[Tt]hird)[-_]`) always does; **and**
+/// - the bracketed **url** does NOT look like a link destination (no
+///   `scheme://`, and no `/`, `./`, `#`, or `mailto:` prefix) — regex prose
+///   like `[-_]` or `[ .,]` has a non-URL right side, while every genuine
+///   reversed link the rule exists for carries a real destination there
+///   (PR #277 review M-2: the text check alone also suppressed genuine
+///   reversed links with bracketed text, e.g. `(see [docs])[https://…]`).
+///
+/// Unparseable messages (a different MD011 shape, or a version bump)
+/// report `false` so nothing is suppressed by accident.
 fn is_regex_false_positive(message: &str) -> bool {
     let Some(start) = message.find("syntax: ").map(|i| i + "syntax: ".len()) else {
         return false;
@@ -812,11 +822,17 @@ fn is_regex_false_positive(message: &str) -> bool {
     else {
         return false;
     };
-    // The parenthesized text is everything before the `)[` boundary.
-    let Some(inner) = stripped.split_once(")[").map(|(text, _)| text) else {
+    // The `)[` boundary splits the parenthesized text from the bracketed url.
+    let Some((text, url)) = stripped.split_once(")[") else {
         return false;
     };
-    inner.contains('|') || inner.contains('[') || inner.contains(']')
+    let text_is_regexish = text.contains('|') || text.contains('[') || text.contains(']');
+    let url_is_destination = url.contains("://")
+        || url.starts_with('/')
+        || url.starts_with("./")
+        || url.starts_with('#')
+        || url.starts_with("mailto:");
+    text_is_regexish && !url_is_destination
 }
 
 fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
@@ -1306,6 +1322,23 @@ mod tests {
         assert!(
             diagnostics.is_empty(),
             "regex prose must not be flagged: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn md011_flags_reversed_link_with_bracketed_text_and_real_url() {
+        // Review M-2 (PR #277): a genuine reversed link whose *text* happens
+        // to carry `[`/`]` must stay flagged — the suppression additionally
+        // requires a non-URL bracketed part.
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "see (the [docs] page)[https://example.com] now.\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD011".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().any(|d| d.rule_id == "MD011"),
+            "a genuine reversed link with bracketed text must still be flagged"
         );
     }
 

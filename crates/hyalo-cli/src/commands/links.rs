@@ -1742,10 +1742,21 @@ pub(crate) fn run(
     if !stale_index_files.is_empty() {
         let n = stale_index_files.len();
         let plural = if n == 1 { "file" } else { "files" };
+        let apply_run = matches!(
+            action,
+            Some(LinksAction::Fix { apply: true, .. } | LinksAction::Auto { apply: true, .. })
+        );
+        // PR #277 review N-2: the tail depends on what happens to the
+        // refreshed entries — `--apply` persists them through the journal,
+        // a dry run keeps them in memory only.
+        let tail = if apply_run {
+            "refreshing from disk and persisting for this run"
+        } else {
+            "refreshing from disk for this run — re-run create-index when convenient"
+        };
         crate::warn::warn(format!(
             "index is stale: {n} {plural} changed on disk since create-index \
-             (e.g. {}); refreshing from disk for this run — re-run create-index \
-             when convenient",
+             (e.g. {}); {tail}",
             stale_index_files[0]
         ));
         let mut journal =
@@ -1753,10 +1764,6 @@ pub(crate) fn run(
         journal.rescan_modified(dir, &stale_index_files)?;
         // Persist the refreshed entries only when this run already writes
         // (apply mode); a dry run leaves the snapshot file untouched.
-        let apply_run = matches!(
-            action,
-            Some(LinksAction::Fix { apply: true, .. } | LinksAction::Auto { apply: true, .. })
-        );
         if apply_run {
             journal.flush()?;
         }

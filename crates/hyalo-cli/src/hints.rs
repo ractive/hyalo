@@ -2380,38 +2380,42 @@ fn hints_for_lint(ctx: &HintContext, data: &serde_json::Value, _total: Option<u6
         // errors-first display sort this only fires when there are more
         // error-carrying files than the cap, but it keeps the listing honest
         // in that case too.
-        let listed_errors: u64 = data
-            .get("files")
-            .and_then(|f| f.as_array())
-            .map_or(0, |files| {
-                files
-                    .iter()
-                    .map(|file| {
-                        file.get("rule_groups")
-                            .and_then(|rg| rg.as_array())
-                            .map_or(0, |groups| {
-                                groups
-                                    .iter()
-                                    .map(|g| {
-                                        g.get("violations").and_then(|v| v.as_array()).map_or(
-                                            0,
-                                            |vs| {
-                                                vs.iter()
-                                                    .filter(|v| {
-                                                        v.get("severity")
-                                                            .and_then(serde_json::Value::as_str)
-                                                            == Some("error")
-                                                    })
-                                                    .count()
-                                                    as u64
-                                            },
-                                        )
-                                    })
-                                    .sum::<u64>()
-                            })
-                    })
-                    .sum()
-            });
+        // Review M-1 (PR #277): read-only mode only — fix-mode JSON shapes
+        // the per-file groups as `fixed_groups`/`remaining_groups` (no
+        // `rule_groups`), so this computation would wrongly report every
+        // error as hidden. Per-file error totals are derived from each
+        // group's `count` (the per-rule display cap truncates `violations[]`
+        // but never `count`), so the hidden figure reflects the *file* cap.
+        let listed_errors: u64 = if is_fix_mode {
+            u64::MAX // read-only-only suffix: never claims hidden errors in fix mode (total_errors > u64::MAX is never true)
+        } else {
+            data.get("files")
+                .and_then(|f| f.as_array())
+                .map_or(0, |files| {
+                    files
+                        .iter()
+                        .map(|file| {
+                            file.get("rule_groups").and_then(|rg| rg.as_array()).map_or(
+                                0,
+                                |groups| {
+                                    groups
+                                        .iter()
+                                        .filter(|g| {
+                                            g.get("severity").and_then(serde_json::Value::as_str)
+                                                == Some("error")
+                                        })
+                                        .map(|g| {
+                                            g.get("count")
+                                                .and_then(serde_json::Value::as_u64)
+                                                .unwrap_or(0)
+                                        })
+                                        .sum::<u64>()
+                                },
+                            )
+                        })
+                        .sum()
+                })
+        };
         let total_errors = data
             .get("errors")
             .and_then(serde_json::Value::as_u64)
@@ -3967,6 +3971,9 @@ mod tests {
                 "file": "warn-only.md",
                 "rule_groups": [{
                     "rule": "MD040",
+                    "severity": "warn",
+                    "count": 1,
+                    "shown": 1,
                     "violations": [{"severity": "warn", "message": "fenced code block should have a language"}]
                 }]
             }],
@@ -3983,6 +3990,44 @@ mod tests {
         assert!(
             show_all.description.contains("4 errors hidden"),
             "hint should name the hidden errors: {show_all:?}"
+        );
+    }
+
+    #[test]
+    fn lint_hints_no_hidden_errors_claim_in_fix_mode_dry_run() {
+        // Review M-1 (PR #277): fix-mode shapes groups as
+        // `fixed_groups`/`remaining_groups`, so the read-only
+        // `rule_groups` computation must not claim hidden errors there —
+        // even though the truncation hint itself is kept in dry-run mode.
+        let mut c = ctx(HintSource::Lint);
+        c.dry_run = true;
+        c.lint_is_fix = true;
+        let data = json!({
+            "files": [{
+                "file": "err.md",
+                "remaining_groups": [{
+                    "rule": "MD011",
+                    "severity": "error",
+                    "count": 1,
+                    "violations": [{"severity": "error", "message": "Reversed link syntax: (a)[b]"}]
+                }]
+            }],
+            "files_truncated": true,
+            "files_with_violations": 60,
+            "errors": 4,
+            "warnings": 7716,
+            "dry_run": true,
+            "total_fixed": 0,
+            "total_remaining": 4
+        });
+        let hints = generate_hints(&c, &data, None);
+        let show_all = hints
+            .iter()
+            .find(|h| h.cmd.contains("--limit 0"))
+            .expect("show-all hint should still be present in dry-run mode");
+        assert!(
+            !show_all.description.contains("hidden"),
+            "fix-mode dry-run must not claim hidden errors: {show_all:?}"
         );
     }
 

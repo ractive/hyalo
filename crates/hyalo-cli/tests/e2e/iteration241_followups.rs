@@ -433,3 +433,241 @@ Matches (3rd|[Tt]hird)[-_] and (2nd|[Ss]econd)[ .,] patterns.
         "a clean vault must report no issues: {stdout}"
     );
 }
+
+// ===========================================================================
+// Review follow-ups (PR #277): links auto stale path, DEC-241 persistence
+// contract, hidden-errors hint e2e, and bare-16-vs-16b matching
+// ===========================================================================
+
+#[test]
+fn links_auto_index_warns_on_stale_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+
+# Target
+"),
+    );
+    write_md(
+        dir,
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+
+Some prose.
+"),
+    );
+    let out = hyalo_no_hints()
+        .args(["--dir", dir.to_str().unwrap(), "create-index"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    // In-place edit behind the index's back (past the tolerance window).
+    std::thread::sleep(Duration::from_secs(2));
+    fs::write(
+        dir.join("source.md"),
+        md!(r"
+---
+title: Source
+---
+
+Some prose mentioning Target.
+"),
+    )
+    .unwrap();
+    let out = hyalo_no_hints()
+        .args(["--dir", dir.to_str().unwrap(), "links", "auto", "--index"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("index is stale"),
+        "links auto must exercise the same staleness check: {stderr}"
+    );
+}
+
+#[test]
+fn stale_refresh_persists_only_under_apply() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    write_md(
+        dir,
+        "target.md",
+        md!(r"
+---
+title: Target
+---
+
+# Target
+"),
+    );
+    write_md(
+        dir,
+        "source.md",
+        md!(r"
+---
+title: Source
+---
+
+See [[target]].
+"),
+    );
+    let out = hyalo_no_hints()
+        .args(["--dir", dir.to_str().unwrap(), "create-index"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let index_path = dir.join(".hyalo-index");
+    let before = fs::read(&index_path).unwrap();
+    std::thread::sleep(Duration::from_secs(2));
+    fs::write(
+        dir.join("source.md"),
+        md!(r"
+---
+title: Source
+---
+
+See [[target]] and [[trget]].
+"),
+    )
+    .unwrap();
+
+    // Dry run: the in-memory refresh must NOT touch the snapshot file
+    // (DEC-241's persistence contract).
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--index",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let after_dry = fs::read(&index_path).unwrap();
+    assert_eq!(
+        before, after_dry,
+        "a dry run must not persist the stale refresh"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        json["results"]["broken"].as_u64().unwrap_or(0) >= 1,
+        "dry run still sees the freshly added broken link"
+    );
+
+    // Apply: the refresh (plus any fixes) is persisted.
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            dir.to_str().unwrap(),
+            "links",
+            "fix",
+            "--apply",
+            "--apply-fuzzy",
+            "--index",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let after_apply = fs::read(&index_path).unwrap();
+    assert_ne!(
+        before, after_apply,
+        "--apply must persist the refreshed entries"
+    );
+}
+
+#[test]
+fn lint_hint_names_errors_hidden_by_file_cap() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path();
+    // 51 error-carrying files: one more than the 50-file display cap, so
+    // exactly one error is truncated away even under the error-first sort.
+    for i in 0..51 {
+        write_md(
+            dir,
+            &format!("err/err-{i:02}.md"),
+            md!(r"
+---
+title: E
+---
+
+see (the docs)[https://example.com] now.
+"),
+        );
+    }
+    // Hints stay on: the assertion targets the show-all hint text itself.
+    let out = hyalo()
+        .args(["--dir", dir.to_str().unwrap(), "lint", "--format", "json"])
+        .output()
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["results"]["errors"].as_u64().unwrap_or(0), 51);
+    assert_eq!(json["results"]["files_truncated"].as_bool(), Some(true));
+    let hint_texts: Vec<String> = json["hints"]
+        .as_array()
+        .map(|h| {
+            h.iter()
+                .filter_map(|v| v["description"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        hint_texts
+            .iter()
+            .any(|t| t.contains("1 error hidden by the file cap")),
+        "the show-all hint should name the hidden error: {hint_texts:?}"
+    );
+}
+
+#[test]
+fn find_iteration_bare_integer_does_not_match_letter_suffix_files() {
+    let vault = setup_archive_vault();
+    write_md(
+        vault.path(),
+        "iterations/iteration-16b-extra.md",
+        md!(r"
+---
+title: Iter 16b
+type: iteration
+status: completed
+date: 2026-03-01
+---
+
+Body 16b.
+"),
+    );
+    let out = hyalo_no_hints()
+        .args([
+            "--dir",
+            vault.path().to_str().unwrap(),
+            "find",
+            "--iteration",
+            "16",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        json["total"].as_u64().unwrap_or(0),
+        0,
+        "bare 16 must not match iteration-16b-*: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
