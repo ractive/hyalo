@@ -1,6 +1,6 @@
 ---
 title: Deep review 2026-08-27 — code quality, security, help coherence, README, dogfood
-type: research
+type: review
 date: 2026-08-27
 status: resolved
 tags:
@@ -37,7 +37,7 @@ places.
 
 Top-level `hyalo --help` shows:
 
-```
+```text
 Summary (vault overview, read-only):
   hyalo summary [-g/--glob G] [-n/--recent N] [--depth N] [--limit N]
 ```
@@ -54,7 +54,7 @@ side of this contradiction while the COMMAND REFERENCE side is untested.
 
 Top-level help:
 
-```
+```text
 hyalo changelog add <CATEGORY> <TEXT>     Append an entry under `## [Unreleased]`
 hyalo changelog release <VERSION>         Rotate ...
 ```
@@ -93,7 +93,7 @@ close this class permanently.
 A 36-byte file whose body contains invalid UTF-8 (`\xff\xfe`) makes
 `hyalo read <file>` emit:
 
-```
+```json
 "content": "<line skipped: exceeds 1 MiB per-line limit>"
 ```
 

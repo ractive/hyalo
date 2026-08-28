@@ -117,6 +117,30 @@ values = ["active", "archived", "reference"]
 [schema.types.decisions.properties.date]
 type = "date"
 
+[schema.types.review]
+required = ["title", "type", "date", "status"]
+
+[schema.types.review.properties]
+
+[schema.types.review.properties.status]
+type = "enum"
+values = ["active", "resolved", "completed", "superseded", "archived"]
+
+[schema.types.review.properties.date]
+type = "date"
+
+[schema.types.review.properties.related]
+type = "list"
+
+[schema.types.review.properties.tags]
+type = "list"
+
+[schema.types.review.properties.title]
+type = "string"
+
+[schema.types.review.properties.type]
+type = "string"
+
 [views.completed-with-todos]
 fields = ["tasks"]
 properties = ["status=completed"]
@@ -144,15 +168,21 @@ properties = ["status=in-progress"]
 
 [lint]
 # Frozen historical records: completed iterations, done backlog items, and
-# dogfood/review logs are snapshots of past state. They legitimately carry old
+# dogfood/research logs are snapshots of past state. They legitimately carry old
 # formatting and aspirational/unchecked housekeeping tasks, so they are excluded
 # from the CI lint gate (which protects the *live* knowledgebase). See
 # iteration-170.
+#
+# `reviews/**` used to sit in this list too. Iteration 247 removed it: review
+# notes are live working documents that iterations are still drawing tasks from,
+# and hiding them from lint let a `type: review` schema drift go unnoticed (the
+# type was never declared, and two files under reviews/ still said
+# `type: research`). The `review` type is now declared in [schema.types.review]
+# above and the directory lints clean under `--strict`.
 ignore = [
   "iterations/done/**",
   "backlog/done/**",
   "dogfood-results/**",
-  "reviews/**",
   "research/**",
   "promotion-plan.md",
 ]
