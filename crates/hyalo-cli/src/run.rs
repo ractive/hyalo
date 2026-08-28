@@ -1718,7 +1718,6 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
-    let strict_index = cli.strict_index;
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
         match SnapshotIndex::load(p) {
             Ok(Some(idx)) => {
@@ -1743,25 +1742,13 @@ fn run_inner() -> Result<(), AppError> {
                     // iter-247 (deep-review S-2): warn-but-serve stays the
                     // default — the probe is a heuristic, and turning a
                     // heuristic into a hard refusal would make every indexed
-                    // query hostage to filesystem mtime granularity. What the
-                    // review actually asked for is an *opt-in* escape hatch for
-                    // callers that would rather pay for a rescan than risk an
-                    // answer that contradicts disk, so `--strict-index` drops
-                    // the snapshot and takes the same disk-scan path the
-                    // vault-mismatch branch below already takes.
-                    if stale && strict_index {
+                    // query hostage to filesystem mtime granularity.
+                    if stale {
                         crate::warn::warn(
-                            "index older than vault; --strict-index: falling back to disk scan — re-run create-index to restore the indexed fast path",
+                            "index older than vault; results may be stale — re-run create-index",
                         );
-                        None
-                    } else {
-                        if stale {
-                            crate::warn::warn(
-                                "index older than vault; results may be stale — re-run create-index (or pass --strict-index to rescan disk instead)",
-                            );
-                        }
-                        Some(idx)
                     }
+                    Some(idx)
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(

@@ -114,7 +114,6 @@ const GLOBAL_FLAGS: &[&str] = &[
     "--site-prefix",
     "--index",
     "--index-file",
-    "--strict-index",
     "--count",
     "--files-from",
     "--help",

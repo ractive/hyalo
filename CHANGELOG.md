@@ -34,10 +34,6 @@ and this project adheres to
     resolved rather than fixable, so MDN-style vaults with case-folded
     directory layouts no longer offer a `link-case-mismatch` rewrite plan
     per link in `links fix --dry-run`.
-- **Iteration 247 — carry-over sweep.** `--strict-index`: a global opt-in that
-  makes a snapshot index detected as stale fall back to a disk scan instead of
-  being served with a warning (deep-review S-2; the warn-but-serve default is
-  unchanged and now recorded as permanent in DEC-245).
 
 ### Changed
 

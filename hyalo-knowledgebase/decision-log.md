@@ -3122,6 +3122,11 @@ recording that the accumulated work is minor-bump-shaped.
 
 ## DEC-245: stale snapshots stay warn-but-serve by default; `--strict-index` is the opt-in fallback (2026-08-28)
 
+> **Superseded (implementation only) by [[decision-log#DEC-249|DEC-249]]
+> (2026-08-28):** `--strict-index` itself was removed the same day, as an
+> owner call unrelated to this decision's reasoning. The warn-but-serve
+> default recorded below is still current and unaffected.
+
 Closes the second task of [[iterations/iteration-247-carry-over-sweep]], which
 carried finding S-2 of [[reviews/deep-review-2026-08-27]] forward from
 [[iterations/iteration-246-help-coherence-review-followups]].
@@ -3239,3 +3244,38 @@ kind in this vault with its own lifecycle (`resolved` — every finding
 addressed — is a state `research` has no use for). Folding the files into
 `research` would have made the type list lie about what the vault contains,
 which is the same failure in the other direction.
+
+## DEC-249: `--strict-index` is removed, not kept as a documented opt-in (2026-08-28)
+
+Supersedes the implementation half of [[decision-log#DEC-245|DEC-245]] (the
+warn-but-serve default it recorded as permanent is untouched). Closes
+[[iterations/iteration-248-remove-strict-index]].
+
+**Decision.** The global `--strict-index` flag added under DEC-245 /
+[[iterations/iteration-247-carry-over-sweep]] is removed outright: the clap
+field, its plumbing in `run.rs`, the `--help` line, the long-form
+`create-index` help paragraph, the xtask `GLOBAL_FLAGS` command-reference
+registration, and the four e2e tests that existed solely to exercise it. The
+stale-index warning keeps firing exactly as before — `index older than
+vault; results may be stale — re-run create-index` — just without the
+`(or pass --strict-index to rescan disk instead)` suffix, since there is no
+longer a flag to name.
+
+**Why.** Owner call, made the same day the flag shipped, on three grounds:
+the flag was redundant (a caller who wants a guaranteed disk scan already
+gets one by not passing `--index` at all — that is not a new capability,
+it is the pre-existing no-index path with an extra name on it); the name was
+a misnomer ("strict" reads as "fails loudly," but the flag only ever
+degrades to a slower, correct path, never refuses a run; DEC-245 itself
+had to spend a paragraph explaining that the failure mode is benign in
+both directions, which is a sign the name was fighting the behaviour it
+named); and it grew the CLI's global-flag surface (one more line in every
+`--help`, one more entry in `GLOBAL_FLAGS`, one more thing every future
+flag audit has to reason about) for a need nobody had actually hit in
+practice — DEC-245's own justification was a hypothetical caller, not a
+reported bug.
+
+**What stays.** Warn-but-serve as the sole behaviour on a stale snapshot is
+unchanged and still governed by DEC-241/DEC-245: the run warns and exits 0.
+A caller who wants disk truth over snapshot speed still has that lever —
+omit `--index`/`--index-file` — it was just never a new one.
