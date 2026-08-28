@@ -67,7 +67,7 @@ fi
 unreleased="$(sed -n '/^## \[Unreleased\]/,/^## \[/p' CHANGELOG.md | sed '1d;$d')"
 if grep -q "^## \[$VER\]" CHANGELOG.md; then
   ok "CHANGELOG has a [$VER] section (post-rotation)"
-elif [[ -n "${unreleased//[[:space:]]/}" ]]; then
+elif grep -q "[^[:space:]]" <<<"$unreleased"; then  # not ${var//[[:space:]]/}: quadratic, hangs on large sections
   ok "CHANGELOG [Unreleased] is non-empty (pre-rotation; run: hyalo changelog release $VER --apply)"
 else
   bad "CHANGELOG has neither a [$VER] section nor [Unreleased] content — nothing to release"
