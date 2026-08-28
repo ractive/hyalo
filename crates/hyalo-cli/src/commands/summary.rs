@@ -111,6 +111,13 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
 
 /// Show a high-level vault summary using pre-scanned index data.
 ///
+/// The rendered text report no longer opens with a `kb dir: <path>` banner
+/// (iter-247): commands run with `effective_format = Json` internally and the
+/// user's format is only known in [`crate::run`], so the note is emitted there
+/// — see the `summary_kb_dir_note` binding — on stderr, where it stays out of a
+/// piped report and obeys `-q`. `dir` is still part of this function's payload
+/// and reaches JSON consumers unchanged.
+///
 /// All aggregation (file counts, properties, tags, status groups, tasks, recent
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.
@@ -438,17 +445,6 @@ pub fn summary(
         recent_files,
         schema: lint_summary,
     };
-
-    // iter-247: the vault dir used to lead the *text* report as a `kb dir: …`
-    // banner — the only command that prefixed its stdout with resolution
-    // context, which is exactly the kind of cwd-dependent noise a script
-    // reading `--format text` has to strip. It moves to stderr as a `note:`,
-    // the channel this CLI already uses to announce which vault/config a run
-    // resolved, so it stays visible in a terminal, stays out of a pipe, and
-    // obeys `-q`. JSON consumers are untouched: `.dir` is still in the payload.
-    if matches!(format, Format::Text) {
-        crate::warn::note(format!("kb dir: {}", vault_summary.dir));
-    }
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
     Ok(CommandOutcome::success(crate::output::format_success(

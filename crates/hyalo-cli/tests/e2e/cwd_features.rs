@@ -199,9 +199,9 @@ fn summary_json_still_carries_dir() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("summary json should parse: {e}; got: {stdout}"));
-    let dir = value["results"]["dir"]
+    let dir = value["dir"]
         .as_str()
-        .unwrap_or_else(|| panic!("expected results.dir in: {stdout}"));
+        .unwrap_or_else(|| panic!("expected dir in: {stdout}"));
     assert!(
         dir.contains("notes"),
         "expected dir to name the vault: {dir}"

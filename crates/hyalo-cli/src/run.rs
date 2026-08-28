@@ -1718,6 +1718,7 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
+    let strict_index = cli.strict_index;
     let mut snapshot_index: Option<SnapshotIndex> = if let Some(ref p) = index_path_buf {
         match SnapshotIndex::load(p) {
             Ok(Some(idx)) => {
@@ -1733,15 +1734,34 @@ fn run_inner() -> Result<(), AppError> {
                     // and warn when they postdate the snapshot, so a stale
                     // index is at least noisy instead of silently wrong.
                     let (_, _, created_at, _) = idx.header_info();
-                    if let Some(newest) = hyalo_core::index::newest_shallow_dir_mtime(&dir)
-                        && newest
-                            > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
-                    {
+                    let stale =
+                        hyalo_core::index::newest_shallow_dir_mtime(&dir).is_some_and(|newest| {
+                            newest
+                                > created_at
+                                    .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                        });
+                    // iter-247 (deep-review S-2): warn-but-serve stays the
+                    // default — the probe is a heuristic, and turning a
+                    // heuristic into a hard refusal would make every indexed
+                    // query hostage to filesystem mtime granularity. What the
+                    // review actually asked for is an *opt-in* escape hatch for
+                    // callers that would rather pay for a rescan than risk an
+                    // answer that contradicts disk, so `--strict-index` drops
+                    // the snapshot and takes the same disk-scan path the
+                    // vault-mismatch branch below already takes.
+                    if stale && strict_index {
                         crate::warn::warn(
-                            "index older than vault; results may be stale — re-run create-index",
+                            "index older than vault; --strict-index: falling back to disk scan                              — re-run create-index to restore the indexed fast path",
                         );
+                        None
+                    } else {
+                        if stale {
+                            crate::warn::warn(
+                                "index older than vault; results may be stale — re-run                                  create-index (or pass --strict-index to rescan disk instead)",
+                            );
+                        }
+                        Some(idx)
                     }
-                    Some(idx)
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
                     crate::warn::warn(format!(
@@ -1963,6 +1983,18 @@ fn run_inner() -> Result<(), AppError> {
     // Capture wall-clock elapsed around the dispatch body so the slow-query
     // hint can fire when the command took longer than SLOW_QUERY_THRESHOLD_MS.
     // We measure here (not inside dispatch) so hint rendering is excluded.
+    // iter-247 (deep-review dogfood note): `summary --format text` used to open
+    // its report with a `kb dir: <path>` banner — the only command that put
+    // resolution context on stdout, and a cwd-dependent line every text-mode
+    // script had to strip. The banner moves to the `note:` stderr channel this
+    // CLI already uses to announce which vault a run resolved: visible in a
+    // terminal, absent from a pipe, suppressed by `-q`. JSON is untouched (the
+    // envelope still carries `dir`). Captured before dispatch because
+    // `cli.command` is moved into it, and emitted only on success so a failed
+    // run does not narrate a vault it never summarised.
+    let summary_kb_dir_note =
+        matches!(cli.command, Commands::Summary { .. }) && format == Format::Text;
+
     let dispatch_start = Instant::now();
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
@@ -1972,6 +2004,10 @@ fn run_inner() -> Result<(), AppError> {
     };
     // Saturate at u64::MAX on absurdly long runs (> ~585 million years).
     let elapsed_ms = u64::try_from(dispatch_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    if summary_kb_dir_note && result.is_ok() {
+        crate::warn::note(format!("kb dir: {}", dir.display()));
+    }
 
     // Inject elapsed into hint context so slow_query_hint can read it.
     if let Some(ref mut hctx) = hint_ctx {

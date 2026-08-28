@@ -334,6 +334,25 @@ pub(crate) struct Cli {
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 
+    /// Refuse to serve a stale snapshot index: fall back to a disk scan instead.
+    ///
+    /// Without it, a snapshot whose vault has changed since `create-index` is
+    /// still served — hyalo warns `index older than vault` and exits 0
+    /// (iteration 241's warn-but-serve trade-off). Under `--strict-index` the
+    /// same detection drops the snapshot and rescans disk, so an indexed query
+    /// can never silently contradict the files on disk. The staleness probe is
+    /// unchanged (shallow directory mtimes with one second of tolerance), so
+    /// this flag inherits its blind spots: it cannot see an in-place edit of an
+    /// existing note, and it can fire on a vault that only *looks* touched. Both
+    /// directions are safe here — the worst case is a disk scan you did not
+    /// need, never a wrong answer.
+    ///
+    /// No effect when no index is in use (`--index` / `--index-file` absent), or
+    /// on a snapshot that fails the vault/site-prefix check — that already falls
+    /// back to disk. Pairs with `-q`, which suppresses the fallback warning.
+    #[arg(long, global = true)]
+    pub strict_index: bool,
+
     /// Use the snapshot index at PATH (global alias for the per-subcommand `--index-file`).
     ///
     /// Equivalent to passing `--index-file PATH` after the subcommand.
@@ -393,6 +412,9 @@ pub(crate) struct FindFilters {
     /// Repo-relative paths with the configured vault dir prefix (e.g. files/en-us/x.md with --dir files/en-us)
     /// are resolved by trying vault-relative first, then stripping the full dir prefix and retrying.
     /// Input is deduplicated; results follow first-seen order.
+    /// CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
+    /// restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
+    /// hyalo shells out to nothing and has no VCS-specific flag).
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"])]
     #[serde(skip)]
     pub files_from: Option<String>,
@@ -1156,7 +1178,11 @@ Repeatable (AND).\n\
             top-level directory mtimes against the snapshot's creation time and\n\
             warn `index older than vault` when they postdate it; that probe misses\n\
             in-place edits of existing notes and changes more than one level deep,\n\
-            so re-run create-index whenever the vault may have changed.\n\n\
+            so re-run create-index whenever the vault may have changed.\n\
+            The warning does not stop the run: stale results are still served and\n\
+            still exit 0. Pass the global `--strict-index` to invert that — the\n\
+            same detection then drops the snapshot and rescans disk, trading the\n\
+            fast path for an answer that cannot contradict the files.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\
