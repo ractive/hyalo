@@ -2702,6 +2702,68 @@ fn stale_index_warns_when_vault_is_newer() {
     );
 }
 
+/// UX-1 (iter-249 dogfood): the old probe only stat'd the vault root and its
+/// immediate children, so a note added two directories deep — the common
+/// shape for real vaults (`iterations/done/x.md` here, `web/css/*/index.md`
+/// on MDN) — never warned. Results must still be served and the run must
+/// still exit 0; only the warning's presence is new.
+#[test]
+fn stale_index_warns_for_new_file_two_directories_deep() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(
+        tmp.path(),
+        "iterations/done/old.md",
+        "---\ntitle: Old\n---\nBody.\n",
+    );
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    // Same two-second margin as `stale_index_warns_when_vault_is_newer`:
+    // the probe compares whole seconds with one second of slack.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    write_md(
+        tmp.path(),
+        "iterations/done/new.md",
+        "---\ntitle: New\n---\nBody.\n",
+    );
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "staleness is a warning, not an error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("index older than vault"),
+        "a depth-2 file addition must be caught by the recursive probe: {stderr}"
+    );
+
+    // Results are still served from the (stale) snapshot — `new.md` predates
+    // the index and is legitimately absent from indexed output; the point of
+    // this test is the warning, not upserting the new file.
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let files: Vec<String> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        files.contains(&"a.md".to_string()),
+        "stale results are still served: {files:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // L-10 (iter-204): create-index text output has JSON parity
 // ---------------------------------------------------------------------------
