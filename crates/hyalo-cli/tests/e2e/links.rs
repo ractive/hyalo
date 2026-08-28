@@ -6061,6 +6061,40 @@ fn links_text_lists_unfixable_links() {
     );
 }
 
+/// UX-2 (iter-249 dogfood): the summary line's fuzzy label must reflect
+/// whether `--apply-fuzzy` actually wrote the matches, not always claim they
+/// were "excluded" — `--apply --apply-fuzzy` on a fixture with one fuzzy
+/// match must say the match was applied, and must not use the
+/// `--dry-run`/plain-`--apply` wording that describes matches left on the
+/// table.
+#[test]
+fn links_text_apply_fuzzy_summary_says_applied_not_excluded() {
+    let tmp = setup_bucket_vault();
+
+    let text = links_fix_text(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    assert!(
+        text.contains("Low-confidence matches (applied via --apply-fuzzy):"),
+        "summary line must say the fuzzy matches were applied, not excluded:\n{text}"
+    );
+    assert!(
+        !text.contains("Low-confidence matches (excluded from plain --apply):"),
+        "the plain---apply wording must not appear once --apply-fuzzy is active:\n{text}"
+    );
+}
+
+/// Without `--apply-fuzzy` the original wording still applies — fuzzy
+/// matches really are excluded from what gets written.
+#[test]
+fn links_text_apply_without_fuzzy_summary_says_excluded() {
+    let tmp = setup_bucket_vault();
+
+    let text = links_fix_text(tmp.path(), &["--apply"]);
+    assert!(
+        text.contains("Low-confidence matches (excluded from plain --apply):"),
+        "without --apply-fuzzy, fuzzy matches are genuinely excluded:\n{text}"
+    );
+}
+
 /// The fuzzy proposal listing is the longest section, so it must come last —
 /// otherwise the actionable buckets are buried under thousands of lines.
 #[test]

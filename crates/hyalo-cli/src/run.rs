@@ -1729,16 +1729,15 @@ fn run_inner() -> Result<(), AppError> {
                     // M-6: a snapshot is a point-in-time copy — edits made
                     // outside it (by hand, by another tool, or by hyalo itself
                     // without `--index`) are simply invisible, and the run
-                    // still exits 0. Probe the vault's shallow directory mtimes
-                    // and warn when they postdate the snapshot, so a stale
-                    // index is at least noisy instead of silently wrong.
+                    // still exits 0. Probe the vault's directory mtimes
+                    // (bounded-depth walk, iter-249 UX-1) and warn when they
+                    // postdate the snapshot, so a stale index is at least
+                    // noisy instead of silently wrong.
                     let (_, _, created_at, _) = idx.header_info();
-                    let stale =
-                        hyalo_core::index::newest_shallow_dir_mtime(&dir).is_some_and(|newest| {
-                            newest
-                                > created_at
-                                    .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
-                        });
+                    let stale = hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
+                        newest
+                            > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
+                    });
                     // iter-247 (deep-review S-2): warn-but-serve stays the
                     // default — the probe is a heuristic, and turning a
                     // heuristic into a hard refusal would make every indexed

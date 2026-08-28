@@ -1174,20 +1174,52 @@ fn is_pid_alive(pid: u32) -> bool {
 /// probe from crying stale about the index's own creation.
 pub const STALENESS_TOLERANCE_SECS: u64 = 1;
 
-/// Cheap staleness probe: the newest mtime among `dir` and its immediate
-/// subdirectories, as whole seconds since the Unix epoch.
+/// Depth to which [`newest_dir_mtime`] descends below the vault root.
+///
+/// `0` means "`dir` itself only" (the pre-iter-249 behaviour); `1` adds
+/// `dir`'s immediate subdirectories (the old `newest_shallow_dir_mtime`
+/// probe, which stopped there). iter-249 UX-1 raised this to `3` so the
+/// probe also sees a directory created two levels below an existing one —
+/// e.g. `iterations/done/` in this vault, or `web/css/zz-dogfood/` in MDN —
+/// without paying for a full recursive walk.
+///
+/// A true unbounded walk was measured (iter-249) against MDN's `en-us` tree
+/// (14,375 files across ~14,376 directories — one folder per page, so
+/// directory count tracks file count almost 1:1 there) and added roughly
+/// 65% to an already-indexed `find --limit 1 --index` query — far past the
+/// ~15% budget for a probe that exists purely to avoid a full scan. Capping
+/// at depth 3 keeps the walk to the directories that exist above the bulk of
+/// real content (MDN's own pages mostly live at relative depth 4+, i.e.
+/// *below* this cap) while adding no measurable overhead.
+const STALENESS_PROBE_MAX_DEPTH: u32 = 3;
+
+/// Cheap staleness probe: the newest mtime among `dir` and its subdirectories
+/// down to [`STALENESS_PROBE_MAX_DEPTH`] levels, as whole seconds since the
+/// Unix epoch.
 ///
 /// A directory's mtime moves when an entry is created, renamed or removed
-/// inside it, so this catches notes added or deleted in the top two levels of
-/// a vault — the common "the vault was edited behind the index's back" case —
-/// at the cost of one `read_dir` plus one `stat` per top-level entry, never a
-/// full walk (which is exactly what the snapshot exists to avoid).
+/// inside it, so this catches notes added or deleted within the probed
+/// depth — the common "the vault was edited behind the index's back" case —
+/// at the cost of one `read_dir` plus one `stat` per directory visited
+/// (files are never stat'd, and dot-directories such as `.git`/
+/// `.hyalo-index` plus symlinked directories are skipped and not
+/// descended into), never a full walk (which is exactly what the snapshot
+/// exists to avoid).
 ///
-/// It deliberately does NOT catch every drift: an in-place edit of an existing
-/// note leaves every directory mtime untouched, and changes more than one
-/// level deep are invisible. Callers must treat a `None`/older result as "no
+/// It deliberately does NOT catch every drift: an in-place edit of an
+/// existing note (that doesn't touch a directory itself) leaves every
+/// directory mtime untouched, and a file added or removed *below*
+/// [`STALENESS_PROBE_MAX_DEPTH`] directories from `dir` is invisible —
+/// still true for the majority of files in a deeply-nested vault like MDN
+/// or GitHub Docs (see the constant's doc for why an unbounded walk isn't
+/// affordable there). Callers must treat a `None`/older result as "no
 /// evidence of staleness", never as "the index is current".
-pub fn newest_shallow_dir_mtime(dir: &Path) -> Option<u64> {
+///
+/// Renamed from `newest_shallow_dir_mtime` (iter-249, UX-1 dogfood finding):
+/// the old top-two-levels-only probe (depth 1) missed changes in
+/// `iterations/done/` and nearly everything in MDN/GitHub Docs, where notes
+/// live two or more directories deep.
+pub fn newest_dir_mtime(dir: &Path) -> Option<u64> {
     fn mtime_secs(path: &Path) -> Option<u64> {
         std::fs::metadata(path)
             .ok()?
@@ -1198,19 +1230,44 @@ pub fn newest_shallow_dir_mtime(dir: &Path) -> Option<u64> {
             .map(|d| d.as_secs())
     }
 
+    fn is_hidden(entry: &std::fs::DirEntry) -> bool {
+        entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with('.'))
+    }
+
     let mut newest = mtime_secs(dir);
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return newest;
-    };
-    for entry in read_dir.flatten() {
-        // `file_type()` comes from the directory entry on every platform we
-        // support, so this costs no extra syscall in the common case.
-        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
-        if !is_dir {
+    // (path, depth-below-root) — root itself is depth 0 and is not
+    // re-visited (already stat'd above); its immediate children are depth 1.
+    let mut stack = vec![(dir.to_path_buf(), 0u32)];
+    while let Some((current, depth)) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&current) else {
             continue;
-        }
-        if let Some(m) = mtime_secs(&entry.path()) {
-            newest = Some(newest.map_or(m, |n: u64| n.max(m)));
+        };
+        for entry in read_dir.flatten() {
+            if is_hidden(&entry) {
+                continue;
+            }
+            // `file_type()` comes from the directory entry on every platform
+            // we support, so this costs no extra syscall in the common case.
+            // Symlinked directories are skipped rather than followed, to
+            // avoid cycles and to match `discover_files`'s vault-boundary
+            // treatment of symlinks.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            let child_depth = depth + 1;
+            if let Some(m) = mtime_secs(&path) {
+                newest = Some(newest.map_or(m, |n: u64| n.max(m)));
+            }
+            if child_depth < STALENESS_PROBE_MAX_DEPTH {
+                stack.push((path, child_depth));
+            }
         }
     }
     newest
@@ -1290,8 +1347,8 @@ fn parse_iso8601_secs(s: &str) -> Option<u64> {
 ///
 /// BUG-2 (dogfood v0.20.0) detection half: an in-place edit of an indexed
 /// file (by hand, by Obsidian, by anything but hyalo's own journaled write
-/// paths) leaves every directory mtime untouched, so the shallow
-/// [`newest_shallow_dir_mtime`] probe cannot see it — yet the stored
+/// paths) leaves every directory mtime untouched, so the
+/// [`newest_dir_mtime`] probe cannot see it — yet the stored
 /// `links` field and link-graph edges describe the *old* body, and
 /// `links fix --apply --index` would report `broken: 0` for a link that was
 /// added seconds ago. This per-entry mtime comparison catches exactly that:
@@ -1420,6 +1477,59 @@ mod iso_tests {
         std::fs::write(&file, "---\ntitle: a\n---\n\nbody v3\n").unwrap();
         let stale = files_modified_since_snapshot(&index, dir.path());
         assert_eq!(stale, vec!["a.md".to_owned()]);
+    }
+
+    /// UX-1 (iter-249 dogfood): the pre-fix `newest_shallow_dir_mtime` only
+    /// stat'd `dir` and its immediate children, so a directory created two
+    /// or three levels down (e.g. `iterations/done/`, MDN's
+    /// `web/css/zz/`) never moved the probe's result. `newest_dir_mtime`
+    /// must see a directory created at [`STALENESS_PROBE_MAX_DEPTH`] itself.
+    #[test]
+    fn newest_dir_mtime_detects_depth_3_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        // The whole chain `a/b/c` (c at relative depth 3, exactly
+        // `STALENESS_PROBE_MAX_DEPTH`) exists before the baseline is read,
+        // so no ancestor's mtime will move afterwards.
+        std::fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
+        let baseline = newest_dir_mtime(dir.path());
+        assert!(baseline.is_some());
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        // Adding a file directly inside `c` bumps only `c`'s own mtime —
+        // a probe that stops at depth 1 or 2 cannot see this; the old
+        // root+children probe passed the previous version of this test.
+        std::fs::write(dir.path().join("a/b/c/new.md"), "x").unwrap();
+        let after = newest_dir_mtime(dir.path());
+        assert!(
+            after > baseline,
+            "expected a newer mtime after creating a depth-3 directory: baseline={baseline:?}, after={after:?}"
+        );
+    }
+
+    /// Honest documentation of the probe's bound: a new directory whose
+    /// *parent* sits below [`STALENESS_PROBE_MAX_DEPTH`] is invisible,
+    /// because the probe never descends far enough to stat that parent.
+    /// This is the behaviour `newest_dir_mtime`'s doc comment and
+    /// `create-index --help` describe — pin it so a future depth change is
+    /// a deliberate, documented decision rather than a silent drift.
+    #[test]
+    fn newest_dir_mtime_does_not_see_past_max_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        // a(1)/b(2)/c(3)/d(4): `d`'s parent `c` is already at the cap, so a
+        // new directory created *inside* `d` never gets stat'd.
+        std::fs::create_dir_all(dir.path().join("a/b/c/d")).unwrap();
+        let baseline = newest_dir_mtime(dir.path());
+        assert!(baseline.is_some());
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        std::fs::create_dir_all(dir.path().join("a/b/c/d/e")).unwrap();
+        let after = newest_dir_mtime(dir.path());
+        assert_eq!(
+            after, baseline,
+            "a directory created below STALENESS_PROBE_MAX_DEPTH must not move the probe"
+        );
     }
 }
 

@@ -261,8 +261,10 @@ pub fn task_toggle(
 
     match hyalo_core::tasks::toggle_tasks(dir, &full_path, &resolved) {
         Ok(infos) => {
-            for info in &infos {
-                journal.update_task(&full_path, &rel_path, info)?;
+            // One re-scan per file, not per task (BUG-1, iter-249): every
+            // toggled line on this file has already landed on disk.
+            if !infos.is_empty() {
+                journal.update_task(&full_path, &rel_path)?;
             }
             journal.flush()?;
             let results: Vec<TaskReadResult> = infos
@@ -367,8 +369,10 @@ pub fn task_set_status(
 
     match hyalo_core::tasks::set_tasks_status(dir, &full_path, &resolved, status) {
         Ok(infos) => {
-            for info in &infos {
-                journal.update_task(&full_path, &rel_path, info)?;
+            // One re-scan per file, not per task (BUG-1, iter-249): every
+            // set line on this file has already landed on disk.
+            if !infos.is_empty() {
+                journal.update_task(&full_path, &rel_path)?;
             }
             journal.flush()?;
             let results: Vec<TaskReadResult> = infos

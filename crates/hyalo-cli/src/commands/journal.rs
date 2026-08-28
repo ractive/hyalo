@@ -39,7 +39,6 @@ use std::path::Path;
 
 use hyalo_core::filter::extract_tags;
 use hyalo_core::index::{SnapshotIndex, VaultIndex as _, format_modified};
-use hyalo_core::types::TaskInfo;
 
 /// Owns index maintenance for one mutating command invocation.
 ///
@@ -205,13 +204,29 @@ impl<'a> MutationJournal<'a> {
         Ok(())
     }
 
-    /// Record a task-checkbox mutation (`task toggle` / `task set`).
+    /// Record a task-checkbox mutation (`task toggle` / `task set`) for one
+    /// file, after all of that file's task writes have landed on disk.
     ///
-    /// Patches the task's status/done flags in the entry and rebuilds
-    /// section task counts + `modified`. Task lines cannot change links, so
-    /// (like the pre-journal `tasks::patch_index` this replaces) no link
-    /// rescan is needed. Batched: nothing is written to disk until
-    /// [`Self::flush`], so a multi-file toggle saves once.
+    /// BUG-1 (iter-249 dogfood): this used to patch just the toggled tasks'
+    /// `status`/`done` flags and rebuild section task counts in place,
+    /// leaving `bm25_tokens` untouched. A checkbox flip changes the file's
+    /// raw body bytes (`[ ]` <-> `[x]`), so the stale cached tokens no
+    /// longer matched what a fresh disk scan would tokenize; rebuilding the
+    /// BM25 corpus statistics (`avgdl`) at [`Self::flush`] from that one
+    /// stale doc-length then drifted every score in the corpus by a couple
+    /// of decimal places versus a disk scan. Fixed by re-scanning the file
+    /// via [`hyalo_core::index::SnapshotIndex::refresh_links`] instead —
+    /// the same "full re-index of the mutated file" every other
+    /// parity-preserving write path (`set`/`append`/`mv`) already uses.
+    /// `properties`/`tags` are untouched by a task mutation and are left as
+    /// `refresh_links` leaves them (unchanged); `modified` is not part of
+    /// that refresh, so it is patched here from the file's current mtime.
+    ///
+    /// Batched per file: call once per file after every task line on it has
+    /// been toggled/set, not once per task — the cost is one disk read +
+    /// re-tokenize, so an `--all`/multi-line caller must not pay it per
+    /// task. Nothing is written to disk until [`Self::flush`], so a
+    /// multi-file toggle saves once.
     ///
     /// Upserts: if `rel_path` is not yet present, the write this method
     /// records has already landed on disk (callers invoke this after
@@ -219,45 +234,19 @@ impl<'a> MutationJournal<'a> {
     /// reflects the post-toggle state — insert it and register its links
     /// rather than dropping the mutation. No-op only when no index is
     /// loaded at all.
-    pub fn update_task(&mut self, full_path: &Path, rel_path: &str, info: &TaskInfo) -> Result<()> {
+    pub fn update_task(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
         let Some(idx) = self.index.as_mut() else {
             return Ok(());
         };
         if idx.get(rel_path).is_none() {
             idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
-            self.dirty = true;
-            return Ok(());
-        }
-        if let Some(entry) = idx.get_mut(rel_path) {
-            if let Some(task) = entry.tasks.iter_mut().find(|t| t.line == info.line) {
-                task.status = info.status;
-                task.done = info.done;
+        } else {
+            idx.refresh_links(full_path, rel_path)?;
+            if let Some(entry) = idx.get_mut(rel_path) {
+                entry.modified = format_modified(full_path)?;
             }
-            // Rebuild section task counts from the updated task list.
-            // Each section owns the range [section.line, next_section.line).
-            let section_starts: Vec<usize> = entry.sections.iter().map(|s| s.line).collect();
-            for (si, section) in entry.sections.iter_mut().enumerate() {
-                let start = section_starts[si];
-                let end = section_starts.get(si + 1).copied().unwrap_or(usize::MAX);
-                let total = entry
-                    .tasks
-                    .iter()
-                    .filter(|t| t.line >= start && t.line < end)
-                    .count();
-                if total > 0 {
-                    let done = entry
-                        .tasks
-                        .iter()
-                        .filter(|t| t.line >= start && t.line < end && t.done)
-                        .count();
-                    section.tasks = Some(hyalo_core::types::TaskCount { total, done });
-                } else {
-                    section.tasks = None;
-                }
-            }
-            entry.modified = format_modified(full_path)?;
-            self.dirty = true;
         }
+        self.dirty = true;
         Ok(())
     }
 
@@ -412,18 +401,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rel = make_vault(tmp.path(), "note");
         let idx = build_snapshot(tmp.path());
-        let info = TaskInfo {
-            line: 8,
-            status: 'x',
-            text: "todo".to_string(),
-            done: true,
-        };
+        let full = tmp.path().join(&rel);
+        // Real callers (`toggle_tasks`/`set_tasks_status`) write the toggled
+        // checkbox to disk *before* telling the journal — `update_task`
+        // re-scans, it does not receive the new status as an argument.
+        fs::write(
+            &full,
+            "---\ntitle: note\ntags: [a]\n---\n\n# note\n\n- [x] todo\n",
+        )
+        .unwrap();
         let mut holder = Some(idx);
         let index_path = tmp.path().join("index.json");
         let mut journal = MutationJournal::new(&mut holder, Some(&index_path));
-        journal
-            .update_task(&tmp.path().join(&rel), &rel, &info)
-            .unwrap();
+        journal.update_task(&full, &rel).unwrap();
         assert!(journal.is_dirty());
         assert!(!index_path.exists(), "no save before flush()");
         journal.flush().unwrap();
@@ -431,6 +421,105 @@ mod tests {
         let persisted = SnapshotIndex::load(&index_path).unwrap().unwrap();
         let entry = persisted.get(&rel).unwrap();
         assert_eq!(entry.tasks.first().map(|t| t.done), Some(true));
+    }
+
+    /// BUG-1 (iter-249): `update_task` must leave the entry's `bm25_tokens`
+    /// matching what a fresh disk scan (`create-index`) would produce for
+    /// the *toggled* file, not the pre-toggle tokens — otherwise
+    /// `rebuild_bm25_index()` at flush time computes corpus statistics
+    /// (`avgdl`) from a stale doc length and every score in the corpus
+    /// drifts from a disk scan.
+    #[test]
+    fn update_task_refreshes_bm25_tokens_to_match_a_fresh_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rel = make_vault(tmp.path(), "note");
+        let full = tmp.path().join(&rel);
+
+        // Build a BM25-tokenizing snapshot (mirrors `create-index --bm25`).
+        let files = hyalo_core::discovery::discover_files(tmp.path()).unwrap();
+        let pairs: Vec<(std::path::PathBuf, String)> = files
+            .into_iter()
+            .map(|f| {
+                let r = f
+                    .strip_prefix(tmp.path())
+                    .unwrap_or(&f)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                (f, r)
+            })
+            .collect();
+        let build = hyalo_core::index::ScannedIndex::build(
+            &pairs,
+            None,
+            &hyalo_core::index::ScanOptions {
+                scan_body: true,
+                bm25_tokenize: true,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let bm25_index =
+            hyalo_core::bm25::Bm25InvertedIndex::build_from_entries(build.index.entries());
+        let snap_path = tmp.path().join(".hyalo-index-bm25-test");
+        SnapshotIndex::save(
+            &build.index,
+            &snap_path,
+            "/vault",
+            None,
+            bm25_index.as_ref(),
+        )
+        .unwrap();
+        let idx = SnapshotIndex::load(&snap_path).unwrap().unwrap();
+
+        // Toggle the task on disk, exactly like `toggle_tasks` does.
+        fs::write(
+            &full,
+            "---\ntitle: note\ntags: [a]\n---\n\n# note\n\n- [x] todo\n",
+        )
+        .unwrap();
+
+        let mut holder = Some(idx);
+        let mut journal = MutationJournal::new(&mut holder, Some(&snap_path));
+        journal.update_task(&full, &rel).unwrap();
+
+        // Check the in-memory entry *before* flush: `write_snapshot` strips
+        // per-entry `bm25_tokens` on save whenever a persisted BM25 index is
+        // present (they live in the inverted index instead), so a
+        // post-reload comparison would compare `None` to `None` and prove
+        // nothing about the bug this test targets.
+        let actual_tokens = journal
+            .index()
+            .unwrap()
+            .get(&rel)
+            .and_then(|e| e.bm25_tokens.clone());
+
+        // A fresh disk scan of the toggled file must tokenize to the same
+        // `bm25_tokens` the journal left in the entry.
+        let expected = hyalo_core::index::ScannedIndex::build(
+            &pairs,
+            None,
+            &hyalo_core::index::ScanOptions {
+                scan_body: true,
+                bm25_tokenize: true,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let expected_tokens = expected.index.get(&rel).and_then(|e| e.bm25_tokens.clone());
+
+        assert_eq!(
+            actual_tokens, expected_tokens,
+            "post-toggle bm25_tokens must match a fresh disk scan of the toggled file"
+        );
+        assert!(
+            expected_tokens.is_some(),
+            "sanity: scan must produce tokens"
+        );
+
+        journal.flush().unwrap();
+        assert!(snap_path.is_file());
     }
 
     #[test]

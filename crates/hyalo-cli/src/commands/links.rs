@@ -1745,8 +1745,9 @@ pub(crate) fn run(
     use crate::dispatch::maybe_case_index;
     use hyalo_core::index::ScanOptions;
 
-    // DEC-241 (BUG-2 detection): an in-place edit of an indexed file is
-    // invisible to the shallow directory-mtime probe, yet `links fix`'s
+    // DEC-241 (BUG-2 detection): an in-place edit of an indexed file leaves
+    // every directory's mtime untouched, so it is invisible to the
+    // directory-mtime probe (`newest_dir_mtime`), yet `links fix`'s
     // discovery pass reads links from the *index*, so a stale entry made
     // `--apply --index` report `broken: 0` for a link added seconds ago —
     // silently, exit 0, file untouched. Before any discovery happens,

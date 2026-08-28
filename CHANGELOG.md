@@ -53,6 +53,36 @@ and this project adheres to
 
 ### Fixed
 
+- **Pre-v0.21.0 dogfood fixes (iter-249).**
+  - **UX-1: stale-index probe was blind past the vault's top level.** The
+    `index older than vault` staleness probe (`create-index`/`--index`)
+    used to check only the vault root and its immediate subdirectories, so
+    a file added or removed two or more directories deep — the common case
+    on real vaults (`iterations/done/*.md` here, nearly every page on MDN
+    and GitHub Docs) — never tripped the warning. The probe now walks
+    directories recursively down to 3 levels (measured: an unbounded walk
+    added ~65% to an indexed query on MDN's 14k-file tree, well past
+    budget, so depth is bounded rather than unlimited), still without
+    reading any file content. `create-index --help` and the `--index` flag
+    help now describe the real depth and its two remaining blind spots
+    (in-place edits of existing files, which never move a directory's
+    mtime, and files added or removed inside a directory more than 3
+    levels below the vault root).
+  - **BUG-1 (carry-over): `task toggle`/`task set --index` BM25 parity.**
+    `task toggle --all --index` and `task set --index` used to patch just
+    the toggled tasks' status in place, leaving the entry's cached BM25
+    tokens stale relative to the file's new body bytes; the journal now
+    re-scans the mutated file the same way `set`/`append`/`mv`/`lint --fix`
+    already do, so `find --index` scores stay byte-identical to a disk
+    scan after a task mutation. `lint --fix --index` was audited too and
+    already re-tokenizes correctly.
+  - **UX-2: `links fix --apply --apply-fuzzy` text summary mislabeled
+    applied fuzzy matches as excluded.** The `Low-confidence matches (…)`
+    summary line always said "excluded from plain --apply", even when
+    `--apply-fuzzy` had just written those matches to disk. It now reads
+    "applied via --apply-fuzzy" when the flag was active, and keeps the
+    original "excluded from plain --apply" wording otherwise. JSON keys
+    are unchanged.
 - **`read` no longer misreports invalid UTF-8 lines as oversized (iter-246,
   F-5).** A body line containing invalid UTF-8 was skipped with the
   "exceeds 1 MiB per-line limit" placeholder because the capped line reader

@@ -34,6 +34,7 @@ mod iteration241_followups;
 mod iteration243_followups;
 mod iteration244_followups;
 mod iteration245_followups;
+mod iteration249_followups;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;
