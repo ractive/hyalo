@@ -1730,9 +1730,9 @@ fn run_inner() -> Result<(), AppError> {
                     // outside it (by hand, by another tool, or by hyalo itself
                     // without `--index`) are simply invisible, and the run
                     // still exits 0. Probe the vault's directory mtimes
-                    // (recursively, iter-249 UX-1) and warn when they postdate
-                    // the snapshot, so a stale index is at least noisy instead
-                    // of silently wrong.
+                    // (bounded-depth walk, iter-249 UX-1) and warn when they
+                    // postdate the snapshot, so a stale index is at least
+                    // noisy instead of silently wrong.
                     let (_, _, created_at, _) = idx.header_info();
                     let stale = hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
                         newest
