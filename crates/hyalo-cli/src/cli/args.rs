@@ -362,7 +362,7 @@ pub(crate) struct FindFilters {
     #[arg(long, short = 'e', value_name = "REGEX")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regexp: Option<String>,
-    /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND)
+    /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and sequences (contact.email, contacts.0.email, contacts.email = any element)
     #[arg(short, long = "property", value_name = "FILTER")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<String>,
@@ -593,6 +593,11 @@ pub(crate) enum Commands {
             but should not under-match a real substring.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
+            \u{00a0} Dot-paths traverse nested frontmatter: a literal dotted key in a flat map wins first, \
+            then `contact.email=x` descends the map `contact: {email: x}`. Sequences are descended too: \
+            a numeric segment indexes one element (`contacts.0.email`), any other segment auto-descends into \
+            EVERY element and collects the hits (`contacts.email=x` matches when any contact has that email; \
+            `!=` matches when none does).\n\
             - --tag T: tag filter (exact or prefix via '/': 'project' matches 'project/backend' but NOT 'projects' — no substring or fuzzy matching)\n\
             - --task STATUS: task presence filter ('todo', 'done', 'any', or a single status char)\n\
             - --section HEADING: section scope filter (exclude files without a matching section; within \
@@ -645,6 +650,7 @@ pub(crate) enum Commands {
             \u{00a0} hyalo find 'error handling'\n\
             \u{00a0} hyalo find --property status=draft --tag project\n\
             \u{00a0} hyalo find --property 'title~=/^Design/i'\n\
+            \u{00a0} hyalo find --property contacts.email=team@example.com   # dot-path into a list of maps\n\
             \u{00a0} hyalo find --section 'Tasks' --task todo\n\
             \u{00a0} hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'\n\
             \u{00a0} hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\

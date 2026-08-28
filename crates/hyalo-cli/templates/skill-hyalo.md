@@ -64,6 +64,19 @@ hyalo find --property 'title~=draft'      # title contains "draft"
 hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
 ```
 
+`K` may be a **dot-path** into nested frontmatter. A literal dotted key in a flat map is
+tried first; otherwise the path is walked. Maps descend by key, and sequences descend too:
+a numeric segment pins one element, any other segment auto-descends into *every* element and
+collects the hits — so the usual list semantics apply (`=`/`~=` match when any element
+matches, `!=` when none does):
+
+```bash
+hyalo find --property contact.email=team@example.com   # contact: {email: ...}
+hyalo find --property contacts.email=ada@example.com   # contacts: [{name, email}, ...] — any element
+hyalo find --property contacts.0.email=ada@example.com # first element only
+hyalo find --property '!contacts.phone'                # no element has a phone
+```
+
 `--title` filters by the displayed title (frontmatter `title` or first H1 heading).
 Case-insensitive substring by default; use `"/regex/"` for regex. Note: `--title` checks
 the *displayed* title, while `--property title~=` only checks the frontmatter property.

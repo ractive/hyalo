@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::Value;
@@ -56,45 +58,18 @@ pub fn tag_matches(tag: &str, query: &str) -> bool {
 
 impl PropertyFilter {
     /// Return true if the given property map satisfies this filter.
+    ///
+    /// Resolution goes through [`resolve_prop`], so nested dot-paths (maps and
+    /// sequences of maps) are handled here; the comparison itself is shared
+    /// with [`PropertyFilter::matches_value`].
     pub fn matches(&self, props: &IndexMap<String, Value>) -> bool {
         match self {
             PropertyFilter::Absent { key } => resolve_prop(props, key).is_none(),
-            PropertyFilter::RegexMatch { key, pattern } => {
-                let Some(yaml_val) = resolve_prop(props, key) else {
-                    return false;
-                };
-                yaml_value_regex_match(yaml_val, pattern)
+            PropertyFilter::RegexMatch { key, .. } => {
+                resolve_prop(props, key).is_some_and(|resolved| self.matches_value(&resolved))
             }
-            PropertyFilter::Scalar { name, op, value } => {
-                if *op == FilterOp::Exists {
-                    return resolve_prop(props, name).is_some();
-                }
-
-                let Some(yaml_val) = resolve_prop(props, name) else {
-                    return false;
-                };
-                let filter_val = value.as_deref().unwrap_or("");
-
-                match op {
-                    FilterOp::Eq => yaml_value_eq(yaml_val, filter_val),
-                    FilterOp::NotEq => !yaml_value_eq(yaml_val, filter_val),
-                    FilterOp::Gt => {
-                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Greater)
-                    }
-                    FilterOp::Gte => matches!(
-                        yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-                    ),
-                    FilterOp::Lt => {
-                        yaml_cmp(yaml_val, filter_val) == Some(std::cmp::Ordering::Less)
-                    }
-                    FilterOp::Lte => matches!(
-                        yaml_cmp(yaml_val, filter_val),
-                        Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-                    ),
-                    // SAFETY: Exists is handled by the early return above
-                    FilterOp::Exists => unreachable!("Exists handled by early return"),
-                }
+            PropertyFilter::Scalar { name, .. } => {
+                resolve_prop(props, name).is_some_and(|resolved| self.matches_value(&resolved))
             }
         }
     }
@@ -153,28 +128,80 @@ impl PropertyFilter {
 // ---------------------------------------------------------------------------
 
 /// Resolve a property key against a frontmatter map, supporting nested
-/// dot-path traversal (UX-3, iter-244).
+/// dot-path traversal (UX-3, iter-244; arrays of maps added in iter-245).
 ///
 /// `a.b=v` first tries the literal key `"a.b"` (a flat map may genuinely
-/// contain dotted keys), then falls back to walking the nested map: `a.b`
-/// matches `{a: {b: …}}`. Traversal only descends through JSON objects —
-/// `a.b` against `{a: [1,2]}` does not resolve. A missing segment yields
-/// `None`, which the callers turn into the same verdict as a missing flat
-/// key (fails `Scalar`/`RegexMatch`, passes `Absent`).
-fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option<&'a Value> {
+/// contain dotted keys), then falls back to walking the nested value:
+///
+/// - **Maps** — `a.b` matches `{a: {b: …}}`; the segment is a key lookup.
+/// - **Sequences** — a numeric segment indexes (`contacts.0.email` is the
+///   first element's `email`); any other segment auto-descends into *every*
+///   element and collects the hits, so `contacts.email` against
+///   `contacts: [{email: a}, {email: b}]` resolves to `[a, b]`. Because the
+///   collected values are returned as a sequence, the existing sequence
+///   semantics apply unchanged: `=`/`~=` match when **any** element matches,
+///   `!=` when **none** does, and a bare key exists when at least one element
+///   yielded a value.
+///
+/// A missing segment yields `None`, which the callers turn into the same
+/// verdict as a missing flat key (fails `Scalar`/`RegexMatch`, passes
+/// `Absent`).
+///
+/// The return type is a [`Cow`] so the common flat/map path stays borrowed;
+/// only auto-descent through a sequence allocates.
+fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option<Cow<'a, Value>> {
     if let Some(v) = props.get(key) {
-        return Some(v);
+        return Some(Cow::Borrowed(v));
     }
-    if !key.contains('.') {
-        return None;
+    let (first, rest) = key.split_once('.')?;
+    resolve_path(props.get(first)?, Some(rest))
+}
+
+/// Walk `path` (a dot-separated remainder, `None` once exhausted) from `value`.
+///
+/// See [`resolve_prop`] for the traversal rules. Recursion depth is bounded by
+/// the number of path segments times the nesting depth of the frontmatter
+/// value, both of which are user data of bounded size in practice.
+fn resolve_path<'a>(value: &'a Value, path: Option<&str>) -> Option<Cow<'a, Value>> {
+    let Some(path) = path else {
+        return Some(Cow::Borrowed(value));
+    };
+    let (segment, rest) = match path.split_once('.') {
+        Some((segment, rest)) => (segment, Some(rest)),
+        None => (path, None),
+    };
+    match value {
+        Value::Object(map) => resolve_path(map.get(segment)?, rest),
+        Value::Array(items) => {
+            // Indexed segment form: `contacts.0.email`.
+            if let Ok(index) = segment.parse::<usize>()
+                && let Some(item) = items.get(index)
+            {
+                return resolve_path(item, rest);
+            }
+            // Auto-descent: apply the *same* segment to every element and
+            // collect the hits into a sequence ("any element matches").
+            let mut collected: Vec<Value> = Vec::new();
+            for item in items {
+                if let Some(found) = resolve_path(item, Some(path)) {
+                    match found.into_owned() {
+                        // Flatten, so `a.b.c` over nested lists stays a flat
+                        // list of leaves rather than a list of lists.
+                        Value::Array(inner) => collected.extend(inner),
+                        other => collected.push(other),
+                    }
+                }
+            }
+            match collected.len() {
+                0 => None,
+                // A single hit is returned bare so ordering ops (`>`, `<`)
+                // still work; they cannot compare a sequence.
+                1 => collected.pop().map(Cow::Owned),
+                _ => Some(Cow::Owned(Value::Array(collected))),
+            }
+        }
+        _ => None,
     }
-    let mut segments = key.split('.');
-    let first = segments.next()?;
-    let mut current = props.get(first)?;
-    for segment in segments {
-        current = current.as_object()?.get(segment)?;
-    }
-    Some(current)
 }
 
 // ---------------------------------------------------------------------------

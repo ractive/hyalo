@@ -117,6 +117,261 @@ mod tests {
         assert!(!f.matches(&props));
     }
 
+    // ------------------------------------------------------------------
+    // UX-3 follow-up (iter-245): dot-paths through sequences of maps
+    // ------------------------------------------------------------------
+
+    /// `contacts: [{name, email}, …]` — a non-numeric segment auto-descends
+    /// into every element, so `contacts.email=v` matches when ANY element's
+    /// `email` equals `v`.
+    fn contacts_props() -> IndexMap<String, Value> {
+        let mut props = IndexMap::new();
+        props.insert(
+            "contacts".to_owned(),
+            json!([
+                {"name": "Ada", "email": "ada@example.com"},
+                {"name": "Grace", "email": "grace@example.com"},
+            ]),
+        );
+        props
+    }
+
+    #[test]
+    fn dot_path_array_of_maps_matches_any_element() {
+        let props = contacts_props();
+        for value in ["ada@example.com", "grace@example.com"] {
+            let f = parse_property_filter(&format!("contacts.email={value}")).unwrap();
+            assert!(f.matches(&props), "expected {value} to match any element");
+        }
+    }
+
+    #[test]
+    fn dot_path_array_of_maps_non_matching_value_fails() {
+        let f = parse_property_filter("contacts.email=nobody@example.com").unwrap();
+        assert!(!f.matches(&contacts_props()));
+    }
+
+    #[test]
+    fn dot_path_array_of_maps_missing_key_fails() {
+        let f = parse_property_filter("contacts.phone=555").unwrap();
+        assert!(!f.matches(&contacts_props()));
+    }
+
+    #[test]
+    fn dot_path_array_index_segment_selects_one_element() {
+        let props = contacts_props();
+        assert!(
+            parse_property_filter("contacts.0.email=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("contacts.1.email=grace@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+        // An index pins the element: element 1 is not Ada.
+        assert!(
+            !parse_property_filter("contacts.1.email=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_index_out_of_range_yields_no_match() {
+        let props = contacts_props();
+        assert!(
+            !parse_property_filter("contacts.9.email=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("contacts.9.email")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_index_into_scalar_sequence() {
+        let mut props = IndexMap::new();
+        props.insert("tags".to_owned(), json!(["alpha", "beta"]));
+        assert!(
+            parse_property_filter("tags.0=alpha")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("tags.1=beta")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("tags.0=beta")
+                .unwrap()
+                .matches(&props)
+        );
+        // A non-numeric segment cannot descend into scalar elements.
+        assert!(
+            !parse_property_filter("tags.name=alpha")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_not_eq_requires_no_element_to_match() {
+        let props = contacts_props();
+        // One element matches, so "not equal" is false — the same semantics a
+        // flat list property already has.
+        assert!(
+            !parse_property_filter("contacts.email!=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("contacts.email!=nobody@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_regex_matches_any_element() {
+        let props = contacts_props();
+        assert!(
+            parse_property_filter("contacts.email~=^grace@")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("contacts.email~=^nobody@")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_exists_and_absent() {
+        let props = contacts_props();
+        assert!(
+            parse_property_filter("contacts.email")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("!contacts.email")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("contacts.phone")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("!contacts.phone")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_array_single_hit_supports_ordering_ops() {
+        // Exactly one element yields a value, so it is returned bare and the
+        // ordering operators (which cannot compare a sequence) still work.
+        let mut props = IndexMap::new();
+        props.insert(
+            "scores".to_owned(),
+            json!([{"name": "unit"}, {"name": "e2e", "value": 42}]),
+        );
+        assert!(
+            parse_property_filter("scores.value>10")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("scores.value>100")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("scores.value<=42")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_nested_sequences_flatten_to_leaves() {
+        let mut props = IndexMap::new();
+        props.insert(
+            "groups".to_owned(),
+            json!([
+                {"members": [{"name": "Ada"}, {"name": "Grace"}]},
+                {"members": [{"name": "Alan"}]},
+            ]),
+        );
+        for name in ["Ada", "Grace", "Alan"] {
+            assert!(
+                parse_property_filter(&format!("groups.members.name={name}"))
+                    .unwrap()
+                    .matches(&props),
+                "expected {name} to be reachable through both sequence levels"
+            );
+        }
+        assert!(
+            !parse_property_filter("groups.members.name=Nobody")
+                .unwrap()
+                .matches(&props)
+        );
+        // Mixed index + auto-descent segments compose.
+        assert!(
+            parse_property_filter("groups.1.members.0.name=Alan")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_map_then_sequence_composes() {
+        let mut props = IndexMap::new();
+        props.insert(
+            "meta".to_owned(),
+            json!({"contacts": [{"email": "ada@example.com"}]}),
+        );
+        assert!(
+            parse_property_filter("meta.contacts.email=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("meta.contacts.email=nobody@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
+    #[test]
+    fn dot_path_literal_dotted_key_still_wins_over_sequence_descent() {
+        let mut props = contacts_props();
+        props.insert(
+            "contacts.email".to_owned(),
+            Value::String("flat".to_owned()),
+        );
+        assert!(
+            parse_property_filter("contacts.email=flat")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("contacts.email=ada@example.com")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
     #[test]
     fn parse_not_eq() {
         let f = parse_property_filter("status!=superseded").unwrap();
