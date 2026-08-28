@@ -33,6 +33,13 @@ and this project adheres to
 
 ### Fixed
 
+- **`read` no longer misreports invalid UTF-8 lines as oversized (iter-246,
+  F-5).** A body line containing invalid UTF-8 was skipped with the
+  "exceeds 1 MiB per-line limit" placeholder because the capped line reader
+  folded both skip causes into one flag. `scanner::read_line_capped` now
+  reports a distinct `LineOutcome::InvalidUtf8`, and `hyalo read` emits
+  `<line skipped: invalid UTF-8 (lossy in search; fix encoding to read)>`;
+  the oversized-line placeholder is reserved for real over-quota lines.
 - **BUG-4 (carry-over): post-mutation BM25 parity.** After a mutation wave
   under `--index`, `find --index` scores are byte-identical to a disk scan
   without an intervening `create-index`: incremental re-scans re-tokenize

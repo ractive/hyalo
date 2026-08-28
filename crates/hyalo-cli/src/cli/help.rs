@@ -47,7 +47,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
                [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
-               [-f/--file F | -g/--glob G] [--filenames-only | --filenames0] [--fields ...] [--sort ...] [--reverse] [--strict] [-n/--limit N]
+               [-f/--file F | -g/--glob G] [--filenames-only | --filenames0] [--fields ...] [--sort ...] [--reverse] [--strict] [--language LANG] [-n/--limit N]
 
   Read (display file body content, read-only):
     hyalo read FILE [-s/--section HEADING] [-l/--lines RANGE] [--frontmatter]
@@ -71,19 +71,21 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo tags rename --from OLD --to NEW [-g/--glob G]           Rename a tag across files (mutates files)
 
   Summary (vault overview, read-only):
-    hyalo summary [-g/--glob G] [-n/--recent N] [--depth N] [--limit N]
+    hyalo summary [-g/--glob G] [-n/--recent N] [--depth N]
 
   Task (single-task operations):
     hyalo task read       -f/--file F -l/--line N           Read task at a line
     hyalo task toggle     -f/--file F -l/--line N           Toggle completion
     hyalo task set        -f/--file F -l/--line N -s/--status C
+    --line accepts comma-separated lists; --section H and --all select tasks without line numbers
 
   Backlinks (reverse link lookup, read-only):
     hyalo backlinks FILE [-n/--limit N]
     hyalo backlinks -f/--file F [...]                             Flag form; FILE positional is equivalent
 
   Links (link operations):
-    hyalo links fix [--apply] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
+    hyalo links fix [--apply] [--apply-fuzzy] [--min-confidence F] [--case-insensitive]
+                    [--expand-short-form] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)
     hyalo links auto [--apply] [--first-only | --no-first-only] [--min-length N] [--exclude-title T ...] [--exclude-target-glob G ...] [--file F | -g/--glob G ...]   Auto-link unlinked title mentions (default: dry-run)
     Persist the exclusions in .hyalo.toml:  [links.auto] exclude_titles / exclude_target_globs / first_only (flags extend the lists; --no-first-only overrides first_only for one run)
 
@@ -124,12 +126,12 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo madr toc [--apply]                               Regenerate the ADR table of contents / status dashboard
 
   Changelog (Keep a Changelog 1.1.0 maintenance):
-    hyalo changelog add <CATEGORY> <TEXT>                  Append an entry under `## [Unreleased]`
+    hyalo changelog add --category CAT --message TEXT     Append an entry under `## [Unreleased]`
     hyalo changelog release <VERSION>                      Rotate `## [Unreleased]` into a dated release section
 
   Okf (Open Knowledge Format artifact generators):
     hyalo okf index [--apply]                              Regenerate each directory's index.md from concept frontmatter
-    hyalo okf log <TEXT> [--apply]                         Prepend a dated entry to a scope-selectable log.md
+    hyalo okf log --message TEXT [TARGET] [--apply]       Prepend a dated entry to a scope-selectable log.md
 
   Config (print the effective configuration, read-only):
     hyalo config [--raw] [-d/--dir DIR]                    # --raw also prints the .hyalo.toml text

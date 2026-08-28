@@ -2,7 +2,7 @@
 title: Deep review 2026-08-27 — code quality, security, help coherence, README, dogfood
 type: research
 date: 2026-08-27
-status: active
+status: resolved
 tags:
   - review
   - security
@@ -13,6 +13,7 @@ related:
   - "[[reviews/adversarial-review-2026-08-23]]"
   - "[[reviews/codebase-review-2026-08-06]]"
   - "[[dogfood-results/dogfood-v0200-arch-refactors-and-agent-cli-followups]]"
+  - "[[iterations/iteration-246-help-coherence-review-followups]]"
 ---
 
 # Deep review — hyalo 0.20.0 (2026-08-27)

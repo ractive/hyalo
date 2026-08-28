@@ -476,16 +476,16 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 
     loop {
         buf.clear();
-        let (n, truncated) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)
+        let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)
             .context("failed to read line")?;
         if n == 0 {
             break;
         }
         line_num += 1;
-        if truncated {
-            // Line either exceeded the per-line byte limit or contained
-            // invalid UTF-8 — skip it entirely to prevent OOM on files with
-            // no newlines (e.g. minified HTML/JSON accidentally placed in the
+        if outcome.is_skipped() {
+            // Line exceeded the per-line byte limit or contained invalid
+            // UTF-8 — skip it entirely to prevent OOM on files with no
+            // newlines (e.g. minified HTML/JSON accidentally placed in the
             // vault) and to avoid propagating malformed encoding. The line
             // counter still advances so that downstream line numbers remain
             // correct.
@@ -509,12 +509,33 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 /// accidentally-added minified blobs) would otherwise exhaust memory.
 pub const MAX_BODY_LINE_BYTES: usize = 1024 * 1024; // 1 MiB
 
+/// Why a line could not be reported verbatim by [`read_line_capped`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineOutcome {
+    /// The line fit entirely in the byte quota and is valid UTF-8.
+    Complete,
+    /// The line exceeded the per-line byte quota; excess bytes were drained.
+    Truncated,
+    /// The line contained invalid UTF-8 and is not representable in `buf`.
+    InvalidUtf8,
+}
+
+impl LineOutcome {
+    /// `true` when the caller must skip the line (position is preserved).
+    pub fn is_skipped(self) -> bool {
+        !matches!(self, LineOutcome::Complete)
+    }
+}
+
 /// Read one newline-terminated line into `buf`, but stop after `limit` bytes.
 ///
-/// Returns `(bytes_consumed, truncated)`.  When `truncated` is `true` the
-/// reader is positioned just after where the logical line ended (i.e. excess
-/// bytes are drained until the next `\n` or EOF), and the caller should treat
-/// the line as skipped.
+/// Returns `(bytes_consumed, outcome)`.  When the outcome is not
+/// [`LineOutcome::Complete`] the reader is positioned just after where the
+/// logical line ended (i.e. excess or invalid bytes are drained until the next
+/// `\n` or EOF), and the caller should treat the line as skipped — the
+/// outcome says *why* (over-quota truncation vs. invalid UTF-8).  Both skip
+/// paths still drain to the next newline and advance the reader; only the
+/// reported cause differs.
 ///
 /// Exposed beyond `#[cfg(test)]` so other crates (e.g. `hyalo-cli`'s `read`
 /// command) can stream a single file with the same per-line memory bound the
@@ -523,7 +544,7 @@ pub fn read_line_capped<R: BufRead>(
     reader: &mut R,
     buf: &mut String,
     limit: usize,
-) -> std::io::Result<(usize, bool)> {
+) -> std::io::Result<(usize, LineOutcome)> {
     let mut total = 0usize;
     loop {
         // Inspect the internal buffer to find a newline and measure how many
@@ -531,7 +552,7 @@ pub fn read_line_capped<R: BufRead>(
         // releasing the borrow so that we can then call `consume`.
         let (newline_pos, chunk_len) = loop {
             match reader.fill_buf() {
-                Ok([]) => return Ok((total, false)),
+                Ok([]) => return Ok((total, LineOutcome::Complete)),
                 Ok(b) => {
                     let nl = b.iter().position(|&byte| byte == b'\n');
                     let len = b.len();
@@ -557,19 +578,19 @@ pub fn read_line_capped<R: BufRead>(
             if newline_pos == Some(0) {
                 reader.consume(1);
                 total += 1;
-                // Keep parity with the other non-truncated paths, which
+                // Keep parity with the other complete paths, which
                 // include the terminating newline in `buf`.
                 buf.push('\n');
-                return Ok((total, false));
+                return Ok((total, LineOutcome::Complete));
             }
             // Otherwise there is more line content beyond the quota — drain it.
             reader.consume(consume);
             total += consume;
             if newline_pos.is_some() {
-                return Ok((total, true));
+                return Ok((total, LineOutcome::Truncated));
             }
             drain_until_newline(reader)?;
-            return Ok((total, true));
+            return Ok((total, LineOutcome::Truncated));
         }
 
         // Within quota: copy up to `to_copy` bytes into a temporary Vec so we
@@ -586,14 +607,16 @@ pub fn read_line_capped<R: BufRead>(
         reader.consume(consume);
         total += consume;
 
-        // Validate UTF-8; treat invalid bytes as a truncated/skipped line.
+        // Validate UTF-8; invalid bytes are a distinct skip cause so callers
+        // can report the real problem (F-5, iter-246) instead of blaming the
+        // byte limit.
         if let Ok(s) = std::str::from_utf8(&chunk) {
             buf.push_str(s);
         } else {
             if newline_pos.is_none() {
                 drain_until_newline(reader)?;
             }
-            return Ok((total, true));
+            return Ok((total, LineOutcome::InvalidUtf8));
         }
 
         let truncated = to_copy < consume;
@@ -601,12 +624,19 @@ pub fn read_line_capped<R: BufRead>(
             // The newline was within the consumed range — line is complete.
             // If quota was hit before the newline, we already consumed past it,
             // so no further draining is needed.
-            return Ok((total, truncated));
+            return Ok((
+                total,
+                if truncated {
+                    LineOutcome::Truncated
+                } else {
+                    LineOutcome::Complete
+                },
+            ));
         }
         if truncated {
             // Quota hit on a chunk with no newline — drain the rest of the line.
             drain_until_newline(reader)?;
-            return Ok((total, true));
+            return Ok((total, LineOutcome::Truncated));
         }
     }
 }
@@ -1758,17 +1788,20 @@ code only
         let mut reader = std::io::BufReader::with_capacity(chunk_cap, input.as_bytes());
 
         let mut buf = String::new();
-        let (n, truncated) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        let (n, outcome) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
         assert!(
-            !truncated,
+            outcome == LineOutcome::Complete,
             "line exactly at the limit must not be truncated"
         );
         assert_eq!(buf, format!("{line}\n"));
         assert_eq!(n, limit + 1);
 
         buf.clear();
-        let (_, truncated2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
-        assert!(!truncated2, "subsequent line must be read normally");
+        let (_, outcome2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(
+            outcome2 == LineOutcome::Complete,
+            "subsequent line must be read normally"
+        );
         assert_eq!(buf, "next\n");
     }
 
@@ -1783,12 +1816,76 @@ code only
         let mut reader = std::io::BufReader::with_capacity(chunk_cap, input.as_bytes());
 
         let mut buf = String::new();
-        let (_, truncated) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
-        assert!(truncated, "line one byte over the limit must be truncated");
+        let (_, outcome) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert_eq!(outcome, LineOutcome::Truncated);
 
         buf.clear();
-        let (_, truncated2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
-        assert!(!truncated2, "subsequent line must be read normally");
+        let (_, outcome2) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+        assert!(
+            outcome2 == LineOutcome::Complete,
+            "subsequent line must be read normally"
+        );
         assert_eq!(buf, "next\n");
+    }
+
+    #[test]
+    fn read_line_capped_invalid_utf8_is_not_truncation() {
+        // F-5 (iter-246): a line containing invalid UTF-8 must be reported as
+        // `InvalidUtf8`, not `Truncated` — the two skip causes have different
+        // user-facing messages and blaming the byte limit misdiagnosed the
+        // real problem (a bad encoding).
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(b"valid\n");
+        input.extend_from_slice(b"bad ");
+        input.push(0xFF);
+        input.push(0xFE);
+        input.extend_from_slice(b" rest\n");
+        input.extend_from_slice(b"after\n");
+        let mut reader = std::io::BufReader::with_capacity(4, &input[..]);
+
+        let mut buf = String::new();
+        // Consume the leading valid line first.
+        let (_, outcome0) = read_line_capped(&mut reader, &mut buf, 1024).unwrap();
+        assert_eq!(outcome0, LineOutcome::Complete);
+        assert_eq!(buf, "valid\n");
+
+        buf.clear();
+        let (n, outcome) = read_line_capped(&mut reader, &mut buf, 1024).unwrap();
+        assert_eq!(outcome, LineOutcome::InvalidUtf8);
+        assert!(n > 0, "bytes consumed must still be reported");
+
+        // The invalid line is drained: the following line reads normally.
+        buf.clear();
+        let (_, outcome2) = read_line_capped(&mut reader, &mut buf, 1024).unwrap();
+        assert_eq!(outcome2, LineOutcome::Complete);
+        assert_eq!(buf, "after\n");
+
+        // A valid line before the invalid one is unaffected.
+        let mut reader2 = std::io::BufReader::with_capacity(4, &input[..]);
+        buf.clear();
+        let (_, outcome3) = read_line_capped(&mut reader2, &mut buf, 1024).unwrap();
+        assert_eq!(outcome3, LineOutcome::Complete);
+        assert_eq!(buf, "valid\n");
+    }
+
+    #[test]
+    fn read_line_capped_invalid_utf8_before_quota_reports_invalid_utf8() {
+        // Encoding is the reported cause even when the line also exceeds the
+        // byte quota, as long as the invalid bytes are copied before the
+        // quota is exhausted (the quota check runs per chunk).
+        let mut input: Vec<u8> = b"aaaa".to_vec();
+        input.push(0xFF);
+        input.extend_from_slice(b"aaaaaaaaaaaa\n"); // line well past the 16-byte limit
+        input.extend_from_slice(b"after\n");
+        let mut reader = std::io::BufReader::with_capacity(4, &input[..]);
+
+        let mut buf = String::new();
+        let (_, outcome) = read_line_capped(&mut reader, &mut buf, 16).unwrap();
+        assert_eq!(outcome, LineOutcome::InvalidUtf8);
+
+        buf.clear();
+        let (_, outcome2) = read_line_capped(&mut reader, &mut buf, 16).unwrap();
+        assert_eq!(outcome2, LineOutcome::Complete);
+        assert_eq!(buf, "after\n");
     }
 }

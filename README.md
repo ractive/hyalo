@@ -174,7 +174,7 @@ hyalo lint --fix     # apply autofixes
 hyalo new --type iteration --file iterations/iter-99-example.md
 ```
 
-Every write command supports `--dry-run` to preview changes before applying them, and every command documents its flags: `hyalo <cmd> --help`.
+Write commands that modify existing files support `--dry-run` to preview changes before applying them, and every command documents its flags: `hyalo <cmd> --help`.
 
 ### Agent loop: new → edit → lint
 
@@ -214,7 +214,8 @@ pi install git:github.com/ractive/hyalo
 From **hyalo ≥ 0.21** on, pin the release tag matching your binary instead
 (recommended — the extension's expected output shapes track the binary, so a
 matched tag avoids extension/binary drift; the tag form needs ≥ v0.21.0,
-earlier tags predate the root package manifest):
+earlier tags predate the root package manifest; the `@v0.21.0` examples
+below work once v0.21.0 is tagged):
 
 ```sh
 pi install git:github.com/ractive/hyalo@v0.21.0
