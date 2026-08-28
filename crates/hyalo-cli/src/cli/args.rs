@@ -784,7 +784,10 @@ pub(crate) enum Commands {
             or --broken-links --strict to fail CI on any finding.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
-            USE WHEN: You need a quick overview of a vault's metadata landscape.\n\n\
+            USE WHEN: You need a quick overview of a vault's metadata landscape.\n\
+            VAULT DIR: with --format text the resolved vault dir is announced on stderr as\n\
+            'note: kb dir: <path>', so stdout carries only the report; -q suppresses the note\n\
+            and --format json keeps the dir in the payload as `.dir`.\n\n\
             FLAG NOTE: `-n / --recent` sizes the 'recently modified' list only. This differs\n\
             from `-n` on find and backlinks, where `-n` is `--limit` and caps the returned\n\
             result set. `summary` has no --limit; its stats always cover every scanned file.\n\n\
