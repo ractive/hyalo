@@ -3058,3 +3058,64 @@ is "the agent doesn't know the vault layout", the fix is teaching (help text,
 skills), not a new selector. Convenience flags for agents are a bad trade —
 the agent doesn't mind typing 40 characters; it minds not being able to
 predict behavior.
+
+## DEC-243: dot-path property filters descend sequences by auto-descent, with numeric segments as an index (2026-08-28)
+
+Implemented in [[iterations/iteration-245-deferral-carryovers]], closing the
+UX-3 follow-up carried out of [[iterations/iteration-244-index-remaining-deferrals]].
+
+**Decision.** `--property 'contacts.email=v'` traverses a frontmatter
+*sequence* as well as a mapping. Both forms the plan offered are supported,
+and they compose:
+
+- a **numeric** segment indexes one element — `contacts.0.email`;
+- **any other** segment auto-descends into *every* element and collects the
+  hits into a sequence — `contacts.email` over
+  `contacts: [{email: a}, {email: b}]` resolves to `[a, b]`.
+
+**Why both.** Auto-descent alone cannot express "the first contact"; an
+index alone forces the caller to know the list's shape, which is exactly
+what a vault-wide query does not know. The precedence rule keeps them
+unambiguous: a segment is only read as an index when the value at hand is a
+sequence *and* the segment parses as an in-range `usize`. A mapping keyed
+`"0"` is still a key lookup, and an out-of-range index falls through to
+auto-descent (which then finds nothing, rather than silently matching a
+neighbour).
+
+**Why collect into a sequence.** Returning the hits as a list means the
+established list semantics apply with no new operator rules to learn or
+document: `=`/`~=` match when any element matches, `!=` when none does, a
+bare key exists when at least one element yielded a value, and `!K` passes
+when none did. A single hit is returned bare so the ordering operators
+(`>`, `<`, …), which cannot compare a sequence, keep working. Nested
+sequences flatten, so `groups.members.name` reaches leaves through two
+levels.
+
+**Cost.** `resolve_prop` now returns `Cow<'_, Value>`: the flat-key and
+mapping paths stay borrowed, and only auto-descent through a sequence
+allocates — a per-file cost paid solely by queries that actually use the
+form. The literal-dotted-key-wins rule from iter-244 is unchanged.
+
+## DEC-244: v0.21.0 is deferred; the release stays parked pending an explicit owner decision (2026-08-28)
+
+Recorded in [[iterations/iteration-245-deferral-carryovers]] against that
+plan's second task ("cut v0.21.0 … or record the owner's explicit decision
+to stay on 0.20.x; owner call, do not tag without it").
+
+**Decision.** No tag is cut. Releases are on hold by standing owner
+decision, and the loop that implemented iteration 245 was explicitly barred
+from tagging, running `/release`, or invoking `gh release create`. The
+release question is therefore closed *as recorded*, not as executed: the
+`Unreleased` section of the changelog keeps accumulating, and the workspace
+stays on 0.20.0.
+
+**What is queued for whenever the release is unparked.** The `Unreleased`
+section already justifies a minor bump under DEC-101 version discipline —
+BUG-4 post-mutation BM25 parity, UX-3 nested dot-path filters and this
+iteration's sequence follow-up, UX-6 case-insensitive link resolution, and
+the `new` link-graph upsert. None of it is a breaking change, so 0.21.0
+remains the right number when the owner says go.
+
+**How to unpark.** The owner runs `/release` (the `release` skill) and
+picks the version; nothing in this decision constrains that choice beyond
+recording that the accumulated work is minor-bump-shaped.
