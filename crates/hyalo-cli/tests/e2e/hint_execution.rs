@@ -101,6 +101,39 @@ tags:
 Linked from [[note-0]] and links to [[note-1]].
 "),
     );
+
+    // A Keep a Changelog file so the `changelog` seed commands have a target
+    // (iter-246). The grammar requires the `# Changelog` title and a
+    // `## [Unreleased]` section to append under.
+    std::fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\nAll notable changes to this project.\n\n## [Unreleased]\n\n### Added\n\n- Initial entry.\n",
+    )
+    .unwrap();
+
+    // A minimal MADR ADR directory so `madr toc` scans a real ADR: number
+    // from the `NNNN-slug.md` filename, title/status/date from frontmatter
+    // (same shape `madr_profile.rs` scaffolds), plus a README whose managed
+    // region the TOC regenerates into.
+    write_md(
+        root,
+        "docs/decisions/0001-use-postgres.md",
+        md!(r"
+---
+title: Use Postgres
+status: accepted
+date: 2026-01-15
+---
+# Use Postgres
+
+We chose Postgres.
+"),
+    );
+    write_md(
+        root,
+        "docs/decisions/README.md",
+        "# Architecture Decision Records\n\n<!-- madr:toc:begin -->\n<!-- madr:toc:end -->\n",
+    );
 }
 
 /// Seed commands whose hints are harvested. Each is argv *after* `hyalo`.
@@ -162,6 +195,20 @@ const SEED_COMMANDS: &[&[&str]] = &[
         "notes/note-3.md",
     ],
     &["mv", "notes/note-4.md", "notes/moved-4.md"],
+    // Profile-generator sources (iter-246): their hints validate the
+    // generated artifact via `lint --profile <p>` or apply the pending
+    // regeneration — both must execute cleanly.
+    &[
+        "changelog",
+        "add",
+        "--category",
+        "Added",
+        "--message",
+        "Test entry",
+    ],
+    &["okf", "index"],
+    &["okf", "log", "--message", "Test entry"],
+    &["madr", "toc"],
 ];
 
 /// A harvested hint: the seed command that produced it, its description, and

@@ -827,6 +827,46 @@ fn read_oversized_single_line_is_placeholdered_not_buffered() {
     );
 }
 
+/// A line containing invalid UTF-8 must be reported with the invalid-UTF-8
+/// placeholder — not the oversized-line one (iter-246, F-5).  The two skip
+/// causes used to share `truncated = true`, so a 36-byte file with a `\xff`
+/// body byte was misdiagnosed as exceeding the per-line byte limit.
+#[test]
+fn read_invalid_utf8_line_gets_dedicated_placeholder() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("bad-encoding.md");
+    // Well under the per-line byte cap; the only problem is the encoding.
+    let mut bytes: Vec<u8> = Vec::new();
+    bytes.extend_from_slice(b"first line is fine\n");
+    bytes.extend_from_slice(b"bad \xff\xfe rest of line\n");
+    bytes.extend_from_slice(b"after the bad line\n");
+    fs::write(&path, &bytes).unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["read", "--file", "bad-encoding.md"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        stdout.contains("invalid UTF-8"),
+        "expected invalid-UTF-8 placeholder, got: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("per-line limit"),
+        "must not blame the byte limit for an encoding problem: {stdout:?}"
+    );
+    // Surrounding lines still read; the bad line keeps its position.
+    assert!(stdout.contains("first line is fine"));
+    assert!(stdout.contains("after the bad line"));
+}
+
 /// Pin exact output for an ordinary small file across the fix — the capped
 /// reader must remain byte-for-byte equivalent to the previous
 /// `BufRead::lines()` based implementation for normal input.

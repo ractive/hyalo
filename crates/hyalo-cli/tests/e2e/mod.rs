@@ -22,6 +22,7 @@ mod files_from;
 mod find;
 mod frontmatter_preservation;
 mod help;
+mod help_reference;
 mod hint_execution;
 mod hints;
 mod hyalo_config;

@@ -194,6 +194,15 @@ fn oversized_line_placeholder() -> String {
     )
 }
 
+/// Placeholder pushed in place of a body line that contains invalid UTF-8
+/// (iter-246, F-5).  Deliberately does NOT mention the byte limit: the line
+/// was skipped because of its encoding, not its size, and the old behaviour
+/// of blaming the per-line limit misdiagnosed the problem.  The line's
+/// position is preserved, same as the oversized-line case.
+fn invalid_utf8_line_placeholder() -> String {
+    "<line skipped: invalid UTF-8 (lossy in search; fix encoding to read)>".to_owned()
+}
+
 /// Read the raw body lines from a markdown file, skipping frontmatter.
 /// Returns the lines with their trailing newlines stripped.
 ///
@@ -208,7 +217,7 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
 
     // Read first line (capped) to check for frontmatter.
     let mut first_line = String::new();
-    let (n, first_truncated) =
+    let (n, first_outcome) =
         scanner::read_line_capped(&mut reader, &mut first_line, scanner::MAX_BODY_LINE_BYTES)
             .with_context(|| format!("failed to read {}", path.display()))?;
     if n == 0 {
@@ -217,10 +226,13 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
 
     let mut lines = Vec::new();
 
-    if first_truncated {
+    if first_outcome.is_skipped() {
         // A real `---` frontmatter delimiter is 3 bytes, so a line this long
         // can only be body content.
-        lines.push(oversized_line_placeholder());
+        lines.push(match first_outcome {
+            scanner::LineOutcome::InvalidUtf8 => invalid_utf8_line_placeholder(),
+            _ => oversized_line_placeholder(),
+        });
     } else {
         let first_trimmed = first_line.trim_end_matches(['\n', '\r']);
         let fm_lines = frontmatter::skip_frontmatter(&mut reader, first_trimmed)?;
@@ -232,14 +244,17 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
 
     loop {
         let mut buf = String::new();
-        let (n, truncated) =
+        let (n, outcome) =
             scanner::read_line_capped(&mut reader, &mut buf, scanner::MAX_BODY_LINE_BYTES)
                 .with_context(|| format!("failed to read {}", path.display()))?;
         if n == 0 {
             break;
         }
-        if truncated {
-            lines.push(oversized_line_placeholder());
+        if outcome.is_skipped() {
+            lines.push(match outcome {
+                scanner::LineOutcome::InvalidUtf8 => invalid_utf8_line_placeholder(),
+                _ => oversized_line_placeholder(),
+            });
         } else {
             lines.push(buf.trim_end_matches(['\n', '\r']).to_owned());
         }
