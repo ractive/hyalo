@@ -111,6 +111,13 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
 
 /// Show a high-level vault summary using pre-scanned index data.
 ///
+/// The rendered text report no longer opens with a `kb dir: <path>` banner
+/// (iter-247): commands run with `effective_format = Json` internally and the
+/// user's format is only known in [`crate::run`], so the note is emitted there
+/// — see the `summary_kb_dir_note` binding — on stderr, where it stays out of a
+/// piped report and obeys `-q`. `dir` is still part of this function's payload
+/// and reaches JSON consumers unchanged.
+///
 /// All aggregation (file counts, properties, tags, status groups, tasks, recent
 /// files, orphans) is derived from `IndexEntry` values rather than scanning
 /// files from disk.

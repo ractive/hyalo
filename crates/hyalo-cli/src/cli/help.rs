@@ -165,6 +165,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Per-subcommand index flags (see each subcommand's --help):
     --index                   Use the default snapshot index (.hyalo-index in the vault dir)
     --index-file <PATH>       Use a snapshot index at an explicit path
+    --strict-index            Global: rescan disk instead of serving a stale snapshot
 
   Default output limits:
     Capped commands ({LIMITED_COMMANDS}) return

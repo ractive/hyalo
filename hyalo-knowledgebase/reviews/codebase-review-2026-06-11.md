@@ -136,6 +136,7 @@ Most of the attack surface is well-hardened and was verified clean:
 Confirmed findings:
 
 ### HIGH — `hyalo mv` escapes the vault through a symlinked destination directory
+
 **File:** `crates/hyalo-cli/src/commands/mv.rs:738` (also `:531` batch)
 `validate_target_single`/`validate_batch_target` reject literal `..`/absolute components
 via `Path::components()` but never resolve symlinks or call `ensure_within_vault`. If a
@@ -148,6 +149,7 @@ given the same treatment.
 **Fix:** canonicalize the destination's nearest existing ancestor and `ensure_within_vault` before any fs mutation, in both `execute_mv` and `execute_batch_mv`.
 
 ### HIGH — `lint` (read-only and `--fix`) reads whole files with no size cap, in parallel
+
 **File:** `crates/hyalo-cli/src/commands/lint.rs:1872`
 `lint_one_file_extended` calls `std::fs::read_to_string` with no `MAX_FILE_SIZE` gate,
 dispatched via `files.par_iter()`, so peak RSS scales as `threads × file_size` — the
@@ -157,6 +159,7 @@ files → ~1.68 GiB RSS; a single 591 MiB file is read with no warning.
 scanner's stderr warning), or route through the streaming scanner.
 
 ### HIGH — `read` buffers the whole body into `Vec<String>` with no size or per-line cap
+
 **File:** `crates/hyalo-cli/src/commands/read.rs:160`
 `read_body_lines` streams with `BufReader` but pushes every line into a `Vec`, with no
 `MAX_FILE_SIZE` gate and no `MAX_BODY_LINE_BYTES` analog. A newline-free 591 MiB blob →
@@ -166,6 +169,7 @@ skipped as oversized, steering users into the unbounded path.
 `read_line_capped`.
 
 ### HIGH — `lint --fix` body write is non-atomic and reverts the frontmatter fix from the same run
+
 **File:** `crates/hyalo-cli/src/commands/lint.rs:2183`
 This is the only mutating path that uses non-atomic `std::fs::write` and has no mtime
 guard. Two defects: **(1)** `content`/`body_start` are captured from the original bytes
@@ -178,15 +182,18 @@ missing a defaulted `status` plus a body MD009 violation ends with `status` abse
 `fs_util::atomic_write`; ideally do a single combined frontmatter+body write.
 
 ### MEDIUM — Resource caps missing on more mutation paths
+
 - `crates/hyalo-core/src/tasks.rs:437` — `toggle_task`/`set_task_status`/`toggle_tasks`/`set_tasks_status` all start with `std::fs::read_to_string` (no `MAX_FILE_SIZE`), then split + rebuild (~2× resident).
 - `crates/hyalo-core/src/frontmatter/parse.rs:262` — `write_frontmatter` reads the full body with `read_to_end` (no cap) and copies it again before `atomic_write`.
 
 ### MEDIUM — `lint --fix` frontmatter write has no TOCTOU mtime guard
+
 **File:** `crates/hyalo-cli/src/commands/lint.rs:2052` — the write is atomic but, unlike
 `set.rs:415`/`append.rs:295`/`remove.rs:282`/`tasks.rs`, there is no `read_mtime`/`check_mtime`,
 so a concurrent edit between the read (line ~1871) and write is silently lost.
 
 ### MEDIUM — `hyalo read` text output is not control-byte sanitized
+
 **File:** `crates/hyalo-cli/src/output_pipeline.rs:175` (also `run.rs:561/571/599`)
 iter-122 sanitized frontmatter values and filenames in *structured* text output, but
 `read`'s `RawOutput` body (`commands/read.rs:339`) is `println!`'d raw. A `.md` body with
@@ -194,6 +201,7 @@ ANSI escapes injects them into the terminal. The post-iter-122 dogfood note alre
 flagged this class.
 
 ### LOW — Security nits
+
 - **Deserialization peak-memory amplification** (`crates/hyalo-core/src/index.rs:502`):
   `rmp_serde::from_slice` fully materializes `entries`/`graph`/`bm25_index` *before* the
   iter-122 caps run, so a ≤512 MiB crafted `.hyalo-index` can transiently allocate
@@ -220,6 +228,7 @@ flagged this class.
 ## Phase 4 — Deep logic review
 
 ### CRITICAL — BOM-prefixed file is corrupted by `set`/`remove`/`append`
+
 **File:** `crates/hyalo-core/src/frontmatter/parse.rs:375` (and `:462`)
 A leading UTF-8 BOM defeats every delimiter check. `read_frontmatter_from_reader`
 (`:462`, `line.trim() == "---"`) returns an empty property map; `find_body_offset`
@@ -230,25 +239,30 @@ body content and is no longer queryable. Reports success (exit 0). Affects all t
 commands; `remove` is doubly wrong (reports a property removed while it survives in the
 buried block). The codebase already strips BOMs in `files_from.rs:43`.
 **Repro (reproduced first-hand):**
-```
+
+```sh
 d=$(mktemp -d); printf '\xEF\xBB\xBF---\ntitle: Note\nstatus: draft\n---\nBody.\n' > "$d/bom.md"
 hyalo --dir "$d" set bom.md --property status=done
 # file now begins '---\nstatus: done\n---\n\357\273\277---\ntitle: Note...': two frontmatter blocks
 ```
+
 **Fix:** strip a leading BOM once at the start of all three entry points and reconcile
 `find_body_offset` with `read_frontmatter_from_reader` so reader and writer agree.
 
 ### CRITICAL — Leading whitespace before `---` corrupts the file
+
 **File:** `crates/hyalo-core/src/frontmatter/parse.rs:462`
 Same root cause: the read path (`line.trim() == "---"`) accepts ` ---` (leading space)
 and loads the real properties; `find_body_offset` (trailing-only trim) rejects it and
 returns `body_offset = 0`. The write then duplicates the frontmatter into the body.
 **Repro (reproduced first-hand):**
-```
+
+```sh
 d=$(mktemp -d); printf ' ---\ntitle: Note\nstatus: draft\n---\nBody.\n' > "$d/lead.md"
 hyalo --dir "$d" set lead.md --property status=published
 # prepends '---\ntitle: Note\nstatus: published\n---' above the original ' ---' block
 ```
+
 **Fix:** make `find_body_offset` use the identical opening-delimiter predicate as the
 reader; the two must compute consistent offsets.
 
@@ -258,6 +272,7 @@ reader; the two must compute consistent offsets.
 > as MEDIUM). Reconciling them fixes both criticals.
 
 ### HIGH — mdlint `line_col_to_byte` is wrong, breaking three `--fix` behaviours
+
 The stock rules and HYALO001 emit **byte** columns (`line.len()`), but
 `crates/hyalo-mdlint/src/engine.rs:474` advances `cur_col += 1` per **char**. Three
 distinct confirmed bugs result (all reproduced first-hand):
@@ -281,6 +296,7 @@ positions), treat end col `len+1` as past-the-newline, and run whole-file rules 
 against full content.
 
 ### HIGH — `task toggle/set --line N` mutates checkbox lines inside code fences
+
 **File:** `crates/hyalo-core/src/tasks.rs:514` (and `:561`)
 `toggle_tasks`/`set_tasks_status` resolve `--line N` by indexing `file_lines[line-1]` and
 validating only with `detect_task_checkbox`; they never track fenced/`%%`-comment state.
@@ -294,6 +310,7 @@ fence, contradicting the documented "Skips … fenced code blocks" and the exist
 fence/comment with the existing "line N is not a task" error.
 
 ### HIGH — Single-file `mv` leaves dangling frontmatter wikilinks
+
 **File:** `crates/hyalo-core/src/link_rewrite.rs:184`
 `plan_mv` (used by `hyalo mv --file X --to Y`) calls `plan_inbound_rewrites`, which skips
 the whole frontmatter block; the batch path uses `plan_inbound_rewrites_with_fm`, which
@@ -305,6 +322,7 @@ iteration files use `related:` heavily, so dogfooding `mv` corrupts cross-refere
 mirroring the batch `t12_frontmatter_wikilink_rewrite`.
 
 ### HIGH — `find` argument-validation errors are not JSON under `--format json`
+
 **File:** `crates/hyalo-cli/src/dispatch.rs:481` (also 474/489/496/508/514)
 `find`'s sub-parser errors return `UserError(format!("Error: {e}"))` — raw text — and the
 pipeline only re-formats for `--format text`, so under JSON (and default piped mode,
@@ -315,6 +333,7 @@ proving it's an inconsistency. Affects `--task`/`--fields`/`--sort`/`--section`/
 **Repro (verified):** `hyalo --dir kb find --task '???' --format json 2>err; jq . err` → parse error.
 
 ### HIGH — Same JSON-envelope bug across mutation/lint/mv/links dispatch
+
 **File:** `crates/hyalo-cli/src/dispatch.rs:1121` (also 1159/1194/1287/1295/1318/1831/1855/1861/1868/1874/1885)
 The same `UserError(format!("Error: …"))` anti-pattern repeats for `set`/`remove`/`append`
 `--where-property` parsing, `lint` `--type`/filter parsing, `find`/`mv` tag validation,
@@ -323,6 +342,7 @@ and `mv`/`links` where-filter parsing. **Fix:** route every site through
 invalid-filter error paths.
 
 ### HIGH — `set`/`append`/`remove`/`lint --fix` with `--index` corrupt the persisted link graph
+
 **File:** `crates/hyalo-cli/src/commands/mutation.rs:32`
 `update_index_entry` patches only `properties`/`tags`/`modified`; it never re-scans
 wikilinks, so neither `entry.links` nor the snapshot `LinkGraph` is updated. Frontmatter
@@ -337,6 +357,7 @@ the live scan returns the correct backlink.
 (rebuild outbound edges), mirroring `rename_index_entry`.
 
 ### HIGH — BM25 ranking diverges between `--index` and default paths under a metadata filter
+
 **File:** `crates/hyalo-cli/src/commands/find/mod.rs:450-465` vs `:318-341`
 The default path builds a fresh BM25 corpus from only the metadata-passing candidates, so
 IDF uses `N = candidates`; the persisted-index path computes IDF over the full vault then
@@ -347,6 +368,7 @@ filtered subset is non-standard). Without a metadata filter they agree.
 or always build BM25 over all scoped entries and intersect after scoring.
 
 ### Medium logic findings
+
 - **`lint --fix` is not idempotent** (`crates/hyalo-cli/src/commands/lint.rs:2146`).
   Fixes are computed once from the original body and applied as a batch; the engine never
   re-lints. Reproduced first-hand: a trailing-space line followed by a blank needs **3
@@ -374,6 +396,7 @@ or always build BM25 over all scoped entries and intersect after scoring.
   — the structural root cause of both criticals.
 
 ### Low / nit logic findings
+
 - **`append` to a mapping property returns exit 2 (internal) for a user error**
   (`crates/hyalo-cli/src/commands/append.rs:103`) — should be a user-error exit code.
 - **`find --help` calls `=~` a "common mistake / Wrong"** but `parse.rs:104` fully

@@ -34,6 +34,10 @@ and this project adheres to
     resolved rather than fixable, so MDN-style vaults with case-folded
     directory layouts no longer offer a `link-case-mismatch` rewrite plan
     per link in `links fix --dry-run`.
+- **Iteration 247 — carry-over sweep.** `--strict-index`: a global opt-in that
+  makes a snapshot index detected as stale fall back to a disk scan instead of
+  being served with a warning (deep-review S-2; the warn-but-serve default is
+  unchanged and now recorded as permanent in DEC-245).
 
 ### Changed
 
@@ -41,6 +45,15 @@ and this project adheres to
   bumped to 0.1.1 (DEC-101 version discipline for the root-manifest change
   in PR #279), so `pi update --extensions` on a pinned git install can
   observe a pushed change.
+- **`hyalo summary --format text` no longer prints a `kb dir:` banner on
+  stdout.** The resolved vault dir moves to stderr as `note: kb dir: <path>`,
+  so a text-mode report is data from its first line; `-q` suppresses the note
+  and `--format json` still carries `dir` (DEC-247).
+- **Internal: the three largest CLI modules are split into submodules.**
+  `hints.rs` (5,059 lines), `commands/lint.rs` (4,005) and `output.rs` (3,744)
+  become `hints/`, `commands/lint/` and `output/` directories. No behaviour,
+  path or visibility changes — every item keeps the visibility it had in the
+  single module.
 
 ### Fixed
 

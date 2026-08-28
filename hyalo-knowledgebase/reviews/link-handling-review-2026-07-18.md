@@ -2,7 +2,7 @@
 title: >-
   Link-handling deep review — 4-layer audit, 15 confirmed defects, consolidation
   plan
-type: research
+type: review
 date: 2026-07-18
 status: resolved
 tags:

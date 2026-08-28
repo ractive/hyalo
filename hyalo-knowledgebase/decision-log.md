@@ -3119,3 +3119,123 @@ remains the right number when the owner says go.
 **How to unpark.** The owner runs `/release` (the `release` skill) and
 picks the version; nothing in this decision constrains that choice beyond
 recording that the accumulated work is minor-bump-shaped.
+
+## DEC-245: stale snapshots stay warn-but-serve by default; `--strict-index` is the opt-in fallback (2026-08-28)
+
+Closes the second task of [[iterations/iteration-247-carry-over-sweep]], which
+carried finding S-2 of [[reviews/deep-review-2026-08-27]] forward from
+[[iterations/iteration-246-help-coherence-review-followups]].
+
+**Decision.** Both halves of the review's suggestion are taken, in the order
+it framed them. The default is unchanged and now explicitly permanent: a
+snapshot the staleness probe flags as older than the vault is still served,
+the run still warns, and it still exits 0 (DEC-241). On top of that a global
+`--strict-index` flag inverts the outcome for callers who ask for it — the
+same detection then drops the snapshot and the query rescans disk.
+
+**Why not make strictness the default.** The probe is a heuristic: it compares
+shallow directory mtimes with one second of tolerance, so it cannot see an
+in-place edit of an existing note, cannot see a change more than one level
+deep, and can fire on a vault that only looks touched. Promoting a heuristic
+to a hard refusal would make every indexed query hostage to filesystem mtime
+granularity, and on a coarse-mtime filesystem it would silently un-index a
+vault that was never stale. Warn-but-serve keeps the fast path honest about
+its own limits instead of pretending to a precision it does not have.
+
+**Why an opt-in is still worth having.** The review's real complaint is that
+an agent that mutated files *without* `--index` and then queried *with* it
+gets an answer contradicting disk, at exit 0, with only a warning to go on.
+`--strict-index` gives that caller a way to say "I would rather pay for a
+rescan than risk that", and the failure mode is benign in both directions: a
+false positive costs a disk scan that was not needed, a false negative leaves
+today's behaviour. It can never produce a wrong answer that the default would
+have got right.
+
+**Shape.** Global flag (it applies to every command that can load a snapshot),
+inert when no index is in use, and irrelevant to a snapshot that fails the
+vault/site-prefix check — that already falls back to disk. The fallback
+warning names the flag and the remedy; `-q` suppresses it like any other
+warning. `links fix` / `links auto` are unaffected: they already mtime-check
+every entry and rescan what changed (DEC-241).
+
+## DEC-246: no `find --changed-since <ref>`; hyalo stays VCS-agnostic and spawns nothing (2026-08-28)
+
+Closes the fifth task of [[iterations/iteration-247-carry-over-sweep]] — the
+minor feature request in [[reviews/deep-review-2026-08-27]]'s dogfood notes,
+which asked whether the `--files-from <(git diff …)` cookbook pattern deserved
+a friendlier built-in.
+
+**Decision.** Rejected. `--files-from -` stays the supported way to scope a
+run to changed files. The flag's `--help` now carries the recipe next to the
+flag itself rather than only in `find`'s examples block, which is where the
+discoverability gap actually was.
+
+**Why.** hyalo executes no subprocess anywhere in the codebase today — grep
+for `process::Command` and the workspace is empty. `--changed-since` cannot be
+implemented without breaking that: either hyalo shells out to whatever `git`
+is first on `PATH` (a new external runtime dependency, a new failure mode on
+machines without git, and a new argument-injection surface, since a ref is
+user input and refs may begin with `-`), or it takes a git library dependency
+— `gix` and its tree, for a convenience flag — which is a large build-time and
+audit-surface cost for sugar over one pipe. CLAUDE.md's "all code stays in
+Rust, no polyglot tooling" points the same way.
+
+**What is lost, honestly.** One pipe of typing, and the ability to write the
+recipe as a single flag in a config file. **What is kept.** `--files-from -`
+works with any producer: `git diff`, `jj diff`, `hg status`, `find -newer`,
+`fd`, `rg -l`, a CI job's changed-files list, or a hand-written file. A
+`--changed-since` flag would serve one of those and quietly privilege git as
+*the* version control system, which is not a claim this tool needs to make.
+
+## DEC-247: `summary --format text` announces the vault dir on stderr, not stdout (2026-08-28)
+
+Closes the fourth task of [[iterations/iteration-247-carry-over-sweep]].
+
+**Decision.** The `kb dir: <path>` line that led `hyalo summary`'s text report
+moves to stderr as `note: kb dir: <path>`. Text stdout now starts at `Files:`,
+`-q` suppresses the note, and the JSON envelope still carries `dir` unchanged.
+
+**Why.** It was the only command that prefixed its stdout with resolution
+context, and the content is cwd-dependent: the same vault prints a different
+first line depending on where the command was run from, so every text-mode
+script had to know to drop line one. stderr is already this CLI's channel for
+"which vault/config did this run resolve" — a `--dir` that switches away from
+the configured tree is announced there, and so is a `.hyalo.toml` that would
+not parse — so the note is not a new convention, it is the existing one
+applied consistently.
+
+**Why not a flag.** A flag would have to default one way or the other and
+would add a third thing to remember. `-q` already means "no stderr chatter",
+which is exactly the control a script wants here, so the flag would have been
+a synonym for something the CLI can already express.
+
+**Where it lives.** Commands run with `effective_format = Json` internally and
+the user's format is only known in the output pipeline, so the note is emitted
+in `run.rs` after a successful dispatch rather than inside `commands::summary`
+— documented at both ends so the split is not a surprise.
+
+## DEC-248: `reviews/` is a live directory: it lints, and `review` is a declared type (2026-08-28)
+
+Closes the third task of [[iterations/iteration-247-carry-over-sweep]].
+
+**Decision.** `reviews/**` is removed from `[lint] ignore`, and a `review`
+type is declared in `[schema.types.review]` (required `title`, `type`, `date`,
+`status`; `status` an enum of active/resolved/completed/superseded/archived;
+`date` typed; `tags` and `related` lists). The two files under `reviews/` that
+still said `type: research` are migrated to `type: review`, and the body
+warnings the directory had been hiding are fixed. `hyalo lint --strict` is
+clean vault-wide.
+
+**Why.** The ignore list exists for *frozen* records — completed iterations,
+done backlog items, dogfood logs — whose old formatting is not worth
+rewriting. Review notes are not frozen: iterations 246 and 247 are both
+drawing their task lists straight out of `reviews/deep-review-2026-08-27.md`.
+Excluding a directory that live work reads from meant a schema drift sat there
+undetected: `type: review` was used by eight files and declared by none, and
+`hyalo types show review` failed while nothing in CI noticed.
+
+**Why declare rather than migrate to an existing type.** `review` is a real
+kind in this vault with its own lifecycle (`resolved` — every finding
+addressed — is a state `research` has no use for). Folding the files into
+`research` would have made the type list lie about what the vault contains,
+which is the same failure in the other direction.

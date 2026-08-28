@@ -1,7 +1,7 @@
 /// E2E tests for iter-130 CWD-aware features:
 ///   1. Help banner (CWD-aware)
 ///   2. `--version` with kb dir
-///   3. `hyalo summary` includes `kb dir:` / `dir` field
+///   3. `hyalo summary` announces `kb dir:` on stderr; JSON keeps the `dir` field
 ///   4. Redundant `--dir` warning
 use std::fs;
 
@@ -120,11 +120,14 @@ fn version_plain_when_no_config() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. hyalo summary includes kb dir
+// 3. hyalo summary announces kb dir on stderr, not stdout (iter-247)
 // ---------------------------------------------------------------------------
 
+/// The vault dir is resolution context, not summary data: it belongs on the
+/// `note:` stderr channel so `hyalo summary --format text | …` carries only the
+/// report itself. Before iter-247 it led stdout as a `kb dir: …` banner.
 #[test]
-fn summary_text_includes_kb_dir_line() {
+fn summary_text_announces_kb_dir_on_stderr() {
     let tmp = TempDir::new().unwrap();
     setup_minimal(&tmp, Some("notes"));
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
@@ -139,12 +142,69 @@ fn summary_text_includes_kb_dir_line() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "stderr: {stderr}");
     assert!(
-        stdout.contains("kb dir:"),
-        "expected 'kb dir:' line in summary text; got: {stdout}"
+        !stdout.contains("kb dir:"),
+        "kb dir banner must not be on stdout; got: {stdout}"
     );
     assert!(
-        stdout.contains("notes"),
-        "expected dir 'notes' in summary text; got: {stdout}"
+        stdout.starts_with("Files:"),
+        "summary text should lead with the report itself; got: {stdout}"
+    );
+    assert!(
+        stderr.contains("note: kb dir:") && stderr.contains("notes"),
+        "expected 'note: kb dir: notes' on stderr; got: {stderr}"
+    );
+}
+
+/// `-q` suppresses the stderr note, so a script that wants a completely silent
+/// stderr can have one without redirecting it away.
+#[test]
+fn summary_text_kb_dir_note_suppressed_by_quiet() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(&tmp, Some("notes"));
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["summary", "--format", "text", "--quiet"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        !stderr.contains("kb dir:"),
+        "expected -q to suppress the kb dir note; got: {stderr}"
+    );
+    assert!(
+        stdout.starts_with("Files:"),
+        "summary text unchanged by -q; got: {stdout}"
+    );
+}
+
+/// JSON output keeps the vault dir in the payload — machine consumers never
+/// depended on the text banner.
+#[test]
+fn summary_json_still_carries_dir() {
+    let tmp = TempDir::new().unwrap();
+    setup_minimal(&tmp, Some("notes"));
+    fs::write(tmp.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["summary", "--format", "json"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("summary json should parse: {e}; got: {stdout}"));
+    let dir = value["dir"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected dir in: {stdout}"));
+    assert!(
+        dir.contains("notes"),
+        "expected dir to name the vault: {dir}"
     );
 }
 

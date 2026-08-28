@@ -2703,6 +2703,131 @@ fn stale_index_warns_when_vault_is_newer() {
 }
 
 // ---------------------------------------------------------------------------
+// iter-247 (deep-review S-2): --strict-index turns warn-but-serve into
+// fall-back-to-disk
+// ---------------------------------------------------------------------------
+
+/// Same setup as `stale_index_warns_when_vault_is_newer`, but with
+/// `--strict-index`: the snapshot is dropped and the query rescans disk, so the
+/// note added after `create-index` shows up in the results instead of being
+/// invisible. Still exit 0 — the fallback is a rescan, not a failure.
+#[test]
+fn strict_index_falls_back_to_disk_when_index_is_stale() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    // The probe compares whole seconds with one second of slack, so the vault
+    // edit has to land at least two seconds after the snapshot was written.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    write_md(tmp.path(), "sub/c.md", "---\ntitle: C\n---\nBody.\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--strict-index", "find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "strict-index falls back to a scan; it does not fail the run"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "index older than vault; --strict-index: falling back to disk scan — re-run create-index to restore the indexed fast path"
+        ),
+        "strict mode must say it fell back, as one clean sentence: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("sub/c.md"),
+        "the disk scan must see the file the snapshot missed: {stdout}"
+    );
+}
+
+/// Without the flag the snapshot is still served, so the post-index file stays
+/// invisible — the documented warn-but-serve default is unchanged.
+#[test]
+fn stale_index_without_strict_still_serves_the_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+    write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    write_md(tmp.path(), "sub/c.md", "---\ntitle: C\n---\nBody.\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("sub/c.md"),
+        "default mode serves the snapshot as-is: {stdout}"
+    );
+}
+
+/// A fresh index is not stale, so `--strict-index` changes nothing: no warning,
+/// and the snapshot is still used.
+#[test]
+fn strict_index_is_a_noop_on_a_fresh_index() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["create-index"])
+        .output()
+        .unwrap();
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--strict-index", "find", "--index", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("index older than vault"),
+        "fresh index must not warn under --strict-index: {stderr}"
+    );
+}
+
+/// `--strict-index` without any index flag is inert: no index is loaded, so
+/// there is nothing to be strict about and nothing is printed.
+#[test]
+fn strict_index_without_an_index_is_inert() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
+
+    let out = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["--strict-index", "find", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("strict-index"),
+        "no index in use: nothing to report: {stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // L-10 (iter-204): create-index text output has JSON parity
 // ---------------------------------------------------------------------------
 
