@@ -21,7 +21,7 @@ usage() { echo "usage: $0 {check|notes} X.Y.Z" >&2; exit 2; }
 if [[ "$MODE" == "notes" ]]; then
   # Section body from "## [X.Y.Z]" up to (excluding) the next "## [" heading.
   notes="$(sed -n "/^## \[${VER//./\\.}\]/,/^## \[/p" CHANGELOG.md | sed '$d')"
-  if [[ -z "${notes//[[:space:]]/}" ]]; then
+  if ! grep -q "[^[:space:]]" <<<"$notes"; then  # not ${var//[[:space:]]/}: quadratic, hangs on large sections
     echo "error: no non-empty '## [$VER]' section in CHANGELOG.md — rotate first (hyalo changelog release $VER --apply)" >&2
     exit 1
   fi
