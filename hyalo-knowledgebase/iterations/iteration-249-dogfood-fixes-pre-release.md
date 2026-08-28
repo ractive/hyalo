@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 249 — dogfood fixes before v0.21.0
 date: 2026-08-28
-status: in-progress
+status: completed
 tags:
   - iteration
   - dogfood
