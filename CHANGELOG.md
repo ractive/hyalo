@@ -11,6 +11,17 @@ and this project adheres to
 
 ### Added
 
+- **Iteration 245 — deferral carry-overs.**
+  - **UX-3 follow-up: dot-path property filters descend sequences.** A
+    frontmatter list of maps (`contacts: [{name, email}, …]`) is now
+    traversable: `--property 'contacts.email=x'` auto-descends into every
+    element and matches when any of them carries that value, while a numeric
+    segment pins one element (`contacts.0.email`). The collected values are
+    returned as a list, so the established list semantics apply unchanged
+    (`=`/`~=` match when any element matches, `!=` when none does, and a bare
+    key exists when at least one element yielded a value). Applies to every
+    filter consumer, including `--where-property` on the mutating commands.
+
 - **Iteration 244 — index remaining deferrals.**
   - **UX-3: nested dot-path property filters.** `--property 'a.b=v'` now
     traverses nested YAML mappings (`contact.email=team@example.com`
