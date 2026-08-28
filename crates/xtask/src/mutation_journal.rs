@@ -107,10 +107,33 @@ pub fn run() -> Result<bool> {
     }
 
     // 2. Mutating modules must reference the journal.
+    //
+    // A module is its file *plus* any same-named submodule directory: iteration
+    // 247 split `commands/lint.rs` into `commands/lint.rs` + `commands/lint/`,
+    // which moved the journal reference out of the file this gate was reading
+    // and made a passing gate fail on a pure file move. Reading the whole
+    // module keeps the guard about the module's behaviour rather than about
+    // which file inside it happens to hold the call.
     for module in MUTATING_MODULES {
         let path = cli_src.join(module);
-        let content = std::fs::read_to_string(&path)
+        let mut content = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
+        let submodule_dir = path.with_extension("");
+        if submodule_dir.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(&submodule_dir)
+                .with_context(|| format!("reading {}", submodule_dir.display()))?
+                .filter_map(std::result::Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+                .collect();
+            entries.sort();
+            for entry in entries {
+                content.push_str(
+                    &std::fs::read_to_string(&entry)
+                        .with_context(|| format!("reading {}", entry.display()))?,
+                );
+            }
+        }
         if !content.contains("MutationJournal") {
             failures.push(format!(
                 "{module}: mutating command does not reference MutationJournal \
