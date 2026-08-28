@@ -1751,13 +1751,13 @@ fn run_inner() -> Result<(), AppError> {
                     // vault-mismatch branch below already takes.
                     if stale && strict_index {
                         crate::warn::warn(
-                            "index older than vault; --strict-index: falling back to disk scan                              — re-run create-index to restore the indexed fast path",
+                            "index older than vault; --strict-index: falling back to disk scan — re-run create-index to restore the indexed fast path",
                         );
                         None
                     } else {
                         if stale {
                             crate::warn::warn(
-                                "index older than vault; results may be stale — re-run                                  create-index (or pass --strict-index to rescan disk instead)",
+                                "index older than vault; results may be stale — re-run create-index (or pass --strict-index to rescan disk instead)",
                             );
                         }
                         Some(idx)

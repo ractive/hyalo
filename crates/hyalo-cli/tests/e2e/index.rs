@@ -2740,8 +2740,10 @@ fn strict_index_falls_back_to_disk_when_index_is_stale() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--strict-index") && stderr.contains("falling back to disk scan"),
-        "strict mode must say it fell back: {stderr}"
+        stderr.contains(
+            "index older than vault; --strict-index: falling back to disk scan — re-run create-index to restore the indexed fast path"
+        ),
+        "strict mode must say it fell back, as one clean sentence: {stderr}"
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
