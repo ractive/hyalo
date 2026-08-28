@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-28
+
 ### Added
 
 - **Iteration 245 — deferral carry-overs.**
@@ -2179,6 +2181,7 @@ already complied (`total = modified + skipped`) and are unchanged.
   crafted files.
 
 [Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[0.21.0]: TBD
 [0.20.0]: TBD
 [0.19.0]: TBD
 [0.18.0]: TBD
