@@ -186,18 +186,38 @@ mod tests {
                 .unwrap()
                 .matches(&props)
         );
-        assert!(!parse_property_filter("contacts.9.email").unwrap().matches(&props));
+        assert!(
+            !parse_property_filter("contacts.9.email")
+                .unwrap()
+                .matches(&props)
+        );
     }
 
     #[test]
     fn dot_path_array_index_into_scalar_sequence() {
         let mut props = IndexMap::new();
         props.insert("tags".to_owned(), json!(["alpha", "beta"]));
-        assert!(parse_property_filter("tags.0=alpha").unwrap().matches(&props));
-        assert!(parse_property_filter("tags.1=beta").unwrap().matches(&props));
-        assert!(!parse_property_filter("tags.0=beta").unwrap().matches(&props));
+        assert!(
+            parse_property_filter("tags.0=alpha")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("tags.1=beta")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("tags.0=beta")
+                .unwrap()
+                .matches(&props)
+        );
         // A non-numeric segment cannot descend into scalar elements.
-        assert!(!parse_property_filter("tags.name=alpha").unwrap().matches(&props));
+        assert!(
+            !parse_property_filter("tags.name=alpha")
+                .unwrap()
+                .matches(&props)
+        );
     }
 
     #[test]
@@ -235,10 +255,26 @@ mod tests {
     #[test]
     fn dot_path_array_exists_and_absent() {
         let props = contacts_props();
-        assert!(parse_property_filter("contacts.email").unwrap().matches(&props));
-        assert!(!parse_property_filter("!contacts.email").unwrap().matches(&props));
-        assert!(!parse_property_filter("contacts.phone").unwrap().matches(&props));
-        assert!(parse_property_filter("!contacts.phone").unwrap().matches(&props));
+        assert!(
+            parse_property_filter("contacts.email")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("!contacts.email")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("contacts.phone")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("!contacts.phone")
+                .unwrap()
+                .matches(&props)
+        );
     }
 
     #[test]
@@ -250,9 +286,21 @@ mod tests {
             "scores".to_owned(),
             json!([{"name": "unit"}, {"name": "e2e", "value": 42}]),
         );
-        assert!(parse_property_filter("scores.value>10").unwrap().matches(&props));
-        assert!(!parse_property_filter("scores.value>100").unwrap().matches(&props));
-        assert!(parse_property_filter("scores.value<=42").unwrap().matches(&props));
+        assert!(
+            parse_property_filter("scores.value>10")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            !parse_property_filter("scores.value>100")
+                .unwrap()
+                .matches(&props)
+        );
+        assert!(
+            parse_property_filter("scores.value<=42")
+                .unwrap()
+                .matches(&props)
+        );
     }
 
     #[test]

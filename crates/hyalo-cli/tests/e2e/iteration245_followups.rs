@@ -141,7 +141,11 @@ fn find_property_dot_path_sequence_index_segment() {
         &tmp,
         &["find", "--property", "contacts.0.email=ada@example.com"],
     );
-    assert_eq!(total(&json), 1, "index 0 must select the first element: {json}");
+    assert_eq!(
+        total(&json),
+        1,
+        "index 0 must select the first element: {json}"
+    );
 
     let (_, json) = run(
         &tmp,
@@ -163,7 +167,11 @@ fn find_property_dot_path_sequence_index_segment() {
         &tmp,
         &["find", "--property", "contacts.9.email=ada@example.com"],
     );
-    assert_eq!(total(&json), 0, "out-of-range index must match nothing: {json}");
+    assert_eq!(
+        total(&json),
+        0,
+        "out-of-range index must match nothing: {json}"
+    );
 }
 
 /// Existence, absence, inequality and regex all follow the established list

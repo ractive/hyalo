@@ -65,10 +65,12 @@ impl PropertyFilter {
     pub fn matches(&self, props: &IndexMap<String, Value>) -> bool {
         match self {
             PropertyFilter::Absent { key } => resolve_prop(props, key).is_none(),
-            PropertyFilter::RegexMatch { key, .. } => resolve_prop(props, key)
-                .is_some_and(|resolved| self.matches_value(&resolved)),
-            PropertyFilter::Scalar { name, .. } => resolve_prop(props, name)
-                .is_some_and(|resolved| self.matches_value(&resolved)),
+            PropertyFilter::RegexMatch { key, .. } => {
+                resolve_prop(props, key).is_some_and(|resolved| self.matches_value(&resolved))
+            }
+            PropertyFilter::Scalar { name, .. } => {
+                resolve_prop(props, name).is_some_and(|resolved| self.matches_value(&resolved))
+            }
         }
     }
 
