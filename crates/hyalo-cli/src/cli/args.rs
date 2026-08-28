@@ -77,13 +77,15 @@ pub(crate) struct IndexFlags {
     /// If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
     /// falls back to a full disk scan automatically.
     ///
-    /// STALENESS PROBE: on load, hyalo compares every directory's mtime in
-    /// the vault (recursively, at any depth — cheap, directory-only stats,
-    /// no file reads) against the snapshot's creation time and warns `index
-    /// older than vault` when one postdates it. This misses only in-place
-    /// edits of existing notes (content changes that don't add, remove, or
-    /// rename any file) — see `create-index --help` for the full contract.
-    /// The warning never stops the run: stale results are still served.
+    /// STALENESS PROBE: on load, hyalo compares directory mtimes in the
+    /// vault (the root and every directory up to 3 levels below it — cheap,
+    /// directory-only stats, no file reads) against the snapshot's creation
+    /// time and warns `index older than vault` when one postdates it. Two
+    /// blind spots: in-place edits of existing notes (content changes that
+    /// don't add, remove, or rename any file), and files added or removed
+    /// inside a directory more than 3 levels deep — see `create-index
+    /// --help` for the full contract. The warning never stops the run:
+    /// stale results are still served.
     #[arg(long)]
     pub index: bool,
 
@@ -1163,13 +1165,16 @@ Repeatable (AND).\n\
             SNAPSHOT CONTRACT: the index is a point-in-time copy, not a live view.\n\
             Edits made while it exists — by hand, by another tool, or by hyalo run\n\
             without an index flag — are invisible to indexed queries, which still\n\
-            exit 0. Commands that load an index cheaply compare every directory's\n\
-            mtime (recursively, at any depth) against the snapshot's creation time\n\
-            and warn `index older than vault` when one postdates it; that probe\n\
-            misses only in-place edits of existing notes (an edit that changes a\n\
-            file's content without adding/removing/renaming any file leaves every\n\
-            directory's mtime untouched), so re-run create-index whenever the\n\
-            vault may have changed.\n\
+            exit 0. Commands that load an index cheaply compare directory mtimes\n\
+            (the vault root and every directory up to 3 levels below it; deeper\n\
+            levels are skipped because a full walk of a 14k-file vault costs more\n\
+            than the indexed query itself) against the snapshot's creation time\n\
+            and warn `index older than vault` when one postdates it. Two blind\n\
+            spots: in-place edits of existing notes (an edit that changes a file's\n\
+            content without adding/removing/renaming any file leaves every\n\
+            directory's mtime untouched), and files added or removed inside a\n\
+            directory more than 3 levels below the root. Re-run create-index\n\
+            whenever the vault may have changed.\n\
             The warning does not stop the run: stale results are still served and\n\
             still exit 0. Re-run `create-index`, or omit `--index` to force a\n\
             disk scan instead.\n\n\

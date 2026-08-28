@@ -64,9 +64,10 @@ and this project adheres to
     added ~65% to an indexed query on MDN's 14k-file tree, well past
     budget, so depth is bounded rather than unlimited), still without
     reading any file content. `create-index --help` and the `--index` flag
-    help now describe the real depth and its remaining blind spot
+    help now describe the real depth and its two remaining blind spots
     (in-place edits of existing files, which never move a directory's
-    mtime).
+    mtime, and files added or removed inside a directory more than 3
+    levels below the vault root).
   - **BUG-1 (carry-over): `task toggle`/`task set --index` BM25 parity.**
     `task toggle --all --index` and `task set --index` used to patch just
     the toggled tasks' status in place, leaving the entry's cached BM25

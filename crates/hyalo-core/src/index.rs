@@ -1487,18 +1487,19 @@ mod iso_tests {
     #[test]
     fn newest_dir_mtime_detects_depth_3_directory() {
         let dir = tempfile::tempdir().unwrap();
-        // Depth-1 directory that already exists when the baseline is read.
-        std::fs::create_dir_all(dir.path().join("a")).unwrap();
+        // The whole chain `a/b/c` (c at relative depth 3, exactly
+        // `STALENESS_PROBE_MAX_DEPTH`) exists before the baseline is read,
+        // so no ancestor's mtime will move afterwards.
+        std::fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
         let baseline = newest_dir_mtime(dir.path());
         assert!(baseline.is_some());
 
         std::thread::sleep(std::time::Duration::from_secs(2));
 
-        // `a/b/c` puts `c` at relative depth 3 (a=1, b=2, c=3) — exactly
-        // `STALENESS_PROBE_MAX_DEPTH`. Creating it bumps `a/b`'s mtime, but
-        // the interesting assertion is that the probe still descends far
-        // enough to see it at all.
-        std::fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
+        // Adding a file directly inside `c` bumps only `c`'s own mtime —
+        // a probe that stops at depth 1 or 2 cannot see this; the old
+        // root+children probe passed the previous version of this test.
+        std::fs::write(dir.path().join("a/b/c/new.md"), "x").unwrap();
         let after = newest_dir_mtime(dir.path());
         assert!(
             after > baseline,
