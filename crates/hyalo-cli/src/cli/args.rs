@@ -334,25 +334,6 @@ pub(crate) struct Cli {
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 
-    /// Refuse to serve a stale snapshot index: fall back to a disk scan instead.
-    ///
-    /// Without it, a snapshot whose vault has changed since `create-index` is
-    /// still served — hyalo warns `index older than vault` and exits 0
-    /// (iteration 241's warn-but-serve trade-off). Under `--strict-index` the
-    /// same detection drops the snapshot and rescans disk, so an indexed query
-    /// can never silently contradict the files on disk. The staleness probe is
-    /// unchanged (shallow directory mtimes with one second of tolerance), so
-    /// this flag inherits its blind spots: it cannot see an in-place edit of an
-    /// existing note, and it can fire on a vault that only *looks* touched. Both
-    /// directions are safe here — the worst case is a disk scan you did not
-    /// need, never a wrong answer.
-    ///
-    /// No effect when no index is in use (`--index` / `--index-file` absent), or
-    /// on a snapshot that fails the vault/site-prefix check — that already falls
-    /// back to disk. Pairs with `-q`, which suppresses the fallback warning.
-    #[arg(long, global = true)]
-    pub strict_index: bool,
-
     /// Use the snapshot index at PATH (global alias for the per-subcommand `--index-file`).
     ///
     /// Equivalent to passing `--index-file PATH` after the subcommand.
@@ -1180,9 +1161,8 @@ Repeatable (AND).\n\
             in-place edits of existing notes and changes more than one level deep,\n\
             so re-run create-index whenever the vault may have changed.\n\
             The warning does not stop the run: stale results are still served and\n\
-            still exit 0. Pass the global `--strict-index` to invert that — the\n\
-            same detection then drops the snapshot and rescans disk, trading the\n\
-            fast path for an answer that cannot contradict the files.\n\n\
+            still exit 0. Re-run `create-index`, or omit `--index` to force a\n\
+            disk scan instead.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\

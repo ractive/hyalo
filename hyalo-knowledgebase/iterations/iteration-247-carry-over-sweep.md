@@ -69,7 +69,9 @@ decision as the plan's acceptance criteria allow.
   learned to skip whole-file test modules now that one exists.
 - **S-2 stale index.** `--strict-index` implemented as a global opt-in;
   warn-but-serve kept as the default and recorded as deliberate — see
-  [[decision-log]] DEC-245.
+  [[decision-log]] DEC-245. Superseded: flag removed in
+  [[iterations/iteration-248-remove-strict-index|iter-248]] (DEC-249); the
+  warn-but-serve default is unaffected.
 - **Vault schema drift.** `review` is a declared type, `reviews/**` is out of
   `[lint] ignore`, two mislabelled `type: research` files are migrated, and
   `hyalo lint --strict` is clean vault-wide — DEC-248.
