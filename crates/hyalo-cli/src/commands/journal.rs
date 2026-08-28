@@ -459,9 +459,8 @@ mod tests {
             },
         )
         .unwrap();
-        let bm25_index = hyalo_core::bm25::Bm25InvertedIndex::build_from_entries(
-            build.index.entries(),
-        );
+        let bm25_index =
+            hyalo_core::bm25::Bm25InvertedIndex::build_from_entries(build.index.entries());
         let snap_path = tmp.path().join(".hyalo-index-bm25-test");
         SnapshotIndex::save(
             &build.index,
@@ -508,16 +507,16 @@ mod tests {
             },
         )
         .unwrap();
-        let expected_tokens = expected
-            .index
-            .get(&rel)
-            .and_then(|e| e.bm25_tokens.clone());
+        let expected_tokens = expected.index.get(&rel).and_then(|e| e.bm25_tokens.clone());
 
         assert_eq!(
             actual_tokens, expected_tokens,
             "post-toggle bm25_tokens must match a fresh disk scan of the toggled file"
         );
-        assert!(expected_tokens.is_some(), "sanity: scan must produce tokens");
+        assert!(
+            expected_tokens.is_some(),
+            "sanity: scan must produce tokens"
+        );
 
         journal.flush().unwrap();
         assert!(snap_path.is_file());
