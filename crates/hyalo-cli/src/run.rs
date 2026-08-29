@@ -1961,6 +1961,7 @@ fn run_inner() -> Result<(), AppError> {
         lint_strict: lint_strict_from_config,
         lint_profiles: lint_profiles_active,
         files_from_counters: None,
+        zero_result_values: std::collections::BTreeMap::new(),
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -1998,6 +1999,11 @@ fn run_inner() -> Result<(), AppError> {
     // Inject elapsed into hint context so slow_query_hint can read it.
     if let Some(ref mut hctx) = hint_ctx {
         hctx.elapsed_ms = Some(elapsed_ms);
+        // iter-251: a `find` that matched nothing collected the distinct
+        // values of every filtered property key during the scan it already
+        // paid for. Hand them to the hint layer so the zero-result
+        // did-you-mean names real values instead of guessing.
+        hctx.observed_property_values = std::mem::take(&mut ctx.zero_result_values);
     }
 
     let exit_code_override = ctx.exit_code_override;

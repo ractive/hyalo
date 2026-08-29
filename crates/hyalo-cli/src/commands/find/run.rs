@@ -274,6 +274,18 @@ pub(crate) fn run(
             if let Some(code) = strict_exit_code(&outcome, strict) {
                 ctx.exit_code_override = Some(code);
             }
+            // iter-251: an empty result set is where an agent most needs a
+            // next step. Collect the distinct values each filtered property
+            // key actually carries, reusing the index this query already
+            // walked, so the hint layer can offer a did-you-mean and name the
+            // real values instead of printing a bare `No results`.
+            if matches!(
+                outcome,
+                CommandOutcome::Success { total: Some(0), .. }
+            ) {
+                ctx.zero_result_values =
+                    observed_property_values(resolved.as_index(), &prop_filters);
+            }
             // iter-235: `--filenames-only` projects the find result
             // set onto raw file paths (one per line, no envelope,
             // no count, no hints). It runs *after* the `--strict`
@@ -295,6 +307,73 @@ pub(crate) fn run(
             Ok(outcome)
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),
+    }
+}
+
+/// Maximum distinct values collected per property key for the zero-result
+/// did-you-mean. A key with more values than this is not a controlled
+/// vocabulary, so naming them all would be noise rather than a correction.
+const MAX_OBSERVED_VALUES: usize = 50;
+
+/// Distinct scalar values of every key named by an equality `--property`
+/// filter, in first-seen-sorted order.
+///
+/// Only equality (`K=V`) filters are probed: an existence, absence, or regex
+/// filter has no misspelled value to correct. Non-scalar values (maps,
+/// sequences) are skipped — a did-you-mean over `[a, b]` would suggest
+/// something the user cannot type back into `--property`.
+fn observed_property_values(
+    index: &dyn hyalo_core::index::VaultIndex,
+    filters: &[hyalo_core::filter::PropertyFilter],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    use hyalo_core::filter::{FilterOp, PropertyFilter};
+
+    let keys: Vec<&str> = filters
+        .iter()
+        .filter_map(|f| match f {
+            PropertyFilter::Scalar {
+                name,
+                op: FilterOp::Eq,
+                value: Some(_),
+            } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if keys.is_empty() {
+        return std::collections::BTreeMap::new();
+    }
+
+    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = keys
+        .iter()
+        .map(|k| ((*k).to_owned(), std::collections::BTreeSet::new()))
+        .collect();
+    for entry in index.entries() {
+        for key in &keys {
+            let Some(value) = entry.properties.get(*key) else {
+                continue;
+            };
+            let Some(rendered) = scalar_to_string(value) else {
+                continue;
+            };
+            let bucket = out.entry((*key).to_owned()).or_default();
+            if bucket.len() < MAX_OBSERVED_VALUES {
+                bucket.insert(rendered);
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(k, v)| (k, v.into_iter().collect()))
+        .collect()
+}
+
+/// Render a scalar JSON value the way `--property K=V` would accept it back.
+/// Returns `None` for maps and sequences, which have no single typeable form.
+fn scalar_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
 }
 

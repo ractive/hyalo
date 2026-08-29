@@ -206,6 +206,13 @@ pub(crate) struct CommandContext<'a> {
     /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
     /// the output pipeline as `files_from_counters` in the envelope.
     pub files_from_counters: Option<crate::commands::files_from::FilesFromCounters>,
+    /// Distinct frontmatter values observed for each property key named by a
+    /// `--property K=V` filter, collected by `find` when the query matched
+    /// nothing (iter-251). The index has already been walked at that point, so
+    /// this costs no extra I/O; `run.rs` copies it into the hint context so the
+    /// zero-result did-you-mean can be computed without a second scan. Empty
+    /// for every command other than an empty `find`.
+    pub zero_result_values: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Resolve the effective limit for a list command.

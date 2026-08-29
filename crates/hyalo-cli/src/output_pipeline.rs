@@ -247,7 +247,14 @@ impl OutputPipeline<'_> {
                         && total == Some(0)
                         && value.as_array().is_some_and(Vec::is_empty)
                     {
-                        eprintln!("No results");
+                        // iter-251: echo the effective filters. `No results`
+                        // alone left the reader to reconstruct what was asked;
+                        // naming the filters makes the empty state definitive
+                        // and pairs with the zero-result hints below it.
+                        match self.hint_ctx.and_then(crate::hints::filter_echo) {
+                            Some(filters) => eprintln!("No results for {filters}"),
+                            None => eprintln!("No results"),
+                        }
                     }
                 }
                 0
