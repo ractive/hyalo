@@ -43,3 +43,12 @@ miri-all:
 # the model must use the hyalo tool (no silent bash fallback).
 pi-extension:
     ./pi-extension-e2e.sh
+
+# Sync the vendored pi-package copies (crates/hyalo-cli/templates/pi/) from
+# the canonical top-level pi-package/. Run after editing any pi-package
+# skill, extension, or package.json — `cargo run -p xtask -- check-pi-package-sync`
+# fails CI until the copies match again.
+sync-pi-package:
+    cp -R pi-package/skills/. crates/hyalo-cli/templates/pi/skills/
+    cp -R pi-package/extensions/. crates/hyalo-cli/templates/pi/extensions/
+    cp pi-package/package.json crates/hyalo-cli/templates/pi/package.json

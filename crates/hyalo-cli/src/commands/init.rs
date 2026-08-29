@@ -15,16 +15,24 @@ const SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo.md");
 const TIDY_SKILL_CONTENT: &str = include_str!("../../templates/skill-hyalo-tidy.md");
 const RULE_TEMPLATE: &str = include_str!("../../templates/rule-knowledgebase.md");
 
-// Single source of truth (iter-237): the pi integration lives in the
-// top-level `pi-package/` directory — the same layout `pi install
-// git:github.com/ractive/hyalo` consumes — and is embedded here directly via
-// `include_str!`. There is no second template copy, so package/binary drift
-// is impossible by construction.
-const PI_SKILL_CONTENT: &str = include_str!("../../../../pi-package/skills/hyalo/SKILL.md");
-const PI_TIDY_SKILL_CONTENT: &str =
-    include_str!("../../../../pi-package/skills/hyalo-tidy/SKILL.md");
-const PI_EXTENSION_CONTENT: &str = include_str!("../../../../pi-package/extensions/hyalo.ts");
-const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../../../pi-package/package.json");
+// The top-level `pi-package/` directory — the same layout `pi install
+// git:github.com/ractive/hyalo` consumes — is the canonical source for the pi
+// integration (iter-237). It used to be embedded here directly via
+// `include_str!("../../../../pi-package/...")`, but `cargo package` builds
+// the crate's verify tarball with only the crate directory on disk, so a
+// `include_str!` reaching outside `crates/hyalo-cli/` fails the tarball build
+// with "No such file or directory" — this broke the `hyalo-cli` 0.21.0
+// crates.io publish on 2026-08-29 (`cargo publish` failed at the verify
+// step). The fix vendors byte-identical copies under
+// `crates/hyalo-cli/templates/pi/`, embedded from there instead. The
+// `check-pi-package-sync` xtask gate (`just sync-pi-package` to fix drift)
+// fails CI if the vendored copies ever diverge from `pi-package/`, so this
+// is a second file, not a second source of truth. See DEC-250 in the
+// knowledgebase for the discussion of alternatives considered.
+const PI_SKILL_CONTENT: &str = include_str!("../../templates/pi/skills/hyalo/SKILL.md");
+const PI_TIDY_SKILL_CONTENT: &str = include_str!("../../templates/pi/skills/hyalo-tidy/SKILL.md");
+const PI_EXTENSION_CONTENT: &str = include_str!("../../templates/pi/extensions/hyalo.ts");
+const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../templates/pi/package.json");
 
 const PI_INSTALL_HINT: &str = "tip: to get extension and skill updates automatically, install the pi package instead: pi install git:github.com/ractive/hyalo";
 
