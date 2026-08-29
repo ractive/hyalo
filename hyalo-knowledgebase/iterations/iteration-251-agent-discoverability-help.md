@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 251 — agent discoverability: short -h pages and zero-result hints"
 date: 2026-08-29
-status: in-progress
+status: completed
 tags:
   - iteration
   - agent-cli
