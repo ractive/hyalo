@@ -318,39 +318,47 @@ hyalo read my-note.md --frontmatter                # include YAML frontmatter
 Start with `hyalo summary` to orient yourself in a new directory (text output is the
 default in interactive terminals).
 
-## Available commands
+## Available commands — read the CLI's own help first
 
-- **find** — BM25 ranked full-text search (AND, OR, phrase, negation) or regex; filter by property, tag, task status
-- **read** — extract body content, a section, or line range
-- **summary** — compact fixed-size orientation view: file counts, tags, tasks, orphans, dead-ends, links, schema lint count (use `--depth N` to override directory depth)
-- **lint** — validate frontmatter against the `[schema]` and lint markdown body with mdbook-lint MD001..MD059 + HYALO001/002 native rules; supports `--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--strict` (promotes missing-type and undeclared-property warnings to errors), `--fix`, `--fix-rule`; exit 1 when errors found
-- **lint-rules** — manage which lint rules are enabled and their severity in `.hyalo.toml` (list, show, set, remove; `lint-rules summary` aliases `list`)
-- **types** — manage `[schema.types.*]` entries in `.hyalo.toml` (list, show, set, remove; `types summary` aliases `list`)
-- **properties summary** — list property names and types (`properties list` is an alias)
-- **properties rename** — bulk rename a property key across files (`--from old --to new`)
-- **tags summary** — list tags with counts (`tags list` is an alias)
-- **tags rename** — bulk rename a tag across files (`--from old --to new`)
-- **set** — create/overwrite frontmatter properties, add tags (supports `--where-property`/`--where-tag` for conditional bulk updates, which default to all `**/*.md` when no `--file`/`--glob` is given; `--property 'K=[a,b,c]'` creates YAML sequences; `--property 'K=[[foo/bar]]'` stores a literal wikilink string; `--validate` rejects values that would fail schema lint; file arg is positional or `--file`, repeatable)
-- **remove** — delete properties or tags
-- **append** — add to list properties (supports `--validate`; note: tags are not appendable; use `set --tag` instead)
-- **task** — read, toggle, or set status on checkboxes (supports `--line 5,7`, `--section "Tasks"`, `--all`; `--dry-run` to preview toggles)
-- **mv** — move/rename a file and rewrite all inbound links across the vault. Single-file mode
-  writes immediately (`--dry-run` to preview; `--apply` is rejected there). Batch mode
-  (`--glob`/`--property`/`--tag`/`--type`) defaults to dry-run and needs `--apply` to commit
-- **links fix** — detect broken wikilinks/markdown links and auto-repair (dry-run by default; `--apply` to write). Targets that normalize above the vault root (`../../CONTRIBUTING.md`) are counted under `out_of_vault`, not `broken`, and are never offered a fix. Also detects case mismatches when `[links] case_insensitive` is enabled (default `"auto"` on macOS/Windows; detection is stat-only and writes nothing into the vault). Low-confidence matches — fuzzy hits and basename fallbacks — are reported separately and excluded from `--apply` unless you pass `--apply-fuzzy`. `--apply-fuzzy` is gated a second time by a confidence floor (0.8 by default, overridable with `--min-confidence <0.0-1.0>` or `[links] fuzzy_min_confidence`; `--min-confidence 0` accepts everything): proposals below it are counted under `fuzzy_below_floor` and never written. Confidence weights the final path segment at 70% and the directory path at 30%, so a relocation inside a section outranks a same-name substitution across sections. A basename fallback is any repair that discards a directory the author actually wrote (`/actions` or `guides/actions` matching some `actions.md` elsewhere in the vault); a target written with no directory at all (`[[actions]]`, `[x](actions.md)`) resolves by the Obsidian short-form rule and stays a plain-`--apply` fix. Every repair is written in the form the link was written in (site-absolute stays site-absolute; a relative destination is computed from the source file's own directory), and a fix whose emitted target would still not resolve is refused and reported under `unfixable` rather than written. Destinations containing `{%`, `{{` or `${` are template expressions, not paths (`{% ifversion ghes %}/admin{% endif %}/guides`): they are counted under `templated`/`templated_links` and never rewritten, because a fuzzy match on the literal text would silently drop the conditional
-- **backlinks** — reverse link lookup: lists all files that link to a given file
-- **create-index** — build a snapshot index for faster repeated read-only queries (`-o/--output PATH`, also accepted as `--path`)
-- **drop-index** — delete a snapshot index file created with create-index (`-p/--path PATH`, also accepted as `--output`)
-- **views list** — show all saved views and their filters (`views summary` is an alias)
-- **views set** — save a find query as a named view (`hyalo views set todo --task todo`)
-- **views remove** — delete a saved view
-- **views run** — run a saved view (`hyalo views run <name> [PATTERN] [extra filters]`), identical
-  to `hyalo find [PATTERN] --view <name>`
-- **config** — print the effective configuration (which `.hyalo.toml` is active, resolved dir,
-  format, hints, site prefix). Add `--raw` for the file's text. `results.malformed` /
-  `results.parse_error` report a config that exists but does not parse — every other value shown
-  is then a built-in default. Wrapped in the standard envelope, so `hyalo config --jq
-  '.results.dir'` works like any other command
+`hyalo -h` lists every command grouped by intent (read / write / config), one line each,
+with the capability families each one covers. `hyalo <cmd> -h` is the short page for one
+command; `hyalo <cmd> --help` is its full syntax reference — property operators, sort keys,
+`--fields` values, output shapes, and a cookbook. Both are generated from the binary you
+are actually running, so they cannot drift the way a copy in this file can. Read them
+before guessing a flag, and before falling back to `grep`.
+
+```bash
+hyalo -h                 # every command, grouped, with composed examples
+hyalo find -h            # one screen: filters, output flags, examples
+hyalo find --help        # every operator, sort key, field name and recipe
+```
+
+What follows is only what those pages do not say — the behaviour that surprises people.
+
+### Pitfalls
+
+- **`mv` has two modes.** Single-file mode writes immediately (`--dry-run` to preview;
+  `--apply` is rejected there). Batch mode (`--glob`/`--property`/`--tag`/`--type`)
+  defaults to dry-run and needs `--apply` to commit.
+- **`links fix` withholds low-confidence repairs.** Fuzzy hits and basename fallbacks are
+  reported separately and excluded from `--apply` unless you pass `--apply-fuzzy`, which is
+  gated again by a confidence floor (0.8 default; `--min-confidence <0.0-1.0>` or
+  `[links] fuzzy_min_confidence`). Confidence weights the final path segment at 70% and the
+  directory path at 30%. A repair is written in the form the link was written in, and one
+  whose emitted target would still not resolve is refused and reported under `unfixable`.
+  Targets normalizing above the vault root count as `out_of_vault`, not `broken`.
+  Destinations containing `{%`, `{{` or `${` are template expressions, counted under
+  `templated` and never rewritten.
+- **`append` does not accept `--tag`.** Tags are scalar list items; use `set --tag`.
+- **`--where-property` / `--where-tag` default to all `**/*.md`** when neither `--file` nor
+  `--glob` is given. Always pair a bulk mutation with `--dry-run` first.
+- **Bare `properties` / `tags` / `types` / `views` / `lint-rules` run their `summary`
+  (or `list`) action** — there is no separate command to remember.
+- **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
+  `--strict` promotes missing-type and undeclared-property warnings to errors.
+- **`config` reports a broken config rather than failing.** `results.malformed` /
+  `results.parse_error` mean every other value shown is a built-in default.
+- **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.
 
 ## Schema & Lint
 
