@@ -959,6 +959,10 @@ pub fn find(
         }
 
         // --- Build properties fields ---
+        // iter-252: `title` joins `tags` as a *promoted* property — it has its
+        // own top-level field, so repeating it inside `properties` shipped the
+        // same string twice in every result item. One rule, one place: a
+        // promoted property is never echoed in the map.
         let properties = if fields.properties {
             let mut map = serde_json::Map::new();
             for (name, value) in entry
@@ -1226,6 +1230,29 @@ pub fn find(
     if total == 0 {
         fuzzy_suggest_tags(index, tag_filters);
         fuzzy_suggest_property_keys(index, property_filters);
+    }
+
+    // iter-252: `title` is a promoted field — when it is included, the same
+    // string in `properties.title` is pure duplicate payload (`tags` has been
+    // promoted the same way since the first `find`, and is filtered out where
+    // the map is built). Removed *here*, after sorting and filtering, so
+    // `--sort property:title` and every `--property title=…` filter keep
+    // comparing exactly what they always compared; only the bytes on the wire
+    // change. `--fields properties` without `title` keeps the property, so no
+    // request can lose the value entirely.
+    if fields.title && fields.properties {
+        for obj in &mut results {
+            if let Some(props) = obj.properties.as_mut() {
+                props.remove("title");
+            }
+        }
+    }
+    if fields.title && fields.properties_typed {
+        for obj in &mut results {
+            if let Some(props) = obj.properties_typed.as_mut() {
+                props.retain(|p| p.name != "title");
+            }
+        }
     }
 
     // --- Serialize ---
