@@ -100,6 +100,20 @@ pub fn apply_jq_filter_result(
     filter_code: &str,
     value: &serde_json::Value,
 ) -> Result<String, String> {
+    apply_jq_filter_with_limit(filter_code, value, JQ_TIME_LIMIT)
+}
+
+/// [`apply_jq_filter_result`] with an explicit deadline. Production callers
+/// always go through the constant-limit wrapper; tests that exercise the
+/// output caps (value count, byte size) pass a generous deadline so the
+/// *count* invariant is what fails on a slow or emulated CI runner (the
+/// v0.21.0 release pipeline saw a 1,000,000-value cap test lose the race
+/// against the 3 s limit under QEMU-emulated aarch64), never the clock.
+pub(super) fn apply_jq_filter_with_limit(
+    filter_code: &str,
+    value: &serde_json::Value,
+    time_limit: std::time::Duration,
+) -> Result<String, String> {
     let filter_code = filter_code.to_owned();
     let value = value.clone();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -118,7 +132,7 @@ pub fn apply_jq_filter_result(
         Err(e) => return Err(format!("failed to start jq evaluation: {e}")),
     };
 
-    match rx.recv_timeout(JQ_TIME_LIMIT) {
+    match rx.recv_timeout(time_limit) {
         Ok(result) => {
             // Finished within the deadline — join is a formality (near-zero
             // wait, the thread already sent its result), just to avoid
@@ -135,7 +149,7 @@ pub fn apply_jq_filter_result(
             drop(handle);
             Err(format!(
                 "jq filter exceeded the {}s time limit (see `hyalo find --help` for --jq's limits)",
-                JQ_TIME_LIMIT.as_secs()
+                time_limit.as_secs()
             ))
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {

@@ -281,8 +281,13 @@ fn jq_value_count_cap_triggers_before_byte_cap_on_many_tiny_values() {
     // value is a single-digit-or-more number (a few bytes), so the byte
     // cap (10 MiB) would take far longer than 1,000,000 iterations to
     // reach — the value-count cap must fire first.
+    // A generous deadline: this test pins the value-count cap, not the
+    // clock. Under QEMU-emulated aarch64 (`cross test`) 1,000,000 jaq
+    // iterations take longer than JQ_TIME_LIMIT and the timeout won the
+    // race in the v0.21.0 release pipeline.
     let val = json!(null);
-    let result = apply_jq_filter_result("range(2000000)", &val);
+    let result =
+        apply_jq_filter_with_limit("range(2000000)", &val, std::time::Duration::from_secs(300));
     assert!(
         result.is_err(),
         "expected the value-count cap to trigger, got Ok"

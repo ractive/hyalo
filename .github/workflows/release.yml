@@ -46,3 +46,18 @@ jobs:
         cp completions/* crates/hyalo-cli/completions/
       extra-archive-paths: completions
       dry-run: ${{ github.event_name == 'workflow_dispatch' }}
+      # Same matrix as the shared default, but the two QEMU-emulated aarch64
+      # Linux targets build only. Native tests already gate every PR on
+      # Linux/macOS/Windows; under emulation the suite took ~950 s and lost
+      # two timing races in the v0.21.0 pipeline (a 1,000,000-value jq cap
+      # test vs the 3 s time limit; a piped `hyalo | xargs -0` round-trip).
+      targets: >-
+        [
+          {"target": "x86_64-unknown-linux-gnu", "os": "ubuntu-latest", "cross": false, "run_tests": true},
+          {"target": "x86_64-unknown-linux-musl", "os": "ubuntu-latest", "cross": true, "run_tests": true},
+          {"target": "aarch64-unknown-linux-gnu", "os": "ubuntu-latest", "cross": true, "run_tests": false},
+          {"target": "aarch64-unknown-linux-musl", "os": "ubuntu-latest", "cross": true, "run_tests": false},
+          {"target": "aarch64-apple-darwin", "os": "macos-latest", "cross": false, "run_tests": true},
+          {"target": "x86_64-pc-windows-msvc", "os": "windows-latest", "cross": false, "run_tests": true},
+          {"target": "aarch64-pc-windows-msvc", "os": "windows-latest", "cross": false, "run_tests": false}
+        ]
