@@ -10,7 +10,7 @@
 
 use std::fs;
 
-use super::common::{hyalo, hyalo_no_hints, write_md};
+use super::common::{hyalo, hyalo_no_hints, shell_split, write_md};
 use tempfile::TempDir;
 
 /// `hyalo -h` ceiling (2.5 KiB).
@@ -340,10 +340,13 @@ fn a_zero_result_hint_is_a_runnable_command() {
         .unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let cmd = parsed["hints"][0]["cmd"].as_str().unwrap().to_owned();
-    // Re-run the suggested command verbatim through a shell-free split: every
-    // hint is built by HintBuilder, so its tokens are already shell-quoted and
-    // single-quoting only appears around values with spaces (none here).
-    let argv: Vec<&str> = cmd.split_whitespace().skip(1).collect();
+    // Re-run the suggested command verbatim, undoing HintBuilder's own
+    // single-quote escaping with `shell_split` rather than a bare
+    // `split_whitespace()`: on Windows the `--dir` value is a temp path
+    // containing `\`, which `shell_quote` wraps in single quotes even though
+    // it has no space, and a naive whitespace split leaves the literal quote
+    // characters in the token, so the path hyalo receives never exists.
+    let argv: Vec<String> = shell_split(&cmd).into_iter().skip(1).collect();
     let rerun = hyalo().args(&argv).output().unwrap();
     assert!(
         rerun.status.success(),
