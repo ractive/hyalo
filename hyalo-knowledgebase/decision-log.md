@@ -3327,3 +3327,44 @@ sync-pi-package` copies `pi-package/` onto the vendored tree to fix drift.
 Manual sync is exactly the failure mode DEC-237 was trying to avoid by having
 one source in the first place; a gate makes drift a CI failure instead of a
 silent divergence that only surfaces (as this bug did) at publish time.
+
+## DEC-251: axi.md agent-CLI principles — what hyalo adopts and what it rejects (2026-08-29)
+
+**Context.** The owner asked what [axi.md](https://axi.md/) (AXI, "Agent
+eXperience Interface" — a design spec for agent-facing CLIs with a
+conformance catalog and LLM-judged benchmarks, not a knowledgebase tool)
+teaches. A research pass compared its ten principles against
+`target/release/hyalo` 0.21.0 on the own KB.
+
+**Already at or above the bar.** Structured `hints[]` with a `writes`
+flag (stricter than AXI's free-text `help[]`); `summary` as a pre-computed
+aggregate; idempotent no-op mutations (`0/1 modified`, exit 0); structured
+errors on stderr with exit codes.
+
+**Measured gaps → adopted.**
+- Concise per-command help: `hyalo -h` 7.7 KB, `find -h` 12.3 KB
+  (`--help` 29 / 24 KB) because flag docs have no short/long split and the
+  global-options block repeats on all 27 subcommands →
+  [[iterations/iteration-251-agent-discoverability-help]].
+- Definitive empty states: bare `No results`, `hints: []` on zero results →
+  iteration 251.
+- Minimal default list schema: `find --tag iteration --limit 20
+  --format json` = 73 KB vs 8 KB with `--fields properties` →
+  [[iterations/iteration-252-find-result-shape]] (breaking; minor bump).
+- Size hints before reading: no `size`/`lines` on results → iteration 252.
+
+**Rejected.**
+- TOON as a third output format: breaks `--jq` and the envelope contract;
+  the savings come from the default field set instead.
+- Errors on stdout: stderr + exit code is the Unix contract CI relies on.
+- Content-first bare invocation (`hyalo` alone printing live data): a KB
+  has no single "most relevant" view; surprises humans and `hyalo | less`.
+- `SessionStart` hook / ambient context: `summary` is one call away.
+- npx/`skills add` distribution: hyalo has real packaging; no polyglot
+  tooling.
+- Benchmarks as marketing: a before/after token count of `find` on ten
+  tasks is enough evidence for a solo tool.
+
+**Constraint carried into both iterations.** No new CLI flags
+([[decision-log#DEC-249]] discipline): every adoption is a default, a
+layout, a hint, or metadata on existing output.
