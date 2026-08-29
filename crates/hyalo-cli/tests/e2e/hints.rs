@@ -662,7 +662,7 @@ fn find_with_hints_json_envelope() {
 }
 
 #[test]
-fn find_with_hints_empty_results_no_hints() {
+fn find_with_hints_empty_results_hint_at_the_vocabulary() {
     let tmp = setup_vault();
     let output = hyalo()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -679,15 +679,25 @@ fn find_with_hints_empty_results_no_hints() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // Empty results -> no hints generated; output is a plain empty array or
-    // a hints envelope with an empty hints array.
+    // iter-251: an empty result set is the moment an agent most needs a next
+    // step, so it now carries 1-3 hints instead of the empty array this test
+    // used to assert. A `--tag` miss points at the tag vocabulary.
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    if let Some(hints) = parsed.get("hints") {
-        assert!(
-            hints.as_array().is_some_and(std::vec::Vec::is_empty),
-            "expected empty hints for empty results: {parsed}"
-        );
-    }
+    let hints = parsed
+        .get("hints")
+        .and_then(serde_json::Value::as_array)
+        .expect("envelope carries a hints array");
+    assert!(
+        !hints.is_empty() && hints.len() <= 3,
+        "expected 1-3 zero-result hints: {parsed}"
+    );
+    assert!(
+        hints.iter().any(|h| h
+            .get("cmd")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|c| c.contains("tags summary"))),
+        "a --tag miss should point at the tag listing: {parsed}"
+    );
 }
 
 // ---------------------------------------------------------------------------

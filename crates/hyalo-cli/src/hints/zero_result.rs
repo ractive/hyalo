@@ -276,7 +276,10 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                     String::new()
                 };
                 hints.push(Hint::new(
-                    format!("Values of `{key}` in this vault: {}{suffix}", shown.join(", ")),
+                    format!(
+                        "Values of `{key}` in this vault: {}{suffix}",
+                        shown.join(", ")
+                    ),
                     HintBuilder::cmd("find")
                         .flag_value("--property", key)
                         .flag_value("--fields", "properties")

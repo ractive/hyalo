@@ -3,6 +3,12 @@ paths:
   - "hyalo-knowledgebase/**"
 ---
 Prefer `hyalo` CLI for operations on files in this directory:
+- **Read the CLI's own help before guessing a flag**: `hyalo -h` lists every command grouped by
+  intent, one line each; `hyalo <cmd> -h` is one screen for one command; `hyalo <cmd> --help` is the
+  full syntax reference (operators, sort keys, `--fields` values, output shapes, cookbook).
+- **Empty result sets are self-documenting**: a `find` that matches nothing echoes the filters it
+  applied and hints at the next step (did-you-mean over the values the property really has, and the
+  same query with its most selective filter dropped).
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"`
 - **Title regex**: `hyalo find --property 'title~=link'`

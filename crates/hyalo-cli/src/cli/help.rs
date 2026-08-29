@@ -55,6 +55,22 @@ pub(crate) fn find_after_short_help(global_pointer: &str) -> String {
     )
 }
 
+/// The whole `-h` body below the usage line: the grouped command list and the
+/// composed examples, with config-defaulted flags filtered out of the examples
+/// exactly as [`filter_examples`] does for the long-form list.
+pub(crate) fn short_help_body(hide_dir: bool, hide_format: bool) -> String {
+    let examples: Vec<&str> = HELP_EXAMPLES_SHORT
+        .lines()
+        .filter(|line| {
+            if hide_format && line.contains(" --format") {
+                return false;
+            }
+            !(hide_dir && (line.contains("-d/--dir") || line.contains(" --dir ")))
+        })
+        .collect();
+    format!("{HELP_COMMANDS}\n\n{}", examples.join("\n"))
+}
+
 /// The single line that stands in for the global-options block on a
 /// subcommand's `-h` (iteration 251).
 ///

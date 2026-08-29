@@ -399,7 +399,12 @@ pub(crate) struct FindFilters {
     /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
     /// K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
     /// sequences (contact.email, contacts.0.email, contacts.email = any element).
-    #[arg(short, long = "property", value_name = "FILTER", help_heading = "Filters")]
+    #[arg(
+        short,
+        long = "property",
+        value_name = "FILTER",
+        help_heading = "Filters"
+    )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<String>,
     /// Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
@@ -418,7 +423,12 @@ pub(crate) struct FindFilters {
     /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
     /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
     /// A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
-    #[arg(short, long = "section", value_name = "HEADING", help_heading = "Filters")]
+    #[arg(
+        short,
+        long = "section",
+        value_name = "HEADING",
+        help_heading = "Filters"
+    )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
     #[arg(
@@ -462,7 +472,12 @@ pub(crate) struct FindFilters {
     /// scanning all files; 'title' is the frontmatter title property or first H1 heading (null if
     /// neither found). Note: in JSON output, `properties-typed` is serialized as
     /// `properties_typed` (underscore).
-    #[arg(long, value_name = "FIELDS", use_value_delimiter = true, help_heading = "Output")]
+    #[arg(
+        long,
+        value_name = "FIELDS",
+        use_value_delimiter = true,
+        help_heading = "Output"
+    )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
     /// file (default)|modified|backlinks_count|links_count|title|date|property:K

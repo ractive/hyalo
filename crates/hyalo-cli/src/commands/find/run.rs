@@ -279,10 +279,7 @@ pub(crate) fn run(
             // key actually carries, reusing the index this query already
             // walked, so the hint layer can offer a did-you-mean and name the
             // real values instead of printing a bare `No results`.
-            if matches!(
-                outcome,
-                CommandOutcome::Success { total: Some(0), .. }
-            ) {
+            if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
                 ctx.zero_result_values =
                     observed_property_values(resolved.as_index(), &prop_filters);
             }

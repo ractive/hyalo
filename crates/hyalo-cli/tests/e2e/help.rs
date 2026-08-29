@@ -9,11 +9,14 @@ fn short_help_is_compact() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    // -h should contain the basic sections
+    // iter-251: `-h` groups the commands by intent instead of listing them
+    // alphabetically, and its examples compose filters rather than showing one
+    // flag each.
     assert!(stdout.contains("Usage: hyalo"));
-    assert!(stdout.contains("Commands:"));
-    assert!(stdout.contains("Options:"));
-    assert!(stdout.contains("EXAMPLES:"));
+    assert!(stdout.contains("COMMANDS \u{2014} read (no writes)"));
+    assert!(stdout.contains("COMMANDS \u{2014} write (mutates files)"));
+    assert!(stdout.contains("GLOBAL OPTIONS"));
+    assert!(stdout.contains("EXAMPLES (each composes"));
 
     // -h should NOT contain the enriched sections
     assert!(
@@ -241,9 +244,11 @@ fn help_shows_dir_without_config() {
 // Config-aware help: examples and cookbook filtering
 // ---------------------------------------------------------------------------
 
-/// Extract the EXAMPLES block from `-h` output (short help).
+/// Extract the EXAMPLES block from `--help` output (long help).
 ///
 /// Returns the text from the `EXAMPLES:` heading to the end of the output.
+/// iter-251 moved this block off `-h` (whose examples now compose filters
+/// instead of demonstrating one flag each) onto `--help`.
 fn examples_block(help: &str) -> &str {
     let start = help.find("EXAMPLES:").expect("no EXAMPLES: block in help");
     &help[start..]
@@ -270,7 +275,7 @@ fn examples_omit_format_when_config_sets_it() {
     fs::write(tmp.path().join(".hyalo.toml"), "format = \"text\"\n").unwrap();
 
     let output = hyalo_no_hints()
-        .arg("-h")
+        .arg("--help")
         .current_dir(tmp.path())
         .output()
         .unwrap();
@@ -291,7 +296,7 @@ fn examples_show_format_without_config() {
     // No .hyalo.toml
 
     let output = hyalo_no_hints()
-        .arg("-h")
+        .arg("--help")
         .current_dir(tmp.path())
         .output()
         .unwrap();

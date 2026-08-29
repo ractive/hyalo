@@ -590,9 +590,15 @@ fn run_inner() -> Result<(), AppError> {
     // Apply runtime-filtered help text so that examples and cookbook entries
     // that reference config-defaulted flags are stripped from help output.
     // `after_help` is shown by `-h`; `after_long_help` is shown by `--help`.
-    cmd = cmd
-        .after_help(filter_examples(hide_dir, hide_format))
-        .after_long_help(filter_long_help(hide_dir, hide_format));
+    // iter-251: the 40 one-flag EXAMPLES moved off `-h` (where they taught one
+    // flag per line and never that filters compose) onto `--help`, which now
+    // carries both them and the COOKBOOK. `-h`'s own examples are installed
+    // below, in the short-help branch.
+    cmd = cmd.after_long_help(format!(
+        "{}\n\n{}",
+        filter_long_help(hide_dir, hide_format),
+        filter_examples(hide_dir, hide_format)
+    ));
 
     // Global args (--format, --jq, etc.) are only defined on the root Command
     // in clap derive — they aren't propagated to subcommands until parse time.
@@ -631,11 +637,7 @@ fn run_inner() -> Result<(), AppError> {
                 .mut_arg("format", |a| a.hide_possible_values(true))
                 .mut_arg("index_file", |a| a.hide_short_help(true))
                 .help_template(TOP_SHORT_HELP_TEMPLATE)
-                .after_help(format!(
-                    "{}\n\n{}",
-                    crate::cli::help::HELP_COMMANDS,
-                    crate::cli::help::HELP_EXAMPLES_SHORT
-                ));
+                .after_help(crate::cli::help::short_help_body(hide_dir, hide_format));
         }
     }
     let matches = match cmd.try_get_matches_from(raw_args.iter().map(String::as_str)) {
