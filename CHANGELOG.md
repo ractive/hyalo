@@ -9,6 +9,29 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **mdbook-lint bumped to 0.16.1.** `mdbook-lint-core` and
+  `mdbook-lint-rulesets` move 0.16.0 → 0.16.1 (lockfile only; the manifest
+  requirement `"0.16"` is unchanged). The release carries upstream
+  [#496](https://github.com/joshrotenberg/mdbook-lint/pull/496), which fixes
+  MD047 on CRLF files: trailing terminators are counted with CRLF as one unit
+  (so a CRLF file with several trailing blank lines is now detected at all),
+  and the missing-final-newline fix inserts the file's own terminator instead
+  of a hard-coded LF. Where a file's endings are mixed, the terminator of the
+  line immediately before EOF wins.
+
+### Removed
+
+- **The last downstream compensation for an upstream mdbook-lint bug.**
+  `md047_fix` in `hyalo-mdlint` — which computed MD047 fixes locally for CRLF
+  bodies, the one documented exception left after iteration 196 — is deleted
+  along with its dispatch branch. MD047 now goes through the same generic
+  `convert_fix` translation as every other rule, so `hyalo-mdlint` carries no
+  rule-specific fix overrides. No user-visible behaviour change: the CRLF and
+  mixed-endings MD047 tests written against the override pass unmodified
+  against 0.16.1 and stay as the regression check.
+
 ### Fixed
 
 - `hyalo-cli` crates.io publish (v0.21.0) failed at the tarball verify step because the pi integration files were embedded via `include_str!` reaching outside the crate into the top-level `pi-package/` directory, which `cargo package` cannot see. The four files are now vendored inside `crates/hyalo-cli/templates/pi/`, kept in sync with `pi-package/` by a new `check-pi-package-sync` CI gate (`just sync-pi-package` to fix drift).
