@@ -1517,7 +1517,7 @@ fn lint_fix_md047_converges_in_one_run() {
 /// MD047 on CRLF and mixed-ending files, end to end through the vault
 /// writer. Until mdbook-lint 0.16.1 (upstream #496) MD047 hard-coded `"\n"`
 /// for the missing-EOF insertion and counted trailing terminators by bare
-/// `'\n'`, so hyalo carried a local `md047_fix` override; iteration 250
+/// `'\n'`, so hyalo carried a local CRLF-only override; iteration 250
 /// deleted it. These cases are the regression check that upstream's fix
 /// survives frontmatter splitting and hyalo's CRLF-atomic offset
 /// translation.

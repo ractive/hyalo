@@ -851,7 +851,7 @@ fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
 /// Every rule now goes through here, MD047 included. Until 0.16.1 (upstream
 /// #496, our report #495) MD047 was the last LF-centric rule — it hard-coded
 /// `"\n"` for the missing-EOF insertion and counted trailing terminators by
-/// bare `'\n'`, so a `md047_fix` override computed CRLF fixes locally. 0.16.1
+/// bare `'\n'`, so a CRLF-only override computed those fixes locally. 0.16.1
 /// inserts the file's own terminator and counts CRLF as one unit, so that
 /// override was deleted in iteration 250; the CRLF MD047 tests below are what
 /// keeps the upstream behaviour honest.
@@ -1287,15 +1287,16 @@ mod tests {
 
     // --- MD047 must handle CRLF terminators ---
     //
-    // These went through hyalo's own `md047_fix` override until mdbook-lint
-    // 0.16.1 (upstream #496) taught MD047 to count CRLF as one terminator and
-    // to insert the file's own line ending. The override is gone (iter-250);
+    // These went through hyalo's own CRLF-only MD047 override until
+    // mdbook-lint 0.16.1 (upstream #496) taught MD047 to count CRLF as one
+    // terminator and to insert the file's own line ending. The override is
+    // gone (iter-250);
     // the assertions are unchanged, so they now pin *upstream's* behaviour
     // travelling through `convert_fix` and our CRLF-atomic offset
     // translation.
 
     /// Run MD047 over `body` and apply the fix it reports, if any.
-    fn md047_fixed(body: &str) -> Option<String> {
+    fn apply_md047(body: &str) -> Option<String> {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let diagnostics = engine
@@ -1308,39 +1309,39 @@ mod tests {
 
     #[test]
     fn md047_crlf_removes_extra_trailing_newlines_in_one_pass() {
-        let fixed = md047_fixed("body\r\n\r\n\r\n").expect("multiple trailing CRLF should fire");
+        let fixed = apply_md047("body\r\n\r\n\r\n").expect("multiple trailing CRLF should fire");
         assert_eq!(fixed, "body\r\n");
         assert!(
-            md047_fixed(&fixed).is_none(),
+            apply_md047(&fixed).is_none(),
             "the fixed body must be clean on a second pass"
         );
     }
 
     #[test]
     fn md047_crlf_adds_matching_terminator() {
-        let fixed = md047_fixed("line one\r\nlast line").expect("missing newline should fire");
+        let fixed = apply_md047("line one\r\nlast line").expect("missing newline should fire");
         assert_eq!(fixed, "line one\r\nlast line\r\n");
     }
 
     #[test]
     fn md047_crlf_single_trailing_newline_is_clean() {
-        assert!(md047_fixed("body\r\n").is_none());
+        assert!(apply_md047("body\r\n").is_none());
     }
 
     /// Mixed endings: upstream 0.16.1 inserts the terminator of the line
     /// immediately before EOF, "since that is what the file was doing at the
-    /// point of insertion". The deleted `md047_fix` used a whole-body
+    /// point of insertion". The deleted override used a whole-body
     /// `contains("\r\n")` test instead, which would have appended CRLF here;
     /// upstream's rule is the one to keep.
     #[test]
     fn md047_mixed_endings_uses_the_terminator_before_eof() {
-        let fixed = md047_fixed("crlf line\r\nlf line\nlast line")
+        let fixed = apply_md047("crlf line\r\nlf line\nlast line")
             .expect("missing newline should fire on a mixed-endings body");
         assert_eq!(fixed, "crlf line\r\nlf line\nlast line\n");
 
         // ...and the other way round: an LF body whose last terminator is
         // CRLF gets a CRLF appended.
-        let fixed = md047_fixed("lf line\ncrlf line\r\nlast line")
+        let fixed = apply_md047("lf line\ncrlf line\r\nlast line")
             .expect("missing newline should fire on a mixed-endings body");
         assert_eq!(fixed, "lf line\ncrlf line\r\nlast line\r\n");
     }
@@ -1353,7 +1354,7 @@ mod tests {
     #[test]
     fn md047_single_line_body_without_terminator_falls_back_to_lf() {
         assert_eq!(
-            md047_fixed("body").expect("missing newline should fire"),
+            apply_md047("body").expect("missing newline should fire"),
             "body\n"
         );
     }
@@ -1363,9 +1364,9 @@ mod tests {
     /// that one is.
     #[test]
     fn md047_mixed_trailing_terminators_converge_in_one_pass() {
-        let fixed = md047_fixed("body\r\n\n\r\n").expect("three trailing terminators should fire");
+        let fixed = apply_md047("body\r\n\n\r\n").expect("three trailing terminators should fire");
         assert_eq!(fixed, "body\r\n");
-        assert!(md047_fixed(&fixed).is_none());
+        assert!(apply_md047(&fixed).is_none());
     }
 
     // --- H-1b: MD009 must not duplicate the line terminator ---
@@ -1410,7 +1411,7 @@ mod tests {
     // --- H-1c: MD047 must converge in a single application ---
 
     #[test]
-    fn md047_fix_converges_two_trailing_newlines_in_one_pass() {
+    fn md047_converges_two_trailing_newlines_in_one_pass() {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let body = "body\n\n";
@@ -1436,7 +1437,7 @@ mod tests {
     }
 
     #[test]
-    fn md047_fix_converges_many_trailing_newlines_in_one_pass() {
+    fn md047_converges_many_trailing_newlines_in_one_pass() {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let body = "body\n\n\n\n\n";
@@ -1453,7 +1454,7 @@ mod tests {
     }
 
     #[test]
-    fn md047_fix_adds_missing_trailing_newline() {
+    fn md047_adds_missing_trailing_newline() {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
         let body = "body without newline";
