@@ -25,6 +25,10 @@ pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
 const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
      per `[links] case_insensitive`, default auto). Mutually exclusive with --glob and --files-from";
 
+/// One-line `-h` form of [`FILE_FLAG_DOC`] (iter-251). The case-folding and
+/// mutual-exclusion detail stays on `--help`, where there is room for it.
+const FILE_FLAG_SHORT_DOC: &str = "Target file(s), repeatable (excludes --glob / --files-from)";
+
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
 pub(crate) fn is_false(v: &bool) -> bool {
     !v
@@ -52,7 +56,7 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
 /// Index flags, flattened into subcommands that can consume a snapshot index.
 #[derive(Args, Debug, Default, Clone)]
 pub(crate) struct IndexFlags {
-    /// Use the snapshot index at `.hyalo-index` in the vault directory.
+    /// Use the `.hyalo-index` snapshot in the vault dir
     ///
     /// Read-only commands (find, summary, tags summary, properties summary,
     /// backlinks) skip the disk scan entirely when the index is present.
@@ -89,7 +93,7 @@ pub(crate) struct IndexFlags {
     #[arg(long)]
     pub index: bool,
 
-    /// Use the snapshot index at PATH instead of the default `.hyalo-index`.
+    /// Use the snapshot index at PATH instead of `.hyalo-index`
     ///
     /// Implies `--index`. Relative paths are resolved against the current
     /// working directory (not the vault dir); absolute paths are used as-is.
@@ -243,6 +247,8 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
     long_about = build_long_about()
 )]
 pub(crate) struct Cli {
+    /// Vault root for file and glob paths (default: .)
+    ///
     /// Root directory for resolving all file and --glob paths.
     /// Default: "." (Override via .hyalo.toml)
     #[arg(
@@ -266,12 +272,16 @@ pub(crate) struct Cli {
     )]
     pub dir: Option<PathBuf>,
 
+    /// Output format (default: text on a terminal, json when piped)
+    ///
     /// Output format: "json" or "text".
     /// Default: "text" when stdout is a terminal, "json" when piped.
     /// Override for a session via .hyalo.toml: format = "text"
     #[arg(long, global = true)]
     pub format: Option<Format>,
 
+    /// jq filter over the JSON envelope
+    ///
     /// Apply a jq filter expression to the JSON output of any command.
     /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
     /// The filtered result is printed as plain text. Incompatible with --format text
@@ -286,6 +296,8 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 
+    /// Print just the total as a bare integer (list commands)
+    ///
     /// Print only the total count as a bare integer for list commands.
     /// Shortcut for --jq '.total'. Incompatible with --jq.
     // The full command list lives in `build_count_long_help()` so it is derived
@@ -293,6 +305,8 @@ pub(crate) struct Cli {
     #[arg(long, global = true, long_help = build_count_long_help())]
     pub count: bool,
 
+    /// Force hints on (already the default)
+    ///
     /// Force hints on (already the default).
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
     /// JSON mode: populates the "hints" array in the envelope (always present, empty when suppressed).
@@ -300,14 +314,17 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub hints: bool,
 
+    /// Disable drill-down hints (on by default)
+    ///
     /// Disable drill-down command hints (enabled by default).
     /// Override via .hyalo.toml: hints = false
     /// When both --hints and --no-hints are present, --hints takes precedence.
     #[arg(long, global = true)]
     pub no_hints: bool,
 
-    /// Site prefix for resolving root-absolute links like `/docs/page.md`.
+    /// Prefix stripped from /root-absolute/links
     ///
+    /// Site prefix for resolving root-absolute links like `/docs/page.md`.
     /// When a markdown file contains a link like `/docs/guides/setup.md`, hyalo strips the
     /// leading `/<prefix>/` to get the vault-relative path `guides/setup.md`. This is how
     /// documentation sites (GitHub Pages, VuePress, Docusaurus) map URL paths to file paths.
@@ -332,8 +349,9 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "PREFIX")]
     pub site_prefix: Option<String>,
 
-    /// Suppress all warnings printed to stderr.
+    /// Suppress warnings on stderr
     ///
+    /// Suppress all warnings printed to stderr.
     /// Useful in scripts or CI pipelines where warning noise is undesirable.
     /// Identical warnings are always deduplicated regardless of this flag;
     /// use `--quiet` to suppress them entirely.
@@ -344,8 +362,9 @@ pub(crate) struct Cli {
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 
-    /// Use the snapshot index at PATH (global alias for the per-subcommand `--index-file`).
+    /// Snapshot index path (alias for the subcommand flag)
     ///
+    /// Use the snapshot index at PATH (global alias for the per-subcommand `--index-file`).
     /// Equivalent to passing `--index-file PATH` after the subcommand.
     /// When both the global flag and the subcommand flag are provided, the
     /// subcommand value takes precedence.
@@ -368,35 +387,59 @@ pub(crate) struct FindFilters {
     #[arg(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
-    /// Regex body text search (case-insensitive by default; use (?-i) to override). Mutually exclusive with PATTERN
-    #[arg(long, short = 'e', value_name = "REGEX")]
+    /// Regex body search, case-insensitive (excludes PATTERN)
+    ///
+    /// Regex body text search (case-insensitive by default; use (?-i) to override).
+    /// Mutually exclusive with PATTERN.
+    #[arg(long, short = 'e', value_name = "REGEX", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regexp: Option<String>,
-    /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent), K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and sequences (contact.email, contacts.0.email, contacts.email = any element)
-    #[arg(short, long = "property", value_name = "FILTER")]
+    /// K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=re|K~=/re/i; AND; K may be a dot-path
+    ///
+    /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
+    /// K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
+    /// sequences (contact.email, contacts.0.email, contacts.email = any element).
+    #[arg(short, long = "property", value_name = "FILTER", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<String>,
-    /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not 'projects'). Repeatable (AND)
-    #[arg(short, long, value_name = "TAG")]
+    /// Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
+    ///
+    /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
+    /// 'projects'). Repeatable (AND).
+    #[arg(short, long, value_name = "TAG", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tag: Vec<String>,
-    /// Task presence filter: 'todo', 'done', 'any', or a single status character
-    #[arg(long, value_name = "STATUS")]
+    /// Task presence: 'todo', 'done', 'any', or a single status character
+    #[arg(long, value_name = "STATUS", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// Heading substring, '##' pins the level, or /regex/; repeatable (OR)
+    ///
     /// Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
     /// prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
     /// A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
-    #[arg(short, long = "section", value_name = "HEADING")]
+    #[arg(short, long = "section", value_name = "HEADING", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sections: Vec<String>,
-    #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+    #[arg(
+        short,
+        long,
+        conflicts_with_all = ["glob", "files_from"],
+        help = FILE_FLAG_SHORT_DOC,
+        long_help = FILE_FLAG_DOC,
+        help_heading = "Filters"
+    )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file: Vec<String>,
-    /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
-    #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
+    /// Glob(s) relative to --dir, repeatable; '!' negates ('!**/draft-*')
+    ///
+    /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
+    /// (e.g. '!**/draft-*').
+    #[arg(short, long, conflicts_with_all = ["file", "files_from"], help_heading = "Filters")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glob: Vec<String>,
+    /// Read paths from PATH, one per line ('-' = stdin)
+    ///
     /// Read file paths from PATH (one per line); use '-' to read from stdin.
     /// Mutually exclusive with --file and --glob.
     /// Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
@@ -406,26 +449,48 @@ pub(crate) struct FindFilters {
     /// CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
     /// restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
     /// hyalo shells out to nothing and has no VCS-specific flag).
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"])]
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
-    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks, title (default: properties, tags, sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to include every field. 'file' and 'modified' are always included. 'properties' is a {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the frontmatter title property or first H1 heading (null if neither found). Note: in JSON output, `properties-typed` is serialized as `properties_typed` (underscore)
-    #[arg(long, value_name = "FIELDS", use_value_delimiter = true)]
+    /// all|properties|properties-typed|tags|sections|tasks|links|backlinks|title (default: properties,tags,sections,links)
+    ///
+    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags,
+    /// sections (alias: outline), tasks, links, backlinks, title (default: properties, tags,
+    /// sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to
+    /// include every field. 'file' and 'modified' are always included. 'properties' is a
+    /// {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires
+    /// scanning all files; 'title' is the frontmatter title property or first H1 heading (null if
+    /// neither found). Note: in JSON output, `properties-typed` is serialized as
+    /// `properties_typed` (underscore).
+    #[arg(long, value_name = "FIELDS", use_value_delimiter = true, help_heading = "Output")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
-    /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count', 'title', 'date', or 'property:<KEY>' for any frontmatter property. For 'property:<KEY>', values of different JSON types (e.g. some files have a string, others a number) compare by raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a stderr warning names the property when this happens; use a consistent type in frontmatter for a meaningful sort
-    #[arg(long)]
+    /// file (default)|modified|backlinks_count|links_count|title|date|property:K
+    ///
+    /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count',
+    /// 'title', 'date', or 'property:<KEY>' for any frontmatter property. For 'property:<KEY>',
+    /// values of different JSON types (e.g. some files have a string, others a number) compare by
+    /// raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a
+    /// stderr warning names the property when this happens; use a consistent type in frontmatter
+    /// for a meaningful sort.
+    #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
-    /// Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc
-    #[arg(long, alias = "desc")]
+    /// Reverse the sort order [alias: --desc]
+    ///
+    /// Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc.
+    #[arg(long, alias = "desc", help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
+    /// Max results, 0 = unlimited (default cap: 50)
+    ///
     /// Maximum number of results to return (0 = unlimited).
-    /// Default cap is bypassed when --jq or --count is used
-    #[arg(short = 'n', long, value_parser = parse_limit)]
+    /// Default cap is bypassed when --jq or --count is used.
+    #[arg(short = 'n', long, value_parser = parse_limit, help_heading = "Output")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<usize>,
+    /// Only files with an unresolved link or dead heading anchor
+    ///
     /// Only return files with at least one unresolved link or dead heading anchor
     /// (auto-includes links field).
     /// Targets that resolve above the vault root are out of scope, not broken: they are
@@ -437,41 +502,54 @@ pub(crate) struct FindFilters {
     /// renders to an anchor hyalo cannot compute, so anchors into such a file are never
     /// reported broken.
     /// Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
-    /// reports, and links are listed in document order
-    #[arg(long)]
+    /// reports, and links are listed in document order.
+    #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
-    /// Exit 1 if the query returns any results (0 if empty) — a CI gate for any find query, most
-    /// commonly `find --broken-links --strict` to fail a build on a dead heading anchor. Before
-    /// this, `find --broken-links` always exited 0 even when it reported findings, so a vault
-    /// whose only defect was a dead anchor passed CI silently
-    #[arg(long)]
+    /// Exit 1 if any results, 0 if empty — a CI gate
+    ///
+    /// A CI gate for any find query, most commonly `find --broken-links --strict` to fail a build
+    /// on a dead heading anchor. Before this, `find --broken-links` always exited 0 even when it
+    /// reported findings, so a vault whose only defect was a dead anchor passed CI silently.
+    #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub strict: bool,
-    /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks field)
-    #[arg(long)]
+    /// Only orphan files: no inbound and no outbound links
+    ///
+    /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks
+    /// field).
+    #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub orphan: bool,
-    /// Only return dead-end files: have inbound links but no outbound links (auto-includes links field)
-    #[arg(long)]
+    /// Only dead-end files: inbound links but no outbound links
+    ///
+    /// Only return dead-end files: have inbound links but no outbound links (auto-includes links
+    /// field).
+    #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub dead_end: bool,
+    /// Title substring (case-insensitive) or /regex/[i]
+    ///
     /// Filter by title: case-insensitive substring match against the displayed title
     /// (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
     /// (e.g. '/^The/' or '/^The/i').
-    #[arg(long)]
+    #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// BM25 Snowball stemmer language (default: english) [alias: --stemmer]
+    ///
     /// Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
     /// tokenization — NOT markdown code-block language.
     /// Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
     /// Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
     /// german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn),
     /// portuguese (pt), romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta),
-    /// turkish (tr)
-    #[arg(long, alias = "stemmer", value_name = "LANG")]
+    /// turkish (tr).
+    #[arg(long, alias = "stemmer", value_name = "LANG", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Print matching paths only, one per line — no envelope, no hints
+    ///
     /// Print only the file path of each matching entry, one per line — no JSON,
     /// no envelope, no count, no hints. grep `-l` precedent: the agent/
     /// pipeline projection of a find result set, usable in `sort`, `xargs`,
@@ -486,10 +564,13 @@ pub(crate) struct FindFilters {
     /// normally does.
     #[arg(
         long,
-        conflicts_with_all = ["jq", "count", "filenames0"]
+        conflicts_with_all = ["jq", "count", "filenames0"],
+        help_heading = "Output"
     )]
     #[serde(skip_serializing_if = "is_false")]
     pub filenames_only: bool,
+    /// Like --filenames-only but NUL-separated, for `xargs -0`
+    ///
     /// NUL-delimited sibling of `--filenames-only` (iter-238): each matching
     /// file path is printed terminated by a NUL byte instead of a newline,
     /// exactly like GNU `find -print0`. Safe for filenames that contain
@@ -502,7 +583,7 @@ pub(crate) struct FindFilters {
     ///
     /// Mutually exclusive with `--filenames-only`, `--jq`, `--count`, and an
     /// explicit `--format json` (pick one projection).
-    #[arg(long, conflicts_with_all = ["jq", "count", "filenames_only"])]
+    #[arg(long, conflicts_with_all = ["jq", "count", "filenames_only"], help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub filenames0: bool,
 }
@@ -669,16 +750,21 @@ pub(crate) enum Commands {
             \u{00a0} hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
             \u{00a0} git diff --name-only origin/main | hyalo find --files-from -")]
     Find {
-        /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran"); results sorted by relevance
+        /// BM25 ranked full-text body search (stemmed; sorted by relevance)
+        ///
+        /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran");
+        /// results sorted by relevance.
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
-        /// Target file(s) as positional args — alternative to --file (repeatable after PATTERN)
+        /// Target file(s), positional form of --file
         #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
         file_positional: Vec<String>,
+        /// Start from a saved view; CLI filters merge on top
+        ///
         /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
         /// are merged on top: list filters (--property, --tag, --section, --glob) extend
-        /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it
-        #[arg(long, value_name = "NAME")]
+        /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it.
+        #[arg(long, value_name = "NAME", help_heading = "Filters")]
         view: Option<String>,
         #[command(flatten)]
         filters: FindFilters,
@@ -706,6 +792,7 @@ pub(crate) enum Commands {
         #[command(flatten)]
         selection: InputSelection,
         /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+        ///
         /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
@@ -729,11 +816,13 @@ pub(crate) enum Commands {
         \u{00a0} hyalo properties rename --from old-key --to new-key")]
     Properties {
         /// Glob pattern(s) to filter which files to scan, relative to --dir
+        ///
         /// (repeatable); prefix '!' to negate. Bare-group form of
         /// `properties summary --glob`.
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited). Bare-group
+        ///
         /// form of `properties summary --limit`.
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -751,11 +840,13 @@ pub(crate) enum Commands {
         \u{00a0} hyalo tags rename --from old-tag --to new-tag")]
     Tags {
         /// Glob pattern(s) to filter which files to scan, relative to --dir
+        ///
         /// (repeatable); prefix '!' to negate. Bare-group form of
         /// `tags summary --glob`.
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited). Bare-group
+        ///
         /// form of `tags summary --limit`.
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -816,6 +907,7 @@ pub(crate) enum Commands {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Number of recent files to show (default: 10).
+        ///
         /// NOTE: on this command -n means --recent, not --limit as on find and backlinks —
         /// it caps only the "recently modified" list, never the summary's stats
         #[arg(short = 'n', long, default_value = "10")]
@@ -850,6 +942,7 @@ pub(crate) enum Commands {
         #[command(flatten)]
         selection: InputSelection,
         /// Maximum number of backlinks to return (0 = unlimited).
+        ///
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -907,6 +1000,7 @@ pub(crate) enum Commands {
         #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
         /// Destination path — positional form (single-file mode only). Alias for --to:
+        ///
         /// `hyalo mv old.md new.md` is equivalent to `hyalo mv old.md --to new.md`.
         /// Requires the positional source FILE (not --file); mutually exclusive with --to.
         #[arg(
@@ -922,6 +1016,7 @@ pub(crate) enum Commands {
         #[arg(short, long, value_name = "GLOB", conflicts_with = "files_from")]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin (batch mode).
+        ///
         /// Mutually exclusive with --file, positional FILE, and --glob.
         /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
         /// Input is deduplicated; results follow first-seen order.
@@ -940,6 +1035,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Commit changes in batch mode (required when using --glob/--property/--tag/--type).
+        ///
         /// Rejected in single-file mode, which applies by default — use --dry-run to preview.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
@@ -947,6 +1043,7 @@ pub(crate) enum Commands {
         #[arg(long = "on-conflict", value_name = "POLICY", default_value = "error")]
         on_conflict: String,
         /// Allow rewriting bare wikilinks ([[note]]) even when the stem is ambiguous
+        ///
         /// (matches multiple vault files). By default, ambiguous bare wikilinks are
         /// skipped with a warning to avoid silent retargeting (BUG-2 prevention).
         #[arg(long)]
@@ -1017,6 +1114,7 @@ Repeatable (AND).\n\
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        ///
         /// Mutually exclusive with --file, positional FILE, and --glob.
         /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
         /// Input is deduplicated; results follow first-seen order.
@@ -1032,6 +1130,7 @@ Repeatable (AND).\n\
         #[arg(long)]
         dry_run: bool,
         /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        ///
         /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
@@ -1091,6 +1190,7 @@ Repeatable (AND).\n\
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        ///
         /// Mutually exclusive with --file, positional FILE, and --glob.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
@@ -1139,6 +1239,7 @@ Repeatable (AND).\n\
         #[arg(long)]
         pi: bool,
         /// Scaffold a preset vault flavour (okf, madr, skills, changelog) by
+        ///
         /// merging an embedded config fragment into .hyalo.toml
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
@@ -1208,6 +1309,7 @@ Repeatable (AND).\n\
     )]
     CreateIndex {
         /// Output path for the index file (default: .hyalo-index in --dir).
+        ///
         /// Equivalent to the global --index-file flag on this subcommand.
         /// Also accepted as --path, matching `drop-index --path`.
         #[arg(short, long, visible_alias = "path")]
@@ -1228,6 +1330,7 @@ Repeatable (AND).\n\
     )]
     DropIndex {
         /// Path to the index file to delete (default: .hyalo-index in --dir).
+        ///
         /// Also accepted as --output, matching `create-index --output`.
         #[arg(short, long, visible_alias = "output")]
         path: Option<PathBuf>,
@@ -1285,6 +1388,7 @@ Repeatable (AND).\n\
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        ///
         /// Mutually exclusive with --file, positional FILE, and --glob.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
@@ -1298,6 +1402,7 @@ Repeatable (AND).\n\
         #[arg(long)]
         dry_run: bool,
         /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        ///
         /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
@@ -1538,6 +1643,7 @@ Repeatable (AND).\n\
     )]
     Lint {
         /// Target file(s) (relative to --dir) — positional form, repeatable.
+        ///
         /// `hyalo lint a.md b.md` lints both, matching `--files-from` semantics.
         #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "type", "files_from"])]
         file_positional: Vec<String>,
@@ -1548,10 +1654,12 @@ Repeatable (AND).\n\
         #[arg(short, long, conflicts_with_all = ["file", "type", "files_from"])]
         glob: Vec<String>,
         /// Restrict linting to files matching the named type's filename template.
+        ///
         /// Equivalent to --glob <template-as-glob>. Mutually exclusive with --file, --glob, and --files-from.
         #[arg(long = "type", conflicts_with_all = ["file", "glob", "file_positional", "files_from"])]
         r#type: Option<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin.
+        ///
         /// Mutually exclusive with --file, positional FILE, --glob, and --type.
         /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
         /// Input is deduplicated; results follow first-seen order.
@@ -1564,6 +1672,7 @@ Repeatable (AND).\n\
         #[arg(long, requires = "fix")]
         dry_run: bool,
         /// Maximum number of files to include in output.
+        ///
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -1583,6 +1692,7 @@ Repeatable (AND).\n\
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
         /// Promote schema warnings to errors: "no 'type' property",
+        ///
         /// "undeclared property in frontmatter", and date-format violations
         /// (HYALO003), causing lint to exit non-zero when those issues are found.
         ///
@@ -1595,6 +1705,7 @@ Repeatable (AND).\n\
         #[arg(long)]
         strict: bool,
         /// Overlay a named conformance profile for this invocation only (no
+        ///
         /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
         /// rules plus advisory citation / augmentation checks; `madr` enables
         /// the MADR ADR schema (path-bound to `docs/decisions/**`) plus the
@@ -1668,10 +1779,12 @@ Repeatable (AND).\n\
         #[arg(long, value_name = "TYPE", required = true)]
         r#type: String,
         /// Vault-relative path for the new file (must not exist; parent dirs created if
+        ///
         /// missing; must still resolve inside the vault after symlinks)
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
         /// When `--index` or `--index-file` is set, patch the snapshot index in
+        ///
         /// place after the file is created so later `--index` queries see it
         /// without a full rebuild.
         #[command(flatten)]
@@ -1879,6 +1992,7 @@ pub(crate) enum OkfAction {
         #[arg(long)]
         dry_run: bool,
         /// Overwrite a marker-less `index.md`, discarding its hand-written body.
+        ///
         /// Without this flag such a file is *adopted*: its body is preserved and
         /// the managed region is appended (non-destructive default).
         #[arg(long)]
@@ -1956,6 +2070,7 @@ pub(crate) enum MadrAction {
     )]
     Toc {
         /// ADR directory (vault-relative, must resolve inside the vault);
+        ///
         /// defaults to `docs/decisions`
         #[arg(value_name = "DIR")]
         adr_dir: Option<String>,
@@ -1966,6 +2081,7 @@ pub(crate) enum MadrAction {
         #[arg(long)]
         dry_run: bool,
         /// Overwrite a marker-less `README.md`, discarding its hand-written body.
+        ///
         /// Without this flag such a file is *adopted*: its body is preserved and
         /// the managed region is appended (non-destructive default).
         #[arg(long)]
@@ -2029,6 +2145,7 @@ pub(crate) enum ChangelogAction {
         #[arg(long, value_name = "TEXT", required = true)]
         message: String,
         /// Wrap the entry to COLS columns, breaking on word boundaries and
+        ///
         /// hanging-indenting continuation lines under the bullet text (2 spaces).
         /// Useful for 80-column changelogs. Omit for a single unwrapped bullet.
         #[arg(long, value_name = "COLS")]
@@ -2066,6 +2183,7 @@ pub(crate) enum ViewsAction {
         #[arg(value_name = "NAME")]
         name: String,
         /// Optional BM25 search pattern to save with the view (second positional arg).
+        ///
         /// Example: `hyalo views set my-view "search terms" --tag foo`
         #[arg(value_name = "PATTERN")]
         pattern: Option<String>,
@@ -2106,6 +2224,7 @@ pub(crate) enum ViewsAction {
         #[arg(value_name = "NAME")]
         name: String,
         /// BM25 ranked full-text search pattern, same semantics as `find <PATTERN>`.
+        ///
         /// Overrides a pattern saved in the view. Mutually exclusive with -e/--regexp
         #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
         pattern: Option<String>,
@@ -2293,6 +2412,7 @@ pub(crate) enum LinksAction {
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// Minimum Jaro-Winkler stem similarity for a file to be considered a
+        ///
         /// fuzzy candidate at all (0.0–1.0). Candidates that clear it are then
         /// scored and ranked by confidence — see --min-confidence.
         #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
@@ -2309,6 +2429,7 @@ pub(crate) enum LinksAction {
         #[arg(long)]
         apply_fuzzy: bool,
         /// Confidence floor for applying low-confidence fixes (0.0–1.0).
+        ///
         /// Implies --apply-fuzzy.
         ///
         /// Defaults to 0.8, or to `[links] fuzzy_min_confidence` in
@@ -2322,6 +2443,7 @@ pub(crate) enum LinksAction {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Ignore broken links whose target contains any of these substrings (repeatable).
+        ///
         /// Useful for skipping Hugo template links, external paths, etc.
         #[arg(long)]
         ignore_target: Vec<String>,
@@ -2335,6 +2457,7 @@ pub(crate) enum LinksAction {
         #[arg(long)]
         expand_short_form: bool,
         /// Treat links that resolve only by case folding as resolved rather
+        ///
         /// than fixable (UX-6, iter-244).
         ///
         /// On case-folded vault layouts (MDN-style `en-US` vs `en-us`
@@ -2454,11 +2577,13 @@ pub(crate) enum LinksAction {
         #[arg(long)]
         exclude_title: Vec<String>,
         /// Only emit the first match of each target title per source file.
+        ///
         /// An existing [[wikilink]] to a target anywhere in the file counts
         /// as its first mention (case-insensitive; aliased links count too).
         #[arg(long)]
         first_only: bool,
         /// Link every mention for this run even when `[links.auto] first_only = true`
+        ///
         /// is set in .hyalo.toml.
         ///
         /// The counter-flag to --first-only: it forces first-only OFF for a single
@@ -2466,10 +2591,12 @@ pub(crate) enum LinksAction {
         #[arg(long, conflicts_with = "first_only")]
         no_first_only: bool,
         /// Exclude target pages whose vault-relative path matches a glob pattern
+        ///
         /// (repeatable; matched case-insensitively, mirroring --exclude-title)
         #[arg(long)]
         exclude_target_glob: Vec<String>,
         /// Do not print the advisory note naming noisy candidate titles: common
+        ///
         /// English words (e.g. "permissions", "index") and titles that dominate
         /// the run (at least 25 matches and 2.5% of the proposed links).
         ///
@@ -2612,6 +2739,7 @@ pub(crate) enum PropertiesAction {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited).
+        ///
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
@@ -2659,6 +2787,7 @@ pub(crate) enum TagsAction {
         #[arg(short, long)]
         glob: Vec<String>,
         /// Maximum number of results to return (0 = unlimited).
+        ///
         /// Default cap is bypassed when --jq or --count is used
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
