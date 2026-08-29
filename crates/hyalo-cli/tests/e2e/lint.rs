@@ -1529,7 +1529,11 @@ fn lint_fix_md047_crlf_and_mixed_endings_converge_in_one_run() {
     // single-line body carries no terminator for MD047 to sample, so it
     // falls back to LF — the same answer the deleted override gave, since it
     // sniffed the same body text.
-    write_md(tmp.path(), "a.md", "---\r\ntitle: A\r\n---\r\nline one\r\nbody");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\r\ntitle: A\r\n---\r\nline one\r\nbody",
+    );
     // (b) CRLF, three trailing terminators.
     write_md(
         tmp.path(),

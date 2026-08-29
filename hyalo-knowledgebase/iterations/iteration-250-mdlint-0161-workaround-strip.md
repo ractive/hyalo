@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 250 — mdbook-lint 0.16.1 bump, strip the MD047 CRLF override
 date: 2026-08-29
-status: planned
+status: in-progress
 tags:
   - iteration
   - upstream
