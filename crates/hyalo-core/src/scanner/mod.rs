@@ -2004,4 +2004,76 @@ code only
         assert_eq!(outcome2, LineOutcome::Complete);
         assert_eq!(buf, "after\n");
     }
+    // -- line counting (iter-252) ------------------------------------------
+
+    #[test]
+    fn count_lines_counts_a_final_unterminated_line() {
+        assert_eq!(count_lines(b""), 0, "an empty file has no lines");
+        assert_eq!(count_lines(b"\n"), 1);
+        assert_eq!(count_lines(b"a"), 1, "no trailing newline still counts");
+        assert_eq!(count_lines(b"a\n"), 1);
+        assert_eq!(count_lines(b"a\nb"), 2);
+        assert_eq!(count_lines(b"a\nb\n"), 2);
+    }
+
+    #[test]
+    fn count_lines_is_identical_for_crlf_and_lf() {
+        // `\r` is part of the line, not a separator: a CRLF document must not
+        // report twice the lines of the same document with LF endings.
+        assert_eq!(count_lines(b"a\r\nb\r\n"), count_lines(b"a\nb\n"));
+        assert_eq!(count_lines("üñï\r\n日本\r\n".as_bytes()), 2);
+    }
+
+    #[test]
+    fn count_file_lines_matches_count_lines_across_chunk_boundaries() {
+        // The streaming counter reads in 64 KiB chunks; a file several chunks
+        // long is where an off-by-one at the boundary would show up.
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("empty.md", String::new()),
+            ("one.md", "single line, no newline".to_owned()),
+            ("small.md", "a\nb\nc\n".to_owned()),
+            ("big.md", (0..20_000).map(|i| format!("line {i}\n")).collect()),
+            (
+                "big_noeol.md",
+                (0..20_000)
+                    .map(|i| format!("line {i}\n"))
+                    .collect::<String>()
+                    + "tail",
+            ),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &body).unwrap();
+            assert_eq!(
+                count_file_lines(&path).unwrap(),
+                count_lines(body.as_bytes()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_file_multi_stats_counts_the_whole_file_on_the_frontmatter_path() {
+        // The frontmatter-only fast path reads a 16 KiB prefix; with exact
+        // counting requested it must still report the file's real line count,
+        // not the prefix's.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        let body: String = (0..5_000).map(|i| format!("body line {i}\n")).collect();
+        let text = format!("---\ntitle: Big\n---\n\n{body}");
+        std::fs::write(&path, &text).unwrap();
+
+        let mut fm = FrontmatterCollector::new(false);
+        let stats = scan_file_multi_stats(&path, &mut [&mut fm], true).unwrap();
+        assert_eq!(stats.size, text.len() as u64);
+        assert_eq!(stats.lines, count_lines(text.as_bytes()));
+        assert!(stats.lines > 5_000, "sanity: the tail was counted");
+
+        // Without exact counting the prefix is all that is measured — cheaper,
+        // and correct for callers that ignore `lines`.
+        let mut fm = FrontmatterCollector::new(false);
+        let prefix_only = scan_file_multi_stats(&path, &mut [&mut fm], false).unwrap();
+        assert_eq!(prefix_only.size, text.len() as u64);
+        assert!(prefix_only.lines < stats.lines);
+    }
 }
