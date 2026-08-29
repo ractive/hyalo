@@ -7,6 +7,7 @@ tags:
   - upstream
   - mdbook-lint
   - iteration-193
+  - iteration-250
 ---
 
 # Upstream mdbook-lint reports
@@ -214,23 +215,54 @@ Upstream shipped every report in this document. Release
 
 Removal work is [[iterations/iteration-196-mdlint-workaround-strip]].
 
-### One exception still open (filed upstream as #495)
+### The last exception — MD047 on CRLF (closed in 0.16.1)
 
-Shipped 0.16.0 `mdbook-lint-rulesets/src/standard/md047.rs` is still
+Shipped 0.16.0 `mdbook-lint-rulesets/src/standard/md047.rs` was still
 LF-centric, despite the release note claim that "standard-rule fixes now
 preserve CRLF":
 
-1. The missing-trailing-newline branch builds
+1. The missing-trailing-newline branch built
    `Fix::insertion("Add newline at end of file", "\n", …)` with a hard-coded
-   LF, so applying it to a CRLF file appends a bare LF.
-2. `check_file_ending` counts trailing terminators with
+   LF, so applying it to a CRLF file appended a bare LF.
+2. `check_file_ending` counted trailing terminators with
    `content.chars().rev().take_while(|&c| c == '\n')`, which stops at the
    `\r` of the preceding CRLF — so a CRLF file with several trailing blank
-   lines counts one terminator and MD047 never fires at all.
+   lines counted one terminator and MD047 never fired at all.
 
-hyalo keeps `md047_fix` for CRLF bodies only (LF bodies go through
-`convert_fix` unchanged) as the documented compensation for (1); (2) is a
-detection gap upstream owns. **Filed 2026-08-23** (user-authorized) as
+**Filed 2026-08-23** (user-authorized) as
 [joshrotenberg/mdbook-lint#495](https://github.com/joshrotenberg/mdbook-lint/issues/495).
 The follow-up comment on #456 reporting the embedder result was dropped by
 user choice.
+
+## Outcome — mdbook-lint 0.16.1 (2026-08-27): all compensation removed
+
+Upstream closed #495 with
+[#496](https://github.com/joshrotenberg/mdbook-lint/pull/496), released in
+[v0.16.1](https://github.com/joshrotenberg/mdbook-lint/releases/tag/v0.16.1)
+(2026-08-27). MD047 now counts trailing terminators via a
+`strip_suffix("\r\n").or_else(strip_suffix('\n'))` loop (CRLF is one unit, so
+both gaps above close at once) and inserts the file's own terminator — where
+endings are mixed, the terminator of the line immediately before EOF wins.
+The maintainer's note: MD047 was the last LF-centric rule.
+
+That was hyalo's last piece of upstream compensation code.
+[[iterations/iteration-250-mdlint-0161-workaround-strip]] deleted `md047_fix`
+and its dispatch branch, so **every** rule — MD047 included — now goes through
+the generic `convert_fix` translation with no per-rule special cases.
+`grep -rn md047_fix crates/` is empty and `hyalo-mdlint` carries no
+rule-specific fix overrides.
+
+What remains in `engine.rs` is not upstream compensation and must not be
+confused with it:
+
+- `BYTE_COLUMN_RULE_IDS` (MD010/MD042/MD052) converts *reported diagnostic
+  columns* — not `Fix` ranges — from byte to scalar offsets. Deliberately not
+  filed upstream: each rule computes the offset a different way, so there is
+  no single fix to track. Re-check it on every ruleset bump.
+- `is_regex_false_positive` suppresses an MD011 false positive on regex prose
+  (dogfood UX-4).
+
+The CRLF and mixed-endings MD047 tests kept from the override era
+(`hyalo-mdlint` unit tests plus `lint_fix_md047_crlf_and_mixed_endings_converge_in_one_run`
+in the CLI e2e suite) are now the regression check that upstream's fix keeps
+surviving hyalo's frontmatter splitting and CRLF-atomic offset translation.

@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 250 — mdbook-lint 0.16.1 bump, strip the MD047 CRLF override
 date: 2026-08-29
-status: planned
+status: completed
 tags:
   - iteration
   - upstream
@@ -26,38 +26,40 @@ upstream compensation code we carry. Remove it. Context:
 
 ## Tasks
 
-- [ ] `cargo update -p mdbook-lint-core -p mdbook-lint-rulesets` to 0.16.1
+- [x] `cargo update -p mdbook-lint-core -p mdbook-lint-rulesets` to 0.16.1
       (`Cargo.toml` already says `"0.16"`; no manifest change). Commit
       `Cargo.lock`.
-- [ ] Delete `md047_fix` and its dispatch branch
+- [x] Delete `md047_fix` and its dispatch branch
       (`engine.rs` ~line 667: `if rule_id == "MD047" && body.contains("\r\n")`)
       so MD047 on CRLF bodies goes through the generic `convert_fix` path
       like every other rule. Reword the `convert_fix` doc comment (~line 768)
       that contrasts itself with "the CRLF gap `md047_fix` compensates for".
-- [ ] Keep every CRLF fixture and e2e test that exercised the override
+- [x] Keep every CRLF fixture and e2e test that exercised the override
       (`tests/e2e/lint.rs` MD047 convergence tests, `hyalo-mdlint` unit
       tests) — they become the regression check that upstream's fix holds
       through our CRLF-atomic offset translation. Add one case for a
       mixed-endings file (upstream: terminator of the line before EOF wins);
       if our old override disagreed, upstream's behaviour is the one to keep.
-- [ ] Verify on a real CRLF vault copy: `lint --fix --rule MD047` converges
+- [x] Verify on a real CRLF vault copy: `lint --fix --rule MD047` converges
       in one run on (a) missing final newline, (b) three trailing blank
       lines, (c) mixed endings; no bare `\n` introduced (`grep -c $'\r$'`
       unchanged except the intended line).
-- [ ] Docs: `docs/upstream-mdbook-lint-reports.md` — turn "One exception
+- [x] Docs: `docs/upstream-mdbook-lint-reports.md` — turn "One exception
       still open" into an outcome section ("all compensation removed in
       iter-250"); CHANGELOG `[Unreleased]` → Changed (dependency bump) and
       Removed (override); any README/skill text that mentions the CRLF
       exception.
-- [ ] Gates: fmt, clippy -D warnings, test --workspace -q, all xtask
+- [x] Gates: fmt, clippy -D warnings, test --workspace -q, all xtask
       check-* gates; `cargo package -p hyalo-mdlint` still succeeds.
 
 ## Acceptance criteria
 
-- [ ] `grep -rn md047_fix crates/` is empty; `hyalo-mdlint` contains no
+- [x] `grep -rn md047_fix crates/` is empty; `hyalo-mdlint` contains no
       rule-specific fix overrides.
-- [ ] All pre-existing CRLF MD047 tests pass unmodified against 0.16.1.
-- [ ] Gates green.
+- [x] All pre-existing CRLF MD047 tests pass against 0.16.1 with their
+      expected outputs preserved (re-pointed from `md047_fix` to `lint_body`;
+      one gained a second-pass convergence assertion).
+- [x] Gates green.
 
 ## Non-goals
 
