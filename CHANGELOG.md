@@ -29,8 +29,9 @@ and this project adheres to
   along with its dispatch branch. MD047 now goes through the same generic
   `convert_fix` translation as every other rule, so `hyalo-mdlint` carries no
   rule-specific fix overrides. No user-visible behaviour change: the CRLF and
-  mixed-endings MD047 tests written against the override pass unmodified
-  against 0.16.1 and stay as the regression check.
+  mixed-endings MD047 tests written against the override keep their expected
+  outputs against 0.16.1 (re-pointed at the engine, one extra convergence
+  assertion) and stay as the regression check.
 
 ### Fixed
 

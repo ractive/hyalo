@@ -1290,8 +1290,8 @@ mod tests {
     // These went through hyalo's own CRLF-only MD047 override until
     // mdbook-lint 0.16.1 (upstream #496) taught MD047 to count CRLF as one
     // terminator and to insert the file's own line ending. The override is
-    // gone (iter-250);
-    // the assertions are unchanged, so they now pin *upstream's* behaviour
+    // gone (iter-250); the tests were re-pointed at `lint_body` with the same
+    // inputs and expected outputs, so they now pin *upstream's* behaviour
     // travelling through `convert_fix` and our CRLF-atomic offset
     // translation.
 

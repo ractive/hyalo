@@ -56,7 +56,9 @@ upstream compensation code we carry. Remove it. Context:
 
 - [x] `grep -rn md047_fix crates/` is empty; `hyalo-mdlint` contains no
       rule-specific fix overrides.
-- [x] All pre-existing CRLF MD047 tests pass unmodified against 0.16.1.
+- [x] All pre-existing CRLF MD047 tests pass against 0.16.1 with their
+      expected outputs preserved (re-pointed from `md047_fix` to `lint_body`;
+      one gained a second-pass convergence assertion).
 - [x] Gates green.
 
 ## Non-goals
