@@ -543,9 +543,10 @@ title: Nested
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let results = json["results"].as_array().unwrap();
     assert_eq!(results.len(), 1);
-    // Prefix stripped unconditionally: resolves to note.md (title: Top)
+    // Prefix stripped unconditionally: resolves to note.md (title: Top).
+    // iter-252: `title` is a promoted field, no longer echoed in `properties`.
     assert_eq!(results[0]["file"], "note.md");
-    assert_eq!(results[0]["properties"]["title"], "Top");
+    assert_eq!(results[0]["title"], "Top");
 }
 
 /// Mutation commands (set) also accept CWD-relative paths.

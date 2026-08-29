@@ -10,6 +10,11 @@ use super::{
     build_find_command_with_pattern, status_priority,
 };
 
+/// Largest untruncated result set for which `find` still offers
+/// `--fields all` (iter-252). Above a handful of files, the full shape is the
+/// payload the compact default exists to avoid, so the hint stays quiet.
+const MAX_EXPANDABLE_RESULTS: usize = 5;
+
 /// Slugify a string to the charset valid for view names: `[a-z0-9_-]`.
 /// Replaces invalid chars with `-`, collapses runs of `-`, and trims leading/trailing `-`.
 pub(super) fn slugify(s: &str) -> String {
@@ -192,12 +197,22 @@ pub(super) fn hints_for_find(
     }
 
     // iter-252: the default result shape carries file, modified, size, lines,
-    // title, properties and tags — everything else (sections, links, tasks,
-    // backlinks, properties-typed) is opt-in, so every listing says how to
-    // get it back. Skipped when the caller already chose `--fields`, and for
-    // a single result, where the richer "See all metadata for this file"
-    // hint above already spells out `--fields all` for that one file.
-    if ctx.fields.is_empty() && !is_single {
+    // title, properties and tags; sections, links, tasks, backlinks and
+    // properties-typed are opt-in, so a listing has to say how to get them.
+    //
+    // Deliberately *not* on every result set. `--fields all` is roughly a 10x
+    // payload — the very cost this iteration removed — so suggesting it under
+    // a 50-file listing would hand an agent the bill it was just spared. It
+    // fires only where expanding is affordable: a handful of results, none of
+    // them truncated away. Skipped when the caller already chose `--fields`,
+    // and for a single result, where the richer "See all metadata for this
+    // file" hint above already spells out `--fields all` for that one file.
+    let untruncated = total.is_none_or(|t| result_count as u64 >= t);
+    if ctx.fields.is_empty()
+        && !is_single
+        && untruncated
+        && result_count <= MAX_EXPANDABLE_RESULTS
+    {
         hints.push(Hint::new(
             "Include the omitted fields (sections, links, tasks, backlinks)",
             build_find_command_preserving_filters(ctx, &["--fields", "all"]),
