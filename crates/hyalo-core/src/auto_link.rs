@@ -1201,6 +1201,8 @@ mod tests {
         IndexEntry {
             rel_path: rel_path.to_owned(),
             modified: String::new(),
+            size: 0,
+            lines: 0,
             properties,
             tags: Vec::new(),
             sections: Vec::new(),

@@ -69,6 +69,37 @@ pub fn count_lines(data: &[u8]) -> usize {
     }
 }
 
+/// Count the lines of a file without holding it in memory.
+///
+/// Streams the file through `memchr` in 64 KiB chunks — no UTF-8 conversion,
+/// no per-line allocation — and applies the same counting rule as
+/// [`count_lines`]. Used by `read`, which reports the whole file's `lines`
+/// even when it returns one section or line range of it.
+pub fn count_file_lines(path: &Path) -> Result<usize> {
+    use std::io::Read;
+    const CHUNK: usize = 64 * 1024;
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut chunk = vec![0u8; CHUNK];
+    let mut newlines = 0usize;
+    let mut last_byte: Option<u8> = None;
+    loop {
+        let n = file
+            .read(&mut chunk)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        newlines += memchr::memchr_iter(b'\n', &chunk[..n]).count();
+        last_byte = chunk[..n].last().copied();
+    }
+    Ok(match last_byte {
+        None => 0,
+        Some(b'\n') => newlines,
+        Some(_) => newlines + 1,
+    })
+}
+
 /// Scan a file with multiple visitors in a single pass.
 ///
 /// Reads the file into memory then delegates to `scan_slice_multi` for

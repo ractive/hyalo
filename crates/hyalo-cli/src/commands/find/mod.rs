@@ -267,19 +267,31 @@ pub fn find(
     // When sorting by a frontmatter property or title, or when --broken-links /
     // --orphan / --dead-end is active, force the relevant fields on even if not
     // requested via --fields.
+    // iter-252: with `sections`/`tasks`/`links`/`backlinks` out of the default
+    // field set, a filter that selects on one of them must still return it —
+    // `--section` without an outline, or `--task todo` without the tasks, is a
+    // result the caller cannot act on. The auto-include list therefore covers
+    // every filter and sort that implies a field, not just the graph filters.
     let original_fields = fields;
     let effective_fields;
+    let auto_sections = has_section_filter;
+    let auto_tasks = has_task_filter;
+    let auto_links = broken_links || orphan || dead_end || sort_needs_links;
+    let auto_backlinks = orphan || dead_end || sort_needs_backlinks;
     let needs_field_override = (sort_needs_properties && !fields.properties)
         || (sort_needs_title && !fields.title)
-        || (broken_links && !fields.links)
-        || (orphan && (!fields.links || !fields.backlinks))
-        || (dead_end && (!fields.links || !fields.backlinks));
+        || (auto_sections && !fields.sections)
+        || (auto_tasks && !fields.tasks)
+        || (auto_links && !fields.links)
+        || (auto_backlinks && !fields.backlinks);
     let fields = if needs_field_override {
         effective_fields = Fields {
             properties: fields.properties || sort_needs_properties,
             title: fields.title || sort_needs_title,
-            links: fields.links || broken_links || orphan || dead_end,
-            backlinks: fields.backlinks || orphan || dead_end,
+            sections: fields.sections || auto_sections,
+            tasks: fields.tasks || auto_tasks,
+            links: fields.links || auto_links,
+            backlinks: fields.backlinks || auto_backlinks,
             ..fields.clone()
         };
         &effective_fields
@@ -1022,6 +1034,8 @@ pub fn find(
         let obj = FileObject {
             file: entry.rel_path.clone(),
             modified: entry.modified.clone(),
+            size: entry.size,
+            lines: entry.lines,
             title,
             properties,
             properties_typed,
@@ -1172,11 +1186,13 @@ pub fn find(
     }
 
     // Strip internally-computed fields that the user didn't request in --fields.
-    if sort_needs_links && !original_fields.links {
-        for obj in &mut results {
-            obj.links = None;
-        }
-    }
+    //
+    // iter-252: `links`/`backlinks` are NOT stripped after a
+    // `--sort links_count`/`backlinks_count` run any more — the counted field
+    // is exactly what the caller is ranking by, so it is an auto-include
+    // (like `--broken-links` → `links`) rather than a hidden intermediate.
+    // `properties`/`title` stay internal: sorting by them says nothing about
+    // wanting them printed, and both are cheap to ask for explicitly.
     if sort_needs_properties && !original_fields.properties {
         for obj in &mut results {
             obj.properties = None;

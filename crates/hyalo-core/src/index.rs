@@ -36,6 +36,16 @@ pub struct IndexEntry {
     pub rel_path: String,
     /// ISO 8601 mtime string.
     pub modified: String,
+    /// File size in bytes (iteration 252). Defaulted so a snapshot written by
+    /// an older hyalo still loads — it reports `0` until the next
+    /// `create-index`.
+    #[serde(default)]
+    pub size: u64,
+    /// Line count (see [`crate::scanner::ScanStats`] for the exact
+    /// definition). Defaulted for the same backwards-compatibility reason as
+    /// [`size`](Self::size).
+    #[serde(default)]
+    pub lines: usize,
     /// Raw frontmatter properties.
     pub properties: IndexMap<String, serde_json::Value>,
     /// Extracted tags (from properties).
@@ -497,6 +507,9 @@ impl SnapshotIndex {
     /// `sections`, `tasks`, and `links` fields, plus the graph's outbound
     /// edges for this file.
     ///
+    /// `size` and `lines` are refreshed too (both are derived from the bytes
+    /// on disk, which a body rewrite changes).
+    ///
     /// `properties`, `tags`, and `modified` are left untouched — callers that
     /// already know the new values in memory (e.g. `set`/`append`/`remove`)
     /// should patch those directly, since they don't require a disk read.
@@ -531,6 +544,11 @@ impl SnapshotIndex {
         entry.sections = scanned.sections;
         entry.tasks = scanned.tasks;
         entry.links = scanned.links;
+        // iter-252: `size`/`lines` are body-derived, so every write path that
+        // routes through `refresh_links` (set/append/remove, task toggles)
+        // keeps them in step with the bytes now on disk.
+        entry.size = scanned.size;
+        entry.lines = scanned.lines;
         // BUG-4 (iter-244): keep BM25 tokens current alongside the body so a
         // post-mutation rebuild of the inverted index scores this file as a
         // fresh disk scan would. Only touched when the snapshot is a BM25
@@ -1582,6 +1600,7 @@ pub(crate) fn scan_one_file(
     let mut fm = FrontmatterCollector::new(scan_body);
     let mut body_collector = BodyCollector::new(bm25_tokenize);
 
+    let stats;
     let (sections, tasks, links, file_links) = if scan_body {
         let mut section_scanner = SectionScanner::new();
         let mut task_extractor = TaskExtractor::new();
@@ -1590,7 +1609,7 @@ pub(crate) fn scan_one_file(
             frontmatter_link_props.to_vec(),
         );
 
-        scanner::scan_file_multi(
+        stats = scanner::scan_file_multi_stats(
             full_path,
             &mut [
                 &mut fm,
@@ -1599,6 +1618,7 @@ pub(crate) fn scan_one_file(
                 &mut link_visitor,
                 &mut body_collector,
             ],
+            true,
         )?;
 
         let sections = section_scanner.into_sections();
@@ -1612,7 +1632,8 @@ pub(crate) fn scan_one_file(
         let self_anchors = fl.self_anchors.clone();
         (sections, tasks, (links_clone, self_anchors), Some(fl))
     } else {
-        scanner::scan_file_multi(full_path, &mut [&mut fm, &mut body_collector])?;
+        stats =
+            scanner::scan_file_multi_stats(full_path, &mut [&mut fm, &mut body_collector], true)?;
         (Vec::new(), Vec::new(), (Vec::new(), Vec::new()), None)
     };
     let (links, self_anchors) = links;
@@ -1659,6 +1680,8 @@ pub(crate) fn scan_one_file(
     let entry = IndexEntry {
         rel_path: rel_path.to_owned(),
         modified,
+        size: stats.size,
+        lines: stats.lines,
         properties: props,
         tags,
         sections,
@@ -2461,6 +2484,8 @@ Content.
             entries: vec![IndexEntry {
                 rel_path: rel_path.to_owned(),
                 modified: "2024-01-01T00:00:00Z".to_owned(),
+                size: 0,
+                lines: 0,
                 properties: IndexMap::default(),
                 tags: vec![],
                 sections: vec![],
@@ -2580,6 +2605,8 @@ Content.
             entries: vec![IndexEntry {
                 rel_path: "doc.md".to_owned(),
                 modified: "2024-01-01T00:00:00Z".to_owned(),
+                size: 0,
+                lines: 0,
                 properties: IndexMap::default(),
                 tags: vec![],
                 sections: vec![],
@@ -2633,6 +2660,8 @@ Content.
             entries: vec![IndexEntry {
                 rel_path: "doc.md".to_owned(),
                 modified: "2024-01-01T00:00:00Z".to_owned(),
+                size: 0,
+                lines: 0,
                 properties: IndexMap::default(),
                 tags: vec![],
                 sections: vec![],

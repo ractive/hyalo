@@ -191,6 +191,19 @@ pub(super) fn hints_for_find(
         ));
     }
 
+    // iter-252: the default result shape carries file, modified, size, lines,
+    // title, properties and tags — everything else (sections, links, tasks,
+    // backlinks, properties-typed) is opt-in, so every listing says how to
+    // get it back. Skipped when the caller already chose `--fields`, and for
+    // a single result, where the richer "See all metadata for this file"
+    // hint above already spells out `--fields all` for that one file.
+    if ctx.fields.is_empty() && !is_single {
+        hints.push(Hint::new(
+            "Include the omitted fields (sections, links, tasks, backlinks)",
+            build_find_command_preserving_filters(ctx, &["--fields", "all"]),
+        ));
+    }
+
     // --- Task bulk operation hints ---
     // When find results target a single file and include task data, suggest bulk task ops.
     if ctx.file_targets.len() == 1 {

@@ -4,7 +4,7 @@ mod parse;
 mod sort;
 mod tasks;
 
-pub use fields::Fields;
+pub use fields::{DEFAULT_FIELD_NAMES, Fields};
 pub use match_props::{
     extract_tags, matches_filters_with_tags, matches_frontmatter_filters, tag_matches,
 };

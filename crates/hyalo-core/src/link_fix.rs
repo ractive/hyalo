@@ -1557,6 +1557,8 @@ mod tests {
                 .map(|(rel, links)| crate::index::IndexEntry {
                     rel_path: (*rel).to_string(),
                     modified: String::new(),
+                    size: 0,
+                    lines: 0,
                     properties: indexmap::IndexMap::default(),
                     tags: Vec::new(),
                     sections: Vec::new(),
@@ -2930,6 +2932,8 @@ See [broken](old-name.md) here.
         let make_entry = |rel_path: &str, links: Vec<(usize, Link)>| crate::index::IndexEntry {
             rel_path: rel_path.to_string(),
             modified: String::new(),
+            size: 0,
+            lines: 0,
             properties: indexmap::IndexMap::default(),
             tags: Vec::new(),
             sections: Vec::new(),
@@ -2978,6 +2982,8 @@ See [broken](old-name.md) here.
         let entry = crate::index::IndexEntry {
             rel_path: "source.md".to_string(),
             modified: String::new(),
+            size: 0,
+            lines: 0,
             properties: indexmap::IndexMap::default(),
             tags: Vec::new(),
             sections: Vec::new(),
