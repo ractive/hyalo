@@ -108,13 +108,21 @@ hyalo find --sort property:priority                # sort by custom property
 hyalo find --sort backlinks_count --reverse        # most-linked files first
 ```
 
-The `--fields` flag controls which data is returned. Available fields: `properties`,
-`properties-typed`, `tags`, `sections` (alias: `outline`), `tasks`, `links`, `backlinks`, `title`. Default fields are
-`properties`, `tags`, `sections`, `links`. Opt-in fields: `tasks`, `properties-typed`,
-`backlinks`, `title`. Use `--fields all` or `--fields tasks` to include them. `properties-typed`
-returns a `[{name, type, value}]` array instead of a `{key: value}` map; `backlinks` requires
-scanning all files to build the link graph. Each backlink entry contains `source` (file path),
-`line` (line number), and an optional `label`.
+Every result item carries `file`, `modified`, `size` (bytes) and `lines` — read `size`/`lines`
+before a `read` to know what a file will cost.
+
+The `--fields` flag controls which *optional* data is returned. Available fields: `properties`,
+`properties-typed`, `tags`, `sections` (alias: `outline`), `tasks`, `links`, `backlinks`, `title`.
+Default fields are `title`, `properties`, `tags` — everything whose size scales with the document
+body (`sections`, `tasks`, `links`) and the whole-vault `backlinks` lookup are opt-in, via
+`--fields` or the filter that implies them: `--section` adds `sections`, `--task` adds `tasks`,
+`--broken-links`/`--dead-end` add `links`, `--orphan` adds both, and `--sort links_count` /
+`--sort backlinks_count` add the field they rank on. Use `--fields all` for every field (the
+pre-0.22 default shape and then some). `title` is promoted: it has its own field and is *not*
+repeated inside `properties` — ask for `--fields properties` alone to get the raw property map
+including `title`. `properties-typed` returns a `[{name, type, value}]` array instead of a
+`{key: value}` map; `backlinks` requires scanning all files to build the link graph. Each backlink
+entry contains `source` (file path), `line` (line number), and an optional `label`.
 
 ```bash
 hyalo find --fields backlinks --file my-note.md       # see who links to this note (--file required: positional is PATTERN)

@@ -186,7 +186,7 @@ Cross-reference with git merges from Phase 2. If the branch was merged, update s
 
 ### Stale backlog items
 ```bash
-hyalo find --property status=planned --property type=backlog --index --jq '.results | map({file, title: .properties.title})'
+hyalo find --property status=planned --property type=backlog --index --jq '.results | map({file, title})'
 ```
 Compare each planned backlog item against merged iterations and recent git history.
 If the feature clearly shipped (in a different iteration or under a different name),

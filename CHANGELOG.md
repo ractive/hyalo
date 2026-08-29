@@ -11,6 +11,34 @@ and this project adheres to
 
 ### Changed
 
+- **BREAKING: `find` returns a compact result shape.** The default field set
+  was `properties, tags, sections, links` on every item, so a 20-file listing
+  of this project's own knowledgebase was 73 KB of JSON — nine times the 8 KB
+  the same query costs with `--fields properties`, nearly all of it document
+  structure nobody had asked for. The default is now `file`, `modified`,
+  `size`, `lines`, `title`, `properties` and `tags` (11.9 KB for that same
+  listing). `sections`, `tasks`, `links`, `backlinks` and `properties-typed`
+  are opt-in — `--fields all` restores the previous shape and then some — but
+  a filter that implies a field still returns it with no flag: `--section`
+  adds `sections`, `--task` adds `tasks`, `--broken-links`/`--dead-end` add
+  `links`, `--orphan` adds both, and `--sort links_count`/`backlinks_count`
+  now return the field they rank on instead of computing it invisibly.
+  `title` is promoted: it joined the default set and is no longer repeated
+  inside `properties`, so read it as `.results[].title`
+  (`--fields properties` on its own still carries the raw property). Sorting
+  and filtering are unaffected — `--sort property:title` and
+  `--property title=…` compare exactly what they compared before.
+- **`size` and `lines` on every `find` and `read` result.** Nothing in a
+  result used to say how big a file was before you read it. Both numbers are
+  now always present, count the whole file (a `read --section` reports the
+  file's totals, not the slice's), are identical between a disk scan and an
+  `--index` snapshot, and count CRLF and LF documents the same. `read` over
+  8 KB offers a line-range read and a section listing instead of another
+  whole-file pull, and `--format text` prints the size and line count in each
+  result's header line plus a `fields:` summary naming what the payload
+  carries and what `--fields all` would add. Snapshot indexes written by
+  0.21.0 and earlier report `0` for both until the next `create-index`.
+
 - **`-h` is a short page again, and every command's page names its
   capabilities.** Measured on 0.21.0, `hyalo -h` was 7.7 KB and `hyalo find -h`
   12.3 KB, because no flag's documentation had a first-line/rest split (so
