@@ -659,16 +659,7 @@ impl HyaloLintEngine {
                     if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
                         continue;
                     }
-                    // Upstream MD047 hard-codes "\n" for the missing-EOF-newline
-                    // insertion and never fires on CRLF files with extra
-                    // trailing blank lines (see `md047_fix`), so CRLF bodies
-                    // still need the local computation. LF bodies take the
-                    // upstream fix, which is exact since 0.16.0.
-                    let fix = if *rule_id == "MD047" && body_content.contains("\r\n") {
-                        md047_fix(body_content)
-                    } else {
-                        convert_fix(&v, body_content)
-                    };
+                    let fix = convert_fix(&v, body_content);
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
                     // `BYTE_COLUMN_RULE_IDS` (DEC-073, iter-218 NEW-11).
@@ -765,9 +756,11 @@ impl HyaloLintEngine {
 /// an already-scalar column through [`byte_col_to_scalar_col`] would corrupt
 /// it on any line with multibyte content before the flagged position.
 ///
-/// Not filed upstream (unlike the CRLF gap `md047_fix` compensates for) — the
-/// three rules here each compute the byte offset a different way, so there is
-/// no single upstream fix to track. Re-check this table on every
+/// Not filed upstream — the three rules here each compute the byte offset a
+/// different way, so there is no single upstream fix to track. (The other
+/// gap hyalo used to compensate for, MD047's LF-centric CRLF handling, *was*
+/// filed as joshrotenberg/mdbook-lint#495 and fixed in 0.16.1; that
+/// compensation is gone as of iteration 250.) Re-check this table on every
 /// `mdbook-lint-rulesets` version bump: if a rule listed here switches to a
 /// `Vec<char>`/scalar computation upstream (as MD011/MD034 already do) and
 /// stays in this list, its column gets converted twice and silently comes
@@ -855,6 +848,14 @@ fn byte_col_to_scalar_col(line: &str, byte_col_1based: usize) -> usize {
 /// replace-vs-insert heuristic all became unnecessary and were deleted in
 /// iteration 196.
 ///
+/// Every rule now goes through here, MD047 included. Until 0.16.1 (upstream
+/// #496, our report #495) MD047 was the last LF-centric rule — it hard-coded
+/// `"\n"` for the missing-EOF insertion and counted trailing terminators by
+/// bare `'\n'`, so a `md047_fix` override computed CRLF fixes locally. 0.16.1
+/// inserts the file's own terminator and counts CRLF as one unit, so that
+/// override was deleted in iteration 250; the CRLF MD047 tests below are what
+/// keeps the upstream behaviour honest.
+///
 /// A position that cannot be resolved (out-of-range line/column, or an
 /// offset inside a CRLF pair) yields `None`; the violation is still reported,
 /// just without a fix.
@@ -872,78 +873,6 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix
         start,
         end,
         replacement: fix.replacement.clone().unwrap_or_default(),
-    })
-}
-
-/// Compute a corrected single-pass fix for MD047 (single-trailing-newline)
-/// on **CRLF** bodies, bypassing upstream's own `Fix` positions.
-///
-/// mdbook-lint 0.16.0 fixed the LF range arithmetic (upstream #486/#493), so
-/// LF bodies now go through [`convert_fix`] unchanged. Two CRLF gaps remain
-/// in the shipped 0.16.0 crate, both in `mdbook-lint-rulesets`
-/// `src/standard/md047.rs`:
-///
-/// 1. The missing-trailing-newline branch builds
-///    `Fix::insertion("Add newline at end of file", "\n", …)` with a
-///    hard-coded LF, which would flip the last line of a CRLF file to a bare
-///    LF.
-/// 2. `check_file_ending` counts trailing terminators with
-///    `content.chars().rev().take_while(|&c| c == '\n')`, which stops at the
-///    `\r` of the second-to-last CRLF — so a CRLF file with several trailing
-///    blank lines counts one terminator and the rule never fires.
-///
-/// (2) is a detection gap upstream owns; (1) is a fix-output gap this
-/// function compensates for. Both are filed upstream as
-/// joshrotenberg/mdbook-lint#495; drop this function once a release carrying
-/// that fix is picked up. Kept as the documented exception required by
-/// iteration 196's acceptance criteria; re-check on the next mdbook-lint
-/// bump.
-fn md047_fix(body: &str) -> Option<DiagFix> {
-    // Match the body's own line-ending style so the fix never flips a CRLF
-    // file to LF (or vice versa).
-    let nl = if body.contains("\r\n") { "\r\n" } else { "\n" };
-    if body.is_empty() {
-        return Some(DiagFix {
-            description: "Add newline at end of file".to_owned(),
-            start: 0,
-            end: 0,
-            replacement: "\n".to_owned(),
-        });
-    }
-    if !body.ends_with('\n') {
-        return Some(DiagFix {
-            description: "Add newline at end of file".to_owned(),
-            start: body.len(),
-            end: body.len(),
-            replacement: nl.to_owned(),
-        });
-    }
-    // Count trailing line terminators, treating each CRLF pair as one.
-    let bytes = body.as_bytes();
-    let mut content_end = bytes.len();
-    let mut terminators = 0usize;
-    while content_end > 0 && bytes[content_end - 1] == b'\n' {
-        content_end -= if content_end >= 2 && bytes[content_end - 2] == b'\r' {
-            2
-        } else {
-            1
-        };
-        terminators += 1;
-    }
-    if terminators <= 1 {
-        return None; // MD047 would not have fired.
-    }
-    // Keep the first terminator after the content, drop the rest.
-    let first_terminator_len = if bytes.get(content_end) == Some(&b'\r') {
-        2
-    } else {
-        1
-    };
-    Some(DiagFix {
-        description: "Remove extra trailing newlines".to_owned(),
-        start: content_end + first_terminator_len,
-        end: body.len(),
-        replacement: String::new(),
     })
 }
 
@@ -1356,27 +1285,74 @@ mod tests {
         );
     }
 
-    // --- md047_fix must handle CRLF terminators ---
+    // --- MD047 must handle CRLF terminators ---
+    //
+    // These went through hyalo's own `md047_fix` override until mdbook-lint
+    // 0.16.1 (upstream #496) taught MD047 to count CRLF as one terminator and
+    // to insert the file's own line ending. The override is gone (iter-250);
+    // the assertions are unchanged, so they now pin *upstream's* behaviour
+    // travelling through `convert_fix` and our CRLF-atomic offset
+    // translation.
 
-    #[test]
-    fn md047_fix_crlf_removes_extra_trailing_newlines_in_one_pass() {
-        let body = "body\r\n\r\n\r\n";
-        let fix = md047_fix(body).expect("multiple trailing CRLF should produce a fix");
-        let fixed = apply(body, &fix);
-        assert_eq!(fixed, "body\r\n");
+    /// Run MD047 over `body` and apply the fix it reports, if any.
+    fn md047_fixed(body: &str) -> Option<String> {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD047".to_owned()])
+            .unwrap();
+        let d = diagnostics.iter().find(|d| d.rule_id == "MD047")?;
+        let fix = d.fix.as_ref().expect("MD047 fix should not be dropped");
+        Some(apply(body, fix))
     }
 
     #[test]
-    fn md047_fix_crlf_adds_matching_terminator() {
-        let body = "line one\r\nlast line";
-        let fix = md047_fix(body).expect("missing trailing newline should produce a fix");
-        let fixed = apply(body, &fix);
+    fn md047_crlf_removes_extra_trailing_newlines_in_one_pass() {
+        let fixed = md047_fixed("body\r\n\r\n\r\n").expect("multiple trailing CRLF should fire");
+        assert_eq!(fixed, "body\r\n");
+        assert!(
+            md047_fixed(&fixed).is_none(),
+            "the fixed body must be clean on a second pass"
+        );
+    }
+
+    #[test]
+    fn md047_crlf_adds_matching_terminator() {
+        let fixed = md047_fixed("line one\r\nlast line").expect("missing newline should fire");
         assert_eq!(fixed, "line one\r\nlast line\r\n");
     }
 
     #[test]
-    fn md047_fix_crlf_single_trailing_newline_is_clean() {
-        assert!(md047_fix("body\r\n").is_none());
+    fn md047_crlf_single_trailing_newline_is_clean() {
+        assert!(md047_fixed("body\r\n").is_none());
+    }
+
+    /// Mixed endings: upstream 0.16.1 inserts the terminator of the line
+    /// immediately before EOF, "since that is what the file was doing at the
+    /// point of insertion". The deleted `md047_fix` used a whole-body
+    /// `contains("\r\n")` test instead, which would have appended CRLF here;
+    /// upstream's rule is the one to keep.
+    #[test]
+    fn md047_mixed_endings_uses_the_terminator_before_eof() {
+        let fixed = md047_fixed("crlf line\r\nlf line\nlast line")
+            .expect("missing newline should fire on a mixed-endings body");
+        assert_eq!(fixed, "crlf line\r\nlf line\nlast line\n");
+
+        // ...and the other way round: an LF body whose last terminator is
+        // CRLF gets a CRLF appended.
+        let fixed = md047_fixed("lf line\ncrlf line\r\nlast line")
+            .expect("missing newline should fire on a mixed-endings body");
+        assert_eq!(fixed, "lf line\ncrlf line\r\nlast line\r\n");
+    }
+
+    /// Mixed *trailing* terminators each count as one, so the extras are
+    /// removed down to the first terminator after the content — whatever kind
+    /// that one is.
+    #[test]
+    fn md047_mixed_trailing_terminators_converge_in_one_pass() {
+        let fixed = md047_fixed("body\r\n\n\r\n").expect("three trailing terminators should fire");
+        assert_eq!(fixed, "body\r\n");
+        assert!(md047_fixed(&fixed).is_none());
     }
 
     // --- H-1b: MD009 must not duplicate the line terminator ---
@@ -1588,11 +1564,11 @@ mod tests {
         assert_eq!(fixed, "Some prose.\n\n# Heading\n\nMore prose.\n");
     }
 
-    /// Upstream #493 promises CRLF preservation, but the shipped 0.16.0
-    /// MD047 still hard-codes `"\n"` for the missing-EOF-newline insertion
-    /// (see [`md047_fix`]). This asserts hyalo's remaining CRLF
-    /// compensation, which is the one documented exception to the
-    /// "no downstream workarounds" rule.
+    /// Upstream #493 promised CRLF preservation but the shipped 0.16.0 MD047
+    /// still hard-coded `"\n"` for the missing-EOF-newline insertion, which
+    /// hyalo compensated for locally. 0.16.1 (#496) closed that gap and the
+    /// compensation was deleted in iteration 250, so this now asserts the
+    /// upstream fix reaches the file intact through [`convert_fix`].
     #[test]
     fn md047_crlf_body_keeps_crlf_when_adding_the_final_terminator() {
         let config = LintConfig::default();
