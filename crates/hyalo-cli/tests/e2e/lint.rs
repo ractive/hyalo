@@ -1514,6 +1514,76 @@ fn lint_fix_md047_converges_in_one_run() {
     assert_eq!(results2.files.len(), 0);
 }
 
+/// MD047 on CRLF and mixed-ending files, end to end through the vault
+/// writer. Until mdbook-lint 0.16.1 (upstream #496) MD047 hard-coded `"\n"`
+/// for the missing-EOF insertion and counted trailing terminators by bare
+/// `'\n'`, so hyalo carried a local `md047_fix` override; iteration 250
+/// deleted it. These cases are the regression check that upstream's fix
+/// survives frontmatter splitting and hyalo's CRLF-atomic offset
+/// translation.
+#[test]
+fn lint_fix_md047_crlf_and_mixed_endings_converge_in_one_run() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    // (a) CRLF, no final newline. The body needs a second line: a
+    // single-line body carries no terminator for MD047 to sample, so it
+    // falls back to LF — the same answer the deleted override gave, since it
+    // sniffed the same body text.
+    write_md(tmp.path(), "a.md", "---\r\ntitle: A\r\n---\r\nline one\r\nbody");
+    // (b) CRLF, three trailing terminators.
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\r\ntitle: B\r\n---\r\nbody\r\n\r\n\r\n",
+    );
+    // (c) Mixed endings, no final newline: the terminator of the line before
+    // EOF wins, so this gets a bare LF appended, not CRLF.
+    write_md(
+        tmp.path(),
+        "c.md",
+        "---\r\ntitle: C\r\n---\r\ncrlf line\r\nlf line\nlast line",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    let results: ExtLintFixOutput = typed_results(&output.stdout);
+    assert_eq!(results.total_fixed, 3, "all three files must be fixed");
+    assert_eq!(results.total_remaining, 0);
+
+    let a = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        a.ends_with("line one\r\nbody\r\n"),
+        "CRLF file must get a CRLF terminator, not a bare LF, got: {a:?}"
+    );
+    let b = std::fs::read_to_string(tmp.path().join("b.md")).unwrap();
+    assert!(
+        b.ends_with("body\r\n") && !b.ends_with("body\r\n\r\n"),
+        "CRLF file must converge to one trailing terminator, got: {b:?}"
+    );
+    let c = std::fs::read_to_string(tmp.path().join("c.md")).unwrap();
+    assert!(
+        c.ends_with("lf line\nlast line\n") && !c.ends_with("last line\r\n"),
+        "mixed endings: the terminator before EOF (LF) wins, got: {c:?}"
+    );
+    // No file gained or lost a CR anywhere but the intended terminator.
+    assert_eq!(a.matches("\r\n").count(), 5, "a.md CR count, got: {a:?}");
+    assert_eq!(b.matches("\r\n").count(), 4, "b.md CR count, got: {b:?}");
+    assert_eq!(c.matches("\r\n").count(), 4, "c.md CR count, got: {c:?}");
+
+    // A second run must report zero fixes for all three.
+    let output2 = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--rule", "MD047", "--format", "json"])
+        .output()
+        .unwrap();
+    let results2: ExtLintFixOutput = typed_results(&output2.stdout);
+    assert_eq!(results2.total_fixed, 0);
+    assert_eq!(results2.files.len(), 0);
+}
+
 #[test]
 fn lint_fix_frontmatter_and_body_fixes_both_persist() {
     let tmp = TempDir::new().unwrap();

@@ -1345,6 +1345,19 @@ mod tests {
         assert_eq!(fixed, "lf line\ncrlf line\r\nlast line\r\n");
     }
 
+    /// A single-line body carries no terminator for MD047 to sample, so
+    /// upstream falls back to LF even when the surrounding file uses CRLF.
+    /// The deleted override sniffed the same body text and answered the same
+    /// way, so this is unchanged behaviour rather than a regression — pinned
+    /// here so a future upstream change is visible instead of silent.
+    #[test]
+    fn md047_single_line_body_without_terminator_falls_back_to_lf() {
+        assert_eq!(
+            md047_fixed("body").expect("missing newline should fire"),
+            "body\n"
+        );
+    }
+
     /// Mixed *trailing* terminators each count as one, so the extras are
     /// removed down to the first terminator after the content — whatever kind
     /// that one is.
