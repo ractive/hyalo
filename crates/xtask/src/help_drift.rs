@@ -6,6 +6,16 @@
 //!
 //! 3b. No `--help` output for any listed command may contain any phrase in
 //!     `crates/xtask/stale-help-patterns.toml`.
+//!
+//! 3c. (iter-251) Short help stays short: `hyalo -h` under
+//!     [`TOP_SHORT_HELP_MAX`] bytes and every `hyalo <cmd> -h` under
+//!     [`SUB_SHORT_HELP_MAX`]. `-h` is the page an agent reads first, and it
+//!     regressed to 7.7 KB (12.3 KB for `find`) purely by accretion — one
+//!     unsplit doc comment at a time, plus the global-options block repeated
+//!     on all 27 subcommands. A ceiling is the only thing that keeps it short.
+//!
+//! 3d. (iter-251) Every subcommand's `-h` ends with the one-line global-options
+//!     pointer instead of reprinting the block.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -58,6 +68,17 @@ const STALE_ONLY_COMMANDS: &[&[&str]] = &[&[]];
 
 /// Commands allowed to skip the EXAMPLES requirement (no-op / meta commands).
 const EXAMPLES_ALLOWLIST: &[&str] = &["help", "completions"];
+
+/// Byte ceiling for `hyalo -h` (2.5 KiB — iter-251 acceptance criterion).
+const TOP_SHORT_HELP_MAX: usize = 2560;
+
+/// Byte ceiling for every `hyalo <cmd> -h` (3 KiB — iter-251 acceptance
+/// criterion). `find` is the one that lives closest to it.
+const SUB_SHORT_HELP_MAX: usize = 3072;
+
+/// The literal every subcommand's `-h` must carry in place of the global
+/// options block. Kept in sync with `cli::help::global_pointer` by this gate.
+const GLOBAL_POINTER_PREFIX: &str = "Global: ";
 
 #[derive(Debug, Deserialize)]
 pub struct StalePatternFile {
@@ -130,6 +151,75 @@ pub fn count_examples(help: &str) -> usize {
         }
     }
     count
+}
+
+/// Get the `-h` (short help) output for a given argv.
+fn short_help_text(workspace_root: &std::path::Path, argv: &[&str]) -> Option<String> {
+    let mut args = vec!["run", "-q", "-p", "hyalo-cli", "--"];
+    args.extend_from_slice(argv);
+    args.push("-h");
+
+    let out = Command::new("cargo")
+        .args(&args)
+        .current_dir(workspace_root)
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if stdout.trim().is_empty() {
+        None
+    } else {
+        Some(stdout)
+    }
+}
+
+/// 3c + 3d: short help stays short, and stands in one line for the globals.
+fn check_short_help(root: &std::path::Path) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    match short_help_text(root, &[]) {
+        Some(help) => {
+            if help.len() > TOP_SHORT_HELP_MAX {
+                failures.push(format!(
+                    "Help drift (3c): 'hyalo -h' is {} bytes; ceiling is {TOP_SHORT_HELP_MAX}. \
+                     Move detail into the second paragraph of the doc comment (clap long_help) \
+                     rather than growing the short page.",
+                    help.len()
+                ));
+            }
+            if !help.contains("COMMANDS") {
+                failures.push(
+                    "Help drift (3c): 'hyalo -h' no longer renders the grouped COMMANDS block."
+                        .to_owned(),
+                );
+            }
+        }
+        None => failures.push("Help drift (3c): could not get 'hyalo -h' output".to_owned()),
+    }
+
+    for argv in SUBCOMMANDS {
+        let cmd_label = argv.join(" ");
+        let Some(help) = short_help_text(root, argv) else {
+            failures.push(format!(
+                "Help drift (3c): could not get help output for 'hyalo {cmd_label} -h'"
+            ));
+            continue;
+        };
+        if help.len() > SUB_SHORT_HELP_MAX {
+            failures.push(format!(
+                "Help drift (3c): 'hyalo {cmd_label} -h' is {} bytes; ceiling is \
+                 {SUB_SHORT_HELP_MAX}.",
+                help.len()
+            ));
+        }
+        if !help.contains(GLOBAL_POINTER_PREFIX) {
+            failures.push(format!(
+                "Help drift (3d): 'hyalo {cmd_label} -h' is missing the \
+                 \"{GLOBAL_POINTER_PREFIX}…\" pointer line that stands in for the global \
+                 options block."
+            ));
+        }
+    }
+    failures
 }
 
 /// 3a: Check EXAMPLES blocks.
@@ -214,8 +304,14 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     let stale_failures = check_stale_patterns(root, &stale_patterns);
     all_failures.extend(stale_failures);
 
+    let short_help_failures = check_short_help(root);
+    all_failures.extend(short_help_failures);
+
     if all_failures.is_empty() {
-        println!("check-help-drift: all subcommands have EXAMPLES blocks and no stale patterns.");
+        println!(
+            "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, and \
+             short help within its byte ceilings."
+        );
         Ok(true)
     } else {
         eprintln!(

@@ -137,7 +137,13 @@ pub(super) fn hints_for_find(
     };
 
     if results.is_empty() {
-        // When a multi-word BM25 search returns nothing, suggest trying OR instead.
+        // iter-251: an empty result set is the moment an agent most needs a
+        // next step, and it used to be the moment hyalo said the least
+        // (`No results`, `hints: []`). Lead with the BM25 OR rewrite when a
+        // multi-word body search is what came up empty — it is the single most
+        // likely fix — then fall through to the generic zero-result hints
+        // (did-you-mean, observed values, drop the most selective filter).
+        let mut hints: Vec<Hint> = Vec::new();
         // Skip if the query already contains quotes (phrase search) — splitting on
         // whitespace would produce malformed tokens like `"exact` and `phrase"`.
         if let Some(pat) = &ctx.body_pattern {
@@ -152,13 +158,15 @@ pub(super) fn hints_for_find(
                 .collect();
             if !has_quotes && words.len() >= 2 {
                 let or_query = words.join(" OR ");
-                return vec![Hint::new(
+                hints.push(Hint::new(
                     "Try OR instead of AND (match any word)",
                     build_find_command_with_pattern(ctx, &or_query),
-                )];
+                ));
             }
         }
-        return vec![];
+        hints.extend(super::zero_result::zero_result_hints(ctx));
+        hints.truncate(super::zero_result::MAX_ZERO_RESULT_HINTS);
+        return hints;
     }
 
     let mut hints = Vec::new();

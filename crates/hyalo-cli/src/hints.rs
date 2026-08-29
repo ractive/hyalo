@@ -204,6 +204,11 @@ pub struct HintContext {
     /// `[lint] profiles` in `.hyalo.toml`. When true the `okf` validate hint
     /// drops the redundant `--profile okf` flag (plain `hyalo lint` runs it).
     pub okf_profile_active: bool,
+    /// Distinct frontmatter values observed for each property key named by a
+    /// `--property K=V` filter, collected by the `find` scan when it matched
+    /// nothing (iter-251). Feeds the zero-result did-you-mean and the
+    /// "values of `K` in this vault" hint; empty on every non-empty result.
+    pub observed_property_values: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -259,6 +264,7 @@ impl HintContext {
             lint_rule_prefix: None,
             lint_fix_rules: vec![],
             okf_profile_active: false,
+            observed_property_values: std::collections::BTreeMap::new(),
         }
     }
 
@@ -474,6 +480,7 @@ mod lint;
 mod mutation;
 mod summary;
 mod util;
+mod zero_result;
 
 pub use command::{HintBuilder, shell_quote, shorten_index_path_for_hint};
 use command::{
@@ -495,6 +502,7 @@ use mutation::{
 };
 use summary::{hints_for_properties_summary, hints_for_summary, hints_for_tags_summary};
 use util::{first_modified_file, status_priority};
+pub(crate) use zero_result::filter_echo;
 
 #[cfg(test)]
 mod tests;

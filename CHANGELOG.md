@@ -11,6 +11,32 @@ and this project adheres to
 
 ### Changed
 
+- **`-h` is a short page again, and every command's page names its
+  capabilities.** Measured on 0.21.0, `hyalo -h` was 7.7 KB and `hyalo find -h`
+  12.3 KB, because no flag's documentation had a first-line/rest split (so
+  clap's short help printed whole paragraphs) and the ~1.9 KB global-options
+  block was repeated on all 27 subcommands. Every `#[arg]`/`#[command]` doc
+  comment now leads with a one-line summary and keeps its full text as
+  `--help`'s long help; on a subcommand, `-h` stands in for the global block
+  with a single `Global: --dir --format --jq … — see hyalo -h` line. `hyalo -h`
+  groups the commands by intent (read / write / config and scaffolds) with
+  one-line descriptions that name the capability families, and its examples
+  each compose two or three features instead of demonstrating one flag; the 40
+  single-flag examples moved to `--help`. `find -h` groups its flags under
+  Filters and Output and keeps the property-operator line, the dot-path note,
+  the `--fields` values and the `--sort` keys — the four things agents were
+  falling back to `grep` for. Result: `hyalo -h` 2.5 KB, `hyalo find -h` 2.9
+  KB, every other subcommand under 2.3 KB, with `--help` unchanged in content.
+  A new `check-help-drift` gate (3c/3d) and an e2e suite that walks the
+  binary's own command list hold the ceilings.
+- **A `find` that matches nothing now says what it ran and what to try.** Text
+  mode prints `No results for --property status=x --tag y` instead of a bare
+  `No results`, and both formats carry 1–3 hints: a did-you-mean over the
+  values the property really has (fired only when the edit distance is small,
+  so `status=draf` suggests `draft` while `status=nonexistent` does not), the
+  observed values named inline, and the same query with its most selective
+  filter dropped. The values come from the scan the query already paid for, so
+  the empty path costs no extra I/O.
 - **mdbook-lint bumped to 0.16.1.** `mdbook-lint-core` and
   `mdbook-lint-rulesets` move 0.16.0 → 0.16.1 (lockfile only; the manifest
   requirement `"0.16"` is unchanged). The release carries upstream

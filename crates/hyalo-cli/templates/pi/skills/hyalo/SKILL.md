@@ -48,9 +48,29 @@ multiple read + edit calls.
 
 **For pi sessions, ALWAYS use `--format text` for compact, LLM-friendly output.**
 
+## Read the CLI's own help before guessing a flag
+
+`hyalo -h` lists every command grouped by intent (read / write / config), one line each,
+naming the capability families behind them. `hyalo <cmd> -h` is one screen for one command;
+`hyalo <cmd> --help` is the full syntax reference — property operators, sort keys,
+`--fields` values, output shapes, and a cookbook. Both are generated from the binary you
+are running, so unlike any copy in this file they cannot go stale. Reach for `-h` first and
+`--help` for detail; do not fall back to `grep` because a filter looked unavailable.
+
+```bash
+hyalo -h                 # every command, grouped, with composed examples
+hyalo find -h            # filters and output flags on one screen
+hyalo find --help        # every operator, sort key, field name and recipe
+```
+
+An empty result set is also self-documenting: `find` that matches nothing echoes the
+filters it applied and hints at the next step (a did-you-mean over the values the property
+actually has, and the same query with its most selective filter dropped).
+
 ## Core Philosophy for pi
 
 - **Use hyalo first**: Before using read/edit/grep/write on .md files, check if hyalo can do it
+- **Read `-h` before guessing**: `hyalo <cmd> -h` for the short page, `--help` for full syntax
 - **Batch operations**: Use hyalo's bulk mutation features instead of individual edits
 - **Snapshot indexes**: For vaults >500 files, use `hyalo create-index` + `--index` for speed
 - **Follow hints**: hyalo outputs drill-down suggestions (`-> hyalo ...`) — use them
@@ -271,6 +291,7 @@ hyalo find --orphan --fields properties,links --format text \
 4. **Using system `mv` instead of `hyalo mv`**: Breaks links — always use `hyalo mv`
 5. **Ignoring hints**: hyalo suggests next commands — follow them
 6. **Not validating schemas**: Run `hyalo lint --strict` regularly
+7. **Guessing flags instead of reading `-h`**: every command's short help fits on one screen; `--help` has the full syntax
 
 ## Integration with pi Extension
 

@@ -451,11 +451,19 @@ fn make_find_item(file: &str, status: Option<&str>, tags: &[&str]) -> serde_json
     })
 }
 
+/// iter-251 reversed this: an unfiltered `find` that matched nothing used to
+/// return no hints at all — the moment an agent most needs a next step. It now
+/// points at the property listing, and never at more than three things.
 #[test]
-fn find_empty_results_no_hints() {
+fn find_empty_results_hint_at_the_vocabulary() {
     let c = ctx(HintSource::Find);
     let hints = generate_hints(&c, &json!([]), None);
-    assert!(hints.is_empty());
+    assert!(!hints.is_empty(), "an empty result set must still hint");
+    assert!(hints.len() <= 3, "zero-result hints are capped at 3");
+    assert!(
+        hints.iter().any(|h| h.cmd.contains("properties summary")),
+        "with no filters to drop, point at the property listing: {hints:?}"
+    );
 }
 
 #[test]

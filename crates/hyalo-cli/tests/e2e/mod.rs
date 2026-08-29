@@ -1,3 +1,4 @@
+mod agent_discoverability;
 mod common;
 
 mod anchors;

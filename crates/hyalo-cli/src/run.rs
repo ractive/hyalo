@@ -469,6 +469,75 @@ pub fn run() {
     }
 }
 
+/// `-h` layout for the top-level command (iteration 251).
+///
+/// Clap has one template per `Command`, so the grouped command list lives in
+/// `after_help` and this template moves it *above* the global options — the
+/// order an agent needs (what can I run? then how do I shape the output?).
+/// `{subcommands}` is deliberately absent: the grouped block replaces the
+/// alphabetical one. `--help` keeps clap's default layout untouched.
+const TOP_SHORT_HELP_TEMPLATE: &str = "\
+{before-help}{about-with-newline}
+{usage-heading} {usage}{after-help}
+
+GLOBAL OPTIONS (every command):
+{options}";
+
+/// Hide every global flag from `-h` (but not `--help`) so a subcommand's short
+/// help can stand in one pointer line for the whole block.
+///
+/// `hide_short_help` is set on the root's own arg objects; clap propagates
+/// `global = true` args to subcommands at build time, so the flag travels with
+/// them. A subcommand that declares its *own* arg of the same name (`find`'s
+/// `--index-file` from [`crate::cli::args::IndexFlags`]) keeps its own copy
+/// visible, which is the intent: it is documented per command, not globally.
+fn hide_globals_from_short_help(mut cmd: clap::Command) -> clap::Command {
+    const GLOBAL_ARG_IDS: [&str; 9] = [
+        "dir",
+        "format",
+        "jq",
+        "count",
+        "hints",
+        "no_hints",
+        "site_prefix",
+        "quiet",
+        "index_file",
+    ];
+    for id in GLOBAL_ARG_IDS {
+        cmd = cmd.mut_arg(id, |a| a.hide_short_help(true));
+    }
+    cmd
+}
+
+/// Append the global-options pointer line to every subcommand's `-h`,
+/// recursively (so `hyalo properties rename -h` gets it too).
+///
+/// Only `after_help` is set, never `after_long_help`: this runs solely on an
+/// invocation that already contains `-h`, so `--help` never reaches it.
+fn attach_subcommand_pointer(cmd: clap::Command, pointer: &str) -> clap::Command {
+    let names: Vec<String> = cmd
+        .get_subcommands()
+        .map(|s| s.get_name().to_owned())
+        .collect();
+    let mut cmd = cmd;
+    for name in names {
+        cmd = cmd.mut_subcommand(name, |sub| {
+            // `help` prints other commands' help; a pointer on it is noise.
+            if sub.get_name() == "help" {
+                return sub;
+            }
+            let sub = attach_subcommand_pointer(sub, pointer);
+            match sub.get_after_help().map(ToString::to_string) {
+                Some(existing) if !existing.is_empty() => {
+                    sub.after_help(format!("{existing}\n\n{pointer}"))
+                }
+                _ => sub.after_help(pointer.to_owned()),
+            }
+        });
+    }
+    cmd
+}
+
 #[allow(clippy::too_many_lines)]
 fn run_inner() -> Result<(), AppError> {
     // Pre-scan for --quiet / -q so config-loading warnings are also suppressed.
@@ -521,9 +590,15 @@ fn run_inner() -> Result<(), AppError> {
     // Apply runtime-filtered help text so that examples and cookbook entries
     // that reference config-defaulted flags are stripped from help output.
     // `after_help` is shown by `-h`; `after_long_help` is shown by `--help`.
-    cmd = cmd
-        .after_help(filter_examples(hide_dir, hide_format))
-        .after_long_help(filter_long_help(hide_dir, hide_format));
+    // iter-251: the 40 one-flag EXAMPLES moved off `-h` (where they taught one
+    // flag per line and never that filters compose) onto `--help`, which now
+    // carries both them and the COOKBOOK. `-h`'s own examples are installed
+    // below, in the short-help branch.
+    cmd = cmd.after_long_help(format!(
+        "{}\n\n{}",
+        filter_long_help(hide_dir, hide_format),
+        filter_examples(hide_dir, hide_format)
+    ));
 
     // Global args (--format, --jq, etc.) are only defined on the root Command
     // in clap derive — they aren't propagated to subcommands until parse time.
@@ -531,6 +606,40 @@ fn run_inner() -> Result<(), AppError> {
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
     let raw_args: Vec<String> = std::env::args().collect();
+
+    // iter-251: reshape *short* help only. `-h` is what an agent reads first
+    // and 7.7 KB of it (29 KB for `--help`) is what stopped them reading past
+    // `find`; `--help` keeps every word. The reshaping is applied here rather
+    // than as static clap attributes because clap has no per-page (`-h` vs
+    // `--help`) template or subcommand-level `hide_short_help`, and because
+    // both variants depend on what `.hyalo.toml` already supplies.
+    if raw_args.iter().any(|a| a == "-h") {
+        if crate::suggest::top_level_subcommand(&raw_args, &Cli::command()).is_some() {
+            // Subcommand `-h`: the ~1.9 KB global block was repeated
+            // identically on all 27 subcommands. Collapse it to one pointer
+            // line; `--help` still lists every global in full.
+            cmd = hide_globals_from_short_help(cmd);
+            let pointer = crate::cli::help::global_pointer(hide_dir, hide_format);
+            cmd = attach_subcommand_pointer(cmd, &pointer);
+            // `find` additionally gets composed examples and its own
+            // `--help` pointer, overriding the bare global line.
+            let find_tail = crate::cli::help::find_after_short_help(&pointer);
+            cmd = cmd.mut_subcommand("find", |sub| sub.after_help(find_tail));
+        } else {
+            // Top-level `-h`: commands grouped by intent ahead of the global
+            // options, with composed examples instead of 40 single-flag ones.
+            // `[possible values: …]` duplicates what the one-line help
+            // already says and forces a wrap; `--help` still prints it.
+            // The global `--index-file` is a pure alias for a flag each
+            // index-aware subcommand documents itself, so it earns no line on
+            // the page an agent reads first.
+            cmd = cmd
+                .mut_arg("format", |a| a.hide_possible_values(true))
+                .mut_arg("index_file", |a| a.hide_short_help(true))
+                .help_template(TOP_SHORT_HELP_TEMPLATE)
+                .after_help(crate::cli::help::short_help_body(hide_dir, hide_format));
+        }
+    }
     let matches = match cmd.try_get_matches_from(raw_args.iter().map(String::as_str)) {
         Ok(m) => m,
         Err(e) => {
@@ -1961,6 +2070,7 @@ fn run_inner() -> Result<(), AppError> {
         lint_strict: lint_strict_from_config,
         lint_profiles: lint_profiles_active,
         files_from_counters: None,
+        zero_result_values: std::collections::BTreeMap::new(),
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -1998,6 +2108,11 @@ fn run_inner() -> Result<(), AppError> {
     // Inject elapsed into hint context so slow_query_hint can read it.
     if let Some(ref mut hctx) = hint_ctx {
         hctx.elapsed_ms = Some(elapsed_ms);
+        // iter-251: a `find` that matched nothing collected the distinct
+        // values of every filtered property key during the scan it already
+        // paid for. Hand them to the hint layer so the zero-result
+        // did-you-mean names real values instead of guessing.
+        hctx.observed_property_values = std::mem::take(&mut ctx.zero_result_values);
     }
 
     let exit_code_override = ctx.exit_code_override;

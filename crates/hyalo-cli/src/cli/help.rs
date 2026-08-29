@@ -1,3 +1,96 @@
+/// The `-h` command list: every command grouped by intent, one line each
+/// (iteration 251).
+///
+/// Clap's generated `Commands:` block lists 27 subcommands alphabetically with
+/// their `about` text, which told an agent the names but not the *capability
+/// families* behind them — the measured consequence was agents reaching for
+/// bare `find` plus `grep` instead of the filters that already exist. This
+/// block is rendered instead of `{subcommands}` on the top-level `-h` (see
+/// [`run::run_inner`](crate::run)); `--help` keeps the full COMMAND REFERENCE.
+pub(crate) const HELP_COMMANDS: &str = "COMMANDS \u{2014} read (no writes):
+  find              BM25 text, regex, property, tag, task, section, title, glob,
+                    link-graph filters; --sort --fields --view --count --limit
+  read summary      File body (--section/--lines) | vault overview counts
+  properties tags   Keys / tags with counts (bare = summary; also rename)
+  backlinks lint    Inbound links | frontmatter schema + markdown rules (--fix)
+  config            Effective .hyalo.toml: dir, format, hints, site_prefix
+COMMANDS \u{2014} write (mutates files):
+  set remove append   Properties/tags on --file/--glob + --where-property/-tag
+  task mv             Checkbox read/toggle/set | move-rename, rewriting links
+  links new           fix broken / auto-link mentions | scaffold from a type
+  madr okf changelog  ADR toc | OKF index+log | Keep a Changelog add/release
+COMMANDS \u{2014} config and scaffolds (write .hyalo.toml):
+  init deinit              Create/remove .hyalo.toml (--claude --pi --profile)
+  types lint-rules views   Schemas | lint rule catalog | saved find queries
+  create-index drop-index  Snapshot index for faster repeated queries
+  completions              Shell completion script";
+
+/// The `-h` examples block: every line composes two or three features.
+///
+/// The 40 single-flag examples this replaced taught one flag per line and so
+/// never showed that filters compose — the exact gap that sent agents to
+/// `grep`. They still exist verbatim in `--help`'s COOKBOOK.
+pub(crate) const HELP_EXAMPLES_SHORT: &str = "EXAMPLES (each composes 2-3 features):
+  hyalo find --property status=planned --tag iteration --sort modified --reverse
+  hyalo find 'broken links' --property 'title~=/^Iter/i' --fields tags,tasks
+  hyalo find --section Tasks --task todo --filenames-only
+  hyalo find --broken-links --strict --glob 'docs/**/*.md'
+  hyalo set --property status=done --where-property status=draft --glob '**/*.md'
+Everything else:  hyalo --help  |  hyalo <cmd> -h";
+
+/// `find -h` tail: composed examples, the global-options pointer, and the
+/// pointer at `find --help` (iteration 251).
+///
+/// `find` is the command agents live in and the one whose `-h` was worst
+/// (12.3 KB). Examples here compose filters rather than demonstrating one flag
+/// each, because "these compose" is precisely what the old page failed to say.
+pub(crate) fn find_after_short_help(global_pointer: &str) -> String {
+    format!(
+        "EXAMPLES (filters compose \u{2014} AND across kinds):\n\
+         \u{20}\u{20}hyalo find --property status=planned --tag iteration --sort modified --reverse\n\
+         \u{20}\u{20}hyalo find 'broken links' --section Tasks --task todo --fields tasks\n\
+         \u{20}\u{20}hyalo find --broken-links --strict --glob 'docs/**/*.md' --filenames-only\n\
+         \n{global_pointer}\n\
+         Full reference (operators, sort keys, fields):  hyalo find --help"
+    )
+}
+
+/// The whole `-h` body below the usage line: the grouped command list and the
+/// composed examples, with config-defaulted flags filtered out of the examples
+/// exactly as [`filter_examples`] does for the long-form list.
+pub(crate) fn short_help_body(hide_dir: bool, hide_format: bool) -> String {
+    let examples: Vec<&str> = HELP_EXAMPLES_SHORT
+        .lines()
+        .filter(|line| {
+            if hide_format && line.contains(" --format") {
+                return false;
+            }
+            !(hide_dir && (line.contains("-d/--dir") || line.contains(" --dir ")))
+        })
+        .collect();
+    format!("{HELP_COMMANDS}\n\n{}", examples.join("\n"))
+}
+
+/// The single line that stands in for the global-options block on a
+/// subcommand's `-h` (iteration 251).
+///
+/// The block is ~1.9 KB and was repeated identically on all 27 subcommands —
+/// the largest single contributor to subcommand `-h` size, and pure noise once
+/// you have read it once. `--dir` and `--format` are omitted when
+/// `.hyalo.toml` already supplies them, matching the existing hiding rule in
+/// [`filter_examples`].
+pub(crate) fn global_pointer(hide_dir: bool, hide_format: bool) -> String {
+    let mut flags: Vec<&str> = Vec::with_capacity(7);
+    if !hide_dir {
+        flags.push("--dir");
+    }
+    if !hide_format {
+        flags.push("--format");
+    }
+    flags.extend(["--jq", "--count", "--no-hints", "--site-prefix", "-q"]);
+    format!("Global: {} — see `hyalo -h`", flags.join(" "))
+}
+
 /// Short help (shown by `-h`): one example per feature.
 pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Search for files:             hyalo find --property status=draft

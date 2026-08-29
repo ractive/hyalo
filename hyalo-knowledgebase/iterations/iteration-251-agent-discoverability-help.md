@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 251 — agent discoverability: short -h pages and zero-result hints"
 date: 2026-08-29
-status: planned
+status: completed
 tags:
   - iteration
   - agent-cli
@@ -31,51 +31,51 @@ acceptance shape, not a suggestion.
 
 ## Tasks
 
-- [ ] Every `#[arg]`/`#[command]` doc comment gets a one-line first
+- [x] Every `#[arg]`/`#[command]` doc comment gets a one-line first
       paragraph (clap `help`) followed by a blank line and the existing
       text (clap `long_help`). Target: `hyalo <cmd> -h` ≤ 3 KB for every
       subcommand; `--help` unchanged in content.
-- [ ] Global options: one-line short help each; the `--jq` limits paragraph
+- [x] Global options: one-line short help each; the `--jq` limits paragraph
       lives only in `--help`. On subcommands, `-h` shows globals as a single
       pointer line (`Global: --format --jq --count --no-hints -q — see
       hyalo -h`) — via the existing help template machinery in
       `cli/help.rs`, not a new flag.
-- [ ] Top-level `-h`: commands grouped by intent (Read / Write / Config &
+- [x] Top-level `-h`: commands grouped by intent (Read / Write / Config &
       scaffolds), two per line where they pair naturally, one-line
       descriptions naming the capability families (e.g. `find`: "BM25 text,
       regex, property, tag, task, section, title, glob, link-graph
       filters; sort, limit, --fields, --view, --count"). Keep a short
       "Start here" block of ≤ 8 examples that each **compose** 2–3
       features — the current 40 single-flag examples move to `--help`.
-- [ ] `find -h`: flags grouped Filters / Output; the property-operator
+- [x] `find -h`: flags grouped Filters / Output; the property-operator
       line, dot-path note, `--fields` values and `--sort` keys stay (these
       are exactly where agents fall back to grep). ≤ 8 composed examples;
       last line points at `find --help`.
-- [ ] Zero-result hints: when `total == 0`, emit 1–3 hints — drop the most
+- [x] Zero-result hints: when `total == 0`, emit 1–3 hints — drop the most
       selective filter (re-run with one filter removed), `hyalo properties`
       / `hyalo tags` to list observed values, and for `--property K=V` a
       did-you-mean over the observed values of K when edit distance is
       small. Text mode: `No results for --property status=x --tag y`
       (echo the effective filters). JSON: same hints in the envelope, with
       `writes: false`.
-- [ ] `check-help-drift` / `check-command-reference` / `check-bundled-skills`
+- [x] `check-help-drift` / `check-command-reference` / `check-bundled-skills`
       xtask gates updated to the new shape; SKILL.md (bundled + pi-package,
       keep in sync via `just sync-pi-package`) trimmed to workflow +
       pitfalls and told to use `-h` first, `--help` for syntax detail.
-- [ ] e2e tests: byte-size ceilings for `-h` on every subcommand (loop over
+- [x] e2e tests: byte-size ceilings for `-h` on every subcommand (loop over
       `hyalo help` list); zero-result hint presence in text and JSON;
       did-you-mean fires for a one-character typo and not for an unrelated
       value.
-- [ ] CHANGELOG `[Unreleased]` → Changed.
+- [x] CHANGELOG `[Unreleased]` → Changed.
 
 ## Acceptance criteria
 
-- [ ] `hyalo -h` ≤ 2.5 KB, `hyalo find -h` ≤ 3 KB, every other
+- [x] `hyalo -h` ≤ 2.5 KB, `hyalo find -h` ≤ 3 KB, every other
       `hyalo <cmd> -h` ≤ 3 KB; every capability named on the current pages
       is still named.
-- [ ] `hyalo find --property status=nonexistent` prints a non-empty hint
+- [x] `hyalo find --property status=nonexistent` prints a non-empty hint
       block in text and a non-empty `hints` array in JSON.
-- [ ] `--help` output loses nothing; all xtask gates and CI green.
+- [x] `--help` output loses nothing; all xtask gates and CI green.
 
 ## Non-goals
 
