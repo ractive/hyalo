@@ -116,6 +116,7 @@ fn filenames0_round_trips_through_xargs0() {
             "--filenames0",
         ])
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let xargs = Command::new("xargs")
@@ -125,7 +126,15 @@ fn filenames0_round_trips_through_xargs0() {
         .stdin(find.stdout.take().unwrap())
         .output()
         .unwrap();
-    assert!(find.wait().unwrap().success());
+    // Surface hyalo's own stderr: the v0.21.0 release pipeline saw this
+    // assertion fail under QEMU-emulated aarch64 with no diagnostic at all.
+    let find = find.wait_with_output().unwrap();
+    assert!(
+        find.status.success(),
+        "hyalo find exited {:?}: {}",
+        find.status.code(),
+        String::from_utf8_lossy(&find.stderr)
+    );
     assert!(xargs.status.success(), "{}", stderr(&xargs));
     let content = String::from_utf8_lossy(&xargs.stdout);
     assert!(content.contains("Body 206."), "{content}");
