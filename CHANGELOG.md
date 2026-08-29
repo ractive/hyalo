@@ -9,6 +9,10 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `hyalo-cli` crates.io publish (v0.21.0) failed at the tarball verify step because the pi integration files were embedded via `include_str!` reaching outside the crate into the top-level `pi-package/` directory, which `cargo package` cannot see. The four files are now vendored inside `crates/hyalo-cli/templates/pi/`, kept in sync with `pi-package/` by a new `check-pi-package-sync` CI gate (`just sync-pi-package` to fix drift).
+
 ## [0.21.0] - 2026-08-28
 
 ### Added

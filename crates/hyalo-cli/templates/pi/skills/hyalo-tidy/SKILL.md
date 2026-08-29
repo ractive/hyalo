@@ -1,0 +1,328 @@
+---
+name: hyalo-tidy
+user_invocable: false
+description: >
+  Perform a reflective consolidation pass over a hyalo-managed knowledgebase directory —
+  detecting structural issues, fixing broken links, flagging stale content, normalizing
+  metadata, and reporting what changed. Use this skill when the user says /hyalo-tidy,
+  "consolidate the knowledgebase", "clean up the KB", "run KB hygiene", "tidy", or
+  "what needs attention in the knowledgebase". Also use when the user asks about
+  knowledgebase health, broken links, orphan files, stale iterations, or metadata
+  inconsistencies.
+context: fork
+disable-model-invocation: true
+---
+
+# Hyalo Tidy — Knowledgebase Consolidation for pi
+
+You are performing a tidy — a reflective pass over a knowledgebase. Your job is to
+detect issues, fix what you can, and report what needs human attention. Think of this
+as a librarian doing a periodic shelf-read: checking that everything is filed correctly,
+cross-references work, and nothing is gathering dust in the wrong place.
+
+**For pi sessions, ALWAYS use `--format text` for compact output.**
+
+This process has 5 phases. Take your time — a thorough tidy is worth more than a fast
+one. A few minutes is fine.
+
+## Before you start
+
+Locate the hyalo binary:
+```bash
+which hyalo 2>/dev/null || echo "target/release/hyalo"
+```
+
+Confirm `.hyalo.toml` exists in the project root to determine the KB directory. If it
+doesn't exist, ask the user which directory to consolidate.
+
+## Phase 1 — Orient and snapshot
+
+Get the lay of the land and create a snapshot index for fast repeated queries.
+
+```bash
+# 1. High-level overview (baseline for the final health dashboard)
+hyalo summary --format text
+
+# 2. Create snapshot index (one scan, reused by all subsequent queries)
+hyalo create-index --format text
+
+# 3. Save recurring diagnostic queries as views for reuse
+hyalo views set stale-in-progress --property status=in-progress --fields tasks --format text
+hyalo views set missing-status --property '!status' --format text
+hyalo views set missing-type --property '!type' --format text
+hyalo views set orphans --orphan --fields backlinks --format text
+hyalo views set completed-with-todos --property status=completed --task todo --fields tasks --format text
+```
+
+The snapshot index captures every file's metadata in a binary file (`.hyalo-index`).
+All read-only queries in Phase 2 and Phase 3 should use `--index` to
+avoid repeated disk scans. For complex reshaping, combine hyalo filtering with `--jq`.
+
+Also grab the tag vocabulary for inconsistency detection:
+```bash
+hyalo tags summary --index --format text
+```
+
+## Phase 2 — Gather recent signal
+
+Before looking for issues, understand what happened recently. This context is what
+makes the tidy valuable — it tells you what *should* have changed in the KB, so you
+can spot what didn't.
+
+### Git history
+
+```bash
+# What branches were merged recently? What iteration branches shipped?
+git log --oneline --merges --since="4 weeks ago"
+
+# What areas of code changed? (helps identify which features shipped)
+git log --oneline --since="4 weeks ago" -- "*.rs" | head -30
+```
+
+Extract non-completed iterations and their branches from the index:
+```bash
+hyalo find --property type=iteration --index --jq '.results | map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
+```
+
+For each non-completed iteration that has a branch, check if that branch was merged:
+```bash
+git log --oneline --merges --all | grep "<branch-name>"
+```
+
+### Claude's auto-memory
+
+Check what was recently worked on from Claude's perspective:
+```bash
+MEMORY_FILE=$(find ~/.claude/projects/ -path "*/memory/MEMORY.md" -print -quit 2>/dev/null)
+if [ -n "$MEMORY_FILE" ]; then
+  MEMORY_DIR=$(dirname "$MEMORY_FILE")
+fi
+```
+
+If found, query it with hyalo (memory files are outside the vault, so no --index here):
+```bash
+hyalo --dir "$MEMORY_DIR" find --property type=project --format text
+hyalo --dir "$MEMORY_DIR" find --property type=feedback --format text
+```
+
+Look for:
+- Project memories mentioning iterations/features that shipped — cross-reference with KB
+- Stale project memories that reference outdated plans (note for the report, but
+  don't modify memory files — that's Claude's own territory)
+
+### Recent KB changes
+
+```bash
+git log --oneline --since="4 weeks ago" -- "hyalo-knowledgebase/" | head -20
+git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebase/"
+```
+
+## Phase 3 — Detect structural issues
+
+All queries below use `--index` — no additional disk scans needed.
+
+### Schema & lint
+Check if type schemas are defined, then run lint in strict mode. `hyalo lint` covers
+both frontmatter schema *and* the markdown body (stock mdbook-lint rules + HYALO native
+rules for things like bare `[]` checkboxes and `status: completed` with open tasks).
+`--strict` promotes the "no `type` property" and "undeclared property in frontmatter"
+warnings to errors so a tidy pass fails fast on schema drift:
+```bash
+hyalo types list --format text
+hyalo lint --strict --index --format text
+```
+
+If `hyalo types list` returns zero types but files have a `type` property, propose
+creating type schemas. Use `hyalo properties summary` to discover common property
+values, then suggest `hyalo types set <name> --required ...`
+commands for the user's most common document types. Don't create them unilaterally —
+report the suggestion in Phase 5.
+
+Note the lint summary's per-rule counts. If **one rule dominates the noise** (e.g.
+MD013 line-length on prose-heavy KBs), that's a signal the rule may not fit the KB —
+flag it for Phase 5 as a candidate to disable via `hyalo lint-rules`. Track fixable
+counts for Phase 4.
+
+Lint also validates `[views.*]` in `.hyalo.toml`. A view whose only narrowing key is
+`fields` (display columns, not a filter) is surfaced as a warning — suggest adding an
+explicit filter like `orphan = true`, `dead_end = true`, or `tag = [...]` when you see
+one in Phase 5.
+
+### Broken links
+```bash
+# Dry-run shows broken links with proposed fixes and confidence scores
+hyalo links fix --index --format text
+```
+This categorizes links as **fixable** (fuzzy match found) vs **unfixable** (no match).
+Note the counts for the health dashboard. Actual fixes happen in Phase 4.
+
+### Orphan files
+```bash
+hyalo find --view orphans --index --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
+```
+Not all orphans are problems. Expect these to be legitimately orphaned:
+- Top-level files (SEED.md, project-pitch.md, decision-log.md)
+- Research documents (standalone reports)
+- Older completed items in `done/` directories
+
+Focus on **actionable orphans**: active/planned items that should be cross-referenced.
+
+### Dead-end files
+```bash
+hyalo find --dead-end --index --jq '.results | map(.file)'
+```
+Dead-end files have inbound links but no outbound links — often stubs or leaf nodes
+that could benefit from cross-references. Not always a problem, but worth reviewing.
+
+### Stale statuses
+```bash
+# In-progress items — should any be completed?
+hyalo find --view stale-in-progress --index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
+
+# Planned items where all tasks are done
+hyalo find --property status=planned --index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
+
+# In-progress items sorted by date (oldest first — possibly stale)
+hyalo find --view stale-in-progress --index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
+```
+Cross-reference with git merges from Phase 2. If the branch was merged, update status.
+
+### Stale backlog items
+```bash
+hyalo find --property status=planned --property type=backlog --index --jq '.results | map({file, title: .properties.title})'
+```
+Compare each planned backlog item against merged iterations and recent git history.
+If the feature clearly shipped (in a different iteration or under a different name),
+flag it.
+
+### Missing metadata
+```bash
+hyalo find --view missing-status --index --jq '.results | map(.file)'
+hyalo find --view missing-type --index --jq '.results | map(.file)'
+```
+
+### Tag inconsistencies
+Review the `hyalo tags summary` output from Phase 1. Look for near-duplicates:
+singular/plural (`filter`/`filters`), hyphenation variants (`bugfix`/`bug-fix`),
+abbreviations (`perf`/`performance`). The canonical form should be the one used by
+more files.
+
+### Task completion vs status mismatch
+The `HYALO002` rule from the lint pass already flags `status: completed` files with
+open tasks (fires only when `[schema.types.*].properties.status` is declared as an enum
+containing `"completed"`). If you want a per-file breakdown with open/total counts, use the view:
+```bash
+hyalo find --view completed-with-todos --index --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
+```
+If many completed items have unchecked tasks, this is a workflow pattern — note it once
+in the report rather than listing every file.
+
+## Phase 4 — Consolidate
+
+Fix what you can. Be conservative — prefer fixing metadata over deleting files. For
+each change, note what you did and why.
+
+**Keep using `--index`** for all mutations — hyalo now patches the index
+in-place after each file write, so it stays current for subsequent queries. No need to
+drop the index before making changes. Only drop it at the very end (Phase 5).
+
+### Fix lint violations
+If lint reported fixable violations in Phase 3, auto-fix them. `--fix` covers both
+passes — frontmatter (defaults, typos, dates, types) and body (e.g. `HYALO001` bare
+brackets, trailing whitespace). Always preview with `--dry-run` first:
+```bash
+hyalo lint --fix --dry-run --index --format text
+hyalo lint --fix --index --format text
+```
+
+If you only want to fix specific rules (e.g. body fixes only, leaving frontmatter
+alone), use `--fix-rule` or `--rule-prefix HYALO` — see `hyalo lint --help`.
+
+Unfixable violations (missing required properties, open tasks under `HYALO002`) are
+reported in Phase 5 for human attention.
+
+### Fix broken links
+Use `hyalo links fix` to auto-repair broken links. It uses fuzzy matching to find the
+correct target (handles moves to `done/`, case changes, extension mismatches, etc.).
+
+```bash
+# Preview what will be fixed
+hyalo links fix --index --format text
+
+# Apply fixes
+hyalo links fix --apply --index --format text
+```
+
+Review the dry-run output first. For any links it can't resolve (reported as unfixable),
+leave them and report them in Phase 5.
+
+### Update stale statuses
+If an iteration's branch was merged:
+```bash
+hyalo set <path> --property status=completed --index --format text
+```
+
+If a backlog item's feature clearly shipped:
+```bash
+hyalo set <path> --property status=completed --index --format text
+```
+
+Only update when the evidence is clear. When uncertain, flag it in the report.
+
+### Archive completed items
+If completed items are in a top-level directory and a `done/` subfolder exists:
+```bash
+hyalo mv <old-path> --to <done-subdir/filename> --dry-run --index --format text
+```
+Review the dry-run output. If correct, execute without `--dry-run`.
+
+### Normalize tags
+```bash
+hyalo tags rename --from <variant> --to <canonical> --index --format text
+```
+
+### Add missing cross-references
+If a backlog item was implemented by an iteration but neither links to the other,
+add a `[[wikilink]]`. Only where the relationship is clear and useful.
+
+## Phase 5 — Report
+
+Summarize everything. Structure as:
+
+### Changes made
+One line per change with reasoning:
+```
+- Set status=completed on iteration-43.md (branch iter-43/data-quality merged in abc1234)
+- Moved iteration-46.md to iterations/done/ (completed, all tasks verified)
+- Renamed tag: bugfix → bug-fix (2 files, matching existing convention)
+- Fixed 5 broken links in research/dogfooding-v0.4.1-consolidated.md (same-dir targets)
+```
+
+### Issues requiring human attention
+Things you detected but couldn't (or shouldn't) fix unilaterally. Keep it concise —
+one line per issue with enough context to act on.
+
+If a single lint rule produced an outsized share of the noise (or if a rule fired only
+on legitimate exceptions), suggest tuning it via `hyalo lint-rules` rather than
+silently leaving the warnings in place.
+
+### KB health dashboard
+Re-run `hyalo summary --format text` (fresh scan after mutations — no `--index`) and compare with
+Phase 1 baseline. Report the delta: statuses changed, links fixed, tags normalized,
+files moved.
+
+## Ground rules
+
+- **Conservative by default**: when in doubt, report rather than change.
+- **Never delete files or body content**: update frontmatter, fix links, move files,
+  suggest changes — but the user decides what to throw away.
+- **Explain every change**: include the evidence (commit hash, task counts, etc.).
+- **Don't modify Claude's memory files**: report stale memories but don't edit them.
+- **Use hyalo for mutations**: `hyalo set`/`remove` for frontmatter, `hyalo tags rename`
+  for tags, `hyalo mv` for moves. Fall back to Edit only for body content (fixing
+  wikilink text in prose, adding cross-reference lines).
+- **Batch similar findings**: if 15 completed items have unchecked tasks, say that once
+  with the count. The report should be scannable in 30 seconds.
+- **Minimize disk scans**: use `--index` for all queries and mutations.
+  Mutations automatically patch the index in-place — no need to drop and recreate.
+  Only drop the index at the very end when the session is complete.

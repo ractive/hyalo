@@ -3279,3 +3279,51 @@ reported bug.
 unchanged and still governed by DEC-241/DEC-245: the run warns and exits 0.
 A caller who wants disk truth over snapshot speed still has that lever —
 omit `--index`/`--index-file` — it was just never a new one.
+
+## DEC-250: pi-package stays canonical at the repo root; the crate embeds a vendored, gate-enforced copy (2026-08-29)
+
+**Problem.** `crates/hyalo-cli/src/commands/init.rs` embedded the four pi
+integration files (`hyalo`/`hyalo-tidy` `SKILL.md`, `hyalo.ts`, `package.json`)
+via `include_str!("../../../../pi-package/...")` — reaching four directories
+up, outside `crates/hyalo-cli/`. DEC-237 called this a "single source of
+truth" with "drift impossible by construction." That held for a normal build,
+but `cargo package`/`cargo publish` builds the verify tarball with only the
+crate directory on disk, so the `include_str!` paths resolved to nothing and
+the `hyalo-cli` 0.21.0 crates.io publish failed at the tarball verify step
+(`hyalo-core` and `hyalo-mdlint` 0.21.0 had already published). `cargo
+package -p hyalo-cli` reproduces the same failure locally.
+
+**Decision.** Vendor byte-identical copies of the four files under
+`crates/hyalo-cli/templates/pi/` (mirroring `pi-package/`'s own
+`skills/<name>/SKILL.md` and `extensions/<name>.ts` layout) and point the
+`include_str!`s there instead. The top-level `pi-package/` directory remains
+canonical and unchanged — it is the exact layout `pi install
+git:github.com/ractive/hyalo` consumes, and moving or symlinking it was ruled
+out (symlinks don't survive a Windows checkout). A new `check-pi-package-sync`
+xtask gate, wired into the `quality-gates` CI job alongside
+`check-bundled-skills`, fails the build if any vendored file differs
+byte-for-byte from its `pi-package/` counterpart, or if `pi-package/` gains a
+skill/extension/`package.json` with no vendored counterpart. `just
+sync-pi-package` copies `pi-package/` onto the vendored tree to fix drift.
+
+**Alternatives considered.**
+- *Publish `pi-package/` as its own crate/package and depend on it.* Rejected:
+  `pi-package/` isn't Rust — it's a `pi` extension (TypeScript) plus
+  Markdown skills consumed by `pi install`, not something Cargo can depend on
+  without inventing a packaging format nobody else needs.
+- *Move `pi-package/` inside `crates/hyalo-cli/` and symlink (or generate) the
+  root-level path `pi install` expects.* Rejected on the same grounds
+  DEC-237 already reflects in the README/justfile/e2e-script constraints
+  this task inherited: `pi install git:...` needs `pi-package/` at the repo
+  root, and symlinks are unusable in Windows checkouts.
+- *Keep the single-source `include_str!` and special-case `cargo publish`
+  (e.g. a build script that copies files in before packaging).* Rejected:
+  `cargo package`'s verify step runs from the extracted tarball in a temp
+  directory with no access to the original working tree, so a build script
+  can't reach back out to `pi-package/` either — the constraint that broke
+  `include_str!` breaks this too.
+
+**Why a gate instead of trusting reviewers to keep both copies in sync.**
+Manual sync is exactly the failure mode DEC-237 was trying to avoid by having
+one source in the first place; a gate makes drift a CI failure instead of a
+silent divergence that only surfaces (as this bug did) at publish time.
