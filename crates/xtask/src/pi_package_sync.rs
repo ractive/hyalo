@@ -116,10 +116,59 @@ pub fn run() -> Result<bool> {
         }
     }
 
+    // Reverse direction: a vendored file whose canonical source was deleted
+    // or renamed would otherwise go stale forever (review finding on
+    // PR #289). Walk the vendored tree with the same file selection the
+    // forward pass uses and demand a source for each.
+    let expected: std::collections::HashSet<&PathBuf> = pairs
+        .iter()
+        .map(|(_, vendored_copy)| vendored_copy)
+        .collect();
+    for orphan in vendored_files(&vendored)? {
+        if !expected.contains(&orphan) {
+            all_ok = false;
+            eprintln!(
+                "check-pi-package-sync: vendored {} has no source under pi-package/ — delete it (and any include_str! of it)",
+                display_rel(&root, &orphan),
+            );
+        }
+    }
+
     if all_ok {
         println!("check-pi-package-sync: {checked} pi-package file(s) match their vendored copies");
     }
     Ok(all_ok)
+}
+
+/// The vendored files the gate is responsible for: `skills/*/SKILL.md`,
+/// `extensions/*.ts`, and `package.json` under `templates/pi/` — the same
+/// selection as the forward pass, so the two directions cannot disagree on
+/// scope. A missing directory yields an empty list.
+fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let read = |dir: &Path| -> Result<Vec<PathBuf>> {
+        match std::fs::read_dir(dir) {
+            Ok(entries) => Ok(entries.filter_map(|e| e.ok().map(|e| e.path())).collect()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e).with_context(|| format!("reading {dir:?}")),
+        }
+    };
+    for skill_dir in read(&vendored.join("skills"))? {
+        let skill_md = skill_dir.join("SKILL.md");
+        if skill_md.is_file() {
+            found.push(skill_md);
+        }
+    }
+    for path in read(&vendored.join("extensions"))? {
+        if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            found.push(path);
+        }
+    }
+    let package_json = vendored.join("package.json");
+    if package_json.is_file() {
+        found.push(package_json);
+    }
+    Ok(found)
 }
 
 fn display_rel(root: &Path, path: &Path) -> String {
@@ -146,6 +195,30 @@ mod tests {
         let root = Path::new("/repo");
         let path = Path::new("/elsewhere/file.txt");
         assert_eq!(display_rel(root, path), "/elsewhere/file.txt");
+    }
+
+    #[test]
+    fn vendored_files_selects_same_scope_as_forward_pass() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let v = dir.path();
+        fs::create_dir_all(v.join("skills/hyalo")).expect("mkdir");
+        fs::create_dir_all(v.join("extensions")).expect("mkdir");
+        fs::write(v.join("skills/hyalo/SKILL.md"), "s").expect("write");
+        fs::write(v.join("skills/hyalo/notes.txt"), "ignored").expect("write");
+        fs::write(v.join("extensions/hyalo.ts"), "t").expect("write");
+        fs::write(v.join("extensions/README.md"), "ignored").expect("write");
+        fs::write(v.join("package.json"), "{}").expect("write");
+        let mut found = vendored_files(v).expect("walk");
+        found.sort();
+        let mut expected = vec![
+            v.join("extensions/hyalo.ts"),
+            v.join("package.json"),
+            v.join("skills/hyalo/SKILL.md"),
+        ];
+        expected.sort();
+        assert_eq!(found, expected);
+        // A missing tree is empty, not an error.
+        assert!(vendored_files(&v.join("nope")).expect("walk").is_empty());
     }
 
     #[test]
