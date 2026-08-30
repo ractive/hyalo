@@ -9,9 +9,26 @@
 //!   findings. Findings get a name of their own (`violations`, `matched`).
 //! - **R2** — top-level `results` keys are always present, including `0`,
 //!   `false`, `[]` and `null`.
-//! - **R3/R4** — one concept, one key name: every mutating command reports
-//!   `dry_run` and `skipped_count`, and `files_with_violations` means the
-//!   same thing in `lint` and in `summary`.
+//! - **R3/R4** — one concept, one key name: every object-shaped mutation
+//!   result reports `dry_run`, the bulk-mutation family also reports
+//!   `skipped_count`, and `files_with_violations` means the same thing in
+//!   `lint` and in `summary`.
+//!
+//! iter-256 (COH-9) narrowed R3/R4's wording to match reality and widened the
+//! `dry_run` coverage to match the wording. Two documented exceptions remain,
+//! and both are structural rather than drift:
+//!
+//! - `task toggle` / `task set` return an *array* of per-task records, so
+//!   there is no top-level object to hang `dry_run` on (and a one-element
+//!   payload collapses to a bare object, so the shape is not even stable).
+//!   Their dry-run records carry `old_status`; their applied records do not — that key is the
+//!   discriminator. Adding `dry_run` to every element would repeat one
+//!   invocation-level fact N times and would pollute `TaskReadResult`, which
+//!   `task read` (a read-only command) shares.
+//! - `skipped_count` is bulk-family-only (`set`, `remove`, `append`,
+//!   `properties rename`, `tags rename`). A single-target command has no
+//!   scanned-but-unchanged set, so a hard-coded `0` would look like a
+//!   measurement and be none.
 //!
 //! The written inventory these rules come from lives at
 //! `hyalo-knowledgebase/research/results-json-shape-inventory.md`.
@@ -126,6 +143,94 @@ fn mutation_total_stays_the_denominator() {
 // ---------------------------------------------------------------------------
 // R2 / R3 / R4: uniform keys across the mutating commands
 // ---------------------------------------------------------------------------
+
+/// iter-256 COH-9: the object-shaped mutation results that are *not* part of
+/// the `--file/--glob` bulk family. Before iter-256 these reported the
+/// write/preview distinction under four different spellings — `applied`
+/// (`mv` batch), `apply` (`madr`/`okf`/`changelog`), `dry_run`, or nothing at
+/// all (`new`, `types remove`) — so no single jq query answered "did this
+/// write?". `apply`/`applied` are retained for back-compat; `dry_run` is now
+/// emitted alongside them and is always their exact inverse.
+#[test]
+fn generators_and_scaffolds_report_dry_run_as_a_bool() {
+    let tmp = vault();
+    let dir = tmp.path();
+    std::fs::create_dir_all(dir.join("docs/decisions")).unwrap();
+    write_md(
+        dir,
+        "docs/decisions/0001-first.md",
+        "---\ntitle: First\ntype: decision\nstatus: accepted\n---\n\n# First\n",
+    );
+    std::fs::write(
+        dir.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- seed\n",
+    )
+    .unwrap();
+
+    // `new` needs a declared type; `types set` is itself one of the cases.
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["types", "set", "note", "--required", "title"],
+        vec!["new", "--type", "note", "--file", "scratch.md"],
+        vec!["types", "remove", "note"],
+        vec!["lint-rules", "set", "MD013", "--enabled", "false"],
+        vec!["lint-rules", "remove", "MD013"],
+        vec!["madr", "toc"],
+        vec!["okf", "index"],
+        vec!["okf", "log", "--message", "hello"],
+        vec!["changelog", "add", "--category", "Added", "--message", "thing"],
+        vec!["changelog", "release", "1.0.0"],
+        // Batch `mv` runs last: it relocates the files the other cases read.
+        vec!["mv", "--glob", "*.md", "--to", "sub"],
+    ];
+
+    for args in cases {
+        let r = results(dir, &args);
+        let dry_run = r
+            .get("dry_run")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_else(|| panic!("{args:?} must report `dry_run` as a bool: {r}"));
+        // Where the legacy inverse is still emitted, the two must agree.
+        for legacy in ["apply", "applied"] {
+            if let Some(v) = r.get(legacy).and_then(serde_json::Value::as_bool) {
+                assert_eq!(
+                    v, !dry_run,
+                    "{args:?}: `{legacy}` must be the exact inverse of `dry_run`: {r}"
+                );
+            }
+        }
+    }
+}
+
+/// iter-256 COH-9: `task toggle` / `task set` are the documented exception —
+/// an array payload with no top-level object. This test pins the discriminator
+/// the docs point at (`old_status` present only on a dry run) so it cannot
+/// drift without a test failing.
+#[test]
+fn task_mutations_signal_dry_run_through_old_status() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "todo.md",
+        "---\ntitle: Todo\n---\n\n# Todo\n\n- [ ] first\n",
+    );
+
+    // `task` collapses a one-element payload to a bare object, so normalise.
+    let first = |v: &serde_json::Value| -> serde_json::Value {
+        v.as_array().map_or_else(|| v.clone(), |a| a[0].clone())
+    };
+
+    let preview = results(tmp.path(), &["task", "toggle", "todo.md", "--all", "--dry-run"]);
+    assert!(
+        first(&preview).get("old_status").is_some(),
+        "a dry-run task record must carry `old_status`: {preview}"
+    );
+
+    let applied = results(tmp.path(), &["task", "toggle", "todo.md", "--all"]);
+    assert!(
+        first(&applied).get("old_status").is_none(),
+        "an applied task record must not carry `old_status`: {applied}"
+    );
+}
 
 #[test]
 fn every_mutating_command_reports_dry_run_as_a_bool() {

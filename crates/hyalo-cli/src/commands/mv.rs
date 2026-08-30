@@ -54,6 +54,10 @@ struct BatchMvResult {
     updated_files: Vec<UpdatedFile>,
     totals: BatchTotals,
     applied: bool,
+    /// `!applied`, restated under the name the rest of the mutation family
+    /// uses (iter-256 COH-9). `applied` predates the convention and is kept
+    /// for back-compat; the two are always exact inverses.
+    dry_run: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     conflicts: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -240,6 +244,7 @@ pub fn mv_batch(
         moves,
         updated_files,
         applied: apply,
+        dry_run: !apply,
         conflicts,
         skipped,
     };

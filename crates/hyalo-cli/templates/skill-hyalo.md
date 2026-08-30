@@ -166,8 +166,15 @@ hyalo summary --jq '.results.tasks.total'                  # tasks count from su
 - Top-level `results` keys are always present, including `0`, `false`, `[]` and `null`. Only
   per-item records inside arrays omit absent optional keys, so `.results.dry_run` is `false`
   (not missing) on a non-dry-run of any mutating command.
-- Every mutating command reports `dry_run` and `skipped_count`:
-  `hyalo set --glob '**/*.md' --property status=draft --jq '.results.skipped_count'`.
+- Every mutating command whose `results` is an object reports `dry_run`, so one query answers
+  "did this write?" — `hyalo madr toc --jq '.results.dry_run'`. The `apply`-style generators
+  (`madr`, `okf`, `changelog`) and batch `mv` also keep an older `apply`/`applied` key that is
+  always its exact inverse. `task toggle`/`task set` are the exception: they return an array of
+  per-task records, and the dry-run records are the ones carrying `old_status`.
+- `skipped_count` is reported by the bulk-mutation family only — `set`, `remove`, `append`,
+  `properties rename`, `tags rename`:
+  `hyalo set --glob '**/*.md' --property status=draft --jq '.results.skipped_count'`. A
+  single-target command has no scanned-but-unchanged set, so it reports no count.
 - `links fix` pairs each bucket count with a list whose suffix names the record type:
   `…_fixes` holds fix proposals (`old_target`/`new_target`/`strategy`/`confidence`),
   `…_links` holds links with no proposal.

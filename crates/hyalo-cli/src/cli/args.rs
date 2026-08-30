@@ -266,7 +266,12 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         never a count of findings, which is named for what it counts (lint: violations, \
         links auto: matched). Top-level results keys are always present, including when the \
         value is 0, false, [] or null; only per-item records inside arrays omit absent optional \
-        keys. Every mutating command reports dry_run and skipped_count.\n\
+        keys. Every mutating command whose results is an object reports dry_run; the apply-style \
+        generators (madr, okf, changelog) and batch mv also keep an older apply/applied key that \
+        is always its exact inverse. skipped_count is reported by the bulk-mutation family only \
+        (set, remove, append, properties rename, tags rename) — a single-target command has no \
+        scanned-but-unchanged set. task toggle/task set return an array of per-task records with \
+        no top-level object; their dry-run records carry old_status, applied records do not.\n\
         Use --format text for human-readable output, --format json for machine-readable output. \
         Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
