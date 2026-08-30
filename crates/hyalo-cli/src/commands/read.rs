@@ -204,13 +204,25 @@ fn invalid_utf8_line_placeholder() -> String {
 }
 
 /// Read the raw body lines from a markdown file, skipping frontmatter.
-/// Returns the lines with their trailing newlines stripped.
+/// Returns `(body_lines, frontmatter_line_count)`: the body lines with their
+/// trailing newlines stripped, plus how many leading lines the frontmatter
+/// block occupied (0 when the file has none).
+///
+/// The frontmatter line count is a by-product of [`frontmatter::skip_frontmatter`]
+/// — returning it costs no extra I/O and lets the caller derive the whole
+/// file's line count (`fm_lines + body_lines.len()`, identical to
+/// [`scanner::count_lines`] over the same bytes) without a second full read
+/// of the file (iteration 253).  This holds because
+/// [`scanner::read_line_capped`] consumes exactly one logical line per call —
+/// skipped lines are drained to the next `\n` and still occupy one slot — and
+/// `skip_frontmatter` counts the opening and closing `---` delimiters plus
+/// everything between them.
 ///
 /// Uses [`scanner::read_line_capped`] rather than `BufRead::lines()` so a
 /// single pathological line (e.g. a minified blob with no newlines) cannot
 /// balloon memory — such a line is replaced with [`oversized_line_placeholder`]
 /// instead of being buffered in full.
-fn read_body_lines(path: &Path) -> Result<Vec<String>> {
+fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize)> {
     let file =
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
@@ -221,10 +233,11 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
         scanner::read_line_capped(&mut reader, &mut first_line, scanner::MAX_BODY_LINE_BYTES)
             .with_context(|| format!("failed to read {}", path.display()))?;
     if n == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
 
     let mut lines = Vec::new();
+    let mut frontmatter_lines = 0usize;
 
     if first_outcome.is_skipped() {
         // A real `---` frontmatter delimiter is 3 bytes, so a line this long
@@ -239,6 +252,8 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
         if fm_lines == 0 {
             // No frontmatter — first line is body content
             lines.push(first_trimmed.to_owned());
+        } else {
+            frontmatter_lines = fm_lines;
         }
     }
 
@@ -260,7 +275,7 @@ fn read_body_lines(path: &Path) -> Result<Vec<String>> {
         }
     }
 
-    Ok(lines)
+    Ok((lines, frontmatter_lines))
 }
 
 // ---------------------------------------------------------------------------
@@ -344,8 +359,18 @@ pub fn run(
     // Determine what content to return
     let need_body = section.is_some() || !frontmatter_flag || line_range.is_some();
 
+    // When the body is read, the whole file's line count falls out of that
+    // single pass (iteration 253): `read_body_lines` streams every line after
+    // the frontmatter and reports how many lines the frontmatter occupied, so
+    // `fm_lines + raw_body_lines` is exactly what `scanner::count_lines` would
+    // return for the same bytes — captured here, before `--section`/`--lines`
+    // narrow `content_lines` below.  `None` means the body was not read
+    // (`--frontmatter` only), and the count is scanned separately further down.
+    let mut whole_file_lines: Option<usize> = None;
     let mut content_lines: Vec<String> = if need_body {
-        read_body_lines(&full_path)?
+        let (body_lines, fm_lines) = read_body_lines(&full_path)?;
+        whole_file_lines = Some(fm_lines + body_lines.len());
+        body_lines
     } else {
         Vec::new()
     };
@@ -409,7 +434,14 @@ pub fn run(
     // returned — they are the same two numbers `find` reports, so an agent can
     // compare a `read --section` result against the file it came from and
     // decide whether the rest is worth another call.
-    let total_lines = scanner::count_file_lines(&full_path)?;
+    //
+    // The count comes free from the body pass above whenever the body was
+    // read; only a `--frontmatter`-only read still has to scan the file for
+    // it, since that path deliberately never touches the body (iteration 253).
+    let total_lines = match whole_file_lines {
+        Some(n) => n,
+        None => scanner::count_file_lines(&full_path)?,
+    };
     let mut obj = serde_json::json!({
         "file": rel_path,
         "size": file_size,
@@ -480,8 +512,9 @@ mod tests {
         )
         .unwrap();
 
-        let lines = read_body_lines(&path).unwrap();
+        let (lines, fm_lines) = read_body_lines(&path).unwrap();
         assert_eq!(lines, vec!["Line one", "Line two", "Line three"]);
+        assert_eq!(fm_lines, 3, "opening `---`, one key, closing `---`");
     }
 
     #[test]
@@ -490,8 +523,9 @@ mod tests {
         let path = tmp.path().join("normal.md");
         std::fs::write(&path, "# Heading\n\nBody text\n").unwrap();
 
-        let lines = read_body_lines(&path).unwrap();
+        let (lines, fm_lines) = read_body_lines(&path).unwrap();
         assert_eq!(lines, vec!["# Heading", "", "Body text"]);
+        assert_eq!(fm_lines, 0, "no frontmatter block");
     }
 
     #[test]
@@ -505,7 +539,8 @@ mod tests {
         let content = format!("before\n{huge}\nafter\n");
         std::fs::write(&path, &content).unwrap();
 
-        let lines = read_body_lines(&path).unwrap();
+        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        assert_eq!(fm_lines, 0);
         assert_eq!(lines.len(), 3, "line count must be preserved: {lines:?}");
         assert_eq!(lines[0], "before");
         assert_ne!(lines[1], huge, "oversized line must not be buffered whole");
@@ -529,7 +564,8 @@ mod tests {
         let huge: String = "y".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
         std::fs::write(&path, format!("{huge}\nafter\n")).unwrap();
 
-        let lines = read_body_lines(&path).unwrap();
+        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        assert_eq!(fm_lines, 0);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("skipped"));
         assert_eq!(lines[1], "after");
@@ -542,12 +578,101 @@ mod tests {
         let exact: String = "z".repeat(scanner::MAX_BODY_LINE_BYTES);
         std::fs::write(&path, format!("{exact}\nnext\n")).unwrap();
 
-        let lines = read_body_lines(&path).unwrap();
+        let (lines, fm_lines) = read_body_lines(&path).unwrap();
+        assert_eq!(fm_lines, 0);
         assert_eq!(
             lines[0], exact,
             "line at the limit must pass through intact"
         );
         assert_eq!(lines[1], "next");
+    }
+
+    /// iteration 253: the whole-file line count derived from the single body
+    /// pass (`fm_lines + body.len()`) must equal what a dedicated scan of the
+    /// file's bytes returns — `scanner::count_lines` is the same counter
+    /// `scanner::count_file_lines` streams, i.e. exactly the number `read`
+    /// reported before the second read was removed.
+    ///
+    /// The cases mirror the pathological inputs the iter-252 `find` suite
+    /// pins for `lines`: CRLF, no trailing newline, invalid UTF-8, and a line
+    /// over the per-line cap — the three inputs where "one call to
+    /// `read_line_capped` is one line" could plausibly break down.
+    #[test]
+    fn derived_line_count_matches_a_whole_file_scan() {
+        let huge = "x".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            ("empty", Vec::new()),
+            ("lone newline", b"\n".to_vec()),
+            (
+                "no frontmatter, trailing newline",
+                b"# H\n\nbody\n".to_vec(),
+            ),
+            (
+                "no frontmatter, no trailing newline",
+                b"# H\n\nbody".to_vec(),
+            ),
+            ("frontmatter only", b"---\ntitle: T\n---\n".to_vec()),
+            ("frontmatter only, no eol", b"---\ntitle: T\n---".to_vec()),
+            (
+                "frontmatter and body",
+                b"---\ntitle: T\n---\n\n# H\n\nbody\n".to_vec(),
+            ),
+            (
+                "frontmatter and body, no eol",
+                b"---\ntitle: T\n---\n\n# End".to_vec(),
+            ),
+            (
+                "crlf throughout",
+                b"---\r\ntitle: T\r\n---\r\n\r\n# H\r\nbody\r\n".to_vec(),
+            ),
+            (
+                "multi-byte utf-8",
+                "---\ntitle: Üñïçôdé\n---\n\n日本語のテキスト。\n"
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            ("trailing blank line", b"a\n\n".to_vec()),
+            (
+                "invalid utf-8 body line",
+                b"---\ntitle: T\n---\n\n\xff\xfe bad\nafter\n".to_vec(),
+            ),
+            ("invalid utf-8 first line", b"\xff bad\nafter\n".to_vec()),
+            (
+                "invalid utf-8 final line, no eol",
+                b"before\n\xff bad".to_vec(),
+            ),
+            (
+                "oversized middle line",
+                format!("before\n{huge}\nafter\n").into_bytes(),
+            ),
+            (
+                "oversized final line, no eol",
+                format!("before\n{huge}").into_bytes(),
+            ),
+            (
+                "oversized first line",
+                format!("{huge}\nafter\n").into_bytes(),
+            ),
+        ];
+
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, content) in cases {
+            let path = tmp.path().join("case.md");
+            std::fs::write(&path, &content).unwrap();
+            let (body, fm_lines) = read_body_lines(&path).unwrap();
+            assert_eq!(
+                fm_lines + body.len(),
+                scanner::count_lines(&content),
+                "derived line count disagrees with a whole-file scan for {name:?}"
+            );
+            // The two counters must also agree with the streaming one `read`
+            // still uses on the `--frontmatter`-only path.
+            assert_eq!(
+                scanner::count_file_lines(&path).unwrap(),
+                scanner::count_lines(&content),
+                "the streaming scan disagrees with the slice scan for {name:?}"
+            );
+        }
     }
 
     // -- parse_line_range --

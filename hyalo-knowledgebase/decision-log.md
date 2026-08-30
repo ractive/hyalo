@@ -3401,3 +3401,49 @@ the hint is the fastest way to the full shape. The general statement lives
 where it costs nothing instead: the `--format text` `fields:` summary line
 names what the payload carries and what `--fields all` would add, and
 `find --help` says the same.
+
+## DEC-253: `read` derives `lines` from the body pass it already makes; only `--frontmatter` still scans (2026-08-30)
+
+**Decision:** `read` computes the whole-file `lines` it reports (DEC-252)
+from the single body pass it already performs, not from a second
+`scanner::count_file_lines` scan. `read_body_lines` now returns
+`(Vec<String>, usize)` — the body lines plus the frontmatter's line count,
+which `frontmatter::skip_frontmatter` already computed and simply was not
+propagating — and `commands/read.rs::run` captures `fm_lines +
+body_lines.len()` *before* `--section`/`--lines` narrow the vector.
+`count_file_lines` survives for exactly one caller: the
+`--frontmatter`-only path (`need_body == false`), which deliberately never
+touches the body and so has nothing to derive from.
+
+**Why:** DEC-252 made `lines` unconditional, which made the scan
+unconditional too — every `read` that returned body content read the file's
+bytes twice, once streamed through `read_line_capped` and once through
+`memchr`. That doubles disk I/O for precisely the large-file case the
+feature exists to help with, and it contradicts the scanner's standing
+"frontmatter-only queries pay zero cost for body scanning" principle by
+being the one path forced to eat a second full read *after* the body was
+already in hand. Output is byte-identical; this is a pure how-computed
+change, which is why it was not a blocker on PR #293 and landed as its own
+iteration.
+
+**The invariant it rests on:** `scanner::read_line_capped` consumes exactly
+one logical line per call — an over-quota or invalid-UTF-8 line is drained
+to the next `\n` and still occupies exactly one slot in the returned vector
+(as a placeholder), and EOF after an unterminated final line yields that
+line and then `n == 0`. That is the same rule `count_lines` applies (one
+line per `\n`, plus a final unterminated one, zero for an empty file), so
+`fm_lines + body.len()` is not an approximation of the scan — it is the same
+count by construction. `skip_frontmatter` counts the opening and closing
+`---` and everything between them, and bails with an error on unclosed or
+oversized frontmatter, so there is no path where it under-reports a block it
+actually consumed. Both halves are pinned by
+`derived_line_count_matches_a_whole_file_scan` (unit, `read.rs`) and
+`read_lines_match_disk_for_every_read_mode` (e2e, `find_result_shape.rs`),
+which compare against an independent naive counter across CRLF, no-EOL,
+multi-byte UTF-8, invalid-UTF-8 and over-cap-line inputs in every read mode.
+
+**Not done:** removing the `--frontmatter`-only scan. Reporting `lines` there
+requires reading the file's bytes no matter what — the DEC-252 contract says
+every `read` result carries the whole file's `lines` — so that path reads
+the file once, which is already the floor. Making `lines` conditional again
+to avoid it would undo DEC-252, not improve it.

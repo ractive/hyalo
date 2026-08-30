@@ -451,6 +451,128 @@ fn read_reports_whole_file_size_and_lines() {
 }
 
 // ---------------------------------------------------------------------------
+// read: `lines` derived from the body pass (iteration 253)
+// ---------------------------------------------------------------------------
+
+/// `hyalo read <file> <extra args>` (JSON, no hints) → the `results` object.
+fn read_result(dir: &Path, file: &str, extra: &[&str]) -> serde_json::Value {
+    let output = hyalo_no_hints()
+        .current_dir(dir)
+        .args(["read", file])
+        .args(extra)
+        .args(["--format", "json"])
+        .output()
+        .expect("hyalo should run");
+    assert!(
+        output.status.success(),
+        "read {file} {extra:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("read should print an envelope");
+    envelope["results"].clone()
+}
+
+/// iteration 253 removed `read`'s second full-file scan: on every path that
+/// reads the body, `lines` is now derived from that single pass instead of
+/// from `scanner::count_file_lines`. The number must stay byte-identical to
+/// the independent baseline `on_disk` computes — including on the inputs
+/// where "one streamed line is one counted line" is least obvious: CRLF, a
+/// missing final newline, invalid UTF-8, and a line over the 1 MiB per-line
+/// cap (all of which the body pass turns into placeholders or splits itself).
+#[test]
+fn read_lines_match_disk_for_every_read_mode() {
+    let tmp = TempDir::new().unwrap();
+    let huge = "x".repeat(1024 * 1024 + 1);
+
+    // (name, bytes, has a `## Section` heading to narrow to)
+    let files: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "plain.md",
+            b"---\ntitle: Plain\n---\n\n# Plain\n\n## Section\n\nbody\n".to_vec(),
+        ),
+        (
+            "crlf.md",
+            b"---\r\ntitle: CRLF\r\n---\r\n\r\n# CRLF\r\n\r\n## Section\r\n\r\nbody\r\n".to_vec(),
+        ),
+        (
+            "noeol.md",
+            b"---\ntitle: No EOL\n---\n\n## Section\n\n# End".to_vec(),
+        ),
+        (
+            "utf8.md",
+            "---\ntitle: Üñïçôdé\n---\n\n## Section\n\n日本語のテキスト。\n"
+                .as_bytes()
+                .to_vec(),
+        ),
+        (
+            "badutf8.md",
+            b"---\ntitle: Bad\n---\n\n## Section\n\n\xff\xfe not utf-8\nafter\n".to_vec(),
+        ),
+        (
+            "oversized.md",
+            format!("---\ntitle: Huge\n---\n\n## Section\n\nbefore\n{huge}\nafter\n").into_bytes(),
+        ),
+        ("fmonly.md", b"---\ntitle: Frontmatter only\n---\n".to_vec()),
+        ("nofm.md", b"## Section\n\nno frontmatter here\n".to_vec()),
+    ];
+
+    for (name, bytes) in &files {
+        std::fs::write(tmp.path().join(name), bytes).unwrap();
+    }
+
+    for (name, _) in &files {
+        let (size, lines) = on_disk(tmp.path(), name);
+        // Every mode: whole body, frontmatter-only (the one path that still
+        // scans separately), a narrowed section, and a line range.
+        for extra in [
+            vec![],
+            vec!["--frontmatter"],
+            vec!["--section", "Section"],
+            vec!["--lines", "1:2"],
+            vec!["--frontmatter", "--lines", "1:2"],
+        ] {
+            // `fmonly.md` has no body, so there is no section to narrow to.
+            if extra.contains(&"--section") && *name == "fmonly.md" {
+                continue;
+            }
+            let result = read_result(tmp.path(), name, &extra);
+            assert_eq!(
+                result["lines"].as_u64(),
+                Some(lines as u64),
+                "lines mismatch for {name} read with {extra:?}"
+            );
+            assert_eq!(
+                result["size"].as_u64(),
+                Some(size),
+                "size mismatch for {name} read with {extra:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn read_lines_are_identical_across_narrowing_modes() {
+    // The derived count describes the whole file, so narrowing must not move
+    // it — and the `--frontmatter`-only path (which still scans the file for
+    // its count) must agree with the paths that derive it from the body pass.
+    let tmp = vault(1);
+    let whole = read_result(tmp.path(), "note-00.md", &[]);
+    for extra in [
+        vec!["--frontmatter"],
+        vec!["--section", "Tasks"],
+        vec!["--lines", "1:3"],
+        vec!["--section", "Tasks", "--lines", "1:1"],
+    ] {
+        let narrowed = read_result(tmp.path(), "note-00.md", &extra);
+        assert_eq!(
+            narrowed["lines"], whole["lines"],
+            "narrowing with {extra:?} must not change the reported line count"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hints
 // ---------------------------------------------------------------------------
 

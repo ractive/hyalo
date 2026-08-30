@@ -73,8 +73,14 @@ pub fn count_lines(data: &[u8]) -> usize {
 ///
 /// Streams the file through `memchr` in 64 KiB chunks — no UTF-8 conversion,
 /// no per-line allocation — and applies the same counting rule as
-/// [`count_lines`]. Used by `read`, which reports the whole file's `lines`
-/// even when it returns one section or line range of it.
+/// [`count_lines`].
+///
+/// Used by `read --frontmatter` only. `read` reports the whole file's `lines`
+/// even when it returns one section or line range of it, but on every path
+/// that reads the body it derives that number from the body pass it already
+/// made (iteration 253) rather than scanning the file a second time; the
+/// `--frontmatter`-only path deliberately never touches the body, so it is
+/// the one case still left with a dedicated scan.
 pub fn count_file_lines(path: &Path) -> Result<usize> {
     use std::io::Read;
     const CHUNK: usize = 64 * 1024;
