@@ -127,11 +127,20 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       renderer), not as a post-filter on the JSON. Record as DEC-254 with
       the reasoning above; update the `views --help` FIELDS paragraph, the
       `rule-knowledgebase.md` shape notes and the bundled `SKILL.md`s.
-- [ ] FIND-3: strip `title` from `properties` only when the promoted
-      top-level `title` is non-null, so a numeric/list/null `title` stays
-      reachable in the default shape; text mode prints the raw value rather
-      than `(none)`. Amend DEC-252 with the rule. Tests for `title: 42`,
-      `title: [a, b]`, `title:`.
+- [ ] FIND-3/FIND-4 — non-string `title`. Scalars are stringified as
+      written in the file: `title: 42` → `"42"`, `title: 1.0` → `"1.0"`,
+      `title: 2026-08-30` → `"2026-08-30"`, `title: true` → `"true"` (the
+      author meant the text; YAML's type inference is the accident). The
+      typed value stays in `properties-typed`. `--property title=42` and
+      `--sort title` compare that string like every other key. Null, empty
+      and whitespace-only titles count as absent: H1 fallback, then
+      filename. Collections (`title: [a, b]`, a map) have no honest string:
+      promoted `title` falls back to H1/filename **and** the raw value is
+      kept in `properties` (strip only when the promotion consumed a
+      scalar), and a new HYALO lint rule warns "title must be a scalar".
+      Text mode never prints `(none)` for a file that has a raw title.
+      Amend DEC-252 with the rule. Tests for `title: 42`, `1.0`,
+      `2026-08-30`, `true`, `[a, b]`, `{k: v}`, `title:`, `title: "  "`.
 
 ### F. Cosmetic, batch if cheap [0/4]
 
@@ -174,8 +183,8 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       `fields = ["title"]` behaves like `--fields title`. Text mode shows the
       same set. Payload for `--fields title --limit 50` on the own KB drops
       by ≥20 % vs 0.22.0 (record the number).
-- [ ] `find --file <numeric-title>.md` default JSON exposes the raw title
-      value somewhere (`title` or `properties.title`).
+- [ ] `find --file <numeric-title>.md` promotes the stringified scalar; a list title
+      falls back to H1 and keeps the raw value in `properties.title`; `lint` warns.
 - [ ] Docs in sync: README (report-only check), `rule-knowledgebase.md`,
       bundled `SKILL.md`s, `CLAUDE.md`, CHANGELOG `[Unreleased]` entries
       under Fixed/Changed.
