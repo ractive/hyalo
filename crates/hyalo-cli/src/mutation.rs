@@ -42,6 +42,8 @@ impl Commands {
             | Self::Backlinks { .. }
             | Self::Config { .. }
             | Self::Completion { .. }
+            // iter-256: rewritten to `<cmd> -h` before parsing, so never reached.
+            | Self::Help { .. }
             | Self::Init { .. }
             | Self::Deinit => false,
 

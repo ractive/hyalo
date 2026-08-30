@@ -36,7 +36,7 @@ pub(crate) const HELP_EXAMPLES_SHORT: &str = "EXAMPLES (each composes 2-3 featur
   hyalo find --section Tasks --task todo --filenames-only
   hyalo find --broken-links --strict --glob 'docs/**/*.md'
   hyalo set --property status=done --where-property status=draft --glob '**/*.md'
-Everything else:  hyalo --help  |  hyalo <cmd> -h";
+Everything else:  hyalo <cmd> -h  ==  hyalo help <cmd>  |  full reference: hyalo --help";
 
 /// `find -h` tail: composed examples, the global-options pointer, and the
 /// pointer at `find --help` (iteration 251).
@@ -69,6 +69,34 @@ pub(crate) fn short_help_body(hide_dir: bool, hide_format: bool) -> String {
         })
         .collect();
     format!("{HELP_COMMANDS}\n\n{}", examples.join("\n"))
+}
+
+/// iter-256 HELP-5: rewrite `hyalo [globals] help <path>...` into
+/// `hyalo <path>... -h` before clap parses.
+///
+/// Clap's generated `help` subcommand renders the LONG page. Measured on
+/// v0.22.0: `hyalo help find` is 28.7 KB where `hyalo find -h` is 3.0 KB — a
+/// 9.6x tax on the phrasing agents reach for first. Rewriting the argv (rather
+/// than rendering a page ourselves from a `Commands::Help` arm) is what makes
+/// `hyalo help <cmd>` byte-for-byte identical to `hyalo <cmd> -h`: it inherits
+/// the collapsed globals pointer, `find`'s composed examples, and the
+/// `--help` footer, and it inherits clap's did-you-mean for an unknown name,
+/// which the generated `help` subcommand never had (HELP-13).
+///
+/// Root globals are dropped along with the `help` token: none of them change
+/// a help page (`hide_dir` / `hide_format` come from `.hyalo.toml`, not argv).
+pub(crate) fn rewrite_help_to_short_page(args: Vec<String>, cmd: &clap::Command) -> Vec<String> {
+    let Some(idx) = crate::suggest::top_level_subcommand_index(&args, cmd) else {
+        return args;
+    };
+    if args[idx] != "help" {
+        return args;
+    }
+    let mut out = Vec::with_capacity(args.len() + 1);
+    out.push(args[0].clone());
+    out.extend(args[idx + 1..].iter().cloned());
+    out.push("-h".to_string());
+    out
 }
 
 /// The one list of global flags (iteration 254, COH-1/COH-2/HELP-4).
@@ -309,6 +337,9 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
 
   Completions (generate shell completions):
     hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell
+
+  Help (print a command's SHORT help \u{2014} the same page as `hyalo <cmd> -h`):
+    hyalo help [COMMAND]...   # `hyalo help find` == `hyalo find -h`; `hyalo find --help` for this reference
 
   Global flags (apply to all commands \u{2014} the same set every `Global:` pointer line names):
 {GLOBAL_FLAGS}

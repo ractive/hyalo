@@ -705,6 +705,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Completion { .. } => {
             unreachable!("Completion is dispatched before this match reached")
         }
+        // iter-256 HELP-5: `help <cmd>` is rewritten to `<cmd> -h` in argv
+        // before clap parses, so the variant only exists to reserve the name
+        // (and to put `help` in shell completions and the COMMAND REFERENCE).
+        Commands::Help { .. } => unreachable!("Help is rewritten to `<cmd> -h` before parsing"),
         Commands::Views { action } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::views::run`.
             views_commands::run(ctx, action)

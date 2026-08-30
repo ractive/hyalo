@@ -291,7 +291,13 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
     name = "hyalo",
     version = build_version_string(),
     about = "Query, filter, and mutate YAML frontmatter across markdown file collections",
-    long_about = build_long_about()
+    long_about = build_long_about(),
+    // iter-256 HELP-5: clap's generated `help` subcommand renders the LONG
+    // help. Agents type `hyalo help find` out of habit and get ~28 KB where
+    // they wanted the ~3 KB `-h` page. Suppressing the generated subcommand
+    // lets `Commands::Help` take the name and forward to the short page; the
+    // short page's own footer points at `--help` for the long one.
+    disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
     /// Vault root for file and glob paths (default: .)
@@ -2079,6 +2085,27 @@ Repeatable (AND).\n\
         /// Also print the raw .hyalo.toml text (`results.raw_contents` in JSON)
         #[arg(long)]
         raw: bool,
+    },
+    /// Print the short help for a command — same page as `hyalo <cmd> -h`
+    #[command(
+        display_order = 901,
+        long_about = "Print the short (-h) help for a command.\n\n\
+            `hyalo help find` and `hyalo find -h` print the same page. This is \
+            deliberate: the long `--help` page is 5-10x larger, and the short page's \
+            footer names `hyalo <cmd> --help` when you want it.\n\n\
+            Accepts a subcommand path, so `hyalo help task toggle` works.\n\
+            An unknown name gets clap's usual did-you-mean suggestion.\n\n\
+            EXAMPLES:\n\
+            \u{00a0} hyalo help              # same as hyalo -h\n\
+            \u{00a0} hyalo help find         # same as hyalo find -h\n\
+            \u{00a0} hyalo help task toggle  # same as hyalo task toggle -h\n\
+            \u{00a0} hyalo find --help       # the long reference page\n\n\
+            SIDE EFFECTS: None (prints to stdout)."
+    )]
+    Help {
+        /// Command to describe, e.g. `find` or `task toggle` (omit for `hyalo -h`)
+        #[arg(value_name = "COMMAND")]
+        command: Vec<String>,
     },
     /// Generate shell completions for the given shell
     #[command(
