@@ -21,14 +21,28 @@
 /// multi-line text block. This coupling is intentional: changing the separator
 /// in `run_jq_filter` would affect `FileObject` rendering.
 pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) -> String {
-    // Header: file path, modified timestamp — always present — plus the
-    // iter-252 size/lines pair when the payload carries it (a find result
-    // always does; other FileObject-shaped payloads and pre-252 JSON may not).
-    let mut parts = if map.contains_key("size") && map.contains_key("lines") {
-        vec![r#""\"\(.file)\"  (\(.modified), \(.size) B, \(.lines) lines)""#.to_owned()]
+    // Header: the file path — the one unconditional key — followed by
+    // whichever of `modified`, `size`, `lines` the payload carries, in that
+    // order, as a parenthesised group. Since iteration 254 each is droppable
+    // via an exact `--fields` projection, so the group is assembled from what
+    // is actually present rather than from two fixed shapes; when none of the
+    // three survive, the header is the quoted path alone.
+    let mut header_bits: Vec<&str> = Vec::with_capacity(3);
+    if map.contains_key("modified") {
+        header_bits.push(r"\(.modified)");
+    }
+    if map.contains_key("size") {
+        header_bits.push(r"\(.size) B");
+    }
+    if map.contains_key("lines") {
+        header_bits.push(r"\(.lines) lines");
+    }
+    let header = if header_bits.is_empty() {
+        r#""\"\(.file)\"""#.to_owned()
     } else {
-        vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()]
+        format!(r#""\"\(.file)\"  ({})""#, header_bits.join(", "))
     };
+    let mut parts = vec![header];
 
     // Title: "  title: <value>" or "  title: (none)"
     if map.contains_key("title") {

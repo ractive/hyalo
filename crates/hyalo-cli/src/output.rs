@@ -383,13 +383,19 @@ const FIND_FIELD_ORDER: &[&str] = &[
 /// empty one. Naming what is present — and what `--fields all` would add —
 /// makes the shape self-describing without a round trip.
 ///
+/// iter-254: with an explicit `--fields` now an exact projection, the line
+/// also reports which of `modified`/`size`/`lines` a projection dropped, so
+/// the rule ("without `--fields`: the seven default keys; with `--fields`:
+/// exactly the named fields plus `file`") is legible from the output itself.
+///
 /// `None` for anything that is not a non-empty array of find result items
-/// (detected the same way the text renderer detects a `FileObject`: a
-/// `file` + `modified` pair).
+/// (detected the same way the text renderer detects a `FileObject`: a `file`
+/// key and no key outside the `FileObject` vocabulary).
 fn find_fields_summary(results: &serde_json::Value) -> Option<String> {
     let arr = results.as_array()?;
     let first = arr.first()?.as_object()?;
-    if !(first.contains_key("file") && first.contains_key("modified")) {
+    if !first.contains_key("file") || !first.keys().all(|k| FIND_FIELD_ORDER.contains(&k.as_str()))
+    {
         return None;
     }
     let present: Vec<&str> = FIND_FIELD_ORDER

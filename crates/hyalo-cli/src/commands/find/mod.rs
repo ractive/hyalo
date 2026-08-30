@@ -138,6 +138,10 @@ pub fn find(
     let sort_needs_links = matches!(sort, Some(SortField::LinksCount));
     let sort_needs_properties = matches!(sort, Some(SortField::Property(_)));
     let sort_needs_title = matches!(sort, Some(SortField::Title));
+    // iter-254: `modified` is droppable now, so `--sort modified --fields title`
+    // has to compute it internally and strip it again below — the same
+    // treatment `properties`/`title` sorts already get.
+    let sort_needs_modified = matches!(sort, Some(SortField::Modified));
 
     let has_bm25_search = pattern.is_some();
     let has_regex_search = regexp.is_some();
@@ -278,7 +282,8 @@ pub fn find(
     let auto_tasks = has_task_filter;
     let auto_links = broken_links || orphan || dead_end || sort_needs_links;
     let auto_backlinks = orphan || dead_end || sort_needs_backlinks;
-    let needs_field_override = (sort_needs_properties && !fields.properties)
+    let needs_field_override = (sort_needs_modified && !fields.modified)
+        || (sort_needs_properties && !fields.properties)
         || (sort_needs_title && !fields.title)
         || (auto_sections && !fields.sections)
         || (auto_tasks && !fields.tasks)
@@ -286,6 +291,7 @@ pub fn find(
         || (auto_backlinks && !fields.backlinks);
     let fields = if needs_field_override {
         effective_fields = Fields {
+            modified: fields.modified || sort_needs_modified,
             properties: fields.properties || sort_needs_properties,
             title: fields.title || sort_needs_title,
             sections: fields.sections || auto_sections,
@@ -1037,9 +1043,9 @@ pub fn find(
 
         let obj = FileObject {
             file: entry.rel_path.clone(),
-            modified: entry.modified.clone(),
-            size: entry.size,
-            lines: entry.lines,
+            modified: fields.modified.then(|| entry.modified.clone()),
+            size: fields.size.then_some(entry.size),
+            lines: fields.lines.then_some(entry.lines),
             title,
             properties,
             properties_typed,
@@ -1197,6 +1203,11 @@ pub fn find(
     // (like `--broken-links` → `links`) rather than a hidden intermediate.
     // `properties`/`title` stay internal: sorting by them says nothing about
     // wanting them printed, and both are cheap to ask for explicitly.
+    if sort_needs_modified && !original_fields.modified {
+        for obj in &mut results {
+            obj.modified = None;
+        }
+    }
     if sort_needs_properties && !original_fields.properties {
         for obj in &mut results {
             obj.properties = None;

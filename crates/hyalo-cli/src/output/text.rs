@@ -116,7 +116,15 @@ pub(super) fn format_value_as_text(
                 return format_lint_rules_mutation_text(map);
             }
             // FileObject: dynamically compose filter from present fields.
-            if map.contains_key("file") && map.contains_key("modified") {
+            //
+            // iter-254: `modified` is no longer an unconditional key (an exact
+            // `--fields` projection can drop it), so it cannot be the
+            // discriminator any more. A FileObject is instead recognised by
+            // `file` plus the absence of any key outside the FileObject
+            // vocabulary — precise enough that a lint entry (`file` +
+            // `violations`) or any other `file`-bearing payload still falls
+            // through to its own renderer.
+            if map.contains_key("file") && map.keys().all(|k| is_file_object_key(k)) {
                 let filter = build_file_object_filter(map);
                 if let Some(output) = apply_jq_filter(&filter, value, cache) {
                     return output;
@@ -161,4 +169,28 @@ pub(super) fn format_scalar(value: &serde_json::Value, cache: &mut JaqFilterCach
         }
         serde_json::Value::Object(_) => format_value_as_text(value, cache),
     }
+}
+
+/// Whether `key` belongs to the [`hyalo_core::types::FileObject`] vocabulary.
+///
+/// Used to recognise a `find` result item in an untyped JSON value; keep in
+/// sync with the struct's serialised field names.
+fn is_file_object_key(key: &str) -> bool {
+    matches!(
+        key,
+        "file"
+            | "modified"
+            | "size"
+            | "lines"
+            | "title"
+            | "properties"
+            | "properties_typed"
+            | "tags"
+            | "sections"
+            | "tasks"
+            | "links"
+            | "backlinks"
+            | "matches"
+            | "score"
+    )
 }
