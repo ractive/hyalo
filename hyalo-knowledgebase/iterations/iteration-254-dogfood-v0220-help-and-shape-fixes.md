@@ -3,7 +3,7 @@ title: "Iteration 254 — dogfood v0.22.0 fixes: help fragments, stale shape doc
 type: iteration
 date: 2026-08-30
 tags: [iteration, dogfood-fixes, help-text, find-shape]
-status: planned
+status: completed
 branch: iter-254/dogfood-v0220-fixes
 depends-on: "[[iterations/iteration-252-find-result-shape]]"
 ---
@@ -29,22 +29,22 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
 
 ## Tasks
 
-### A. Silent wrong result [0/2]
+### A. Silent wrong result [2/2]
 
-- [ ] FIND-2: add `--fields tasks` to the "planned items where all tasks are
+- [x] FIND-2: add `--fields tasks` to the "planned items where all tasks are
       done" recipe in `crates/hyalo-cli/templates/skill-hyalo-tidy.md`,
       `crates/hyalo-cli/templates/pi/skills/hyalo-tidy/SKILL.md` and
       `.claude/skills/hyalo-tidy/SKILL.md`; `check-bundled-skills` /
       `check-pi-package-sync` stay green.
-- [ ] Add an e2e test that greps every bundled skill/template/rule file for
+- [x] Add an e2e test that greps every bundled skill/template/rule file for
       `--jq` recipes referencing `.tasks`, `.sections`, `.links`,
       `.backlinks` and asserts the same command line carries `--fields`,
       `--view`, or an auto-including filter — so the next shape change cannot
       leave a silent recipe behind.
 
-### B. Short-help sentence fragments [0/3]
+### B. Short-help sentence fragments [3/3]
 
-- [ ] COH-6/HELP-1: rewrite the first paragraph of each affected doc comment
+- [x] COH-6/HELP-1: rewrite the first paragraph of each affected doc comment
       as one complete sentence and move the blank line to the sentence
       boundary: `set`/`append --validate`, `lint --strict`, `lint --profile`,
       `init --profile`, `new --file`, `changelog add --wrap`, `links fix
@@ -53,33 +53,33 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       `mv [DEST]`, `mv --allow-ambiguous`, `madr toc [DIR]`, `read -s`,
       `properties`/`tags -g` and `-n`. Verify `--help` no longer has a blank
       line mid-sentence for any of them.
-- [ ] HELP-2: give the shared `--file/--glob/--files-from` arg struct used by
+- [x] HELP-2: give the shared `--file/--glob/--files-from` arg struct used by
       `read`, `task read/toggle/set`, `backlinks` the same one-line short
       help as `find` (`Target file(s), repeatable (excludes --glob /
       --files-from)`, `Glob(s) relative to --dir, repeatable; '!' negates`,
       `Read paths from PATH, one per line ('-' = stdin)`); same for `task *
       --section`.
-- [ ] Extend `xtask check-help-drift` with a dangling-fragment guard: walk
+- [x] Extend `xtask check-help-drift` with a dangling-fragment guard: walk
       every `-h` page and fail if a flag's short line ends in `,` `;` `:`
       or a dangling word (`and or by if to a the rather would (no`), or if a
       short-help entry spans more than 2 rendered lines. Add the matching
       e2e in `agent_discoverability.rs`.
 
-### C. Stale result-shape docs [0/4]
+### C. Stale result-shape docs [4/4]
 
-- [ ] COH-3: `find` headline (root `--help` Commands, `find -h` line 1) and
+- [x] COH-3: `find` headline (root `--help` Commands, `find -h` line 1) and
       `find --help` paragraph 1 describe the compact default shape and say
       `--fields` adds sections/tasks/links/backlinks.
-- [ ] COH-4: regenerate the root `--help` JSON-shape cookbook from a real
+- [x] COH-4: regenerate the root `--help` JSON-shape cookbook from a real
       run — `find` item `{file, modified, size, lines, title, properties,
       tags}` with `title` outside `properties`; `read` result carries
       `size`/`lines`; `task read/toggle/set` note the array form for
       multi-line ops. Add an e2e that runs `find --limit 1` and asserts the
       cookbook's key list equals the actual key list, so it cannot drift again.
-- [ ] COH-5: `read --help` documents `size`/`lines` and the >8 KiB
+- [x] COH-5: `read --help` documents `size`/`lines` and the >8 KiB
       `--lines`/`--section` hint; drop the iter-252 plan's "text mode shows
       size in the header line" claim or implement it (decide, record in DEC).
-- [ ] COH-16/FIND-6: `--orphan` and `--dead-end` flag lines say
+- [x] COH-16/FIND-6: `--orphan` and `--dead-end` flag lines say
       "auto-includes links and backlinks" (matches behaviour and the
       `--fields` paragraph). `--fields` help, the text `fields:` summary
       line and the "unknown field" error all state the E1 rule in one
@@ -87,29 +87,29 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       properties, tags. With --fields: exactly the named fields plus file
       (filters add what they need)."
 
-### D. Help-vs-behaviour contradictions [0/5]
+### D. Help-vs-behaviour contradictions [5/5]
 
-- [ ] HELP-3: `views run` either honours `--filenames-only`/`--filenames0`
+- [x] HELP-3: `views run` either honours `--filenames-only`/`--filenames0`
       (preferred — route through the same projection as `find`) or removes
       them from the `views run -h` Output group; `views set -h` lists only
       flags a view actually persists (`--strict`? decide and document).
-- [ ] COH-10: `lint --help` example → `hyalo lint --fix --fix-rule
+- [x] COH-10: `lint --help` example → `hyalo lint --fix --fix-rule
       HYALO001`; `--fix-rule` short line "With --fix, only autofix the
       specified rule(s) (repeatable)"; fix the same recipe in `CLAUDE.md`.
-- [ ] COH-1/COH-2/HELP-4: one global-options list. Root `-h` GLOBAL OPTIONS
+- [x] COH-1/COH-2/HELP-4: one global-options list. Root `-h` GLOBAL OPTIONS
       gains `-d, --dir <DIR>` and `--index-file`; the 52 pointer lines and
       the root `--help` COMMAND REFERENCE "Global flags" block are generated
       from the same list (drop the contradictory "Per-subcommand index
       flags" block). Consider hiding `--hints` from `-h` (HELP-9).
-- [ ] HELP-6/COH-11: `mv --property` short and long help → "Same syntax as
+- [x] HELP-6/COH-11: `mv --property` short and long help → "Same syntax as
       `find --property`" (it already accepts `~=`, `!K`, dot-paths).
-- [ ] HELP-7: `task --line` help states file-absolute 1-based numbering
+- [x] HELP-7: `task --line` help states file-absolute 1-based numbering
       (frontmatter counted); `read --lines` already says body-relative —
       cross-reference both.
 
-### E. Result-shape semantics [0/2]
+### E. Result-shape semantics [2/2]
 
-- [ ] FIND-1 — exact projection. `file` is the only unconditional key; it
+- [x] FIND-1 — exact projection. `file` is the only unconditional key; it
       names the result and is never droppable. `modified`, `size`, `lines`
       become ordinary members of the field set: present in the *default*
       set (no `--fields`) because they are cheap (`stat`, or already
@@ -127,7 +127,7 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       renderer), not as a post-filter on the JSON. Record as DEC-254 with
       the reasoning above; update the `views --help` FIELDS paragraph, the
       `rule-knowledgebase.md` shape notes and the bundled `SKILL.md`s.
-- [ ] FIND-3/FIND-4 — non-string `title`. Scalars are stringified as
+- [x] FIND-3/FIND-4 — non-string `title`. Scalars are stringified as
       written in the file: `title: 42` → `"42"`, `title: 1.0` → `"1.0"`,
       `title: 2026-08-30` → `"2026-08-30"`, `title: true` → `"true"` (the
       author meant the text; YAML's type inference is the accident). The
@@ -142,17 +142,17 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       Amend DEC-252 with the rule. Tests for `title: 42`, `1.0`,
       `2026-08-30`, `true`, `[a, b]`, `{k: v}`, `title:`, `title: "  "`.
 
-### F. Cosmetic, batch if cheap [0/4]
+### F. Cosmetic, batch if cheap [4/4]
 
-- [ ] COH-7: `find --help` PROJECTIONS renders `\0` / `\n` as escapes, not
+- [x] COH-7: `find --help` PROJECTIONS renders `\0` / `\n` as escapes, not
       literal control characters.
-- [ ] COH-8: move the `[crate::list_commands::LIST_COMMANDS]` rustdoc link
+- [x] COH-8: move the `[crate::list_commands::LIST_COMMANDS]` rustdoc link
       out of the `--index` user-facing long help (it appears on ~15 pages).
-- [ ] COH-15: use `\u{00a0}` only on non-command indentation in
+- [x] COH-15: use `\u{00a0}` only on non-command indentation in
       `cli/args.rs` so `hyalo …` example lines paste into a shell; quote the
       `set --property tags=[a,b,c]` example; unwrap the three `--jq`
       examples that split across lines.
-- [ ] HELP-8/HELP-11/HELP-12: `value_name` `N`/`GLOB`/`SUBSTR`/`TITLE` on
+- [x] HELP-8/HELP-11/HELP-12: `value_name` `N`/`GLOB`/`SUBSTR`/`TITLE` on
       `links fix`/`links auto` so they render single-line like the other 50
       pages; drop the duplicated `(default: 10)` on `summary -n`; normalise
       `<GLOB>`/`<FILE>`/`<PATH>` placeholders and the nine `--dry-run`
@@ -160,35 +160,35 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
 
 ## Acceptance criteria
 
-- [ ] The FIND-2 recipe returns the same non-empty list as
+- [x] The FIND-2 recipe returns the same non-empty list as
       `find --property status=completed --fields tasks --jq …` on the own
       KB, and the new recipe-shape test guards all bundled skills.
-- [ ] `check-help-drift` fails on a deliberately re-introduced fragment
+- [x] `check-help-drift` fails on a deliberately re-introduced fragment
       (test the guard by mutation in the e2e) and passes on `main`.
-- [ ] No short-help line on any of the 52 pages ends mid-sentence; `hyalo
+- [x] No short-help line on any of the 52 pages ends mid-sentence; `hyalo
       -h` stays ≤ 2560 B and every subcommand `-h` ≤ 3072 B (the 251
       ceilings still hold after B and D — measure and record the new
       numbers in the PR body).
-- [ ] The root `--help` JSON cookbook key lists equal the live `find`,
+- [x] The root `--help` JSON cookbook key lists equal the live `find`,
       `read` and `task toggle` output keys (asserted by the new e2e).
-- [ ] `hyalo views run <view> --filenames-only` prints one path per line,
+- [x] `hyalo views run <view> --filenames-only` prints one path per line,
       or the flag no longer appears on `views run -h`.
-- [ ] Every example line in every `--help` page executes without a clap
+- [x] Every example line in every `--help` page executes without a clap
       usage error in a scratch KB (extend the 251 e2e that walks
       `hyalo help`).
-- [ ] Exact projection: `find --fields title --limit 1` JSON item keys are
+- [x] Exact projection: `find --fields title --limit 1` JSON item keys are
       exactly `["file","title"]`; `--fields size,lines` → `["file","lines",
       "size"]`; no `--fields` → the seven default keys; `--fields title
       --section Goal` → `["file","sections","title"]`; a view pinning
       `fields = ["title"]` behaves like `--fields title`. Text mode shows the
       same set. Payload for `--fields title --limit 50` on the own KB drops
       by ≥20 % vs 0.22.0 (record the number).
-- [ ] `find --file <numeric-title>.md` promotes the stringified scalar; a list title
+- [x] `find --file <numeric-title>.md` promotes the stringified scalar; a list title
       falls back to H1 and keeps the raw value in `properties.title`; `lint` warns.
-- [ ] Docs in sync: README (report-only check), `rule-knowledgebase.md`,
+- [x] Docs in sync: README (report-only check), `rule-knowledgebase.md`,
       bundled `SKILL.md`s, `CLAUDE.md`, CHANGELOG `[Unreleased]` entries
       under Fixed/Changed.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, all eight `xtask check-*`, `hyalo lint --strict`.
 
 ## Non-goals

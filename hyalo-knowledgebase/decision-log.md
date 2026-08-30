@@ -3447,3 +3447,114 @@ requires reading the file's bytes no matter what — the DEC-252 contract says
 every `read` result carries the whole file's `lines` — so that path reads
 the file once, which is already the floor. Making `lines` conditional again
 to avoid it would undo DEC-252, not improve it.
+
+## DEC-254: an explicit `--fields` is an exact projection; only `file` survives it (2026-08-30)
+
+**Decision:** `file` is the only unconditional key in a `find` result item —
+it names the result, so no projection may drop it. `modified`, `size` and
+`lines` stop being structural and become ordinary members of the *default*
+field set: present when no `--fields` is given, absent when an explicit
+`--fields` does not name them. So `--fields title` → `{file, title}`,
+`--fields size,lines` → `{file, size, lines}`, `--fields file` → `{file}`,
+`--fields all` unchanged. Filter auto-includes (`--section`→sections,
+`--task`→tasks, `--broken-links`→links, `--orphan`/`--dead-end`→links +
+backlinks, count sorts→the ranked field) still add to whatever set is in
+force. A view's pinned `fields` behaves exactly like an explicit `--fields`,
+and a CLI `--fields` **replaces** the pin rather than extending it.
+
+**Why the three stay in the default set:** they are cheap — `modified` and
+`size` come from the `stat` the walk already does, `lines` from the scan
+already made — and they are precisely the inputs an agent uses to choose its
+*next* call: `size`/`lines` to decide between `read` and `read --lines A:B`,
+`modified` to decide what is worth looking at. Making them opt-in would mean
+the common path has to name them, which is the cost DEC-252 set out to
+remove.
+
+**Why an explicit `--fields` drops them anyway:** `--fields` is the flag a
+caller reaches for when it knows exactly what it wants, and before this it
+could not express that — `--fields title` still paid for four keys, so the
+narrowest possible request on this project's own knowledgebase was 8.6 KB for
+50 items when the caller wanted 3.5 KB of paths and titles. "Exactly the
+fields you named, plus the one that names the row" is also the only rule that
+needs no list of exceptions, which matters more for a flag an agent composes
+than saving anyone a keystroke. `--fields file` falls out of the rule for free
+and means "just the paths" without a special case; it also makes a printed
+field list round-trip back into `--fields`.
+
+**Why CLI `--fields` replaces a view's pin:** the old `extend` meant a view
+could only ever be widened. `hyalo find --view titles --fields tags` returned
+`{file, tags, title}` — more than either the view or the flag asked for — and
+there was no way to narrow a saved view at all. Replacement makes `--view`
+plus `--fields` mean the same thing as `--fields` alone, which is what "the
+CLI overrides the view" means for every other single-valued flag.
+
+**Where it is implemented:** in the one projection point that already builds
+the item — `Fields` in `hyalo-core::filter::fields` gained `modified`/`size`/
+`lines` members, and `commands/find.rs` sets each key with
+`fields.<name>.then(...)`. Not as a post-filter over the JSON: a post-filter
+would have had to be repeated for the text renderer, the `fields:` summary
+line and every future consumer. `--sort modified` under a projection that
+drops `modified` follows the existing `--sort property:K`/`--sort title`
+precedent: computed internally, stripped after sorting.
+
+**One consequence worth naming:** the text renderer could no longer recognise
+a `FileObject` by "has `file` and `modified`" — `--fields backlinks` yields
+`{file, backlinks}`, byte-identical to a `backlinks` command result, and
+rendered as one. Detection is now "has `file` and no key outside the
+`FileObject` vocabulary", and a `find` listing renders its items directly
+rather than dispatching each through the key-signature table.
+
+## DEC-255: every scalar `title` promotes, stringified as written (2026-08-30) — amends DEC-252
+
+**Decision:** the promoted `title` field takes any scalar frontmatter
+`title`, stringified as it was written in the file: `title: 42` → `"42"`,
+`title: 1.0` → `"1.0"`, `title: 2026-08-30` → `"2026-08-30"`, `title: true` →
+`"true"`. The typed value stays available under `--fields properties-typed`.
+`--property title=42`, `--title 42` and `--sort title` compare that string
+like every other key. Null, empty and whitespace-only titles count as absent:
+H1 fallback, and they stay in `properties` because nothing consumed them. A
+collection — `title: [a, b]`, `title: {k: v}` — has no honest string form, so
+it does not promote: `title` falls back to the H1, the raw value is **kept**
+in `properties.title` (the promotion strips the property only when it actually
+consumed a scalar), and the new default-on rule `HYALO007`
+(`title-not-scalar`, warn; error under `--strict`) reports it.
+
+**Why:** DEC-252 promoted `title` only when the YAML value was a string, and
+stripped `properties.title` whenever `title` and `properties` were both
+requested. Together those two rules made a non-string title *unreachable*:
+`find --fields title` showed the H1, and `properties` no longer carried the
+authored value either. YAML's type inference is an accident of the syntax —
+someone who writes `title: 42` means the text `42`, and someone who writes
+`title: 2026-08-30` means that date's text, not a date object. Stringifying
+is what the author meant; keeping the typed value in `properties-typed` means
+nothing is lost.
+
+**Why a collection is different:** there is no string a reader would agree
+`[a, b]` "means". Guessing one (`"a, b"`? `"[a, b]"`?) would put a fabricated
+title into the field callers sort and filter on. In practice it is a quoting
+typo — `title: [Draft] Notes` parses as a one-element list — which is why it
+earns a lint rule rather than a silent coercion.
+
+**Not done: a filename fallback.** The plan sketched "H1 fallback, then
+filename". `title: null` stays the honest answer for a file with neither a
+title nor an H1: `FileObject.title` is documented as `null` when the field was
+requested and nothing was found, `--format text` marks it `(none)`, and
+substituting a filename would make "this file has no title" unrepresentable
+in either format — including for the lint and tidy recipes that look for
+exactly that.
+
+## DEC-256: `read --format text` prints the body and nothing else (2026-08-30)
+
+**Decision:** `read`'s text output stays exactly the body bytes. The iteration
+252 plan's note that "text mode shows size in the header line" is dropped, not
+implemented. `size`/`lines` appear in `--format json`, in the over-8 KiB hint
+(`Read only the first 80 of N lines (K KB file)`), and on the `find` item that
+sent the caller here.
+
+**Why:** `read` is the one command that deliberately defaults to plain text
+rather than JSON, because its output is meant to be *the file* —
+`hyalo read x.md > x.txt`, `hyalo read x.md | grep …`, a body pasted into a
+prompt. A header line corrupts every one of those, and there is no flag-free
+way for a consumer to strip it. The information is not lost: the number that
+matters (this file is big, read less of it) is already delivered by the hint,
+at exactly the moment it is actionable.
