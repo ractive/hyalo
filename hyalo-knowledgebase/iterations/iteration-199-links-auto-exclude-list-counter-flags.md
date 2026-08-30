@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 199 — counter-flags for links auto exclude-list config keys
 date: 2026-08-18
-status: deferred
+status: superseded
 tags:
   - iteration
   - links
