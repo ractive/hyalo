@@ -9,28 +9,43 @@
 ///
 /// Clap enforces that `--file`, `--glob`, and `--files-from` are mutually
 /// exclusive with each other (and with `file_positional`).
+///
+/// iteration 254 (HELP-2): the three flags carry the same short/long help
+/// constants `find` uses, so the input trio reads identically on `read`,
+/// `task read/toggle/set` and `backlinks` — and each short line fits one
+/// rendered line instead of the three-to-five it used to wrap to.
 #[derive(Debug, Default, Clone, clap::Args)]
 pub(crate) struct InputSelection {
     /// Target file (relative to --dir) — positional form (single file)
     #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "files_from"])]
     pub file_positional: Option<String>,
 
-    /// Target file(s) (relative to --dir) — flag form, repeatable.
-    /// Mutually exclusive with --glob and --files-from.
-    #[arg(long, short = 'f', value_name = "PATH", conflicts_with_all = ["glob", "files_from", "file_positional"])]
+    #[arg(
+        long,
+        short = 'f',
+        value_name = "FILE",
+        conflicts_with_all = ["glob", "files_from", "file_positional"],
+        help = crate::cli::args::FILE_FLAG_SHORT_DOC,
+        long_help = crate::cli::args::FILE_FLAG_DOC,
+    )]
     pub file: Vec<String>,
 
-    /// Glob pattern(s) to match files, relative to --dir (repeatable).
-    /// Prefix '!' to negate (e.g. '!**/draft-*').
-    /// Mutually exclusive with --file and --files-from.
-    #[arg(long, short = 'g', value_name = "PATTERN", conflicts_with_all = ["file", "files_from"])]
+    #[arg(
+        long,
+        short = 'g',
+        value_name = "GLOB",
+        conflicts_with_all = ["file", "files_from"],
+        help = crate::cli::args::GLOB_FLAG_SHORT_DOC,
+        long_help = crate::cli::args::GLOB_FLAG_DOC,
+    )]
     pub glob: Vec<String>,
 
-    /// Read file paths from PATH (one per line); use '-' to read from stdin.
-    /// Non-.md paths and paths outside the vault are silently skipped.
-    /// Repo-relative paths with the configured vault dir prefix are resolved automatically.
-    /// Input is deduplicated; results follow first-seen order.
-    /// Mutually exclusive with --file and --glob.
-    #[arg(long, value_name = "PATH|-", conflicts_with_all = ["file", "glob", "file_positional"])]
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["file", "glob", "file_positional"],
+        help = crate::cli::args::FILES_FROM_FLAG_SHORT_DOC,
+        long_help = crate::cli::args::FILES_FROM_FLAG_DOC,
+    )]
     pub files_from: Option<String>,
 }

@@ -22,12 +22,44 @@ pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
 /// `set`, `remove`, and `append`.
-const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
+pub(crate) const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
      per `[links] case_insensitive`, default auto). Mutually exclusive with --glob and --files-from";
 
 /// One-line `-h` form of [`FILE_FLAG_DOC`] (iter-251). The case-folding and
 /// mutual-exclusion detail stays on `--help`, where there is room for it.
-const FILE_FLAG_SHORT_DOC: &str = "Target file(s), repeatable (excludes --glob / --files-from)";
+pub(crate) const FILE_FLAG_SHORT_DOC: &str =
+    "Target file(s), repeatable (excludes --glob / --files-from)";
+
+/// Shared `--glob` doc string for the `--file` / `--glob` / `--files-from`
+/// input trio.
+pub(crate) const GLOB_FLAG_DOC: &str = "Glob pattern(s) to select files, relative to --dir (repeatable); \
+     prefix '!' to negate (e.g. '!**/draft-*'). Mutually exclusive with --file and --files-from";
+
+/// One-line `-h` form of [`GLOB_FLAG_DOC`] (iter-254, HELP-2). Identical to the
+/// line `find -h` shows, so the trio reads the same on every command.
+pub(crate) const GLOB_FLAG_SHORT_DOC: &str = "Glob(s) relative to --dir, repeatable; '!' negates \
+     ('!**/draft-*')";
+
+/// Shared `--files-from` doc string for the input trio.
+pub(crate) const FILES_FROM_FLAG_DOC: &str = "Read file paths from PATH (one per line); use '-' to read from \
+     stdin. Mutually exclusive with --file and --glob. Non-.md paths and paths outside the vault \
+     are silently skipped. Repo-relative paths with the configured vault dir prefix are resolved \
+     automatically. Input is deduplicated; results follow first-seen order.";
+
+/// One-line `-h` form of [`FILES_FROM_FLAG_DOC`] (iter-254, HELP-2).
+pub(crate) const FILES_FROM_FLAG_SHORT_DOC: &str =
+    "Read paths from PATH, one per line ('-' = stdin)";
+
+/// Shared `task --section` doc string: unlike `find --section`, a heading that
+/// matches more than once is an error rather than a union.
+pub(crate) const TASK_SECTION_FLAG_DOC: &str = "Select all tasks under a heading: case-insensitive substring, \
+     '##' pins the level, or /regex/. Refuses with an error naming every matched heading's line \
+     number when more than one distinct heading matches (unlike `find --section`, which unions \
+     them).";
+
+/// One-line `-h` form of [`TASK_SECTION_FLAG_DOC`] (iter-254, HELP-2).
+pub(crate) const TASK_SECTION_FLAG_SHORT_DOC: &str = "Heading substring, '##' pins the level, or /regex/ \
+     (refuses if ambiguous)";
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
 pub(crate) fn is_false(v: &bool) -> bool {
@@ -817,9 +849,11 @@ pub(crate) enum Commands {
     Read {
         #[command(flatten)]
         selection: InputSelection,
-        /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+        /// Heading substring, '##' pins the level, or /regex/ (nested subsections included)
         ///
-        /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
+        /// Extract section(s) by case-insensitive substring match (e.g. 'Tasks' matches
+        /// 'Tasks [4/4]'); prefix '##' to pin the heading level; use '/regex/' for a regex.
+        /// Nested subsections are included.
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
         /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
@@ -1025,7 +1059,7 @@ pub(crate) enum Commands {
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
         #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
-        /// Destination path — positional form (single-file mode only). Alias for --to:
+        /// Destination path — positional form of --to (single-file mode only)
         ///
         /// `hyalo mv old.md new.md` is equivalent to `hyalo mv old.md --to new.md`.
         /// Requires the positional source FILE (not --file); mutually exclusive with --to.
@@ -1134,7 +1168,13 @@ Repeatable (AND).\n\
         /// Tag to add (idempotent). Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1155,9 +1195,10 @@ Repeatable (AND).\n\
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
-        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// Reject writes that would create lint errors under the .hyalo.toml schema
         ///
-        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        /// Validates the new values against the schema before writing. Implied by
+        /// `validate_on_write = true` in the [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
@@ -1210,7 +1251,13 @@ Repeatable (AND).\n\
         /// Tag to remove. Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1264,9 +1311,9 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
-        /// Scaffold a preset vault flavour (okf, madr, skills, changelog) by
+        /// Scaffold a preset vault flavour: okf, madr, skills, or changelog
         ///
-        /// merging an embedded config fragment into .hyalo.toml
+        /// Merges the profile's embedded config fragment into .hyalo.toml.
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
     },
@@ -1408,7 +1455,13 @@ Repeatable (AND).\n\
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1427,9 +1480,10 @@ Repeatable (AND).\n\
         /// Preview changes without modifying any files
         #[arg(long)]
         dry_run: bool,
-        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// Reject writes that would create lint errors under the .hyalo.toml schema
         ///
-        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        /// Validates the new values against the schema before writing. Implied by
+        /// `validate_on_write = true` in the [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
@@ -1723,10 +1777,11 @@ Repeatable (AND).\n\
         /// Only autofix the specified rule(s) — repeatable
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
-        /// Promote schema warnings to errors: "no 'type' property",
+        /// Promote schema warnings (missing type, undeclared property, date format) to errors
         ///
-        /// "undeclared property in frontmatter", and date-format violations
-        /// (HYALO003), causing lint to exit non-zero when those issues are found.
+        /// Promotes "no 'type' property", "undeclared property in frontmatter" and
+        /// date-format violations (HYALO003) to errors, so lint exits non-zero when those
+        /// issues are found.
         ///
         /// Note: missing-type and undeclared-property promotions require a
         /// `[schema.types.*]` block in `.hyalo.toml` — on a schema-less vault
@@ -1736,9 +1791,9 @@ Repeatable (AND).\n\
         /// Overrides `[lint] strict` in `.hyalo.toml` for this invocation.
         #[arg(long)]
         strict: bool,
-        /// Overlay a named conformance profile for this invocation only (no
+        /// Overlay a named conformance profile for this invocation only, without touching config
         ///
-        /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
+        /// No `.hyalo.toml` change. `okf` enables the Open Knowledge Format §9
         /// rules plus advisory citation / augmentation checks; `madr` enables
         /// the MADR ADR schema (path-bound to `docs/decisions/**`) plus the
         /// supersede / duplicate-number advisory rules; `skills` enables the
@@ -1810,15 +1865,15 @@ Repeatable (AND).\n\
         /// Document type to scaffold (must exist in `[schema.types.*]`)
         #[arg(long, value_name = "TYPE", required = true)]
         r#type: String,
-        /// Vault-relative path for the new file (must not exist; parent dirs created if
+        /// Vault-relative path for the new file (must not already exist)
         ///
-        /// missing; must still resolve inside the vault after symlinks)
+        /// Parent directories are created if missing; the path must still resolve inside
+        /// the vault after symlinks.
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
-        /// When `--index` or `--index-file` is set, patch the snapshot index in
-        ///
-        /// place after the file is created so later `--index` queries see it
-        /// without a full rebuild.
+        /// When `--index` or `--index-file` is set, the snapshot index is patched in place
+        /// after the file is created, so later `--index` queries see it without a full
+        /// rebuild.
         #[command(flatten)]
         index_flags: IndexFlags,
     },
@@ -2101,9 +2156,9 @@ pub(crate) enum MadrAction {
             \u{00a0} hyalo madr toc docs/adr --apply"
     )]
     Toc {
-        /// ADR directory (vault-relative, must resolve inside the vault);
+        /// ADR directory, vault-relative (default: `docs/decisions`)
         ///
-        /// defaults to `docs/decisions`
+        /// Must resolve inside the vault.
         #[arg(value_name = "DIR")]
         adr_dir: Option<String>,
         /// Write changes to disk. Without this flag the command is a dry run.
@@ -2176,10 +2231,10 @@ pub(crate) enum ChangelogAction {
         /// The entry text (required)
         #[arg(long, value_name = "TEXT", required = true)]
         message: String,
-        /// Wrap the entry to COLS columns, breaking on word boundaries and
+        /// Wrap the entry to COLS columns on word boundaries (omit for one unwrapped bullet)
         ///
-        /// hanging-indenting continuation lines under the bullet text (2 spaces).
-        /// Useful for 80-column changelogs. Omit for a single unwrapped bullet.
+        /// Continuation lines are hanging-indented under the bullet text (2 spaces).
+        /// Useful for 80-column changelogs.
         #[arg(long, value_name = "COLS")]
         wrap: Option<usize>,
         /// Write changes to disk. Without this flag the command is a dry run.
@@ -2443,13 +2498,13 @@ pub(crate) enum LinksAction {
         /// Apply fixes to files on disk
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Minimum Jaro-Winkler stem similarity for a file to be considered a
+        /// Minimum stem similarity (0.0–1.0) for a file to be a fuzzy candidate at all
         ///
-        /// fuzzy candidate at all (0.0–1.0). Candidates that clear it are then
-        /// scored and ranked by confidence — see --min-confidence.
-        #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
+        /// Jaro-Winkler. Candidates that clear it are then scored and ranked by
+        /// confidence — see --min-confidence.
+        #[arg(long, value_name = "N", default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
-        /// Apply low-confidence fixes too (excluded from --apply by default).
+        /// Apply low-confidence fixes too (excluded from --apply by default)
         ///
         /// Fuzzy matches are guesses: a broken [[foo]] can "match" an
         /// unrelated bar.md. So is a basename fallback, where a target that
@@ -2460,26 +2515,30 @@ pub(crate) enum LinksAction {
         /// confidence floor (0.8 by default; see --min-confidence).
         #[arg(long)]
         apply_fuzzy: bool,
-        /// Confidence floor for applying low-confidence fixes (0.0–1.0).
+        /// Confidence floor for applying low-confidence fixes (0.0–1.0); implies --apply-fuzzy
         ///
-        /// Implies --apply-fuzzy.
         ///
         /// Defaults to 0.8, or to `[links] fuzzy_min_confidence` in
         /// .hyalo.toml when set; this flag overrides both. Proposals below the
         /// floor stay in the reported-but-not-applied bucket and are counted
         /// as fuzzy_below_floor. Pass 0 to accept every proposal (the
         /// pre-0.21 behaviour), 0.99 to apply almost nothing.
-        #[arg(long, value_parser = parse_threshold)]
+        #[arg(long, value_name = "N", value_parser = parse_threshold)]
         min_confidence: Option<f64>,
-        /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long)]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
-        /// Ignore broken links whose target contains any of these substrings (repeatable).
+        /// Ignore broken links whose target contains SUBSTR (repeatable)
         ///
         /// Useful for skipping Hugo template links, external paths, etc.
-        #[arg(long)]
+        #[arg(long, value_name = "SUBSTR")]
         ignore_target: Vec<String>,
-        /// Expand short-form wikilinks ([[Name]]) to their full vault path when applying fixes.
+        /// Expand short-form wikilinks ([[Name]]) to their full vault path when applying fixes
         ///
         /// By default, hyalo treats bare stem wikilinks as valid Obsidian short-form links:
         /// [[Corina]] that resolves to sub/Corina.md is left untouched. With this flag,
@@ -2488,9 +2547,9 @@ pub(crate) enum LinksAction {
         /// whole vault and does not require the full path.
         #[arg(long)]
         expand_short_form: bool,
-        /// Treat links that resolve only by case folding as resolved rather
+        /// Treat links that resolve only by case folding as resolved, not fixable
         ///
-        /// than fixable (UX-6, iter-244).
+        /// (UX-6, iter-244.)
         ///
         /// On case-folded vault layouts (MDN-style `en-US` vs `en-us`
         /// directories on macOS/Windows), a plain `links fix --dry-run`
@@ -2603,34 +2662,32 @@ pub(crate) enum LinksAction {
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// Minimum title length to consider (skip short common words)
-        #[arg(long, default_value = "3")]
+        #[arg(long, value_name = "N", default_value = "3")]
         min_length: usize,
         /// Titles to exclude from matching (repeatable, case-insensitive)
-        #[arg(long)]
+        #[arg(long, value_name = "TITLE")]
         exclude_title: Vec<String>,
-        /// Only emit the first match of each target title per source file.
+        /// Only emit the first match of each target title per source file
         ///
         /// An existing [[wikilink]] to a target anywhere in the file counts
         /// as its first mention (case-insensitive; aliased links count too).
         #[arg(long)]
         first_only: bool,
-        /// Link every mention for this run even when `[links.auto] first_only = true`
-        ///
-        /// is set in .hyalo.toml.
+        /// Link every mention for this run, overriding `[links.auto] first_only = true`
         ///
         /// The counter-flag to --first-only: it forces first-only OFF for a single
         /// run without editing the config. Cannot be combined with --first-only.
         #[arg(long, conflicts_with = "first_only")]
         no_first_only: bool,
-        /// Exclude target pages whose vault-relative path matches a glob pattern
+        /// Exclude target pages whose vault-relative path matches GLOB (repeatable)
         ///
-        /// (repeatable; matched case-insensitively, mirroring --exclude-title)
-        #[arg(long)]
+        /// Matched case-insensitively, mirroring --exclude-title.
+        #[arg(long, value_name = "GLOB")]
         exclude_target_glob: Vec<String>,
-        /// Do not print the advisory note naming noisy candidate titles: common
+        /// Do not print the advisory note naming noisy candidate titles
         ///
-        /// English words (e.g. "permissions", "index") and titles that dominate
-        /// the run (at least 25 matches and 2.5% of the proposed links).
+        /// The note names common English words (e.g. "permissions", "index") and titles
+        /// that dominate the run (at least 25 matches and 2.5% of the proposed links).
         ///
         /// The note goes to stderr only and never changes the report on stdout.
         /// Persist the opt-out with `warn_common_titles = false` under
@@ -2638,10 +2695,16 @@ pub(crate) enum LinksAction {
         #[arg(long)]
         no_warn_common_titles: bool,
         /// Restrict to a single file (vault-relative path)
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(long, value_name = "FILE", conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            conflicts_with = "file",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
         #[command(flatten)]
         index_flags: IndexFlags,
@@ -2669,8 +2732,13 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
@@ -2700,8 +2768,13 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
@@ -2736,8 +2809,13 @@ pub(crate) enum TaskAction {
         /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
@@ -2785,10 +2863,10 @@ pub(crate) enum PropertiesAction {
         SIDE EFFECTS: Modifies matched files on disk."
     )]
     Rename {
-        /// Property key to rename from
+        /// Existing property key to rename
         #[arg(long)]
         from: String,
-        /// Property key to rename to
+        /// New property key
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
@@ -2831,10 +2909,10 @@ pub(crate) enum TagsAction {
         Atomic per-file: if the new tag already exists on a file, only the old tag is removed.\n\
         SIDE EFFECTS: Modifies matched files on disk.")]
     Rename {
-        /// Tag to rename from
+        /// Existing tag to rename
         #[arg(long)]
         from: String,
-        /// Tag to rename to
+        /// New tag name
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
