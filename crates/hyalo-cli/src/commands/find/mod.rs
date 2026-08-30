@@ -1251,9 +1251,20 @@ pub fn find(
     // comparing exactly what they always compared; only the bytes on the wire
     // change. `--fields properties` without `title` keeps the property, so no
     // request can lose the value entirely.
+    //
+    // iter-254 (FIND-4): stripped only when the promotion actually consumed
+    // the property — that is, when the raw value is a promotable scalar. A
+    // `title:` that is null, blank, a list or a map does not promote (the
+    // result's `title` falls back to the H1), so removing it would leave the
+    // authored value unreachable from every output; it stays put and
+    // `HYALO013` reports the collection case.
     if fields.title && fields.properties {
         for obj in &mut results {
-            if let Some(props) = obj.properties.as_mut() {
+            if let Some(props) = obj.properties.as_mut()
+                && props.get("title").is_some_and(|v| {
+                    crate::commands::find::build::promoted_title_string(v).is_some()
+                })
+            {
                 props.remove("title");
             }
         }
@@ -1261,7 +1272,10 @@ pub fn find(
     if fields.title && fields.properties_typed {
         for obj in &mut results {
             if let Some(props) = obj.properties_typed.as_mut() {
-                props.retain(|p| p.name != "title");
+                props.retain(|p| {
+                    p.name != "title"
+                        || crate::commands::find::build::promoted_title_string(&p.value).is_none()
+                });
             }
         }
     }

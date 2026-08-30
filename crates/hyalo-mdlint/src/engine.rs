@@ -50,6 +50,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     ("HYALO004", DiagSeverity::Warn),
     ("HYALO005", DiagSeverity::Error),
     ("HYALO006", DiagSeverity::Warn),
+    ("HYALO007", DiagSeverity::Warn),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -57,7 +58,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006",
+    "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006", "HYALO007",
 ];
 
 // ---------------------------------------------------------------------------
@@ -162,6 +163,15 @@ impl HyaloLintEngine {
                 name: "frontmatter-parse-error".to_owned(),
                 description: "Frontmatter could not be parsed (invalid YAML, duplicate keys, oversized scalar). The file is otherwise invisible to lint, so this is an error by default and cannot be silently downgraded by a profile.".to_owned(),
                 default_severity: DiagSeverity::Error,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint".to_owned(),
+            },
+            RuleCatalogEntry {
+                id: "HYALO007".to_owned(),
+                name: "title-not-scalar".to_owned(),
+                description: "Frontmatter `title` is a list or a map. Only a scalar promotes to the `find --fields title` value (numbers, dates and booleans are stringified as written), so a collection leaves the result falling back to the first H1 — usually a quoting typo such as `title: [Draft] Notes`. Warns by default; promoted to error under --strict.".to_owned(),
+                default_severity: DiagSeverity::Warn,
                 default_enabled: true,
                 autofixable: false,
                 source: "hyalo-mdlint".to_owned(),
@@ -493,6 +503,66 @@ impl HyaloLintEngine {
                 severity: sev,
                 fix: None,
             })
+            .collect()
+    }
+
+    /// Check HYALO007 (title-not-scalar) against the parsed frontmatter
+    /// properties.
+    ///
+    /// Mirrors [`Self::lint_frontmatter_hyalo003`]: same enabled/filter/severity
+    /// resolution, a `Vec<Diagnostic>` the caller merges into its violations.
+    pub fn lint_frontmatter_hyalo007(
+        &self,
+        _rel_path: &str,
+        properties: &indexmap::IndexMap<String, serde_json::Value>,
+        config: &LintConfig,
+        rule_filter: &[String],
+        strict: bool,
+    ) -> Vec<Diagnostic> {
+        use crate::rules::hyalo007::non_scalar_title_kind;
+
+        let enabled = if let Some(ov) = config.rules.get("HYALO007")
+            && let Some(b) = ov.enabled()
+        {
+            b
+        } else {
+            DEFAULT_ON.contains(&"HYALO007")
+        };
+        if !enabled {
+            return vec![];
+        }
+
+        if !rule_filter.is_empty() && !rule_filter.iter().any(|r| r == "HYALO007") {
+            return vec![];
+        }
+
+        let sev = if let Some(ov) = config.rules.get("HYALO007")
+            && let Some(sev_str) = ov.severity()
+        {
+            match sev_str {
+                "error" => DiagSeverity::Error,
+                _ => DiagSeverity::Warn,
+            }
+        } else if strict {
+            DiagSeverity::Error
+        } else {
+            DiagSeverity::Warn
+        };
+
+        non_scalar_title_kind(properties)
+            .map(|kind| Diagnostic {
+                rule_id: "HYALO007".to_owned(),
+                rule_name: "title-not-scalar".to_owned(),
+                message: format!(
+                    "property `title` is a {kind}; title must be a scalar to be promoted \
+                     (quote the value if the brackets or braces are literal text)"
+                ),
+                line: 1,
+                column: 1,
+                severity: sev,
+                fix: None,
+            })
+            .into_iter()
             .collect()
     }
 
