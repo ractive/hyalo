@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 253 — read: compute lines without a second full-file scan"
 date: 2026-08-30
-status: planned
+status: in-progress
 tags:
   - iteration
   - agent-cli
