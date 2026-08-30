@@ -378,8 +378,8 @@ COOKBOOK:
   # Find dead-end files (have inbound links but no outbound)
   hyalo find --dead-end
 
-  # Find broken [[wikilinks]] (fields=links, then filter in jq)
-  hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
+  # Every broken link target (--broken-links auto-includes the links field)
+  hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'
 
   # Every broken link as file:line — each link carries the source line lint reports
   hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.path == null and (.out_of_vault | not)) or .broken_anchor) | \"\\($f.file):\\(.line) \\(.target)\"'
