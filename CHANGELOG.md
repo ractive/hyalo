@@ -143,6 +143,36 @@ and this project adheres to
 
 ### Fixed
 
+- **A mutation that changed nothing left the index describing a file that no
+  longer existed.** `set`/`append`/`remove` only touched the snapshot when they
+  actually wrote, so `set note.md --property status=completed --index` on a file
+  whose `status` was *already* `completed` reported `0 modified` and left the
+  entry exactly as the last `create-index` saw it — including its cached body
+  tokens, `links`, `size` and `lines`. Append a paragraph by hand first and
+  `find <word-from-that-paragraph> --index` kept answering `0` while a disk scan
+  found it. All three commands now repair the entry of every file they read
+  whose `(mtime, size)` no longer matches the snapshot, whether or not the write
+  turned out to be a no-op — a full rescan plus link-graph refresh, the same
+  repair an externally rewritten body already got from `links fix --apply`. The
+  check reuses the `stat` the concurrent-write guard already takes, so a batch
+  where nothing is stale costs nothing extra, and `--dry-run` still writes
+  nothing.
+- **`read` and `find` disagreed about what invalid UTF-8 costs you.** `read`
+  substituted `<line skipped: invalid UTF-8 (lossy in search; fix encoding to
+  read)>`, promising search still saw the line, while `find <text>` dropped the
+  whole file with the raw io message `stream did not contain valid UTF-8`. Only
+  the regex path (`find -e`) is genuinely lossy. Both surfaces now print the
+  same sentence — the encoding is the problem, full-text search excludes the
+  file, and `-e` still matches it — from a single shared constant, with an e2e
+  that pins the wording *and* checks both halves of the claim against real
+  behaviour.
+- **`hyalo new --property k=v` failed without saying where properties are
+  set.** `new` scaffolds strictly from the type's schema, and clap's
+  nearest-match tip pointed at `--type`. It now answers with the
+  scaffold-then-set chain (`hyalo new --type T --file F && hyalo set F
+  --property k=v`), `--tag` gets the same pointer, and `new --help` states that
+  there is no `--property` flag and shows the chained example. No new flag: the
+  gap was discoverability, not capability.
 - **A bundled recipe that had been silently returning nothing.** The
   "planned items where all tasks are done" recipe in the `hyalo-tidy` skill
   reads `.tasks` but never asked for the field, so from the moment `tasks` left

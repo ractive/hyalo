@@ -109,6 +109,12 @@ pub(crate) struct IndexFlags {
     /// seen (created by an editor or Obsidian since the last create-index)
     /// is *upserted*: its full entry and outgoing links are inserted, not
     /// dropped, so indexed reads match a disk scan after the mutation.
+    /// `set`/`append`/`remove` go further: every file they read whose
+    /// `(mtime, size)` no longer matches the snapshot is rescanned, even when
+    /// the mutation itself changes nothing (`0 modified`) — so a body edited
+    /// by hand between `create-index` and the mutation cannot leave the entry
+    /// describing bytes that are gone. `--dry-run` writes nothing, stale
+    /// entry or not.
     /// `links fix`/`links auto` additionally mtime-check every indexed entry
     /// before their discovery pass, rescan files that changed on disk since
     /// create-index, and upsert files the index does not know yet (with a
@@ -1396,7 +1402,11 @@ Repeatable (AND).\n\
             (set, remove, append, task, mv, tags rename, properties rename) still\n\
             read/write files on disk but also patch the index in-place after each\n\
             mutation — keeping it current for subsequent queries. This is safe as\n\
-            long as no external tool modifies vault files while the index is active.\n\n\
+            long as no external tool modifies vault files while the index is active.\n\
+            `set`, `remove` and `append` are the exception: they rescan any file they\n\
+            read whose (mtime, size) has drifted from the snapshot, even when the\n\
+            mutation writes nothing, so an externally edited file they touch is\n\
+            repaired rather than trusted.\n\n\
             SNAPSHOT CONTRACT: the index is a point-in-time copy, not a live view.\n\
             Edits made while it exists — by hand, by another tool, or by hyalo run\n\
             without an index flag — are invisible to indexed queries, which still\n\
