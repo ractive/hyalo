@@ -654,7 +654,10 @@ fn new_with_index_refreshes_stale_entry() {
     // The scaffolded skeleton uses title "TBD", not the pre-existing "Old".
     // iter-252: read it from the promoted `title` field, which replaced the
     // duplicate copy inside `properties`.
-    let title = body.pointer("/title").and_then(|v| v.as_str()).unwrap_or("");
+    let title = body
+        .pointer("/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     assert_eq!(
         title, "TBD",
         "stale entry must be replaced by fresh scaffold"

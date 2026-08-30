@@ -172,8 +172,16 @@ fn sort_by_title_property_still_orders_by_the_frontmatter_value() {
     // The de-duplication happens after sorting, so `--sort property:title`
     // compares exactly what it compared before.
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "a.md", "---\ntitle: Zulu\ntype: note\n---\n\n# A\n");
-    write_md(tmp.path(), "b.md", "---\ntitle: Alpha\ntype: note\n---\n\n# B\n");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: Zulu\ntype: note\n---\n\n# A\n",
+    );
+    write_md(
+        tmp.path(),
+        "b.md",
+        "---\ntitle: Alpha\ntype: note\n---\n\n# B\n",
+    );
     let results = find_results(tmp.path(), &["--sort", "property:title"]);
     let files: Vec<&str> = results
         .iter()
@@ -229,8 +237,55 @@ fn broken_links_filter_auto_includes_links() {
     let results = find_results(tmp.path(), &["--broken-links"]);
     assert_eq!(results.len(), 1);
     assert!(
-        results[0]["links"].as_array().is_some_and(|l| !l.is_empty()),
+        results[0]["links"]
+            .as_array()
+            .is_some_and(|l| !l.is_empty()),
         "--broken-links must return the links it filtered on"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_view_can_pin_fields_and_one_without_gets_the_default() {
+    let tmp = vault(2);
+    for args in [
+        &[
+            "views", "set", "outlines", "--tag", "note", "--fields", "sections",
+        ][..],
+        &["views", "set", "plain", "--tag", "note"][..],
+    ] {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let pinned = find_results(tmp.path(), &["--view", "outlines"]);
+    assert!(
+        pinned[0].get("sections").is_some(),
+        "a view that pins --fields sections must return them: {:?}",
+        keys(&pinned[0])
+    );
+    assert!(
+        pinned[0].get("tags").is_none(),
+        "a pinned field set replaces the default, it does not extend it: {:?}",
+        keys(&pinned[0])
+    );
+
+    let plain = find_results(tmp.path(), &["--view", "plain"]);
+    assert!(
+        plain[0].get("sections").is_none() && plain[0].get("tags").is_some(),
+        "a view without --fields gets the compact default: {:?}",
+        keys(&plain[0])
     );
 }
 
@@ -239,6 +294,11 @@ fn broken_links_filter_auto_includes_links() {
 // ---------------------------------------------------------------------------
 
 /// Byte length and line count of a file, computed independently of hyalo.
+///
+/// Deliberately naive: the point is to check hyalo's `memchr` counter against
+/// the most obvious possible implementation, so it must not share code (or a
+/// crate) with it.
+#[allow(clippy::naive_bytecount)]
 fn on_disk(dir: &Path, name: &str) -> (u64, usize) {
     let bytes = std::fs::read(dir.join(name)).unwrap();
     let newlines = bytes.iter().filter(|b| **b == b'\n').count();
@@ -268,13 +328,21 @@ fn size_and_lines_match_disk_for_crlf_and_utf8() {
     )
     .unwrap();
     // No trailing newline: the last unterminated line still counts.
-    std::fs::write(tmp.path().join("noeol.md"), "---\ntitle: No EOL\n---\n\n# End").unwrap();
+    std::fs::write(
+        tmp.path().join("noeol.md"),
+        "---\ntitle: No EOL\n---\n\n# End",
+    )
+    .unwrap();
 
     let results = find_results(tmp.path(), &[]);
     for item in &results {
         let file = item["file"].as_str().unwrap();
         let (size, lines) = on_disk(tmp.path(), file);
-        assert_eq!(item["size"].as_u64(), Some(size), "size mismatch for {file}");
+        assert_eq!(
+            item["size"].as_u64(),
+            Some(size),
+            "size mismatch for {file}"
+        );
         assert_eq!(
             item["lines"].as_u64(),
             Some(lines as u64),
@@ -367,7 +435,14 @@ fn read_reports_whole_file_size_and_lines() {
     // compared against the `find` result that led here.
     let section = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["read", "note-00.md", "--section", "Tasks", "--format", "json"])
+        .args([
+            "read",
+            "note-00.md",
+            "--section",
+            "Tasks",
+            "--format",
+            "json",
+        ])
         .output()
         .unwrap();
     let envelope: serde_json::Value = serde_json::from_slice(&section.stdout).unwrap();
@@ -382,10 +457,19 @@ fn read_reports_whole_file_size_and_lines() {
 #[test]
 fn read_of_a_large_file_hints_at_reading_less() {
     let tmp = TempDir::new().unwrap();
-    let body: String = (0..600)
-        .map(|i| format!("Line {i} of a document that is comfortably over the hint threshold.\n"))
-        .collect();
-    write_md(tmp.path(), "big.md", &format!("---\ntitle: Big\n---\n\n# Big\n\n{body}"));
+    let mut body = String::new();
+    for i in 0..600 {
+        use std::fmt::Write as _;
+        let _ = writeln!(
+            body,
+            "Line {i} of a document that is comfortably over the hint threshold."
+        );
+    }
+    write_md(
+        tmp.path(),
+        "big.md",
+        &format!("---\ntitle: Big\n---\n\n# Big\n\n{body}"),
+    );
 
     let output = super::common::hyalo()
         .current_dir(tmp.path())
@@ -396,24 +480,26 @@ fn read_of_a_large_file_hints_at_reading_less() {
     let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let hints = envelope["hints"].as_array().expect("hints array");
     assert!(
-        hints
-            .iter()
-            .any(|h| h["cmd"].as_str().is_some_and(|c| c.contains("--lines 1:80"))),
+        hints.iter().any(|h| h["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--lines 1:80"))),
         "a large read should offer a line-range read: {hints:?}"
     );
 
     // A read that already narrowed does not get told to narrow.
     let narrowed = super::common::hyalo()
         .current_dir(tmp.path())
-        .args(["read", "big.md", "--lines", "1:20", "--format", "json", "--hints"])
+        .args([
+            "read", "big.md", "--lines", "1:20", "--format", "json", "--hints",
+        ])
         .output()
         .unwrap();
     let envelope: serde_json::Value = serde_json::from_slice(&narrowed.stdout).unwrap();
     let hints = envelope["hints"].as_array().expect("hints array");
     assert!(
-        !hints
-            .iter()
-            .any(|h| h["cmd"].as_str().is_some_and(|c| c.contains("--lines 1:80"))),
+        !hints.iter().any(|h| h["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--lines 1:80"))),
         "an already-narrowed read must not repeat the suggestion: {hints:?}"
     );
 }
@@ -429,9 +515,9 @@ fn small_result_set_offers_fields_all() {
     let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let hints = envelope["hints"].as_array().expect("hints array");
     assert!(
-        hints
-            .iter()
-            .any(|h| h["cmd"].as_str().is_some_and(|c| c.contains("--fields all"))),
+        hints.iter().any(|h| h["cmd"]
+            .as_str()
+            .is_some_and(|c| c.contains("--fields all"))),
         "a small listing should say how to get the omitted fields: {hints:?}"
     );
 }

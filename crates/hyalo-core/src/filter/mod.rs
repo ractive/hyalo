@@ -864,7 +864,15 @@ mod tests {
         let f = Fields::default();
         assert_eq!(
             DEFAULT_FIELD_NAMES,
-            &["file", "modified", "size", "lines", "title", "properties", "tags"]
+            &[
+                "file",
+                "modified",
+                "size",
+                "lines",
+                "title",
+                "properties",
+                "tags"
+            ]
         );
         assert_eq!(f.properties, DEFAULT_FIELD_NAMES.contains(&"properties"));
         assert_eq!(f.tags, DEFAULT_FIELD_NAMES.contains(&"tags"));

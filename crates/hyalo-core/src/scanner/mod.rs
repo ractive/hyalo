@@ -78,8 +78,8 @@ pub fn count_lines(data: &[u8]) -> usize {
 pub fn count_file_lines(path: &Path) -> Result<usize> {
     use std::io::Read;
     const CHUNK: usize = 64 * 1024;
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut chunk = vec![0u8; CHUNK];
     let mut newlines = 0usize;
     let mut last_byte: Option<u8> = None;
@@ -2024,6 +2024,17 @@ code only
         assert_eq!(count_lines("üñï\r\n日本\r\n".as_bytes()), 2);
     }
 
+    /// `n` newline-terminated lines, built with `writeln!` so clippy's
+    /// `format_collect` lint stays happy about the per-line allocation.
+    fn repeated_lines(n: usize) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for i in 0..n {
+            let _ = writeln!(out, "line {i}");
+        }
+        out
+    }
+
     #[test]
     fn count_file_lines_matches_count_lines_across_chunk_boundaries() {
         // The streaming counter reads in 64 KiB chunks; a file several chunks
@@ -2033,14 +2044,8 @@ code only
             ("empty.md", String::new()),
             ("one.md", "single line, no newline".to_owned()),
             ("small.md", "a\nb\nc\n".to_owned()),
-            ("big.md", (0..20_000).map(|i| format!("line {i}\n")).collect()),
-            (
-                "big_noeol.md",
-                (0..20_000)
-                    .map(|i| format!("line {i}\n"))
-                    .collect::<String>()
-                    + "tail",
-            ),
+            ("big.md", repeated_lines(20_000)),
+            ("big_noeol.md", repeated_lines(20_000) + "tail"),
         ] {
             let path = dir.path().join(name);
             std::fs::write(&path, &body).unwrap();
@@ -2059,7 +2064,7 @@ code only
         // not the prefix's.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("big.md");
-        let body: String = (0..5_000).map(|i| format!("body line {i}\n")).collect();
+        let body: String = repeated_lines(5_000);
         let text = format!("---\ntitle: Big\n---\n\n{body}");
         std::fs::write(&path, &text).unwrap();
 

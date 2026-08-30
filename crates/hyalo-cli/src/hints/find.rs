@@ -208,10 +208,7 @@ pub(super) fn hints_for_find(
     // and for a single result, where the richer "See all metadata for this
     // file" hint above already spells out `--fields all` for that one file.
     let untruncated = total.is_none_or(|t| result_count as u64 >= t);
-    if ctx.fields.is_empty()
-        && !is_single
-        && untruncated
-        && result_count <= MAX_EXPANDABLE_RESULTS
+    if ctx.fields.is_empty() && !is_single && untruncated && result_count <= MAX_EXPANDABLE_RESULTS
     {
         hints.push(Hint::new(
             "Include the omitted fields (sections, links, tasks, backlinks)",
