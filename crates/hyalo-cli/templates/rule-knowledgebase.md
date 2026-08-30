@@ -38,6 +38,15 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
   `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
+- **`find` results are compact by default**: every item carries `file`, `modified`, `size`
+  (bytes), `lines`, `title`, `properties` and `tags`. `sections`, `tasks`, `links`, `backlinks`
+  and `properties-typed` come only from `--fields` (or `--fields all`) — or automatically from the
+  filter that implies them (`--section`, `--task`, `--broken-links`, `--orphan`, `--dead-end`,
+  `--sort links_count|backlinks_count`). `title` is promoted out of `properties`, so read it as
+  `.results[].title`, not `.results[].properties.title`.
+- **Check `size`/`lines` before reading**: both appear on `find` items and on `read` results, so a
+  large file can be taken in slices — `hyalo read <path> --lines 1:80` or `--section "Heading"` —
+  instead of whole.
 - **Read content/sections**: `hyalo read <path>` or `hyalo read <path> --section "Heading"`
 - **Mutate frontmatter**: `hyalo set`, `hyalo remove`, `hyalo append`
 - **Auto-link**: `hyalo links auto --first-only --exclude-target-glob 'templates/*' --apply`.

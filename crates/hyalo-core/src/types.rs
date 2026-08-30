@@ -335,6 +335,12 @@ pub struct ContentMatch {
 pub struct FileObject {
     pub file: String,
     pub modified: String,
+    /// File size in bytes (iteration 252) — always present, so an agent can
+    /// budget a `read` before issuing it.
+    pub size: u64,
+    /// Line count (see [`crate::scanner::ScanStats`]) — always present, and
+    /// the unit `read --lines A:B` takes.
+    pub lines: usize,
     /// Title extracted from frontmatter `title` property or first H1 heading.
     /// - `None`: field not requested (omitted from JSON output)
     /// - `Some(Value::String(...))`: title found

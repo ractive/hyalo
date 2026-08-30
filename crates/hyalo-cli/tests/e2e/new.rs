@@ -652,8 +652,10 @@ fn new_with_index_refreshes_stale_entry() {
         .cloned()
         .unwrap_or_default();
     // The scaffolded skeleton uses title "TBD", not the pre-existing "Old".
+    // iter-252: read it from the promoted `title` field, which replaced the
+    // duplicate copy inside `properties`.
     let title = body
-        .pointer("/properties/title")
+        .pointer("/title")
         .and_then(|v| v.as_str())
         .unwrap_or("");
     assert_eq!(

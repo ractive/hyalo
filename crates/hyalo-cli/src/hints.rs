@@ -183,6 +183,10 @@ pub struct HintContext {
     /// Task selector used: "all", "section:<name>", or "lines" (for multi-line).
     /// `None` means single-line or no task context.
     pub task_selector: Option<String>,
+    /// `read` already narrowed its output with `--section` or `--lines`
+    /// (iter-252). Suppresses the large-file "read less" hint, which would
+    /// otherwise tell a caller to do what they just did.
+    pub read_narrowed: bool,
     // Mutation context
     pub dry_run: bool,
     // Index context
@@ -254,6 +258,7 @@ impl HintContext {
             find_index: FindIndexHint::None,
             view_name: None,
             task_selector: None,
+            read_narrowed: false,
             dry_run: false,
             index_path: None,
             auto_link_file: None,

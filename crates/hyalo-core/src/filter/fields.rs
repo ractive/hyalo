@@ -21,21 +21,38 @@ impl Default for Fields {
             properties: true,
             properties_typed: false,
             tags: true,
-            sections: true,
+            sections: false,
             tasks: false,
-            links: true,
+            links: false,
             backlinks: false,
-            title: false,
+            title: true,
         }
     }
 }
+
+/// The default field set, in the order `find` emits it, for help texts and
+/// the `--format text` summary line. `file`, `modified`, `size`, and `lines`
+/// are structural — always present, never selectable — so they lead the list.
+pub const DEFAULT_FIELD_NAMES: &[&str] = &[
+    "file",
+    "modified",
+    "size",
+    "lines",
+    "title",
+    "properties",
+    "tags",
+];
 
 impl Fields {
     /// Parse a fields selection from a list of `--fields` argument values.
     ///
     /// Each element may be a comma-separated list of field names. An empty
-    /// slice returns the default (properties, tags, sections, links;
-    /// `tasks`, `properties-typed`, `backlinks`, and `title` are opt-in).
+    /// slice returns the default (iteration 252: `properties`, `tags`,
+    /// `title` — alongside the always-present `file`, `modified`, `size`,
+    /// `lines`). `sections`, `links`, `tasks`, `properties-typed`, and
+    /// `backlinks` are opt-in, either via `--fields` or via the filter that
+    /// implies them (`--section`, `--task`, `--broken-links`, `--orphan`,
+    /// `--dead-end`, `--sort links_count|backlinks_count`).
     pub fn parse(input: &[String]) -> Result<Fields> {
         if input.is_empty() {
             return Ok(Fields::default());

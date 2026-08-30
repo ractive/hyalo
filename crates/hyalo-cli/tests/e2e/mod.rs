@@ -21,6 +21,7 @@ mod examples_contract;
 mod feature_matrix;
 mod files_from;
 mod find;
+mod find_result_shape;
 mod frontmatter_preservation;
 mod help;
 mod help_reference;

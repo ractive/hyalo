@@ -2625,24 +2625,27 @@ fn find_sort_links_count() {
 }
 
 #[test]
-fn find_sort_backlinks_count_without_fields_backlinks() {
-    // Sort by backlinks_count should work even without --fields backlinks
+fn find_sort_backlinks_count_auto_includes_backlinks() {
+    // Sort by backlinks_count works without --fields backlinks, and (iter-252)
+    // returns the counted field: ranking by a number the caller cannot see was
+    // a dead end, so the sort auto-includes it the way --orphan does.
     let tmp = setup_link_vault();
     let (status, json, stderr) = find_typed(&tmp, &["--sort", "backlinks_count"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
     assert_eq!(files[0], "c.md", "c.md should be first (most backlinks)");
-    // Verify backlinks field is NOT in output (user didn't request it)
     assert!(
-        arr[0].backlinks.is_none(),
-        "backlinks should not appear in output when not in --fields"
+        arr[0].backlinks.is_some(),
+        "the counted field must be included by the sort that ranks on it"
     );
 }
 
 #[test]
-fn find_sort_links_count_without_fields_links() {
-    // Sort by links_count should work even when --fields excludes links
+fn find_sort_links_count_auto_includes_links() {
+    // Sort by links_count works with a narrower --fields, and (iter-252) the
+    // counted field comes back regardless — an auto-include, like
+    // --broken-links → links, which has always overridden --fields.
     let tmp = setup_link_vault();
     let (status, json, stderr) =
         find_typed(&tmp, &["--sort", "links_count", "--fields", "properties"]);
@@ -2650,10 +2653,9 @@ fn find_sort_links_count_without_fields_links() {
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
     assert_eq!(files[0], "a.md", "a.md should be first (most links)");
-    // Verify links field is NOT in output (user excluded it via --fields)
     assert!(
-        arr[0].links.is_none(),
-        "links should not appear in output when not in --fields"
+        arr[0].links.is_some(),
+        "the counted field must be included by the sort that ranks on it"
     );
 }
 
@@ -2955,16 +2957,25 @@ fn find_title_null_when_neither_found() {
 }
 
 #[test]
-fn find_title_not_present_by_default() {
+fn find_title_present_by_default_and_not_duplicated_in_properties() {
+    // iter-252: `title` joined the default field set, and stopped being
+    // echoed inside `properties` — one string, one place.
     let tmp = setup_title_vault();
     let (status, json, stderr) = find_typed(&tmp, &["--file", "with_fm_title.md"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
+    assert_eq!(
+        obj.title.as_ref().and_then(|v| v.as_str()),
+        Some("Frontmatter Title"),
+        "title should be a default field: {obj:?}"
+    );
     assert!(
-        obj.title.is_none(),
-        "title should not appear in default output: {obj:?}"
+        obj.properties
+            .as_ref()
+            .is_some_and(|p| !p.contains_key("title")),
+        "the promoted title must not be repeated in properties: {obj:?}"
     );
 }
 

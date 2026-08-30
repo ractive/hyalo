@@ -21,8 +21,14 @@
 /// multi-line text block. This coupling is intentional: changing the separator
 /// in `run_jq_filter` would affect `FileObject` rendering.
 pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json::Value>) -> String {
-    // Header: file path and modified timestamp — always present.
-    let mut parts = vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()];
+    // Header: file path, modified timestamp — always present — plus the
+    // iter-252 size/lines pair when the payload carries it (a find result
+    // always does; other FileObject-shaped payloads and pre-252 JSON may not).
+    let mut parts = if map.contains_key("size") && map.contains_key("lines") {
+        vec![r#""\"\(.file)\"  (\(.modified), \(.size) B, \(.lines) lines)""#.to_owned()]
+    } else {
+        vec![r#""\"\(.file)\"  (\(.modified))""#.to_owned()]
+    };
 
     // Title: "  title: <value>" or "  title: (none)"
     if map.contains_key("title") {

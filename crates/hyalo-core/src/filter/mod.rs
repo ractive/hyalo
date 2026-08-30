@@ -4,7 +4,7 @@ mod parse;
 mod sort;
 mod tasks;
 
-pub use fields::Fields;
+pub use fields::{DEFAULT_FIELD_NAMES, Fields};
 pub use match_props::{
     extract_tags, matches_filters_with_tags, matches_frontmatter_filters, tag_matches,
 };
@@ -841,11 +841,46 @@ mod tests {
     #[test]
     fn fields_empty_returns_default() {
         let f = Fields::parse(&[]).unwrap();
-        // Default: properties, tags, sections, links enabled; tasks is opt-in (off by default)
-        assert!(f.properties && f.tags && f.sections && f.links);
+        // iter-252 default: properties, tags and title. Everything whose size
+        // scales with the document body (sections, tasks, links) and the
+        // whole-vault backlinks lookup are opt-in, via `--fields` or the
+        // filter that implies them.
+        assert!(f.properties && f.tags && f.title);
+        assert!(!f.sections, "sections should be off by default");
+        assert!(!f.links, "links should be off by default");
         assert!(!f.tasks, "tasks should be off by default");
         assert!(!f.backlinks, "backlinks should be off by default");
-        assert!(!f.title, "title should be off by default");
+        assert!(
+            !f.properties_typed,
+            "properties-typed should be off by default"
+        );
+    }
+
+    #[test]
+    fn default_field_names_match_the_default_fields() {
+        // The help/summary-line constant and `Fields::default()` are two
+        // spellings of one decision; drift between them shows up as a text
+        // summary that names fields the payload does not carry.
+        let f = Fields::default();
+        assert_eq!(
+            DEFAULT_FIELD_NAMES,
+            &[
+                "file",
+                "modified",
+                "size",
+                "lines",
+                "title",
+                "properties",
+                "tags"
+            ]
+        );
+        assert_eq!(f.properties, DEFAULT_FIELD_NAMES.contains(&"properties"));
+        assert_eq!(f.tags, DEFAULT_FIELD_NAMES.contains(&"tags"));
+        assert_eq!(f.title, DEFAULT_FIELD_NAMES.contains(&"title"));
+        assert_eq!(f.sections, DEFAULT_FIELD_NAMES.contains(&"sections"));
+        assert_eq!(f.links, DEFAULT_FIELD_NAMES.contains(&"links"));
+        assert_eq!(f.tasks, DEFAULT_FIELD_NAMES.contains(&"tasks"));
+        assert_eq!(f.backlinks, DEFAULT_FIELD_NAMES.contains(&"backlinks"));
     }
 
     #[test]

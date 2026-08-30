@@ -39,6 +39,67 @@ pub enum ScanAction {
 /// Files larger than this are skipped with a warning written to stderr.
 pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 
+/// Byte size and line count of a file, measured by [`scan_file_multi_stats`].
+///
+/// Both numbers are what `find`/`read` report as `size`/`lines` (iteration
+/// 252): `size` is the file's length in bytes as the filesystem reports it,
+/// `lines` counts `\n`-separated lines with a final unterminated line still
+/// counted (an empty file is 0 lines). Counting `\n` and not `\r\n` keeps a
+/// CRLF file's count identical to the same file with LF endings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScanStats {
+    /// File length in bytes.
+    pub size: u64,
+    /// Number of lines (see the type docs for the exact definition).
+    pub lines: usize,
+}
+
+/// Count lines in a byte slice: one per `\n`, plus a final unterminated line.
+/// Empty input is zero lines.
+#[must_use]
+pub fn count_lines(data: &[u8]) -> usize {
+    if data.is_empty() {
+        return 0;
+    }
+    let newlines = memchr::memchr_iter(b'\n', data).count();
+    if data.last() == Some(&b'\n') {
+        newlines
+    } else {
+        newlines + 1
+    }
+}
+
+/// Count the lines of a file without holding it in memory.
+///
+/// Streams the file through `memchr` in 64 KiB chunks — no UTF-8 conversion,
+/// no per-line allocation — and applies the same counting rule as
+/// [`count_lines`]. Used by `read`, which reports the whole file's `lines`
+/// even when it returns one section or line range of it.
+pub fn count_file_lines(path: &Path) -> Result<usize> {
+    use std::io::Read;
+    const CHUNK: usize = 64 * 1024;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut chunk = vec![0u8; CHUNK];
+    let mut newlines = 0usize;
+    let mut last_byte: Option<u8> = None;
+    loop {
+        let n = file
+            .read(&mut chunk)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        newlines += memchr::memchr_iter(b'\n', &chunk[..n]).count();
+        last_byte = chunk[..n].last().copied();
+    }
+    Ok(match last_byte {
+        None => 0,
+        Some(b'\n') => newlines,
+        Some(_) => newlines + 1,
+    })
+}
+
 /// Scan a file with multiple visitors in a single pass.
 ///
 /// Reads the file into memory then delegates to `scan_slice_multi` for
@@ -50,6 +111,26 @@ pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 ///
 /// Files exceeding [`MAX_FILE_SIZE`] are skipped with a warning to stderr.
 pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    scan_file_multi_stats(path, visitors, false).map(|_| ())
+}
+
+/// [`scan_file_multi`] that also reports the file's [`ScanStats`].
+///
+/// `count_lines` selects how much the frontmatter-only fast path pays: with
+/// `false` the returned `lines` covers only the bytes that were actually read
+/// (the 16 KiB frontmatter prefix), which is all a caller that ignores the
+/// field needs; with `true` the remainder of the file is streamed through
+/// `memchr` — no UTF-8 conversion, no allocation per line — so the count is
+/// exact. The body path always reads the whole file anyway and is exact
+/// either way.
+///
+/// A file skipped for exceeding [`MAX_FILE_SIZE`] reports its size with
+/// `lines: 0`, matching the "not scanned" outcome the visitors see.
+pub fn scan_file_multi_stats(
+    path: &Path,
+    visitors: &mut [&mut dyn FileVisitor],
+    count_lines_exact: bool,
+) -> Result<ScanStats> {
     let file_size = std::fs::metadata(path)
         .with_context(|| format!("failed to stat {}", path.display()))?
         .len();
@@ -60,14 +141,22 @@ pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Re
             file_size / (1024 * 1024),
             MAX_FILE_SIZE / (1024 * 1024)
         );
-        return Ok(());
+        return Ok(ScanStats {
+            size: file_size,
+            lines: 0,
+        });
     }
 
     let any_needs_body = visitors.iter().any(|v| v.needs_body());
     if any_needs_body {
         let data =
             std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-        scan_slice_multi(&data, visitors)
+        let lines = count_lines(&data);
+        scan_slice_multi(&data, visitors)?;
+        Ok(ScanStats {
+            size: file_size,
+            lines,
+        })
     } else {
         // Frontmatter-only: read a limited prefix to avoid loading the full file.
         use std::io::Read;
@@ -79,7 +168,34 @@ pub fn scan_file_multi(path: &Path, visitors: &mut [&mut dyn FileVisitor]) -> Re
             .read(&mut buf)
             .with_context(|| format!("failed to read {}", path.display()))?;
         buf.truncate(n);
-        scan_slice_multi(&buf, visitors)
+        // Count over the prefix first; the tail (if any) is streamed below so
+        // the frontmatter fast path still never holds the whole file at once.
+        let mut newlines = memchr::memchr_iter(b'\n', &buf).count();
+        let mut last_byte = buf.last().copied();
+        if count_lines_exact && (n as u64) < file_size {
+            const TAIL_CHUNK: usize = 64 * 1024;
+            let mut chunk = vec![0u8; TAIL_CHUNK];
+            loop {
+                let m = file
+                    .read(&mut chunk)
+                    .with_context(|| format!("failed to read {}", path.display()))?;
+                if m == 0 {
+                    break;
+                }
+                newlines += memchr::memchr_iter(b'\n', &chunk[..m]).count();
+                last_byte = chunk[..m].last().copied();
+            }
+        }
+        scan_slice_multi(&buf, visitors)?;
+        let lines = match last_byte {
+            None => 0,
+            Some(b'\n') => newlines,
+            Some(_) => newlines + 1,
+        };
+        Ok(ScanStats {
+            size: file_size,
+            lines,
+        })
     }
 }
 
@@ -1887,5 +2003,82 @@ code only
         let (_, outcome2) = read_line_capped(&mut reader, &mut buf, 16).unwrap();
         assert_eq!(outcome2, LineOutcome::Complete);
         assert_eq!(buf, "after\n");
+    }
+    // -- line counting (iter-252) ------------------------------------------
+
+    #[test]
+    fn count_lines_counts_a_final_unterminated_line() {
+        assert_eq!(count_lines(b""), 0, "an empty file has no lines");
+        assert_eq!(count_lines(b"\n"), 1);
+        assert_eq!(count_lines(b"a"), 1, "no trailing newline still counts");
+        assert_eq!(count_lines(b"a\n"), 1);
+        assert_eq!(count_lines(b"a\nb"), 2);
+        assert_eq!(count_lines(b"a\nb\n"), 2);
+    }
+
+    #[test]
+    fn count_lines_is_identical_for_crlf_and_lf() {
+        // `\r` is part of the line, not a separator: a CRLF document must not
+        // report twice the lines of the same document with LF endings.
+        assert_eq!(count_lines(b"a\r\nb\r\n"), count_lines(b"a\nb\n"));
+        assert_eq!(count_lines("üñï\r\n日本\r\n".as_bytes()), 2);
+    }
+
+    /// `n` newline-terminated lines, built with `writeln!` so clippy's
+    /// `format_collect` lint stays happy about the per-line allocation.
+    fn repeated_lines(n: usize) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for i in 0..n {
+            let _ = writeln!(out, "line {i}");
+        }
+        out
+    }
+
+    #[test]
+    fn count_file_lines_matches_count_lines_across_chunk_boundaries() {
+        // The streaming counter reads in 64 KiB chunks; a file several chunks
+        // long is where an off-by-one at the boundary would show up.
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("empty.md", String::new()),
+            ("one.md", "single line, no newline".to_owned()),
+            ("small.md", "a\nb\nc\n".to_owned()),
+            ("big.md", repeated_lines(20_000)),
+            ("big_noeol.md", repeated_lines(20_000) + "tail"),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, &body).unwrap();
+            assert_eq!(
+                count_file_lines(&path).unwrap(),
+                count_lines(body.as_bytes()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_file_multi_stats_counts_the_whole_file_on_the_frontmatter_path() {
+        // The frontmatter-only fast path reads a 16 KiB prefix; with exact
+        // counting requested it must still report the file's real line count,
+        // not the prefix's.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        let body: String = repeated_lines(5_000);
+        let text = format!("---\ntitle: Big\n---\n\n{body}");
+        std::fs::write(&path, &text).unwrap();
+
+        let mut fm = FrontmatterCollector::new(false);
+        let stats = scan_file_multi_stats(&path, &mut [&mut fm], true).unwrap();
+        assert_eq!(stats.size, text.len() as u64);
+        assert_eq!(stats.lines, count_lines(text.as_bytes()));
+        assert!(stats.lines > 5_000, "sanity: the tail was counted");
+
+        // Without exact counting the prefix is all that is measured — cheaper,
+        // and correct for callers that ignore `lines`.
+        let mut fm = FrontmatterCollector::new(false);
+        let prefix_only = scan_file_multi_stats(&path, &mut [&mut fm], false).unwrap();
+        assert_eq!(prefix_only.size, text.len() as u64);
+        assert!(prefix_only.lines < stats.lines);
     }
 }

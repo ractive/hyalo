@@ -404,7 +404,17 @@ pub fn run(
     let content_str = content_lines.join("\n");
 
     // Build the JSON representation (used for both JSON output and the internal pipeline).
-    let mut obj = serde_json::json!({ "file": rel_path });
+    //
+    // iter-252: `size`/`lines` describe the whole file, not the slice being
+    // returned — they are the same two numbers `find` reports, so an agent can
+    // compare a `read --section` result against the file it came from and
+    // decide whether the rest is worth another call.
+    let total_lines = scanner::count_file_lines(&full_path)?;
+    let mut obj = serde_json::json!({
+        "file": rel_path,
+        "size": file_size,
+        "lines": total_lines,
+    });
     if let Some(ref props) = fm_value {
         let json_val =
             serde_json::to_value(props).context("failed to serialize frontmatter as JSON")?;

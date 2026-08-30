@@ -32,7 +32,9 @@ pub(super) fn hints_for_mutation(ctx: &HintContext, data: &serde_json::Value) ->
 }
 
 pub(super) fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
-    let mut hints = Vec::new();
+    // iter-252: a large body is the one case where the *next* command should
+    // not be another whole-file read, so those hints lead.
+    let mut hints = read_size_hints(ctx, data);
 
     let file = data
         .get("file")
@@ -63,6 +65,48 @@ pub(super) fn hints_for_read(ctx: &HintContext, data: &serde_json::Value) -> Vec
         }
     }
 
+    hints
+}
+
+/// Body size (bytes) above which `read` offers a narrower way to read the
+/// file (iter-252). 8 KiB is roughly where a whole-file read stops being a
+/// cheap lookup for an agent and starts being a budget decision.
+pub(super) const READ_LARGE_BODY_BYTES: u64 = 8 * 1024;
+
+/// Suggest reading less of a large file: a leading line range, or one
+/// section. Only fires when the caller asked for the whole body (no
+/// `--lines`, no `--section`) and the file is over
+/// [`READ_LARGE_BODY_BYTES`] — a caller who already narrowed the read needs
+/// no reminder, and a small file has nothing to save.
+pub(super) fn read_size_hints(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
+    let mut hints = Vec::new();
+    if ctx.read_narrowed {
+        return hints;
+    }
+    let size = data.get("size").and_then(serde_json::Value::as_u64);
+    if size.is_none_or(|s| s <= READ_LARGE_BODY_BYTES) {
+        return hints;
+    }
+    let Some(file) = data
+        .get("file")
+        .and_then(|f| f.as_str())
+        .or_else(|| ctx.file_targets.first().map(String::as_str))
+    else {
+        return hints;
+    };
+    let lines = data
+        .get("lines")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let kib = size.unwrap_or(0) / 1024;
+    hints.push(Hint::new(
+        format!("Read only the first 80 of {lines} lines ({kib} KB file)"),
+        build_command_with_file(ctx, &["read"], file, &["--lines", "1:80"]),
+    ));
+    hints.push(Hint::new(
+        "List this file's sections, to read just one",
+        build_command_no_glob(ctx, &["find", "--file", file, "--fields", "sections"]),
+    ));
     hints
 }
 

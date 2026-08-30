@@ -1508,7 +1508,12 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
-            Commands::Read { selection, .. } => {
+            Commands::Read {
+                selection,
+                section,
+                lines,
+                ..
+            } => {
                 let mut ctx = HintContext::from_common(HintSource::Read, &common);
                 if let Some(f) = selection
                     .file_positional
@@ -1517,6 +1522,7 @@ fn run_inner() -> Result<(), AppError> {
                 {
                     ctx.file_targets = vec![f.clone()];
                 }
+                ctx.read_narrowed = section.is_some() || lines.is_some();
                 Some(ctx)
             }
             Commands::Backlinks {

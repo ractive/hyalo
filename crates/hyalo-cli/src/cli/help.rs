@@ -335,6 +335,15 @@ COOKBOOK:
   # Sort by modification time, newest first
   hyalo find --sort modified --reverse --limit 5
 
+  # Full result shape for one file (sections, tasks, links, backlinks)
+  hyalo find --file note.md --fields all
+
+  # Biggest matches first — size (bytes) and lines are on every result item
+  hyalo find --tag research --jq '[.results[] | {file, size, lines}] | sort_by(-.size)'
+
+  # Budget a read: the first 80 lines of a large file
+  hyalo read notes/todo.md --lines 1:80
+
   # Exclude draft files with glob negation
   hyalo find --glob '!**/draft-*'
 

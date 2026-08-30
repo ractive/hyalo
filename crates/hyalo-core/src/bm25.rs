@@ -1917,6 +1917,8 @@ mod tests {
             IndexEntry {
                 rel_path: "a.md".to_owned(),
                 modified: String::new(),
+                size: 0,
+                lines: 0,
                 properties: IndexMap::new(),
                 tags: Vec::new(),
                 sections: Vec::new(),
@@ -1930,6 +1932,8 @@ mod tests {
             IndexEntry {
                 rel_path: "b.md".to_owned(),
                 modified: String::new(),
+                size: 0,
+                lines: 0,
                 properties: IndexMap::new(),
                 tags: Vec::new(),
                 sections: Vec::new(),
@@ -1959,6 +1963,8 @@ mod tests {
         let entries = vec![IndexEntry {
             rel_path: "a.md".to_owned(),
             modified: String::new(),
+            size: 0,
+            lines: 0,
             properties: IndexMap::new(),
             tags: Vec::new(),
             sections: Vec::new(),

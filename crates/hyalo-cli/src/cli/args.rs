@@ -462,15 +462,19 @@ pub(crate) struct FindFilters {
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
-    /// all|properties|properties-typed|tags|sections|tasks|links|backlinks|title (default: properties,tags,sections,links)
+    /// all|properties|properties-typed|tags|sections|tasks|links|backlinks|title (default: title,properties,tags)
     ///
     /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags,
-    /// sections (alias: outline), tasks, links, backlinks, title (default: properties, tags,
-    /// sections, links — excludes tasks, properties-typed, backlinks, and title). Use 'all' to
-    /// include every field. 'file' and 'modified' are always included. 'properties' is a
-    /// {key: value} map; 'properties-typed' is a [{name, type, value}] array; 'backlinks' requires
-    /// scanning all files; 'title' is the frontmatter title property or first H1 heading (null if
-    /// neither found). Note: in JSON output, `properties-typed` is serialized as
+    /// sections (alias: outline), tasks, links, backlinks, title (default: title, properties, tags
+    /// — excludes sections, tasks, links, backlinks, and properties-typed). Use 'all' to
+    /// include every field. 'file', 'modified', 'size' (bytes) and 'lines' are always included.
+    /// A filter that implies a field returns it without --fields: --section adds sections,
+    /// --task adds tasks, --broken-links/--dead-end add links, --orphan adds links and backlinks,
+    /// and --sort links_count/backlinks_count add the field they rank on. 'properties' is a
+    /// {key: value} map WITHOUT the promoted 'title' property (which has its own field whenever
+    /// 'title' is included); 'properties-typed' is a [{name, type, value}] array; 'backlinks'
+    /// requires scanning all files; 'title' is the frontmatter title property or first H1 heading
+    /// (null if neither found). Note: in JSON output, `properties-typed` is serialized as
     /// `properties_typed` (underscore).
     #[arg(
         long,
@@ -720,8 +724,15 @@ pub(crate) enum Commands {
             different heading sets, so there is no single 'the' match to disambiguate against, unlike a \
             single-file mutation. A stderr warning names how many result files hit this (not per-file, \
             to avoid spamming a large result set).\n\n\
-            FIELDS: Use --fields to limit which fields appear (default: all). \
-            Properties are a {key: value} map; use --fields properties-typed for [{name, type, value}] array.\n\
+            FIELDS: Every item carries file, modified, size (bytes) and lines. The default optional \
+            fields are title, properties and tags; sections, tasks, links, backlinks and \
+            properties-typed are opt-in via --fields (or --fields all), or come automatically from \
+            the filter that implies them (--section, --task, --broken-links, --orphan, --dead-end, \
+            --sort links_count|backlinks_count). Properties are a {key: value} map and do NOT repeat \
+            the promoted title; use --fields properties-typed for a [{name, type, value}] array. \
+            --format text prints the included field names under the results.\n\
+            SIZE: size/lines let a caller budget before reading -- pair them with \
+            `read --lines A:B` or `read --section H` instead of pulling a large body whole.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
@@ -1435,10 +1446,16 @@ Repeatable (AND).\n\
             - list: Show all saved views and their filters (default).\n\
             - set: Create or update a view.\n\
             - remove: Delete a view.\n\n\
+            FIELDS: a view may pin --fields, and running it then uses that shape instead of the \
+            compact default (file, modified, size, lines, title, properties, tags). Pin the fields \
+            a query is actually about -- `views set orphans --orphan --fields backlinks` -- so the \
+            saved query stays cheap; a view with no --fields gets the default shape, plus whatever \
+            its own filters imply.\n\n\
             SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only.\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo views list\n\
             \u{00a0} hyalo views set drafts --property status=draft --tag project\n\
+            \u{00a0} hyalo views set audit --broken-links --fields links\n\
             \u{00a0} hyalo find --view drafts --limit 5\n\
             \u{00a0} hyalo views remove drafts"
     )]

@@ -339,7 +339,10 @@ fn format_results_as_text(
         }
     }
 
-    let text = format_value_as_text(results, cache);
+    let mut text = format_value_as_text(results, cache);
+    if let Some(fields_line) = find_fields_summary(results) {
+        let _ = write!(text, "\n{fields_line}");
+    }
     if let Some(total) = total {
         let shown = match results {
             serde_json::Value::Array(arr) => arr.len() as u64,
@@ -350,6 +353,62 @@ fn format_results_as_text(
         }
     }
     text
+}
+
+/// Every field a `find` result item can carry, in the order the JSON struct
+/// declares them. `serde_json::Map` is a `BTreeMap` here (no `preserve_order`
+/// feature), so the keys come back alphabetised — this list restores the
+/// order a reader expects.
+const FIND_FIELD_ORDER: &[&str] = &[
+    "file",
+    "modified",
+    "size",
+    "lines",
+    "title",
+    "properties",
+    "properties_typed",
+    "tags",
+    "sections",
+    "tasks",
+    "links",
+    "backlinks",
+    "matches",
+    "score",
+];
+
+/// The `fields:` footer under a `--format text` find listing (iter-252).
+///
+/// The default result shape omits `sections`, `links`, `tasks`, `backlinks`
+/// and `properties-typed`, and a reader cannot tell an omitted field from an
+/// empty one. Naming what is present — and what `--fields all` would add —
+/// makes the shape self-describing without a round trip.
+///
+/// `None` for anything that is not a non-empty array of find result items
+/// (detected the same way the text renderer detects a `FileObject`: a
+/// `file` + `modified` pair).
+fn find_fields_summary(results: &serde_json::Value) -> Option<String> {
+    let arr = results.as_array()?;
+    let first = arr.first()?.as_object()?;
+    if !(first.contains_key("file") && first.contains_key("modified")) {
+        return None;
+    }
+    let present: Vec<&str> = FIND_FIELD_ORDER
+        .iter()
+        .copied()
+        .filter(|k| first.contains_key(*k))
+        .collect();
+    let missing: Vec<&str> = FIND_FIELD_ORDER
+        .iter()
+        .copied()
+        .filter(|k| {
+            !first.contains_key(*k) && !matches!(*k, "matches" | "score" | "properties_typed")
+        })
+        .collect();
+    let mut line = format!("fields: {}", present.join(", "));
+    if !missing.is_empty() {
+        let _ = write!(line, " (--fields all adds {})", missing.join(", "));
+    }
+    Some(line)
 }
 
 /// Format an error for output to stderr.

@@ -3368,3 +3368,36 @@ errors on stderr with exit codes.
 **Constraint carried into both iterations.** No new CLI flags
 ([[decision-log#DEC-249]] discipline): every adoption is a default, a
 layout, a hint, or metadata on existing output.
+
+## DEC-252: `title` is promoted out of `properties`, and `--fields all` is hinted only where it is affordable (2026-08-30)
+
+**Decision (a):** `find` promotes `title` to a top-level field in the default
+result shape and stops repeating it inside the `properties` map. The removal
+happens *after* sorting and filtering, so `--sort property:title` and
+`--property title=…` compare exactly what they compared before; only the
+serialized payload changes. `--fields properties` without `title` still
+carries the raw `title` property, so no request can lose the value.
+
+**Why:** `tags` has been promoted this way since the first `find`, so the rule
+already existed — `title` joining the default field set (iteration 252) simply
+made the duplicate visible: the same string, twice, in every result item. It
+is also what closed the last kilobyte of the iteration's byte budget: the
+20-file own-KB listing lands at 11.9 KB against a 12 KB acceptance criterion,
+where keeping the duplicate put it at 13.3 KB. Callers reading
+`.results[].properties.title` must read `.results[].title` — recorded as a
+breaking change in the 0.22.0 changelog, and swept out of the bundled skills,
+the knowledgebase rule file and the tests in the same PR.
+
+**Decision (b):** the `--fields all` hint fires only for an untruncated result
+set of five or fewer items, not on every `find` as
+[[iterations/iteration-252-find-result-shape]] proposed.
+
+**Why:** `--fields all` is roughly a 10x payload — precisely the cost this
+iteration removed. Suggesting it under a 50-file listing would hand an agent
+the bill it was just spared, and with `MAX_HINTS = 5` it would displace the
+narrowing hints (`--limit`, narrow-by-tag) that actually help at that size.
+Where the whole result set is a handful of files, expanding it is cheap and
+the hint is the fastest way to the full shape. The general statement lives
+where it costs nothing instead: the `--format text` `fields:` summary line
+names what the payload carries and what `--fields all` would add, and
+`find --help` says the same.
