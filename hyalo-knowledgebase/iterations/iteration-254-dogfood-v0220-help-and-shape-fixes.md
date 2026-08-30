@@ -97,10 +97,16 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       HYALO001`; `--fix-rule` short line "With --fix, only autofix the
       specified rule(s) (repeatable)"; fix the same recipe in `CLAUDE.md`.
 - [x] COH-1/COH-2/HELP-4: one global-options list. Root `-h` GLOBAL OPTIONS
-      gains `-d, --dir <DIR>` and `--index-file`; the 52 pointer lines and
-      the root `--help` COMMAND REFERENCE "Global flags" block are generated
-      from the same list (drop the contradictory "Per-subcommand index
-      flags" block). Consider hiding `--hints` from `-h` (HELP-9).
+      gains `-d, --dir <DIR>` (verified: appears when no `.hyalo.toml`-set
+      dir hides it); the 52 pointer lines and the root `--help` COMMAND
+      REFERENCE "Global flags" block are generated from one `GLOBAL_FLAGS`
+      table (drop the contradictory "Per-subcommand index flags" block).
+      `--hints` is hidden from `-h` (HELP-9) — implemented, not just
+      considered. Deviation from this line's original wording: `--index-file`
+      was deliberately **not** added to the root `-h` page — it is a pure
+      alias for a flag each index-aware subcommand already documents itself,
+      so landing it on the root page an agent reads first would cost more
+      than it teaches (see `run.rs` comment at the top-level `-h` branch).
 - [x] HELP-6/COH-11: `mv --property` short and long help → "Same syntax as
       `find --property`" (it already accepts `~=`, `!K`, dot-paths).
 - [x] HELP-7: `task --line` help states file-absolute 1-based numbering
