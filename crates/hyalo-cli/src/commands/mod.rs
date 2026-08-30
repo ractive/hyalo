@@ -50,10 +50,12 @@ use hyalo_core::discovery::{self, FileResolveError};
 /// behaviour change needing a DEC), both now state the same three facts:
 /// the encoding is the problem, full-text search excludes the file, and
 /// `-e` still reaches it. A single constant is the only way to keep them
-/// from drifting apart again, and `invalid_utf8_wording_is_shared` in
-/// `tests/e2e/read.rs` pins that both surfaces really do print it.
-pub(crate) const INVALID_UTF8_CONSEQUENCE: &str =
-    "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
+/// from drifting apart again, and
+/// `invalid_utf8_wording_is_shared_by_read_and_find` in
+/// `tests/e2e/iteration255_followups.rs` pins that both surfaces really do
+/// print it — alongside a second test that checks each claim against real
+/// behaviour, so the two can agree without both being wrong.
+pub(crate) const INVALID_UTF8_CONSEQUENCE: &str = "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
 
 /// Refuse a write whose destination resolves outside the vault.
 ///

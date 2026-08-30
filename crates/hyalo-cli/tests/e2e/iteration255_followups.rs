@@ -19,8 +19,7 @@ use tempfile::TempDir;
 /// print — the pin for `commands::INVALID_UTF8_CONSEQUENCE`. Written out in
 /// full here on purpose: a test that imported the constant would pass even if
 /// the constant itself started lying again.
-const UTF8_SENTENCE: &str =
-    "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
+const UTF8_SENTENCE: &str = "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
 
 fn hyalo(tmp: &TempDir) -> Command {
     let mut cmd = crate::common::hyalo_no_hints();
@@ -52,9 +51,9 @@ fn run_json(tmp: &TempDir, args: &[&str]) -> serde_json::Value {
 
 /// `find --count --format json` emits a bare number, not an envelope.
 fn count(tmp: &TempDir, args: &[&str]) -> u64 {
-    let mut argv = args.to_vec();
-    argv.push("--count");
-    let output = run(tmp, &argv);
+    let mut with_count = args.to_vec();
+    with_count.push("--count");
+    let output = run(tmp, &with_count);
     String::from_utf8_lossy(&output.stdout)
         .trim()
         .parse()
