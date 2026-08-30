@@ -426,6 +426,7 @@ pub fn run_release(
     let payload = serde_json::json!({
         "command": "changelog release",
         "apply": apply,
+        "dry_run": !apply,
         "file": display,
         "version": version,
         "date": date_owned,
@@ -590,6 +591,7 @@ pub fn run_add(
     let payload = serde_json::json!({
         "command": "changelog add",
         "apply": apply,
+        "dry_run": !apply,
         "file": display,
         "category": canonical,
         "message": message.trim(),

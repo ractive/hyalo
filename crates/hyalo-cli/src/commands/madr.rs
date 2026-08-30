@@ -125,6 +125,7 @@ pub fn run_toc(
     let mut payload = serde_json::json!({
         "command": "madr toc",
         "apply": apply,
+        "dry_run": !apply,
         "adr_dir": adr_rel,
         "adrs": entries.len(),
         "changed": changed,

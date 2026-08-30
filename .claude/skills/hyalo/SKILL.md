@@ -1,1 +1,0 @@
-../../../crates/hyalo-cli/templates/skill-hyalo.md
