@@ -291,6 +291,28 @@ pub(super) fn lint_one_file_extended(
             });
     }
 
+    // HYALO007 — title-not-scalar: a list/map `title` cannot be promoted.
+    for diag in
+        engine.lint_frontmatter_hyalo007(rel_path, &properties, md_lint_config, rule_filter, strict)
+    {
+        let sev = match diag.severity {
+            hyalo_mdlint::DiagSeverity::Error => "error",
+            hyalo_mdlint::DiagSeverity::Warn => "warn",
+        };
+        violations_by_rule
+            .entry("HYALO007".to_owned())
+            .or_default()
+            .push(InternalViolation {
+                line: diag.line,
+                column: diag.column,
+                message: diag.message,
+                severity: sev.to_owned(),
+                fix: None,
+                fixed: false,
+                autofixable: None,
+            });
+    }
+
     // HYALO004 — datetime-format: schema-declared datetime properties must
     // hold `YYYY-MM-DDThh:mm:ss` values.
     let doc_type_for_dt: Option<&str> = properties.get("type").and_then(|v| v.as_str());

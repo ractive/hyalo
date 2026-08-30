@@ -16,6 +16,14 @@
 //!
 //! 3d. (iter-251) Every subcommand's `-h` ends with the one-line global-options
 //!     pointer instead of reprinting the block.
+//!
+//! 3e. (iter-254) No short-help entry on any `-h` page ends mid-sentence, and
+//!     none spans more than two rendered lines. The iter-251 split moved the
+//!     detail of each doc comment into a second paragraph, but sixteen of them
+//!     were cut at a line break rather than at a sentence boundary, so `-h`
+//!     shipped lines like "…; reject writes that would" and "Scaffold a preset
+//!     vault flavour (okf, madr, skills, changelog) by". Nothing failed, which
+//!     is exactly why it needs a gate.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -288,6 +296,247 @@ fn check_stale_patterns(root: &std::path::Path, patterns: &[StalePattern]) -> Ve
     failures
 }
 
+/// Every `-h` page gate 3e walks — the root, every subcommand, and every
+/// nested sub-action.
+///
+/// Deliberately separate from [`SUBCOMMANDS`]: a nested action like
+/// `links fix` is not held to the EXAMPLES bar (its parent's `--help` carries
+/// them) but its short help still has to read as sentences.
+const SHORT_HELP_PAGES: &[&[&str]] = &[
+    &[],
+    &["find"],
+    &["read"],
+    &["properties"],
+    &["properties", "summary"],
+    &["properties", "rename"],
+    &["tags"],
+    &["tags", "summary"],
+    &["tags", "rename"],
+    &["task"],
+    &["task", "read"],
+    &["task", "toggle"],
+    &["task", "set"],
+    &["summary"],
+    &["backlinks"],
+    &["mv"],
+    &["set"],
+    &["remove"],
+    &["append"],
+    &["init"],
+    &["deinit"],
+    &["create-index"],
+    &["drop-index"],
+    &["views"],
+    &["views", "list"],
+    &["views", "set"],
+    &["views", "remove"],
+    &["views", "run"],
+    &["links"],
+    &["links", "fix"],
+    &["links", "auto"],
+    &["lint"],
+    &["lint-rules"],
+    &["lint-rules", "list"],
+    &["lint-rules", "show"],
+    &["lint-rules", "set"],
+    &["lint-rules", "remove"],
+    &["types"],
+    &["types", "list"],
+    &["types", "show"],
+    &["types", "set"],
+    &["types", "remove"],
+    &["new"],
+    &["okf"],
+    &["okf", "index"],
+    &["okf", "log"],
+    &["madr"],
+    &["madr", "toc"],
+    &["changelog"],
+    &["changelog", "release"],
+    &["changelog", "add"],
+    &["config"],
+    &["completions"],
+];
+
+/// Words a short-help line must not end on: cutting a doc comment at a line
+/// break rather than a sentence boundary almost always leaves one of these
+/// dangling (iter-254, gate 3e).
+const DANGLING_WORDS: &[&str] = &[
+    "and", "or", "by", "if", "to", "a", "the", "rather", "would", "(no",
+];
+
+/// Maximum rendered lines one short-help entry may occupy (iter-254, gate 3e).
+///
+/// Three or more means the text belongs in the `--help` paragraph, not on the
+/// page an agent reads first.
+const MAX_SHORT_HELP_LINES: usize = 2;
+
+/// One flag/argument entry parsed out of a rendered `-h` page.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ShortHelpEntry {
+    /// The flag or argument column, e.g. `-f, --file <FILE>`.
+    pub flag: String,
+    /// The help column, with clap's wrapping undone.
+    pub text: String,
+    /// How many rendered lines the entry occupies.
+    pub lines: usize,
+}
+
+/// Split a rendered `-h` page into its flag/argument entries.
+///
+/// clap renders an entry as `  <flag column>  <help column>`, continuing the
+/// help column on following lines indented past the column start. Anything
+/// less indented (a section header, a blank line, the trailing global-options
+/// pointer) ends the entry.
+#[must_use]
+pub fn parse_short_help_entries(help: &str) -> Vec<ShortHelpEntry> {
+    /// Column at or beyond which a line is a wrapped continuation rather than
+    /// a new entry. clap indents help-column continuations well past this.
+    const CONTINUATION_INDENT: usize = 10;
+
+    let starts_entry = |line: &str| {
+        let indent = line.len() - line.trim_start().len();
+        if !(2..CONTINUATION_INDENT).contains(&indent) {
+            return false;
+        }
+        let rest = line.trim_start();
+        rest.starts_with('-') || rest.starts_with('[') || rest.starts_with('<')
+    };
+
+    let mut entries = Vec::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+
+    let flush = |current: &mut Option<(String, Vec<String>)>, entries: &mut Vec<ShortHelpEntry>| {
+        if let Some((flag, parts)) = current.take() {
+            entries.push(ShortHelpEntry {
+                flag,
+                text: parts.join(" "),
+                lines: parts.len(),
+            });
+        }
+    };
+
+    for line in help.lines() {
+        if starts_entry(line) {
+            flush(&mut current, &mut entries);
+            // Split the flag column from the help column on the run of two or
+            // more spaces clap puts between them. A flag with no help text on
+            // the same line (clap's wide layout) starts with an empty help.
+            let trimmed = line.trim_end();
+            match trimmed.trim_start().split_once("  ") {
+                Some((flag, help_col)) => {
+                    let help_col = help_col.trim().to_owned();
+                    let parts = if help_col.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![help_col]
+                    };
+                    current = Some((flag.trim().to_owned(), parts));
+                }
+                None => current = Some((trimmed.trim().to_owned(), Vec::new())),
+            }
+        } else if let Some((_, parts)) = current.as_mut() {
+            let indent = line.len() - line.trim_start().len();
+            if line.trim().is_empty() || indent < CONTINUATION_INDENT {
+                flush(&mut current, &mut entries);
+            } else {
+                parts.push(line.trim().to_owned());
+            }
+        }
+    }
+    flush(&mut current, &mut entries);
+    entries
+}
+
+/// Report every gate-3e problem in one rendered `-h` page.
+///
+/// Returns `(flag, reason)` pairs so the caller can prefix them with the
+/// command they came from.
+#[must_use]
+pub fn dangling_short_help(help: &str) -> Vec<(String, String)> {
+    let mut issues = Vec::new();
+    for entry in parse_short_help_entries(help) {
+        if entry.text.is_empty() {
+            continue;
+        }
+        // clap appends `[default: …]` / `[aliases: …]` after the help text;
+        // the sentence ends before them.
+        let text = strip_clap_suffixes(&entry.text);
+        if text.ends_with([',', ';', ':']) {
+            issues.push((
+                entry.flag.clone(),
+                format!("short help ends mid-sentence: \"…{}\"", tail(text)),
+            ));
+        } else if let Some(last) = text.split_whitespace().next_back()
+            && DANGLING_WORDS.contains(&last.trim_end_matches('.').to_lowercase().as_str())
+        {
+            issues.push((
+                entry.flag.clone(),
+                format!(
+                    "short help ends on the dangling word {last:?}: \"…{}\"",
+                    tail(text)
+                ),
+            ));
+        }
+        if entry.lines > MAX_SHORT_HELP_LINES {
+            issues.push((
+                entry.flag.clone(),
+                format!(
+                    "short help spans {} rendered lines (max {MAX_SHORT_HELP_LINES}); move the \
+                     detail into the second paragraph of the doc comment",
+                    entry.lines
+                ),
+            ));
+        }
+    }
+    issues
+}
+
+/// Drop clap's trailing `[default: …]` / `[aliases: …]` annotation.
+fn strip_clap_suffixes(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    let Some(open) = trimmed.rfind('[') else {
+        return trimmed;
+    };
+    if !trimmed.ends_with(']') {
+        return trimmed;
+    }
+    let inside = &trimmed[open + 1..trimmed.len() - 1];
+    for tag in ["default:", "aliases:", "alias:", "possible values:"] {
+        if inside.starts_with(tag) {
+            return trimmed[..open].trim_end();
+        }
+    }
+    trimmed
+}
+
+/// The last few words of `text`, for a diagnostic that fits on one line.
+fn tail(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words[words.len().saturating_sub(6)..].join(" ")
+}
+
+/// 3e: no short-help entry ends mid-sentence or overflows two rendered lines.
+fn check_short_help_fragments(root: &std::path::Path) -> Vec<String> {
+    let mut failures = Vec::new();
+    for argv in SHORT_HELP_PAGES {
+        let cmd_label = if argv.is_empty() {
+            "hyalo".to_owned()
+        } else {
+            format!("hyalo {}", argv.join(" "))
+        };
+        let Some(help) = short_help_text(root, argv) else {
+            continue;
+        };
+        for (flag, reason) in dangling_short_help(&help) {
+            failures.push(format!(
+                "Help drift (3e): '{cmd_label} -h' {flag}: {reason}"
+            ));
+        }
+    }
+    failures
+}
+
 pub fn run() -> Result<bool> {
     let root = workspace_root()?;
     run_with_root(&root)
@@ -307,10 +556,13 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     let short_help_failures = check_short_help(root);
     all_failures.extend(short_help_failures);
 
+    let fragment_failures = check_short_help_fragments(root);
+    all_failures.extend(fragment_failures);
+
     if all_failures.is_empty() {
         println!(
             "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, and \
-             short help within its byte ceilings."
+             short help within its byte ceilings with no sentence fragments."
         );
         Ok(true)
     } else {
@@ -376,6 +628,83 @@ EXAMPLES:
   hyalo find "rust"
 "#;
         assert_eq!(count_examples(help), 1);
+    }
+
+    // --- 3e: short-help fragment guard ---
+
+    /// A rendered `-h` page in clap's narrow layout, with one clean entry, one
+    /// entry cut mid-sentence, one ending on a dangling word, and one wrapped
+    /// across three lines.
+    const SAMPLE_HELP: &str = "\
+Do a thing
+
+Usage: hyalo thing [OPTIONS]
+
+Options:
+  -f, --file <FILE>    Target file(s), repeatable (excludes --glob)
+      --section <H>    Extract section(s) by substring match;
+      --profile <P>    Scaffold a preset vault flavour (okf, madr, skills) by
+      --threshold <N>  Minimum stem similarity for a fuzzy candidate [default: 0.8]
+      --wordy          One two three four five six seven eight nine ten
+                       eleven twelve thirteen fourteen fifteen sixteen
+                       seventeen eighteen nineteen twenty
+  -h, --help           Print help
+
+Global: --format -q — see `hyalo -h`
+";
+
+    #[test]
+    fn parses_entries_and_unwraps_continuations() {
+        let entries = parse_short_help_entries(SAMPLE_HELP);
+        let flags: Vec<&str> = entries.iter().map(|e| e.flag.as_str()).collect();
+        assert_eq!(
+            flags,
+            vec![
+                "-f, --file <FILE>",
+                "--section <H>",
+                "--profile <P>",
+                "--threshold <N>",
+                "--wordy",
+                "-h, --help",
+            ]
+        );
+        let wordy = entries.iter().find(|e| e.flag == "--wordy").unwrap();
+        assert_eq!(wordy.lines, 3);
+        assert!(wordy.text.contains("ten eleven"), "{}", wordy.text);
+    }
+
+    #[test]
+    fn flags_trailing_punctuation_dangling_word_and_overflow() {
+        let issues = dangling_short_help(SAMPLE_HELP);
+        let flagged: Vec<&str> = issues.iter().map(|(f, _)| f.as_str()).collect();
+        assert!(flagged.contains(&"--section <H>"), "{issues:?}");
+        assert!(flagged.contains(&"--profile <P>"), "{issues:?}");
+        assert!(flagged.contains(&"--wordy"), "{issues:?}");
+        assert!(!flagged.contains(&"-f, --file <FILE>"), "{issues:?}");
+        assert!(!flagged.contains(&"-h, --help"), "{issues:?}");
+    }
+
+    #[test]
+    fn clap_default_suffix_does_not_hide_the_sentence_end() {
+        // `--threshold` is clean; the `[default: 0.8]` must not be mistaken
+        // for the end of the sentence, nor mask a dangling word before it.
+        let issues = dangling_short_help(SAMPLE_HELP);
+        assert!(
+            !issues.iter().any(|(f, _)| f == "--threshold <N>"),
+            "{issues:?}"
+        );
+        let cut = "Options:\n      --threshold <N>  Similarity for a file to be considered a [default: 0.8]\n";
+        assert_eq!(dangling_short_help(cut).len(), 1, "{cut}");
+    }
+
+    #[test]
+    fn strip_clap_suffixes_leaves_a_real_bracket_alone() {
+        assert_eq!(strip_clap_suffixes("Text [default: 3]"), "Text");
+        assert_eq!(
+            strip_clap_suffixes("Matches 'Tasks [4/4]'"),
+            "Matches 'Tasks [4/4]'"
+        );
+        assert_eq!(strip_clap_suffixes("Plain text"), "Plain text");
     }
 
     #[test]

@@ -22,12 +22,44 @@ pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
 /// Keeping it in one place prevents future help-text drift across `find`,
 /// `set`, `remove`, and `append`.
-const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
+pub(crate) const FILE_FLAG_DOC: &str = "Target file(s) (repeatable; falls back to case-insensitive matching \
      per `[links] case_insensitive`, default auto). Mutually exclusive with --glob and --files-from";
 
 /// One-line `-h` form of [`FILE_FLAG_DOC`] (iter-251). The case-folding and
 /// mutual-exclusion detail stays on `--help`, where there is room for it.
-const FILE_FLAG_SHORT_DOC: &str = "Target file(s), repeatable (excludes --glob / --files-from)";
+pub(crate) const FILE_FLAG_SHORT_DOC: &str =
+    "Target file(s), repeatable (excludes --glob / --files-from)";
+
+/// Shared `--glob` doc string for the `--file` / `--glob` / `--files-from`
+/// input trio.
+pub(crate) const GLOB_FLAG_DOC: &str = "Glob pattern(s) to select files, relative to --dir (repeatable); \
+     prefix '!' to negate (e.g. '!**/draft-*'). Mutually exclusive with --file and --files-from";
+
+/// One-line `-h` form of [`GLOB_FLAG_DOC`] (iter-254, HELP-2). Identical to the
+/// line `find -h` shows, so the trio reads the same on every command.
+pub(crate) const GLOB_FLAG_SHORT_DOC: &str = "Glob(s) relative to --dir, repeatable; '!' negates \
+     ('!**/draft-*')";
+
+/// Shared `--files-from` doc string for the input trio.
+pub(crate) const FILES_FROM_FLAG_DOC: &str = "Read file paths from PATH (one per line); use '-' to read from \
+     stdin. Mutually exclusive with --file and --glob. Non-.md paths and paths outside the vault \
+     are silently skipped. Repo-relative paths with the configured vault dir prefix are resolved \
+     automatically. Input is deduplicated; results follow first-seen order.";
+
+/// One-line `-h` form of [`FILES_FROM_FLAG_DOC`] (iter-254, HELP-2).
+pub(crate) const FILES_FROM_FLAG_SHORT_DOC: &str =
+    "Read paths from PATH, one per line ('-' = stdin)";
+
+/// Shared `task --section` doc string: unlike `find --section`, a heading that
+/// matches more than once is an error rather than a union.
+pub(crate) const TASK_SECTION_FLAG_DOC: &str = "Select all tasks under a heading: case-insensitive substring, \
+     '##' pins the level, or /regex/. Refuses with an error naming every matched heading's line \
+     number when more than one distinct heading matches (unlike `find --section`, which unions \
+     them).";
+
+/// One-line `-h` form of [`TASK_SECTION_FLAG_DOC`] (iter-254, HELP-2).
+pub(crate) const TASK_SECTION_FLAG_SHORT_DOC: &str = "Heading substring, '##' pins the level, or /regex/ \
+     (refuses if ambiguous)";
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires &bool
 pub(crate) fn is_false(v: &bool) -> bool {
@@ -56,15 +88,19 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
 /// Index flags, flattened into subcommands that can consume a snapshot index.
 #[derive(Args, Debug, Default, Clone)]
 pub(crate) struct IndexFlags {
+    // COH-8 (iter-254): the maintenance note below is for whoever edits this
+    // list, not for the ~15 `--help` pages it used to be printed on. A rustdoc
+    // intra-doc link renders as literal `[`crate::…`]` in a terminal, which is
+    // noise at best and a dangling reference at worst.
+    //
+    // This set is *index support*, not the *list commands* of
+    // [`crate::list_commands::LIST_COMMANDS`] — it includes `summary` (which
+    // emits no `total`) and excludes the config-only listings. The two lists
+    // answer different questions and are deliberately maintained apart.
     /// Use the `.hyalo-index` snapshot in the vault dir
     ///
     /// Read-only commands (find, summary, tags summary, properties summary,
     /// backlinks) skip the disk scan entirely when the index is present.
-    ///
-    /// This set is *index support*, not the *list commands* of
-    /// [`crate::list_commands::LIST_COMMANDS`] — it includes `summary` (which
-    /// emits no `total`) and excludes the config-only listings. The two lists
-    /// answer different questions and are deliberately maintained apart.
     ///
     /// Mutation commands (set, remove, append, task, mv, tags rename,
     /// properties rename, links fix) still read/write individual files on disk
@@ -311,7 +347,12 @@ pub(crate) struct Cli {
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
     /// JSON mode: populates the "hints" array in the envelope (always present, empty when suppressed).
     /// Suppressed when --jq is active.
-    #[arg(long, global = true)]
+    //
+    // iter-254 (HELP-9): hidden from `-h`. A flag that forces on what is
+    // already on teaches nothing on the page an agent reads first, and
+    // `--no-hints` sitting right beside it already says which way the default
+    // points. `--help` still documents it.
+    #[arg(long, global = true, hide_short_help = true)]
     pub hints: bool,
 
     /// Disable drill-down hints (on by default)
@@ -462,20 +503,31 @@ pub(crate) struct FindFilters {
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
-    /// all|properties|properties-typed|tags|sections|tasks|links|backlinks|title (default: title,properties,tags)
+    /// all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
     ///
-    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags,
-    /// sections (alias: outline), tasks, links, backlinks, title (default: title, properties, tags
-    /// — excludes sections, tasks, links, backlinks, and properties-typed). Use 'all' to
-    /// include every field. 'file', 'modified', 'size' (bytes) and 'lines' are always included.
-    /// A filter that implies a field returns it without --fields: --section adds sections,
-    /// --task adds tasks, --broken-links/--dead-end add links, --orphan adds links and backlinks,
-    /// and --sort links_count/backlinks_count add the field they rank on. 'properties' is a
-    /// {key: value} map WITHOUT the promoted 'title' property (which has its own field whenever
-    /// 'title' is included); 'properties-typed' is a [{name, type, value}] array; 'backlinks'
-    /// requires scanning all files; 'title' is the frontmatter title property or first H1 heading
-    /// (null if neither found). Note: in JSON output, `properties-typed` is serialized as
-    /// `properties_typed` (underscore).
+    /// Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
+    /// exactly the named fields plus file (filters add what they need).
+    ///
+    /// `file` is the only unconditional key — it names the result — so `--fields title` returns
+    /// {file, title} and `--fields size,lines` returns {file, size, lines}. `modified`, `size`
+    /// and `lines` are ordinary members of the default set: cheap enough to always pay for, and
+    /// the inputs an agent uses to choose its next call (`read --lines`, recency), but dropped
+    /// when an explicit --fields does not name them. `--fields file` is accepted and means
+    /// {file}; `--fields all` selects everything. A saved view's pinned `fields` behaves exactly
+    /// like an explicit --fields; a CLI --fields on top replaces the pin rather than adding to it.
+    ///
+    /// A filter that implies a field still returns it, on top of whatever set is in force:
+    /// --section adds sections, --task adds tasks, --broken-links adds links,
+    /// --orphan/--dead-end add links and backlinks, and --sort links_count/backlinks_count add
+    /// the field they rank on.
+    ///
+    /// 'properties' is a {key: value} map WITHOUT the promoted 'title' property (which has its
+    /// own field whenever 'title' is included, and stays in the map when the frontmatter value
+    /// is a list or a map and so cannot be promoted); 'properties-typed' is a
+    /// [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the
+    /// frontmatter title property — any scalar, stringified as written — or the first H1
+    /// heading (null if neither found). 'outline' is an alias for 'sections'. Note: in JSON
+    /// output, `properties-typed` is serialized as `properties_typed` (underscore).
     #[arg(
         long,
         value_name = "FIELDS",
@@ -533,17 +585,17 @@ pub(crate) struct FindFilters {
     #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub strict: bool,
-    /// Only orphan files: no inbound and no outbound links
+    /// Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
     ///
-    /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks
-    /// field).
+    /// Deciding orphanhood needs both directions of the graph, so both fields come back
+    /// whether or not --fields names them.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub orphan: bool,
-    /// Only dead-end files: inbound links but no outbound links
+    /// Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
     ///
-    /// Only return dead-end files: have inbound links but no outbound links (auto-includes links
-    /// field).
+    /// Deciding dead-endedness needs both directions of the graph, so both fields come back
+    /// whether or not --fields names them.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub dead_end: bool,
@@ -638,7 +690,14 @@ impl FindFilters {
             self.glob.extend(overlay.glob.iter().cloned());
             self.file.clear();
         }
-        self.fields.extend(overlay.fields.iter().cloned());
+        // iter-254 (DEC-254): --fields is a projection, not an accumulator.
+        // A pinned `fields` behaves exactly like an explicit --fields, so a CLI
+        // --fields REPLACES the pin — extending it would make
+        // `find --view titles --fields tags` return more than either alone
+        // asked for, and there would be no way to narrow a view.
+        if !overlay.fields.is_empty() {
+            self.fields.clone_from(&overlay.fields);
+        }
         if overlay.sort.is_some() {
             self.sort.clone_from(&overlay.sort);
         }
@@ -667,11 +726,15 @@ impl FindFilters {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Search and filter markdown files — returns file objects with metadata, structure, tasks, and links
+    /// Search and filter markdown files — returns one compact object per file (see --fields)
     #[command(long_about = "Search and filter markdown files.\n\n\
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
-            Each item in results contains the file path, modified time, \
-            and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
+            Each item carries the default field set — file, modified, size, lines, title, \
+            properties, tags — where `title` is promoted out of `properties`. \
+            --fields adds sections, tasks, links, backlinks and properties-typed, and an \
+            explicit --fields is an exact projection: exactly the named fields plus `file`, \
+            which is the one key no projection can drop. A filter that needs a field adds it \
+            regardless.\n\n\
             SEARCH MODES:\n\
             - PATTERN (positional): BM25 ranked full-text search with stemming. Results are sorted by \
             relevance score (highest first) unless --sort is specified. Each result includes a numeric \
@@ -745,8 +808,8 @@ pub(crate) enum Commands {
             --strict still flips the exit code (1 when results exist), so `find --filenames-only\n\
             --strict` is a CI gate that lists the offenders and fails.\n\
             --filenames0 is the NUL-delimited sibling (GNU `find -print0` precedent): each\n\
-            path ends in \u{00} instead of \n, safe for filenames containing newlines; pair it\n\
-            with `xargs -0`. Same zero-results/conflict/--strict rules as --filenames-only.\n\
+            path ends in a NUL byte instead of a newline, safe for filenames containing\n\
+            newlines; pair it with `xargs -0`. Same zero-results/conflict/--strict rules as --filenames-only.\n\
             SEQUENCE-KEYED FILES (iterations, decisions, ...): address them by glob, and remember\n\
             the number may be zero-padded and the file archived in a subdirectory —\n\
             `find --glob '**/iteration-02-*.md'` reaches both `iterations/iteration-2-*.md`\n\
@@ -767,14 +830,14 @@ pub(crate) enum Commands {
             A path already present in an `--index-file` snapshot is accepted without touching disk.\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo find 'error handling'\n\
-            \u{00a0} hyalo find --property status=draft --tag project\n\
-            \u{00a0} hyalo find --property 'title~=/^Design/i'\n\
-            \u{00a0} hyalo find --property contacts.email=team@example.com   # dot-path into a list of maps\n\
-            \u{00a0} hyalo find --section 'Tasks' --task todo\n\
-            \u{00a0} hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'\n\
-            \u{00a0} hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
-            \u{00a0} git diff --name-only origin/main | hyalo find --files-from -")]
+            hyalo find 'error handling'\n\
+            hyalo find --property status=draft --tag project\n\
+            hyalo find --property 'title~=/^Design/i'\n\
+            hyalo find --property contacts.email=team@example.com   # dot-path into a list of maps\n\
+            hyalo find --section 'Tasks' --task todo\n\
+            hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'\n\
+            hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
+            git diff --name-only origin/main | hyalo find --files-from -")]
     Find {
         /// BM25 ranked full-text body search (stemmed; sorted by relevance)
         ///
@@ -806,24 +869,39 @@ pub(crate) enum Commands {
             pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
-            Pass --format json to get {\"results\": {\"file\": \"...\", \"content\": \"...\"}, \"hints\": [...]}.\n\
+            Pass --format json to get \
+            {\"results\": {\"file\": \"...\", \"size\": N, \"lines\": N, \"content\": \"...\"}, \"hints\": [...]}. \
+            `size` (body bytes) and `lines` (body line count) are the same numbers `find` reports, \
+            so the two commands agree on what a read will cost. Text mode prints the body and \
+            nothing else \u{2014} a header line would corrupt `hyalo read x.md > x.txt` and every \
+            pipe into another tool \u{2014} so the size shows up there only in the hint below.\n\
+            BUDGETING A LARGE READ: over 8 KiB of body, `read` stops offering the whole file as a \
+            cheap lookup and hints at two narrower reads instead \u{2014} `read --lines 1:80` for a \
+            leading slice, or `find --file <path> --fields sections` to pick one section and then \
+            `read --section`. The hint is suppressed once --lines or --section is already in play.\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo read notes/todo.md\n\
-            \u{00a0} hyalo read --file notes/todo.md --section Tasks\n\
-            \u{00a0} hyalo read --file notes/todo.md --lines 1:20\n\
-            \u{00a0} hyalo read --file notes/todo.md --frontmatter --format json"
+            hyalo read notes/todo.md\n\
+            hyalo read --file notes/todo.md --section Tasks\n\
+            hyalo read --file notes/todo.md --lines 1:20\n\
+            hyalo read --file notes/todo.md --frontmatter --format json"
     )]
     Read {
         #[command(flatten)]
         selection: InputSelection,
-        /// Extract section(s) by substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+        /// Heading substring, '##' pins the level, or /regex/ (nested subsections included)
         ///
-        /// prefix '##' to pin heading level; use '/regex/' for regex. Nested subsections included
+        /// Extract section(s) by case-insensitive substring match (e.g. 'Tasks' matches
+        /// 'Tasks [4/4]'); prefix '##' to pin the heading level; use '/regex/' for a regex.
+        /// Nested subsections are included.
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
-        /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
-        #[arg(short, long)]
+        /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
+        ///
+        /// The frontmatter block is not counted, so line 1 is the first line after it — even
+        /// with --frontmatter. Note that `task --line` counts differently: those numbers are
+        /// file-absolute, with the frontmatter included.
+        #[arg(short, long, value_name = "RANGE")]
         lines: Option<String>,
         /// Include the YAML frontmatter in output
         #[arg(long)]
@@ -837,9 +915,9 @@ pub(crate) enum Commands {
         - summary: Unique property names, types, and file counts (read-only).\n\
         - rename: Rename a property key across files (mutates files).\n\n\
         EXAMPLES:\n\
-        \u{00a0} hyalo properties summary\n\
-        \u{00a0} hyalo properties summary --glob 'research/**/*.md'\n\
-        \u{00a0} hyalo properties rename --from old-key --to new-key")]
+        hyalo properties summary\n\
+        hyalo properties summary --glob 'research/**/*.md'\n\
+        hyalo properties rename --from old-key --to new-key")]
     Properties {
         /// Glob pattern(s) to filter which files to scan, relative to --dir
         ///
@@ -861,9 +939,9 @@ pub(crate) enum Commands {
         - summary: Unique tags with file counts (read-only).\n\
         - rename: Rename a tag across files (mutates files).\n\n\
         EXAMPLES:\n\
-        \u{00a0} hyalo tags summary\n\
-        \u{00a0} hyalo tags summary --glob 'research/**/*.md'\n\
-        \u{00a0} hyalo tags rename --from old-tag --to new-tag")]
+        hyalo tags summary\n\
+        hyalo tags summary --glob 'research/**/*.md'\n\
+        hyalo tags rename --from old-tag --to new-tag")]
     Tags {
         /// Glob pattern(s) to filter which files to scan, relative to --dir
         ///
@@ -889,11 +967,11 @@ pub(crate) enum Commands {
             SCOPE: Single file only.\n\
             SIDE EFFECTS: 'toggle' and 'set' modify the file on disk. 'read' is read-only.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo task toggle todo.md --all\n\
-            \u{00a0} hyalo task toggle todo.md --section Tasks\n\
-            \u{00a0} hyalo task toggle todo.md --line 5,7,9\n\
-            \u{00a0} hyalo task read todo.md --line 5\n\
-            \u{00a0} hyalo task set todo.md --line 5 --status '-'")]
+            hyalo task toggle todo.md --all\n\
+            hyalo task toggle todo.md --section Tasks\n\
+            hyalo task toggle todo.md --line 5,7,9\n\
+            hyalo task read todo.md --line 5\n\
+            hyalo task set todo.md --line 5 --status '-'")]
     Task {
         #[command(subcommand)]
         action: TaskAction,
@@ -922,21 +1000,26 @@ pub(crate) enum Commands {
             from `-n` on find and backlinks, where `-n` is `--limit` and caps the returned\n\
             result set. `summary` has no --limit; its stats always cover every scanned file.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo summary\n\
-            \u{00a0} hyalo summary -n 25   # 25 recent files (not a result limit)\n\
-            \u{00a0} hyalo summary --format text\n\
-            \u{00a0} hyalo summary --jq '.results.tasks.total'\n\
-            \u{00a0} hyalo summary --jq '.results.links.broken'"
+            hyalo summary\n\
+            hyalo summary -n 25   # 25 recent files (not a result limit)\n\
+            hyalo summary --format text\n\
+            hyalo summary --jq '.results.tasks.total'\n\
+            hyalo summary --jq '.results.links.broken'"
     )]
     Summary {
-        /// Glob pattern(s) to filter which files to include, relative to --dir (repeatable); prefix '!' to negate (e.g. '!**/draft-*')
-        #[arg(short, long)]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
-        /// Number of recent files to show (default: 10).
+        /// Number of recent files to show
         ///
         /// NOTE: on this command -n means --recent, not --limit as on find and backlinks —
-        /// it caps only the "recently modified" list, never the summary's stats
-        #[arg(short = 'n', long, default_value = "10")]
+        /// it caps only the "recently modified" list, never the summary's stats.
+        #[arg(short = 'n', long, value_name = "N", default_value = "10")]
         recent: usize,
         /// Limit directory listing depth (0 = root only; stats are always full)
         #[arg(long)]
@@ -960,9 +1043,9 @@ pub(crate) enum Commands {
             (PR #251 review L8).\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo backlinks decision-log.md\n\
-            \u{00a0} hyalo backlinks --file notes/design.md\n\
-            \u{00a0} hyalo backlinks --file notes/design.md --limit 20"
+            hyalo backlinks decision-log.md\n\
+            hyalo backlinks --file notes/design.md\n\
+            hyalo backlinks --file notes/design.md --limit 20"
     )]
     Backlinks {
         #[command(flatten)]
@@ -1004,11 +1087,11 @@ pub(crate) enum Commands {
             directory (existing or trailing '/', no .md suffix). Defaults to dry-run; pass --apply\n\
             to commit changes. A single link-graph build covers all files.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo mv old.md --to new.md\n\
-            \u{00a0} hyalo mv old.md new.md   # positional DEST, alias for --to\n\
-            \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
-            \u{00a0} hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
-            \u{00a0} hyalo mv --tag archive --to archive/ --apply\n\n\
+            hyalo mv old.md --to new.md\n\
+            hyalo mv old.md new.md   # positional DEST, alias for --to\n\
+            hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/\n\
+            hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
+            hyalo mv --tag archive --to archive/ --apply\n\n\
             OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, applied flag,\n\
             and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
@@ -1025,7 +1108,7 @@ pub(crate) enum Commands {
         /// Source file to move (relative to --dir) — flag form (single-file mode only)
         #[arg(short, long, value_name = "FILE", conflicts_with_all = ["file_positional", "glob", "properties", "tag", "type", "files_from"])]
         file: Option<String>,
-        /// Destination path — positional form (single-file mode only). Alias for --to:
+        /// Destination path — positional form of --to (single-file mode only)
         ///
         /// `hyalo mv old.md new.md` is equivalent to `hyalo mv old.md --to new.md`.
         /// Requires the positional source FILE (not --file); mutually exclusive with --to.
@@ -1035,11 +1118,19 @@ pub(crate) enum Commands {
             conflicts_with = "to"
         )]
         to_positional: Option<String>,
-        /// Destination path: a .md path or an existing directory (basename appended) in single-file mode; a directory path in batch mode
-        #[arg(long)]
+        /// Destination: a .md path or an existing directory in single-file mode; a directory in batch mode
+        ///
+        /// In single-file mode a directory destination appends the source basename.
+        #[arg(long, value_name = "DEST")]
         to: Option<String>,
-        /// Glob pattern(s) to select source files, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long, value_name = "GLOB", conflicts_with = "files_from")]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            conflicts_with = "files_from",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
         /// Read file paths from PATH (one per line); use '-' to read from stdin (batch mode).
         ///
@@ -1048,7 +1139,11 @@ pub(crate) enum Commands {
         /// Input is deduplicated; results follow first-seen order.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
-        /// Property filter for source selection: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists). Repeatable (AND)
+        /// Property filter for source selection. Same syntax as `find --property`; repeatable (AND)
+        ///
+        /// The full operator set: K=V, K!=V, K>V, K>=V, K<V, K<=V, K (exists), !K (absent),
+        /// K~=re and K~=/re/i (regex), and K may be a dot-path into a nested map — exactly
+        /// what `find --property` accepts, parsed by the same code.
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
         /// Tag filter: exact or prefix match. Repeatable (AND)
@@ -1057,7 +1152,7 @@ pub(crate) enum Commands {
         /// Type filter: match files where frontmatter 'type' equals TYPE. Repeatable (AND)
         #[arg(long = "type", value_name = "TYPE")]
         r#type: Vec<String>,
-        /// Preview changes without modifying any files (default behavior in batch mode without --apply)
+        /// Preview changes without writing any files (the default in batch mode; --apply writes)
         #[arg(long)]
         dry_run: bool,
         /// Commit changes in batch mode (required when using --glob/--property/--tag/--type).
@@ -1117,12 +1212,12 @@ Repeatable (AND).\n\
             USE WHEN: You need to create or overwrite frontmatter properties or add tags, \
             possibly across many files at once.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo set --property status=completed --file notes/todo.md\n\
-            \u{00a0} hyalo set --property priority=3 --property reviewed=true --file notes/todo.md\n\
-            \u{00a0} hyalo set --property tags=[a,b,c] --file notes/todo.md\n\
-            \u{00a0} hyalo set --tag reviewed --glob 'research/**/*.md'\n\
-            \u{00a0} hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\
-            \u{00a0} hyalo set --property due=2026-12-31 --validate --file notes/todo.md"
+            hyalo set --property status=completed --file notes/todo.md\n\
+            hyalo set --property priority=3 --property reviewed=true --file notes/todo.md\n\
+            hyalo set --property 'tags=[a,b,c]' --file notes/todo.md\n\
+            hyalo set --tag reviewed --glob 'research/**/*.md'\n\
+            hyalo set --property status=in-progress --where-property status=draft --glob '**/*.md'\n\
+            hyalo set --property due=2026-12-31 --validate --file notes/todo.md"
     )]
     Set {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -1134,7 +1229,13 @@ Repeatable (AND).\n\
         /// Tag to add (idempotent). Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1152,12 +1253,13 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
-        /// Preview changes without modifying any files
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
-        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// Reject writes that would create lint errors under the .hyalo.toml schema
         ///
-        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        /// Validates the new values against the schema before writing. Implied by
+        /// `validate_on_write = true` in the [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
@@ -1195,10 +1297,10 @@ Repeatable (AND).\n\
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
             USE WHEN: You need to delete properties or remove tags from one or more files.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo remove --property status --file notes/todo.md\n\
-            \u{00a0} hyalo remove --property aliases=old-name --file notes/todo.md\n\
-            \u{00a0} hyalo remove --tag draft --glob '**/*.md'\n\
-            \u{00a0} hyalo remove --property status --where-tag archive --glob '**/*.md'"
+            hyalo remove --property status --file notes/todo.md\n\
+            hyalo remove --property aliases=old-name --file notes/todo.md\n\
+            hyalo remove --tag draft --glob '**/*.md'\n\
+            hyalo remove --property status --where-tag archive --glob '**/*.md'"
     )]
     Remove {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -1210,7 +1312,13 @@ Repeatable (AND).\n\
         /// Tag to remove. Repeatable
         #[arg(short, long, value_name = "TAG")]
         tag: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1226,7 +1334,7 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
-        /// Preview changes without modifying any files
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]
@@ -1247,15 +1355,15 @@ Repeatable (AND).\n\
             With --profile <name> --claude, also installs the bundled skill for it.\n\n\
             Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo init\n\
-            \u{00a0} hyalo --dir kb init\n\
-            \u{00a0} hyalo --dir kb init --claude\n\
-            \u{00a0} hyalo --dir kb init --pi\n\
-            \u{00a0} hyalo init --profile okf\n\
-            \u{00a0} hyalo init --profile okf --claude\n\
-            \u{00a0} hyalo init --profile madr\n\
-            \u{00a0} hyalo init --profile skills\n\
-            \u{00a0} hyalo init --profile changelog"
+            hyalo init\n\
+            hyalo --dir kb init\n\
+            hyalo --dir kb init --claude\n\
+            hyalo --dir kb init --pi\n\
+            hyalo init --profile okf\n\
+            hyalo init --profile okf --claude\n\
+            hyalo init --profile madr\n\
+            hyalo init --profile skills\n\
+            hyalo init --profile changelog"
     )]
     Init {
         /// Set up Claude Code integration (skill + CLAUDE.md hint)
@@ -1264,10 +1372,10 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
-        /// Scaffold a preset vault flavour (okf, madr, skills, changelog) by
+        /// Scaffold a preset vault flavour: okf, madr, skills, or changelog
         ///
-        /// merging an embedded config fragment into .hyalo.toml
-        #[arg(long, value_name = "PROFILE")]
+        /// Merges the profile's embedded config fragment into .hyalo.toml.
+        #[arg(long, value_name = "NAME")]
         profile: Option<String>,
     },
     /// Remove hyalo configuration and tool integration artifacts
@@ -1323,22 +1431,22 @@ Repeatable (AND).\n\
             reading a snapshot with `--index-file` is unrestricted.\n\n\
             READ-ONLY CORPORA: to index a vault you cannot (or would rather not) write\n\
             into, keep the snapshot elsewhere and name it on every query:\n\
-            \u{00a0} hyalo create-index --dir /corpus -o ~/.cache/corpus.idx --allow-outside-vault\n\
-            \u{00a0} hyalo find \"query\" --dir /corpus --index-file ~/.cache/corpus.idx\n\
+            hyalo create-index --dir /corpus -o ~/.cache/corpus.idx --allow-outside-vault\n\
+            hyalo find \"query\" --dir /corpus --index-file ~/.cache/corpus.idx\n\
             The snapshot records the vault it was built for, so a query pointed at a\n\
             different --dir refuses the index and falls back to a disk scan.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo create-index\n\
-            \u{00a0} hyalo create-index -o .hyalo-index-draft   # in-vault when dir = \".\"\n\
-            \u{00a0} hyalo create-index -o /tmp/my-index --allow-outside-vault\n\
-            \u{00a0} hyalo find --property status=draft --index"
+            hyalo create-index\n\
+            hyalo create-index -o .hyalo-index-draft   # in-vault when dir = \".\"\n\
+            hyalo create-index -o /tmp/my-index --allow-outside-vault\n\
+            hyalo find --property status=draft --index"
     )]
     CreateIndex {
         /// Output path for the index file (default: .hyalo-index in --dir).
         ///
         /// Equivalent to the global --index-file flag on this subcommand.
         /// Also accepted as --path, matching `drop-index --path`.
-        #[arg(short, long, visible_alias = "path")]
+        #[arg(short, long, value_name = "PATH", visible_alias = "path")]
         output: Option<PathBuf>,
         /// Allow writing the index file outside the vault directory
         #[arg(long)]
@@ -1397,9 +1505,9 @@ Repeatable (AND).\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
             without overwriting the existing list.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo append --property aliases='My Note' --file note.md\n\
-            \u{00a0} hyalo append --property authors=alice --glob 'research/**/*.md'\n\
-            \u{00a0} hyalo append --property related=other.md --where-tag project --glob '**/*.md'"
+            hyalo append --property aliases='My Note' --file note.md\n\
+            hyalo append --property authors=alice --glob 'research/**/*.md'\n\
+            hyalo append --property related=other.md --where-tag project --glob '**/*.md'"
     )]
     Append {
         /// Target file(s) as positional argument(s) — alternative to --file
@@ -1408,7 +1516,13 @@ Repeatable (AND).\n\
         /// Property to append to: K=V. Repeatable
         #[arg(short, long = "property", value_name = "K=V", required = true)]
         properties: Vec<String>,
-        #[arg(short, long, conflicts_with_all = ["glob", "files_from"], help = FILE_FLAG_DOC)]
+        #[arg(
+            short,
+            long,
+            conflicts_with_all = ["glob", "files_from"],
+            help = FILE_FLAG_SHORT_DOC,
+            long_help = FILE_FLAG_DOC,
+        )]
         file: Vec<String>,
         /// Glob pattern(s) for multiple files, relative to --dir (repeatable); prefix '!' to negate
         #[arg(short, long, conflicts_with_all = ["file", "files_from"])]
@@ -1424,12 +1538,13 @@ Repeatable (AND).\n\
         /// Filter: only mutate files with this tag (repeatable, AND). Same syntax as find --tag
         #[arg(long = "where-tag", value_name = "TAG")]
         where_tags: Vec<String>,
-        /// Preview changes without modifying any files
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
-        /// Validate new values against the schema from .hyalo.toml; reject writes that would
+        /// Reject writes that would create lint errors under the .hyalo.toml schema
         ///
-        /// create lint errors. Implied by `validate_on_write = true` in [schema] config.
+        /// Validates the new values against the schema before writing. Implied by
+        /// `validate_on_write = true` in the [schema] config.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
@@ -1453,11 +1568,11 @@ Repeatable (AND).\n\
             its own filters imply.\n\n\
             SIDE EFFECTS: 'set' and 'remove' modify .hyalo.toml. 'list' is read-only.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo views list\n\
-            \u{00a0} hyalo views set drafts --property status=draft --tag project\n\
-            \u{00a0} hyalo views set audit --broken-links --fields links\n\
-            \u{00a0} hyalo find --view drafts --limit 5\n\
-            \u{00a0} hyalo views remove drafts"
+            hyalo views list\n\
+            hyalo views set drafts --property status=draft --tag project\n\
+            hyalo views set audit --broken-links --fields links\n\
+            hyalo find --view drafts --limit 5\n\
+            hyalo views remove drafts"
     )]
     Views {
         #[command(subcommand)]
@@ -1521,10 +1636,10 @@ Repeatable (AND).\n\
             TIP: For read-only auditing, use 'hyalo summary' (link health overview)\n\
             or 'hyalo find --broken-links' (list files with unresolved links).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo links fix\n\
-            \u{00a0} hyalo links fix --apply\n\
-            \u{00a0} hyalo links auto --first-only --apply\n\
-            \u{00a0} hyalo links auto --min-length 5 --exclude-target-glob 'templates/*' --apply"
+            hyalo links fix\n\
+            hyalo links fix --apply\n\
+            hyalo links auto --first-only --apply\n\
+            hyalo links auto --min-length 5 --exclude-target-glob 'templates/*' --apply"
     )]
     Links {
         #[command(subcommand)]
@@ -1564,6 +1679,9 @@ Repeatable (AND).\n\
             \u{00a0} - HYALO002: `status: completed` requires all task checkboxes ticked\n\
             \u{00a0}            (only fires when the schema declares `status` as an enum\n\
             \u{00a0}            containing `completed`)\n\
+            \u{00a0} - HYALO007: frontmatter `title` is a list or a map, so it cannot be promoted\n\
+            \u{00a0}            to the `find --fields title` value (usually a quoting typo such as\n\
+            \u{00a0}            `title: [Draft] Notes`) \u{2014} the item falls back to its first H1\n\
             \u{00a0} - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
             \u{00a0}            oversized scalar) — error by default; the file still counts in\n\
             \u{00a0}            `files_checked` so a corrupt file can never leave a green lint.\n\
@@ -1655,18 +1773,18 @@ Repeatable (AND).\n\
             questions.\n\n\
             EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo lint\n\
-            \u{00a0} hyalo lint --detailed\n\
-            \u{00a0} hyalo lint --rule MD013 --detailed\n\
-            \u{00a0} hyalo lint --rule-prefix HYALO\n\
-            \u{00a0} hyalo lint --max-per-rule 0\n\
-            \u{00a0} hyalo lint --fix --dry-run\n\
-            \u{00a0} hyalo lint --fix-rule HYALO001\n\
-            \u{00a0} hyalo lint --fix\n\
-            \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\
-            \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\
-            \u{00a0} hyalo lint --profile changelog   # validate CHANGELOG.md (Keep a Changelog)\n\
-            \u{00a0} hyalo lint --strict --format github   # inline PR annotations in GitHub Actions\n\n\
+            hyalo lint\n\
+            hyalo lint --detailed\n\
+            hyalo lint --rule MD013 --detailed\n\
+            hyalo lint --rule-prefix HYALO\n\
+            hyalo lint --max-per-rule 0\n\
+            hyalo lint --fix --dry-run\n\
+            hyalo lint --fix --fix-rule HYALO001\n\
+            hyalo lint --fix\n\
+            hyalo lint --profile okf         # validate OKF bundle conformance\n\
+            hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\
+            hyalo lint --profile changelog   # validate CHANGELOG.md (Keep a Changelog)\n\
+            hyalo lint --strict --format github   # inline PR annotations in GitHub Actions\n\n\
             INDEX NOTE: The snapshot index does not accelerate the body pass — body bytes are\n\
             not indexed. The frontmatter pass and file enumeration still benefit from --index.\n\n\
             SIDE EFFECTS: None without --fix. With --fix (and without --dry-run), mutated files\n\
@@ -1700,7 +1818,7 @@ Repeatable (AND).\n\
         /// Auto-remediate fixable violations (defaults, enum typos, date format, type inference)
         #[arg(long)]
         fix: bool,
-        /// With --fix, preview changes without writing files
+        /// With --fix, preview changes without writing any files
         #[arg(long, requires = "fix")]
         dry_run: bool,
         /// Maximum number of files to include in output.
@@ -1720,13 +1838,16 @@ Repeatable (AND).\n\
         /// Override per-rule violation cap (0 = unlimited; default from config or 3)
         #[arg(long, value_name = "N", value_parser = parse_limit)]
         max_per_rule: Option<usize>,
-        /// Only autofix the specified rule(s) — repeatable
+        /// With --fix, only autofix the specified rule(s) (repeatable)
+        ///
+        /// Requires --fix: on its own it has nothing to restrict, and clap rejects it.
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
-        /// Promote schema warnings to errors: "no 'type' property",
+        /// Promote schema warnings (missing type, undeclared property, date format) to errors
         ///
-        /// "undeclared property in frontmatter", and date-format violations
-        /// (HYALO003), causing lint to exit non-zero when those issues are found.
+        /// Promotes "no 'type' property", "undeclared property in frontmatter" and
+        /// date-format violations (HYALO003) to errors, so lint exits non-zero when those
+        /// issues are found.
         ///
         /// Note: missing-type and undeclared-property promotions require a
         /// `[schema.types.*]` block in `.hyalo.toml` — on a schema-less vault
@@ -1736,9 +1857,9 @@ Repeatable (AND).\n\
         /// Overrides `[lint] strict` in `.hyalo.toml` for this invocation.
         #[arg(long)]
         strict: bool,
-        /// Overlay a named conformance profile for this invocation only (no
+        /// Overlay a named conformance profile for this invocation only, without touching config
         ///
-        /// `.hyalo.toml` change). `okf` enables the Open Knowledge Format §9
+        /// No `.hyalo.toml` change. `okf` enables the Open Knowledge Format §9
         /// rules plus advisory citation / augmentation checks; `madr` enables
         /// the MADR ADR schema (path-bound to `docs/decisions/**`) plus the
         /// supersede / duplicate-number advisory rules; `skills` enables the
@@ -1763,11 +1884,11 @@ Repeatable (AND).\n\
             - remove: Remove a rule override (revert to default).\n\n\
             SIDE EFFECTS: set/remove modify .hyalo.toml. list and show are read-only.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo lint-rules list\n\
-            \u{00a0} hyalo lint-rules show MD013\n\
-            \u{00a0} hyalo lint-rules set MD013 --enabled false\n\
-            \u{00a0} hyalo lint-rules set HYALO002 --severity error\n\
-            \u{00a0} hyalo lint-rules remove MD013"
+            hyalo lint-rules list\n\
+            hyalo lint-rules show MD013\n\
+            hyalo lint-rules set MD013 --enabled false\n\
+            hyalo lint-rules set HYALO002 --severity error\n\
+            hyalo lint-rules remove MD013"
     )]
     LintRules {
         #[command(subcommand)]
@@ -1775,7 +1896,7 @@ Repeatable (AND).\n\
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
-        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\n            EXAMPLES:\n            \u{00a0} hyalo types list\n            \u{00a0} hyalo types show iteration\n            \u{00a0} hyalo types set note --required title,date\n            \u{00a0} hyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\n            \u{00a0} hyalo types remove draft"
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\n            EXAMPLES:\n            hyalo types list\n            hyalo types show iteration\n            hyalo types set note --required title,date\n            hyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\n            hyalo types remove draft"
     )]
     Types {
         #[command(subcommand)]
@@ -1798,8 +1919,8 @@ Repeatable (AND).\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
             - Frontmatter is limited to 64 KiB / 2000 lines; schema templates exceeding this are rejected\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo new --type iteration --file iterations/iter-99-example.md\n\
-            \u{00a0} hyalo new --type note --file notes/2026-05-24-standup.md\n\n\
+            hyalo new --type iteration --file iterations/iter-99-example.md\n\
+            hyalo new --type note --file notes/2026-05-24-standup.md\n\n\
             OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
             Text mode: `created <rel-path>`.\n\n\
             SIDE EFFECTS: Writes one new file. When `--index` or `--index-file` is set,\n\
@@ -1810,15 +1931,15 @@ Repeatable (AND).\n\
         /// Document type to scaffold (must exist in `[schema.types.*]`)
         #[arg(long, value_name = "TYPE", required = true)]
         r#type: String,
-        /// Vault-relative path for the new file (must not exist; parent dirs created if
+        /// Vault-relative path for the new file (must not already exist)
         ///
-        /// missing; must still resolve inside the vault after symlinks)
+        /// Parent directories are created if missing; the path must still resolve inside
+        /// the vault after symlinks.
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
-        /// When `--index` or `--index-file` is set, patch the snapshot index in
-        ///
-        /// place after the file is created so later `--index` queries see it
-        /// without a full rebuild.
+        /// When `--index` or `--index-file` is set, the snapshot index is patched in place
+        /// after the file is created, so later `--index` queries see it without a full
+        /// rebuild.
         #[command(flatten)]
         index_flags: IndexFlags,
     },
@@ -1842,12 +1963,12 @@ Repeatable (AND).\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile okf` to check the\n\
             bundle against the OKF §9 conformance rules (warn-not-reject per the spec).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
-            \u{00a0} hyalo okf index --apply            # regenerate all index.md files\n\
-            \u{00a0} hyalo okf index tables --apply     # scope to a subtree\n\
-            \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\
-            \u{00a0} hyalo okf log tables --action Update --message \"...\" --apply\n\
-            \u{00a0} hyalo lint --profile okf           # validate bundle conformance"
+            hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
+            hyalo okf index --apply            # regenerate all index.md files\n\
+            hyalo okf index tables --apply     # scope to a subtree\n\
+            hyalo okf log --message \"Added blocks table\" --apply\n\
+            hyalo okf log tables --action Update --message \"...\" --apply\n\
+            hyalo lint --profile okf           # validate bundle conformance"
     )]
     Okf {
         #[command(subcommand)]
@@ -1867,9 +1988,9 @@ Repeatable (AND).\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile madr` to check\n\
             ADR conformance (status pattern, required sections, supersede references).\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo madr toc --dry-run              # CI: fail if the TOC is stale\n\
-            \u{00a0} hyalo madr toc --apply                # regenerate docs/decisions/README.md\n\
-            \u{00a0} hyalo madr toc docs/adr --apply       # scope to a custom ADR directory"
+            hyalo madr toc --dry-run              # CI: fail if the TOC is stale\n\
+            hyalo madr toc --apply                # regenerate docs/decisions/README.md\n\
+            hyalo madr toc docs/adr --apply       # scope to a custom ADR directory"
     )]
     Madr {
         #[command(subcommand)]
@@ -1898,10 +2019,10 @@ Repeatable (AND).\n\
             VALIDATE: after releasing, replace the `TBD` link target with the real\n\
             compare/tag URL and run `hyalo lint --profile changelog`.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo changelog add --category Added --message \"New export format\" --apply\n\
-            \u{00a0} hyalo changelog release 1.2.0 --dry-run\n\
-            \u{00a0} hyalo changelog release 1.2.0 --apply\n\
-            \u{00a0} hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
+            hyalo changelog add --category Added --message \"New export format\" --apply\n\
+            hyalo changelog release 1.2.0 --dry-run\n\
+            hyalo changelog release 1.2.0 --apply\n\
+            hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
     )]
     Changelog {
         #[command(subcommand)]
@@ -1921,12 +2042,12 @@ Repeatable (AND).\n\
             point at the configured vault. Detectable from the output alone, without\n\
             scraping stderr — this command does not print the diagnostic there too.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo config\n\
-            \u{00a0} hyalo config --raw\n\
-            \u{00a0} hyalo config --dir ../other-vault\n\
-            \u{00a0} hyalo config --jq '.results.dir'\n\
-            \u{00a0} hyalo config --jq '.results.malformed'\n\
-            \u{00a0} hyalo config --format json\n\n\
+            hyalo config\n\
+            hyalo config --raw\n\
+            hyalo config --dir ../other-vault\n\
+            hyalo config --jq '.results.dir'\n\
+            hyalo config --jq '.results.malformed'\n\
+            hyalo config --format json\n\n\
             OUTPUT: Line-by-line in text format; the standard JSON envelope with --format json —\n\
             the settings live under `results`, and the config's own hints switch is reported as\n\
             `results.hints_enabled` so it does not collide with the envelope's `hints` array.\n\
@@ -2008,10 +2129,10 @@ pub(crate) enum OkfAction {
             file or an invalid scope). --apply exits 0 on success, 2 on error.\n\n\
             SIDE EFFECTS: writes `index.md` files only with --apply.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo okf index --dry-run\n\
-            \u{00a0} hyalo okf index --apply\n\
-            \u{00a0} hyalo okf index tables --apply\n\
-            \u{00a0} hyalo okf index --apply --replace   # overwrite marker-less index.md"
+            hyalo okf index --dry-run\n\
+            hyalo okf index --apply\n\
+            hyalo okf index tables --apply\n\
+            hyalo okf index --apply --replace   # overwrite marker-less index.md"
     )]
     Index {
         /// Optional directory (vault-relative) to scope regeneration to a subtree
@@ -2020,7 +2141,7 @@ pub(crate) enum OkfAction {
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Preview changes without writing (default behaviour; explicit for clarity)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
         /// Overwrite a marker-less `index.md`, discarding its hand-written body.
@@ -2053,9 +2174,9 @@ pub(crate) enum OkfAction {
             --apply to write.\n\n\
             SIDE EFFECTS: writes/creates one `log.md` only with --apply.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo okf log --message \"Added blocks table\" --apply\n\
-            \u{00a0} hyalo okf log tables --action Update --message \"Refreshed schema\" --apply\n\
-            \u{00a0} hyalo okf log tables/log.md --message \"...\" --apply"
+            hyalo okf log --message \"Added blocks table\" --apply\n\
+            hyalo okf log tables --action Update --message \"Refreshed schema\" --apply\n\
+            hyalo okf log tables/log.md --message \"...\" --apply"
     )]
     Log {
         /// Directory or `log.md` path selecting which log to write (default: bundle-root)
@@ -2070,7 +2191,7 @@ pub(crate) enum OkfAction {
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Preview changes without writing (default behaviour; explicit for clarity)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
     },
@@ -2096,20 +2217,20 @@ pub(crate) enum MadrAction {
             or a symlinked ADR directory pointing out is refused (exit 1) in dry-run and\n\
             apply alike.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo madr toc --dry-run\n\
-            \u{00a0} hyalo madr toc --apply\n\
-            \u{00a0} hyalo madr toc docs/adr --apply"
+            hyalo madr toc --dry-run\n\
+            hyalo madr toc --apply\n\
+            hyalo madr toc docs/adr --apply"
     )]
     Toc {
-        /// ADR directory (vault-relative, must resolve inside the vault);
+        /// ADR directory, vault-relative (default: `docs/decisions`)
         ///
-        /// defaults to `docs/decisions`
+        /// Must resolve inside the vault.
         #[arg(value_name = "DIR")]
         adr_dir: Option<String>,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Preview changes without writing (default behaviour; explicit for clarity)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
         /// Overwrite a marker-less `README.md`, discarding its hand-written body.
@@ -2137,9 +2258,9 @@ pub(crate) enum ChangelogAction {
             pass --apply to write.\n\n\
             SIDE EFFECTS: writes CHANGELOG.md only with --apply.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo changelog release 1.2.0 --dry-run\n\
-            \u{00a0} hyalo changelog release 1.2.0 --apply\n\
-            \u{00a0} hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
+            hyalo changelog release 1.2.0 --dry-run\n\
+            hyalo changelog release 1.2.0 --apply\n\
+            hyalo changelog release 1.2.0 --date 2026-07-17 --apply"
     )]
     Release {
         /// The new version (MAJOR.MINOR.PATCH)
@@ -2151,7 +2272,7 @@ pub(crate) enum ChangelogAction {
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Preview changes without writing (default behaviour; explicit for clarity)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
     },
@@ -2166,8 +2287,8 @@ pub(crate) enum ChangelogAction {
             Defaults to --dry-run and exits non-zero on drift; pass --apply to write.\n\n\
             SIDE EFFECTS: writes/creates CHANGELOG.md only with --apply.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo changelog add --category Added --message \"New export format\" --apply\n\
-            \u{00a0} hyalo changelog add --category Fixed --message \"Crash on empty input\" --apply"
+            hyalo changelog add --category Added --message \"New export format\" --apply\n\
+            hyalo changelog add --category Fixed --message \"Crash on empty input\" --apply"
     )]
     Add {
         /// Change category (Added/Changed/Deprecated/Removed/Fixed/Security)
@@ -2176,16 +2297,16 @@ pub(crate) enum ChangelogAction {
         /// The entry text (required)
         #[arg(long, value_name = "TEXT", required = true)]
         message: String,
-        /// Wrap the entry to COLS columns, breaking on word boundaries and
+        /// Wrap the entry to COLS columns on word boundaries (omit for one unwrapped bullet)
         ///
-        /// hanging-indenting continuation lines under the bullet text (2 spaces).
-        /// Useful for 80-column changelogs. Omit for a single unwrapped bullet.
+        /// Continuation lines are hanging-indented under the bullet text (2 spaces).
+        /// Useful for 80-column changelogs.
         #[arg(long, value_name = "COLS")]
         wrap: Option<usize>,
         /// Write changes to disk. Without this flag the command is a dry run.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Preview changes without writing (default behaviour; explicit for clarity)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
     },
@@ -2209,6 +2330,13 @@ pub(crate) enum ViewsAction {
         The view is stored in .hyalo.toml and can be recalled with `hyalo find --view <name>`.\n\
         You can combine --view with additional CLI filters to extend or override the saved set.\n\
         Overwrites if the view already exists.\n\n\
+        WHAT IS PERSISTED: every flag shown below \u{2014} not just the filters. --sort, --reverse, \
+        --limit and --fields are saved with the view, and so are the output-shaping switches \
+        --strict, --filenames-only and --filenames0, so a saved view can be a complete CI gate \
+        rather than a filter set someone still has to decorate. On recall, a CLI flag of the same \
+        name overrides the saved value; the three bools can only be turned ON by the CLI, never \
+        off. A pinned `fields` behaves exactly like an explicit --fields (an exact projection), \
+        and a CLI --fields replaces the pin rather than adding to it.\n\n\
         SIDE EFFECTS: Modifies .hyalo.toml.")]
     Set {
         /// View name (first positional arg)
@@ -2246,9 +2374,9 @@ pub(crate) enum ViewsAction {
             semantics `find` gives it — ranked full-text search, mutually exclusive with -e.\n\
             It overrides a pattern saved in the view.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo views run drafts\n\
-            \u{00a0} hyalo views run drafts \"search terms\"\n\
-            \u{00a0} hyalo views run drafts --tag project\n\n\
+            hyalo views run drafts\n\
+            hyalo views run drafts \"search terms\"\n\
+            hyalo views run drafts --tag project\n\n\
             SIDE EFFECTS: None (read-only find)."
     )]
     Run {
@@ -2360,7 +2488,7 @@ pub(crate) enum LintRulesAction {
         /// Override severity: warn or error
         #[arg(long, value_name = "SEVERITY")]
         severity: Option<String>,
-        /// Preview changes without writing to .hyalo.toml
+        /// Preview changes without writing .hyalo.toml
         #[arg(long)]
         dry_run: bool,
     },
@@ -2369,7 +2497,7 @@ pub(crate) enum LintRulesAction {
         /// Rule ID to reset
         #[arg(value_name = "RULE_ID")]
         rule_id: String,
-        /// Preview changes without writing to .hyalo.toml
+        /// Preview changes without writing .hyalo.toml
         #[arg(long)]
         dry_run: bool,
     },
@@ -2437,19 +2565,19 @@ pub(crate) enum LinksAction {
             casing fix — reported separately as relocations/relocation_fixes, also written by\n\
             plain --apply.")]
     Fix {
-        /// Preview changes without modifying files (default when --apply is omitted)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
         /// Apply fixes to files on disk
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// Minimum Jaro-Winkler stem similarity for a file to be considered a
+        /// Minimum stem similarity (0.0–1.0) for a file to be a fuzzy candidate at all
         ///
-        /// fuzzy candidate at all (0.0–1.0). Candidates that clear it are then
-        /// scored and ranked by confidence — see --min-confidence.
-        #[arg(long, default_value = "0.8", value_parser = parse_threshold)]
+        /// Jaro-Winkler. Candidates that clear it are then scored and ranked by
+        /// confidence — see --min-confidence.
+        #[arg(long, value_name = "N", default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
-        /// Apply low-confidence fixes too (excluded from --apply by default).
+        /// Apply low-confidence fixes too (excluded from --apply by default)
         ///
         /// Fuzzy matches are guesses: a broken [[foo]] can "match" an
         /// unrelated bar.md. So is a basename fallback, where a target that
@@ -2460,26 +2588,30 @@ pub(crate) enum LinksAction {
         /// confidence floor (0.8 by default; see --min-confidence).
         #[arg(long)]
         apply_fuzzy: bool,
-        /// Confidence floor for applying low-confidence fixes (0.0–1.0).
+        /// Confidence floor for applying low-confidence fixes (0.0–1.0); implies --apply-fuzzy
         ///
-        /// Implies --apply-fuzzy.
         ///
         /// Defaults to 0.8, or to `[links] fuzzy_min_confidence` in
         /// .hyalo.toml when set; this flag overrides both. Proposals below the
         /// floor stay in the reported-but-not-applied bucket and are counted
         /// as fuzzy_below_floor. Pass 0 to accept every proposal (the
         /// pre-0.21 behaviour), 0.99 to apply almost nothing.
-        #[arg(long, value_parser = parse_threshold)]
+        #[arg(long, value_name = "N", value_parser = parse_threshold)]
         min_confidence: Option<f64>,
-        /// Glob pattern(s) to filter which files to check, relative to --dir (repeatable); prefix '!' to negate
-        #[arg(short, long)]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
-        /// Ignore broken links whose target contains any of these substrings (repeatable).
+        /// Ignore broken links whose target contains SUBSTR (repeatable)
         ///
         /// Useful for skipping Hugo template links, external paths, etc.
-        #[arg(long)]
+        #[arg(long, value_name = "SUBSTR")]
         ignore_target: Vec<String>,
-        /// Expand short-form wikilinks ([[Name]]) to their full vault path when applying fixes.
+        /// Expand short-form wikilinks ([[Name]]) to their full vault path when applying fixes
         ///
         /// By default, hyalo treats bare stem wikilinks as valid Obsidian short-form links:
         /// [[Corina]] that resolves to sub/Corina.md is left untouched. With this flag,
@@ -2488,9 +2620,9 @@ pub(crate) enum LinksAction {
         /// whole vault and does not require the full path.
         #[arg(long)]
         expand_short_form: bool,
-        /// Treat links that resolve only by case folding as resolved rather
+        /// Treat links that resolve only by case folding as resolved, not fixable
         ///
-        /// than fixable (UX-6, iter-244).
+        /// (UX-6, iter-244.)
         ///
         /// On case-folded vault layouts (MDN-style `en-US` vs `en-us`
         /// directories on macOS/Windows), a plain `links fix --dry-run`
@@ -2596,41 +2728,39 @@ pub(crate) enum LinksAction {
             for one run."
     )]
     Auto {
-        /// Preview changes without modifying files (default when --apply is omitted)
+        /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]
         dry_run: bool,
         /// Apply changes to files on disk
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
         /// Minimum title length to consider (skip short common words)
-        #[arg(long, default_value = "3")]
+        #[arg(long, value_name = "N", default_value = "3")]
         min_length: usize,
         /// Titles to exclude from matching (repeatable, case-insensitive)
-        #[arg(long)]
+        #[arg(long, value_name = "TITLE")]
         exclude_title: Vec<String>,
-        /// Only emit the first match of each target title per source file.
+        /// Only emit the first match of each target title per source file
         ///
         /// An existing [[wikilink]] to a target anywhere in the file counts
         /// as its first mention (case-insensitive; aliased links count too).
         #[arg(long)]
         first_only: bool,
-        /// Link every mention for this run even when `[links.auto] first_only = true`
-        ///
-        /// is set in .hyalo.toml.
+        /// Link every mention for this run, overriding `[links.auto] first_only = true`
         ///
         /// The counter-flag to --first-only: it forces first-only OFF for a single
         /// run without editing the config. Cannot be combined with --first-only.
         #[arg(long, conflicts_with = "first_only")]
         no_first_only: bool,
-        /// Exclude target pages whose vault-relative path matches a glob pattern
+        /// Exclude target pages whose vault-relative path matches GLOB (repeatable)
         ///
-        /// (repeatable; matched case-insensitively, mirroring --exclude-title)
-        #[arg(long)]
+        /// Matched case-insensitively, mirroring --exclude-title.
+        #[arg(long, value_name = "GLOB")]
         exclude_target_glob: Vec<String>,
-        /// Do not print the advisory note naming noisy candidate titles: common
+        /// Do not print the advisory note naming noisy candidate titles
         ///
-        /// English words (e.g. "permissions", "index") and titles that dominate
-        /// the run (at least 25 matches and 2.5% of the proposed links).
+        /// The note names common English words (e.g. "permissions", "index") and titles
+        /// that dominate the run (at least 25 matches and 2.5% of the proposed links).
         ///
         /// The note goes to stderr only and never changes the report on stdout.
         /// Persist the opt-out with `warn_common_titles = false` under
@@ -2638,10 +2768,16 @@ pub(crate) enum LinksAction {
         #[arg(long)]
         no_warn_common_titles: bool,
         /// Restrict to a single file (vault-relative path)
-        #[arg(long, conflicts_with = "glob")]
+        #[arg(long, value_name = "FILE", conflicts_with = "glob")]
         file: Option<String>,
-        /// Glob pattern(s) to filter which files to scan (repeatable); prefix '!' to negate
-        #[arg(short, long, conflicts_with = "file")]
+        #[arg(
+            short,
+            long,
+            value_name = "GLOB",
+            conflicts_with = "file",
+            help = GLOB_FLAG_SHORT_DOC,
+            long_help = GLOB_FLAG_DOC,
+        )]
         glob: Vec<String>,
         #[command(flatten)]
         index_flags: IndexFlags,
@@ -2666,11 +2802,22 @@ pub(crate) enum TaskAction {
     Read {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
@@ -2697,16 +2844,27 @@ pub(crate) enum TaskAction {
     Toggle {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
         all: bool,
-        /// Preview the toggle result without writing the file
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]
@@ -2733,11 +2891,22 @@ pub(crate) enum TaskAction {
     Set {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
-        /// Select all tasks under a heading (case-insensitive substring, ##-pinned, or /regex/). Refuses with an error naming every matched heading's line number if more than one distinct heading matches -- use --line to disambiguate
-        #[arg(long, conflicts_with_all = ["line", "all"])]
+        #[arg(
+            long,
+            value_name = "HEADING",
+            conflicts_with_all = ["line", "all"],
+            help = TASK_SECTION_FLAG_SHORT_DOC,
+            long_help = TASK_SECTION_FLAG_DOC,
+        )]
         section: Option<String>,
         /// Select all tasks in the file
         #[arg(long, conflicts_with_all = ["line", "section"])]
@@ -2745,7 +2914,7 @@ pub(crate) enum TaskAction {
         /// Single character to set as the task status (e.g. '?', '-', '!')
         #[arg(short, long)]
         status: String,
-        /// Preview which tasks would be changed without modifying the file
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]
@@ -2785,16 +2954,16 @@ pub(crate) enum PropertiesAction {
         SIDE EFFECTS: Modifies matched files on disk."
     )]
     Rename {
-        /// Property key to rename from
+        /// Existing property key to rename
         #[arg(long)]
         from: String,
-        /// Property key to rename to
+        /// New property key
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
-        /// Preview changes without writing to disk
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]
@@ -2831,16 +3000,16 @@ pub(crate) enum TagsAction {
         Atomic per-file: if the new tag already exists on a file, only the old tag is removed.\n\
         SIDE EFFECTS: Modifies matched files on disk.")]
     Rename {
-        /// Tag to rename from
+        /// Existing tag to rename
         #[arg(long)]
         from: String,
-        /// Tag to rename to
+        /// New tag name
         #[arg(long)]
         to: String,
         /// Glob pattern(s) to scope which files to scan (repeatable); prefix '!' to negate
         #[arg(short, long)]
         glob: Vec<String>,
-        /// Preview changes without writing to disk
+        /// Preview changes without writing any files
         #[arg(long)]
         dry_run: bool,
         #[command(flatten)]

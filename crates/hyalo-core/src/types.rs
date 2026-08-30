@@ -333,14 +333,22 @@ pub struct ContentMatch {
 /// Always returned in an array. Optional fields are controlled by `--fields`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileObject {
+    /// The only unconditional key (iteration 254, DEC-254): it names the
+    /// result, so no projection may drop it.
     pub file: String,
-    pub modified: String,
-    /// File size in bytes (iteration 252) — always present, so an agent can
-    /// budget a `read` before issuing it.
-    pub size: u64,
-    /// Line count (see [`crate::scanner::ScanStats`]) — always present, and
-    /// the unit `read --lines A:B` takes.
-    pub lines: usize,
+    /// Last-modified timestamp. In the *default* field set — an agent picks
+    /// its next call by recency — but an explicit `--fields` that does not
+    /// name `modified` drops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    /// File size in bytes (iteration 252), so an agent can budget a `read`
+    /// before issuing it. Default field set; droppable via `--fields`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Line count (see [`crate::scanner::ScanStats`]) — the unit
+    /// `read --lines A:B` takes. Default field set; droppable via `--fields`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines: Option<usize>,
     /// Title extracted from frontmatter `title` property or first H1 heading.
     /// - `None`: field not requested (omitted from JSON output)
     /// - `Some(Value::String(...))`: title found

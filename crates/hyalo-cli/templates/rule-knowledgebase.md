@@ -44,6 +44,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
   filter that implies them (`--section`, `--task`, `--broken-links`, `--orphan`, `--dead-end`,
   `--sort links_count|backlinks_count`). `title` is promoted out of `properties`, so read it as
   `.results[].title`, not `.results[].properties.title`.
+- **`--fields` is an exact projection**: without it you get the seven default keys above; with it
+  you get exactly the fields you named plus `file`, the one key that is never dropped. So
+  `--fields title` returns `{file, title}` and `--fields size,lines` returns
+  `{file, size, lines}` — `modified`/`size`/`lines` are ordinary members of the default set, not
+  structural. `--fields file` means "just the paths"; a filter still adds what it needs on top; a
+  view's pinned `fields` behaves like an explicit `--fields`, and a CLI `--fields` replaces the pin.
+- **A non-string `title` still works**: any scalar promotes, stringified as written — `title: 42`
+  → `"42"`, `title: 2026-08-30` → `"2026-08-30"`, `title: true` → `"true"` — and the typed value
+  stays under `--fields properties-typed`. A list or map `title` cannot promote: the item's `title`
+  falls back to the first H1 and the raw value stays in `properties.title`, with `HYALO007`
+  reporting it.
 - **Check `size`/`lines` before reading**: both appear on `find` items and on `read` results, so a
   large file can be taken in slices — `hyalo read <path> --lines 1:80` or `--section "Heading"` —
   instead of whole.

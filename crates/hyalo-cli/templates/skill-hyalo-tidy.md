@@ -177,7 +177,7 @@ that could benefit from cross-references. Not always a problem, but worth review
 hyalo find --view stale-in-progress --index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
-hyalo find --property status=planned --index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
+hyalo find --property status=planned --fields tasks --index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
 hyalo find --view stale-in-progress --index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'

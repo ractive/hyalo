@@ -3,10 +3,40 @@ use hyalo_core::types::{FindTaskInfo, OutlineSection};
 
 use crate::output::CommandOutcome;
 
+/// The string a frontmatter `title` value promotes to, if any.
+///
+/// iteration 254 (DEC-252 amendment): YAML's type inference is an accident of
+/// the syntax, not an authoring choice — someone who writes `title: 42` meant
+/// the text `42`, and before this every such title was simply unreachable
+/// through `--fields title`, `--title` and `--sort title`. Every scalar
+/// therefore promotes, stringified as written in the file:
+///
+/// | frontmatter        | promoted title |
+/// |--------------------|----------------|
+/// | `title: 42`        | `"42"`         |
+/// | `title: 1.0`       | `"1.0"`        |
+/// | `title: 2026-08-30`| `"2026-08-30"` |
+/// | `title: true`      | `"true"`       |
+///
+/// The typed value stays available under `properties-typed`, so nothing is
+/// lost. Null, empty and whitespace-only titles count as absent (there is no
+/// text to promote), and a collection — `title: [a, b]`, `title: {k: v}` — has
+/// no honest string form at all: it does not promote, and `HYALO007` reports
+/// it instead.
+pub(super) fn promoted_title_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 /// Extract the title value for `--fields title`.
 ///
 /// Priority:
-/// 1. `title` frontmatter property (if it is a string)
+/// 1. `title` frontmatter property, when it is a promotable scalar (see
+///    [`promoted_title_string`])
 /// 2. First H1 heading in the document outline
 /// 3. `serde_json::Value::Null` if neither found
 pub(super) fn extract_title(
@@ -14,8 +44,8 @@ pub(super) fn extract_title(
     outline_sections: Option<&[OutlineSection]>,
 ) -> serde_json::Value {
     // 1. Frontmatter title property
-    if let Some(serde_json::Value::String(s)) = props.get("title") {
-        return serde_json::Value::String(s.clone());
+    if let Some(s) = props.get("title").and_then(promoted_title_string) {
+        return serde_json::Value::String(s);
     }
     // 2. First H1 heading from outline
     if let Some(sections) = outline_sections {

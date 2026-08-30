@@ -11,6 +11,60 @@ and this project adheres to
 
 ### Changed
 
+- **BREAKING: an explicit `--fields` is an exact projection.** `--fields
+  title` used to return `{file, modified, size, lines, title}` — the four
+  "structural" keys were unconditional, so a projection could never cost less
+  than they did, and there was no way to ask for just the paths and one
+  property. `file` is now the only key no projection can drop: it names the
+  result. `modified`, `size` and `lines` are ordinary members of the *default*
+  set — present when no `--fields` is given, because they are cheap and are the
+  inputs an agent uses to choose its next call (`read --lines`, recency) — but
+  dropped when an explicit `--fields` does not name them. So `--fields title`
+  is `{file, title}`, `--fields size,lines` is `{file, size, lines}`,
+  `--fields file` is `{file}`, and `--fields all` is unchanged. Filter
+  auto-includes still add on top of whatever set is in force. A saved view's
+  pinned `fields` behaves exactly like an explicit `--fields`, and a CLI
+  `--fields` now *replaces* that pin instead of extending it — extending it
+  meant a view could only ever be widened, never narrowed. `--format text`
+  renders exactly the projected set: with none of the three present, a result's
+  header is the quoted path alone. On this project's own knowledgebase,
+  `--fields title --limit 50` drops from 24.7 KB to 7.0 KB (−71 %).
+- **BREAKING: a non-string frontmatter `title` is reachable again.** Only a
+  YAML string promoted to the `title` field, so `title: 42`, `title: 1.0`,
+  `title: true` and any unquoted date were invisible to `--fields title`,
+  `--title` and `--sort title` — the item fell back to the first H1 and the
+  authored value was reachable only through `properties`. YAML's type inference
+  is an accident of the syntax, not an authoring choice: every scalar now
+  promotes, stringified as written (`42`, `1.0`, `2026-08-30`, `true`), with
+  the typed value still under `--fields properties-typed`. Null, empty and
+  whitespace-only titles count as absent (H1 fallback) and stay in
+  `properties`. A list or map has no honest string form, so it does not
+  promote: the item's `title` falls back to the H1, the raw value stays in
+  `properties.title` rather than being stripped as a consumed promotion, and a
+  new default-on lint rule `HYALO007` (`title-not-scalar`, warn; error under
+  `--strict`) reports it — `title: [Draft] Notes` is almost always a quoting
+  typo.
+- **One list of global flags, and it is the same list everywhere.** The set was
+  written down three times — the root `-h` GLOBAL OPTIONS, the root `--help`
+  COMMAND REFERENCE block, and the 52 `Global: …` pointer lines — and the three
+  disagreed: the pointer omitted `--dir`, the reference omitted `--hints`. Both
+  renderings are now generated from one table. The contradictory
+  "Per-subcommand index flags" block is gone: `--index`/`--index-file` are not
+  global and already appear in the Options block of every subcommand that reads
+  a snapshot index. `--hints` is hidden from `-h` (it forces on what is already
+  on; `--no-hints` next to it says which way the default points) and stays
+  documented in `--help`.
+- **`--dry-run`, placeholders and one-line help read the same across all 52
+  pages.** The nine different phrasings of `--dry-run` collapse to one;
+  `<PATTERN>`/`<RECENT>`/`<THRESHOLD>`/`<MIN_CONFIDENCE>`/`<IGNORE_TARGET>`/
+  `<EXCLUDE_TITLE>`/`<EXCLUDE_TARGET_GLOB>`/`<PROFILE>` become
+  `<GLOB>`/`<N>`/`<SUBSTR>`/`<TITLE>`/`<NAME>`, which also lets `links fix -h`
+  and `links auto -h` render in the compact single-line layout the other 50
+  pages use; `summary -n` loses its duplicated `(default: 10)`; and `read`,
+  `task read/toggle/set` and `backlinks` get the same one-line
+  `--file`/`--glob`/`--files-from` help `find` has, down from the three-to-five
+  rendered lines each was wrapping to.
+
 - **BREAKING: `find` returns a compact result shape.** The default field set
   was `properties, tags, sections, links` on every item, so a 20-file listing
   of this project's own knowledgebase was 73 KB of JSON — nine times the 8 KB
@@ -34,9 +88,9 @@ and this project adheres to
   file's totals, not the slice's), are identical between a disk scan and an
   `--index` snapshot, and count CRLF and LF documents the same. `read` over
   8 KB offers a line-range read and a section listing instead of another
-  whole-file pull, and `--format text` prints the size and line count in each
-  result's header line plus a `fields:` summary naming what the payload
-  carries and what `--fields all` would add. Snapshot indexes written by
+  whole-file pull, and `--format text` prints whichever of them the payload
+  carries in each result's header line, plus a `fields:` summary naming what
+  the payload carries and what `--fields all` would add. Snapshot indexes written by
   0.21.0 and earlier report `0` for both until the next `create-index`.
 
 - **`-h` is a short page again, and every command's page names its
@@ -89,6 +143,45 @@ and this project adheres to
 
 ### Fixed
 
+- **A bundled recipe that had been silently returning nothing.** The
+  "planned items where all tasks are done" recipe in the `hyalo-tidy` skill
+  reads `.tasks` but never asked for the field, so from the moment `tasks` left
+  the default set it matched nothing on every vault — no error, no warning, just
+  a wrong answer in a recipe agents are told to trust. It now passes
+  `--fields tasks`, and an e2e walks every bundled skill/template/rule file to
+  fail any `hyalo find … --jq` line that reads `tasks`, `sections`, `links`,
+  `backlinks` or `properties_typed` without a `--fields`, a `--view`, or a
+  filter that auto-includes it.
+- **Sixteen `-h` lines that ended mid-sentence.** The iteration-251 split moved
+  the detail of each doc comment into a second paragraph, but sixteen of them
+  were cut at a line break rather than a sentence boundary, so `-h` shipped
+  lines like `Validate new values against the schema from .hyalo.toml; reject
+  writes that would` and `Scaffold a preset vault flavour (okf, madr, skills,
+  changelog) by`. All sixteen are rewritten as whole sentences, and a new
+  `check-help-drift` gate (3e) plus an e2e now fail any short-help entry that
+  ends on a dangling word or `,;:`, or that spans more than two rendered lines.
+- **`views run --filenames-only` / `--filenames0` were advertised and ignored.**
+  Both appear in the `views run -h` Output group, but the flags were
+  destructured away, so `views run gate --filenames-only` printed the full JSON
+  envelope while `find --view gate --filenames-only` printed bare paths. They
+  now route through the same projection as `find`, applied after the `--strict`
+  check so a filename list can still be a CI gate.
+- **Help text that described the pre-0.22 result shape.** The `find` headline,
+  the `find --help` opening paragraph, the `--fields` help, the root `--help`
+  JSON cookbook (`find`, `read`, `task read/toggle/set`) and the bundled
+  `SKILL.md`s all still described the old shape — the cookbook showed `title`
+  inside `properties` and no `size`/`lines` at all. All are regenerated from
+  real output, and an e2e now asserts the cookbook's key lists equal the live
+  ones. `--orphan`/`--dead-end` say they auto-include links *and* backlinks
+  (which is what they do); `mv --property` says it takes the same syntax as
+  `find --property` (which it does — `~=`, `!K` and dot-paths all work);
+  `task --line` states that its numbering is file-absolute with frontmatter
+  counted, and `read --lines` that its numbering is body-relative, each
+  cross-referencing the other; `lint --help`'s `--fix-rule` example includes the
+  `--fix` it requires; `find --help`'s PROJECTIONS paragraph no longer prints a
+  literal NUL byte and newline into the terminal; and the rustdoc intra-doc link
+  that was rendering as `[`crate::list_commands::LIST_COMMANDS`]` on ~15 pages
+  is now an ordinary code comment.
 - `hyalo-cli` crates.io publish (v0.21.0) failed at the tarball verify step because the pi integration files were embedded via `include_str!` reaching outside the crate into the top-level `pi-package/` directory, which `cargo package` cannot see. The four files are now vendored inside `crates/hyalo-cli/templates/pi/`, kept in sync with `pi-package/` by a new `check-pi-package-sync` CI gate (`just sync-pi-package` to fix drift).
 
 ## [0.21.0] - 2026-08-28

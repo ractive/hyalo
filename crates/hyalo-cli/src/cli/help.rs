@@ -71,6 +71,73 @@ pub(crate) fn short_help_body(hide_dir: bool, hide_format: bool) -> String {
     format!("{HELP_COMMANDS}\n\n{}", examples.join("\n"))
 }
 
+/// The one list of global flags (iteration 254, COH-1/COH-2/HELP-4).
+///
+/// Before this the same set was written down three times — the root `-h`
+/// GLOBAL OPTIONS (clap-generated), the root `--help` COMMAND REFERENCE
+/// "Global flags" block, and the 52 `Global: …` pointer lines — and the three
+/// disagreed: the pointer omitted `--dir`, the reference block omitted
+/// `--hints`. Both renderings now come from here.
+///
+/// Each entry is `(pointer name, reference row)`: the compact name the pointer
+/// line prints, and the aligned `flag  description` row the reference block
+/// prints.
+const GLOBAL_FLAGS: &[(&str, &str)] = &[
+    (
+        "--dir",
+        "-d/--dir <DIR>            Root directory (default: ., override via .hyalo.toml)",
+    ),
+    (
+        "--format",
+        "--format json|text|github Output format (default: text on a terminal, json when piped;\n                              override via .hyalo.toml. github is lint-only)",
+    ),
+    (
+        "--jq",
+        "--jq <FILTER>             Apply a jq expression to JSON output (incompatible with --format text)",
+    ),
+    (
+        "--count",
+        "--count                   Print total as bare integer (shortcut for --jq '.total'; list commands only)",
+    ),
+    (
+        "--hints",
+        "--hints                   Force hints on (already the default; suppressed by --jq)",
+    ),
+    (
+        "--no-hints",
+        "--no-hints                Disable drill-down hints (enabled by default, override via .hyalo.toml)",
+    ),
+    (
+        "--site-prefix",
+        "--site-prefix <PREFIX>    Override site prefix for absolute link resolution (auto-derived from --dir)",
+    ),
+    (
+        "-q",
+        "-q/--quiet                Suppress all warnings to stderr",
+    ),
+];
+
+/// Flags the compact pointer line leaves out.
+///
+/// `--hints` forces on what is already on (HELP-9): naming it on 52 pages
+/// costs more than it teaches, and `--no-hints` right beside it already says
+/// which way the default points. It stays in the reference block.
+const POINTER_OMITS: &[&str] = &["--hints"];
+
+/// Token in [`HELP_LONG_TEMPLATE`] replaced with [`global_flags_block`].
+const GLOBAL_FLAGS_PLACEHOLDER: &str = "{GLOBAL_FLAGS}";
+
+/// Render the COMMAND REFERENCE "Global flags" block from [`GLOBAL_FLAGS`].
+fn global_flags_block(hide_dir: bool, hide_format: bool) -> String {
+    GLOBAL_FLAGS
+        .iter()
+        .filter(|(name, _)| !(hide_dir && *name == "--dir"))
+        .filter(|(name, _)| !(hide_format && *name == "--format"))
+        .map(|(_, row)| format!("    {row}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The single line that stands in for the global-options block on a
 /// subcommand's `-h` (iteration 251).
 ///
@@ -80,14 +147,13 @@ pub(crate) fn short_help_body(hide_dir: bool, hide_format: bool) -> String {
 /// `.hyalo.toml` already supplies them, matching the existing hiding rule in
 /// [`filter_examples`].
 pub(crate) fn global_pointer(hide_dir: bool, hide_format: bool) -> String {
-    let mut flags: Vec<&str> = Vec::with_capacity(7);
-    if !hide_dir {
-        flags.push("--dir");
-    }
-    if !hide_format {
-        flags.push("--format");
-    }
-    flags.extend(["--jq", "--count", "--no-hints", "--site-prefix", "-q"]);
+    let flags: Vec<&str> = GLOBAL_FLAGS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !POINTER_OMITS.contains(name))
+        .filter(|name| !(hide_dir && *name == "--dir"))
+        .filter(|name| !(hide_format && *name == "--format"))
+        .collect();
     format!("Global: {} — see `hyalo -h`", flags.join(" "))
 }
 
@@ -244,20 +310,10 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Completions (generate shell completions):
     hyalo completions <SHELL>   # bash, zsh, fish, elvish, powershell
 
-  Global flags (apply to all commands):
-    -d/--dir <DIR>            Root directory (default: ., override via .hyalo.toml)
-    --format json|text|github Output format (default: text on a terminal, json when piped;
-                              override via .hyalo.toml. github is lint-only)
-    --jq <FILTER>             Apply a jq expression to JSON output (incompatible with --format text)
-    --count                   Print total as bare integer (shortcut for --jq '.total'; list commands only)
-    --hints                   Force hints on (already the default; suppressed by --jq)
-    --no-hints                Disable drill-down hints (enabled by default, override via .hyalo.toml)
-    --site-prefix <PREFIX>    Override site prefix for absolute link resolution (auto-derived from --dir)
-    -q/--quiet                Suppress all warnings to stderr
-
-  Per-subcommand index flags (see each subcommand's --help):
-    --index                   Use the default snapshot index (.hyalo-index in the vault dir)
-    --index-file <PATH>       Use a snapshot index at an explicit path
+  Global flags (apply to all commands \u{2014} the same set every `Global:` pointer line names):
+{GLOBAL_FLAGS}
+    (Not global: --index / --index-file are per-subcommand. They appear in the
+    Options block of every subcommand that can read a snapshot index.)
 
   Default output limits:
     Capped commands ({LIMITED_COMMANDS}) return
@@ -322,8 +378,8 @@ COOKBOOK:
   # Find dead-end files (have inbound links but no outbound)
   hyalo find --dead-end
 
-  # Find broken [[wikilinks]] (fields=links, then filter in jq)
-  hyalo find --fields links --jq '[.results[] | select(.links | map(select(.path == null)) | length > 0)]'
+  # Every broken link target (--broken-links auto-includes the links field)
+  hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'
 
   # Every broken link as file:line — each link carries the source line lint reports
   hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.path == null and (.out_of_vault | not)) or .broken_anchor) | \"\\($f.file):\\(.line) \\(.target)\"'
@@ -460,14 +516,19 @@ OUTPUT SHAPES (JSON, default):
   #     included); only per-item records inside arrays omit optional keys
   #   - every mutating command reports dry_run and skipped_count
 
-  # find — results is an array of file objects
+  # find — results is an array of file objects; these seven keys are the
+  # default set, and `title` is promoted OUT of `properties`. --fields adds
+  # sections, tasks, links, backlinks, properties-typed; an explicit --fields
+  # is an exact projection, where only `file` always survives.
   {\"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
-   \"properties\": {\"status\": \"draft\", \"title\": \"My Note\"},
-   \"tags\": [...], \"sections\": [...], \"tasks\": [...], \"links\": [...]}],
+   \"size\": 1093, \"lines\": 35, \"title\": \"My Note\",
+   \"properties\": {\"status\": \"draft\"}, \"tags\": [...]}],
   \"total\": N, \"hints\": [...]}
 
-  # read
-  {\"results\": {\"file\": \"notes/todo.md\", \"content\": \"...body text...\"}, \"hints\": [...]}
+  # read — size/lines are the same numbers find reports, so a large body can
+  # be sliced with --lines A:B or --section instead of read whole
+  {\"results\": {\"file\": \"notes/todo.md\", \"size\": 1093, \"lines\": 35,
+   \"content\": \"...body text...\"}, \"hints\": [...]}
 
   # set / remove / append (mutation result)
   {\"results\": {\"property\": \"status\", \"value\": \"completed\", \"modified\": [...], \"skipped\": [...],
@@ -497,7 +558,9 @@ OUTPUT SHAPES (JSON, default):
   \"dry_run\": true, \"files_applied\": 0, \"files_skipped\": 0, \"files_failed\": 0,
   \"apply_outcomes\": [...], \"ambiguous_titles\": [...]}, \"hints\": [...]}
 
-  # task read / toggle / set
+  # task read / toggle / set — one object for a single --line, an ARRAY of the
+  # same objects for --all / --section / a multi-value --line; toggle and set
+  # add \"old_status\"
   {\"results\": {\"file\": \"todo.md\", \"line\": 5, \"status\": \"x\", \"text\": \"Fix bug\", \"done\": true}, \"hints\": [...]}
 
   # summary (compact: counts only, no file lists)
@@ -585,7 +648,10 @@ pub(crate) fn filter_examples(hide_dir: bool, hide_format: bool) -> String {
 /// This keeps the help focused on flags the user actually needs to type.
 pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
     if !hide_dir && !hide_format {
-        return help_long().to_owned();
+        // Still expand {GLOBAL_FLAGS}: the block is generated even when
+        // nothing is hidden, so the reference and the pointer lines cannot
+        // drift apart (iter-254).
+        return help_long().replace(GLOBAL_FLAGS_PLACEHOLDER, &global_flags_block(false, false));
     }
 
     // Split into paragraphs separated by blank lines.  Process each paragraph
@@ -597,22 +663,14 @@ pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
     for para in &paragraphs {
         // The Global flags paragraph needs line-level filtering (we want to keep
         // the paragraph but drop individual flag rows).
-        if para.contains("  Global flags (apply to all commands):") {
-            let filtered: String = para
-                .lines()
-                .filter(|line| {
-                    let trimmed = line.trim_start();
-                    if hide_dir && trimmed.starts_with("-d/--dir") {
-                        return false;
-                    }
-                    if hide_format && trimmed.starts_with("--format ") {
-                        return false;
-                    }
-                    true
-                })
-                .collect::<Vec<&str>>()
-                .join("\n");
-            out.push(filtered);
+        // iter-254: the rows themselves come from GLOBAL_FLAGS via the
+        // {GLOBAL_FLAGS} placeholder, so hiding a config-defaulted flag is a
+        // filter on that one list rather than a second pass over rendered text.
+        if para.contains("  Global flags (apply to all commands") {
+            out.push(para.replace(
+                GLOBAL_FLAGS_PLACEHOLDER,
+                &global_flags_block(hide_dir, hide_format),
+            ));
             continue;
         }
 
@@ -633,4 +691,68 @@ pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
     }
 
     out.join("\n\n")
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests — iteration 254 (COH-1/COH-2/HELP-4)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both renderings must name the same flags, in the same order, minus the
+    /// deliberate `POINTER_OMITS` — that equality is the whole point of the
+    /// shared list, and it is exactly what drifted before.
+    #[test]
+    fn the_pointer_and_the_reference_block_name_the_same_flags() {
+        let pointer = global_pointer(false, false);
+        let block = global_flags_block(false, false);
+        for (name, row) in GLOBAL_FLAGS {
+            assert!(
+                block.contains(row),
+                "the reference block is missing {name}:\n{block}"
+            );
+            if POINTER_OMITS.contains(name) {
+                assert!(
+                    !pointer.contains(name),
+                    "{name} is omitted from the pointer but appeared: {pointer}"
+                );
+            } else {
+                assert!(pointer.contains(name), "{name} missing from {pointer}");
+            }
+        }
+    }
+
+    #[test]
+    fn hiding_a_config_defaulted_flag_hides_it_in_both_renderings() {
+        for (hide_dir, hide_format) in [(true, false), (false, true), (true, true)] {
+            let pointer = global_pointer(hide_dir, hide_format);
+            let block = global_flags_block(hide_dir, hide_format);
+            assert_eq!(pointer.contains("--dir"), !hide_dir, "{pointer}");
+            assert_eq!(block.contains("-d/--dir"), !hide_dir, "{block}");
+            assert_eq!(pointer.contains("--format"), !hide_format, "{pointer}");
+            assert_eq!(block.contains("--format json"), !hide_format, "{block}");
+        }
+    }
+
+    /// `--index`/`--index-file` are per-subcommand, so the reference must not
+    /// list them among the globals — the contradiction COH-2 reported.
+    #[test]
+    fn the_globals_block_claims_no_index_flags() {
+        let block = global_flags_block(false, false);
+        assert!(!block.contains("--index"), "{block}");
+    }
+
+    #[test]
+    fn the_long_help_expands_the_globals_placeholder() {
+        for (hide_dir, hide_format) in [(false, false), (true, true)] {
+            let rendered = filter_long_help(hide_dir, hide_format);
+            assert!(
+                !rendered.contains(GLOBAL_FLAGS_PLACEHOLDER),
+                "the placeholder leaked into --help (hide_dir={hide_dir}, hide_format={hide_format})"
+            );
+            assert!(rendered.contains("Global flags (apply to all commands"));
+        }
+    }
 }
