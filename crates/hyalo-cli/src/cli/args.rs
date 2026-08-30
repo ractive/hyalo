@@ -690,7 +690,14 @@ impl FindFilters {
             self.glob.extend(overlay.glob.iter().cloned());
             self.file.clear();
         }
-        self.fields.extend(overlay.fields.iter().cloned());
+        // iter-254 (DEC-254): --fields is a projection, not an accumulator.
+        // A pinned `fields` behaves exactly like an explicit --fields, so a CLI
+        // --fields REPLACES the pin — extending it would make
+        // `find --view titles --fields tags` return more than either alone
+        // asked for, and there would be no way to narrow a view.
+        if !overlay.fields.is_empty() {
+            self.fields.clone_from(&overlay.fields);
+        }
         if overlay.sort.is_some() {
             self.sort.clone_from(&overlay.sort);
         }
