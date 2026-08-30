@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 253 — read: compute lines without a second full-file scan"
 date: 2026-08-30
-status: in-progress
+status: completed
 tags:
   - iteration
   - agent-cli
@@ -39,7 +39,7 @@ feature exists to help with, and contradicts the "frontmatter-only queries
 pay zero cost for body scanning" principle ([[decision-log]], scanner
 section) for the one case still forced to eat a full second read anyway.
 
-## Tasks
+## Tasks [4/4]
 
 - [x] `read_body_lines` returns the frontmatter line count alongside the body
       lines (e.g. `(Vec<String>, usize)`), without adding I/O — it already
@@ -60,7 +60,7 @@ section) for the one case still forced to eat a full second read anyway.
       iteration only removes the *second* read on the already-body-reading
       paths).
 
-## Acceptance criteria
+## Acceptance criteria [3/3]
 
 - [x] `read` without `--frontmatter`-only reads the file's bytes once, not
       twice (verified by the new test comparing against the pre-253 double-
