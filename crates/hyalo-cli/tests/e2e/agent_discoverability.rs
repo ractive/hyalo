@@ -558,3 +558,156 @@ fn the_fragment_guard_itself_catches_a_reintroduced_fragment() {
     let three_lines = "Options:\n      --wordy  one two three\n               four five six\n               seven eight nine\n";
     assert_eq!(short_help_fragments(three_lines).len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 254 — every documented example actually parses
+// ---------------------------------------------------------------------------
+
+/// The `hyalo …` lines inside every EXAMPLES / COOKBOOK block of a help page.
+///
+/// A block runs from its heading to the first line that is neither indented
+/// nor blank. Only lines whose first word is `hyalo` are collected: a synopsis
+/// row in COMMAND REFERENCE (`hyalo types remove <TYPE>`) is a grammar, not a
+/// runnable command, and a shell pipeline (`git diff … | hyalo …`) is not one
+/// argv.
+fn example_command_lines(help: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for line in help.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("EXAMPLES") || trimmed.starts_with("COOKBOOK") {
+            in_block = true;
+            continue;
+        }
+        if !in_block {
+            continue;
+        }
+        if !line.starts_with(' ')
+            && !line.starts_with('\u{00a0}')
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("hyalo ")
+            && !trimmed.starts_with('#')
+        {
+            in_block = false;
+            continue;
+        }
+        if !trimmed.starts_with("hyalo ") {
+            continue;
+        }
+        // Strip a trailing `  # explanation` comment.
+        let cmd = trimmed.split_once("  #").map_or(trimmed, |(c, _)| c).trim();
+        // A shell pipeline is not one argv.
+        if cmd.contains(" | ") {
+            continue;
+        }
+        // A wrapped continuation would parse as a separate command; clap's
+        // wrap column is the only thing that could split one, and no example
+        // is allowed to be that long, so an unbalanced quote means the line
+        // was cut and the test would be checking a fragment.
+        if cmd.matches('\'').count() % 2 != 0 || cmd.matches('"').count() % 2 != 0 {
+            continue;
+        }
+        out.push(cmd.to_owned());
+    }
+    out
+}
+
+/// Split a documented example into argv, honouring both quote styles.
+///
+/// `common::shell_split` handles only single quotes; several examples use
+/// double quotes (`--message "New export format"`), and splitting those on
+/// whitespace would hand clap a fragment and fail the test for the wrong
+/// reason.
+fn split_argv(cmd: &str) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    for c in cmd.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => current.push(c),
+            None if c == '\'' || c == '"' => {
+                quote = Some(c);
+                started = true;
+            }
+            None if c.is_whitespace() => {
+                if started {
+                    args.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            None => {
+                current.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(current);
+    }
+    args
+}
+
+#[test]
+fn every_documented_example_parses_without_a_clap_usage_error() {
+    let pages: Vec<Vec<String>> = {
+        let probe = TempDir::new().unwrap();
+        every_short_help_page(probe.path())
+    };
+
+    let mut collected: Vec<(String, String)> = Vec::new();
+    for page in &pages {
+        let probe = TempDir::new().unwrap();
+        let mut cmd = hyalo_no_hints();
+        cmd.args(page.iter().map(String::as_str));
+        let out = cmd
+            .arg("--help")
+            .current_dir(probe.path())
+            .output()
+            .unwrap();
+        let help = String::from_utf8_lossy(&out.stdout).into_owned();
+        let label = format!("hyalo {}", page.join(" "));
+        for line in example_command_lines(&help) {
+            collected.push((label.clone(), line));
+        }
+    }
+    assert!(
+        collected.len() >= 100,
+        "expected the documented examples, collected {}",
+        collected.len()
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    for (page, line) in collected {
+        // Each example gets a fresh vault: several of them write .hyalo.toml
+        // or mutate files, and one example must not change how the next parses.
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            "note.md",
+            "---\ntitle: Note\n---\n\n# Note\n\n- [ ] a\n",
+        );
+        let argv: Vec<String> = split_argv(&line).into_iter().skip(1).collect();
+        let out = hyalo_no_hints()
+            .args(&argv)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        // clap exits 2 on a usage error and prints its own `Usage:` block;
+        // hyalo's own runtime errors exit 1 (a missing file, an empty vault)
+        // and are fine — the example is being checked for *parseability*.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if out.status.code() == Some(2) && stderr.contains("Usage: hyalo") {
+            failures.push(format!(
+                "{page} --help: `{line}` is not accepted by clap:\n    {}",
+                stderr.lines().next().unwrap_or_default()
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "documented examples that do not parse:\n{}",
+        failures.join("\n")
+    );
+}
