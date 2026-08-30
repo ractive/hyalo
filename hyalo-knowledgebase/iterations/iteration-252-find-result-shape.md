@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 252 — find result shape: compact default fields and size metadata"
 date: 2026-08-29
-status: in-progress
+status: completed
 tags:
   - iteration
   - agent-cli
@@ -27,7 +27,7 @@ gets its own iteration and a minor bump.
 **No new flags.** `--fields` exists; the auto-include precedent exists
 (`--broken-links` adds `links`, `--orphan` adds `backlinks`).
 
-## Tasks
+## Tasks [7/7]
 
 - [x] New `find` default field set: `file, modified, size, title,
       properties, tags` (+ `score`/`matches` when a PATTERN or `-e` is
@@ -58,7 +58,7 @@ gets its own iteration and a minor bump.
       test vault), auto-include matrix, `size`/`lines` correctness on CRLF
       and UTF-8 files, index parity for the new fields.
 
-## Acceptance criteria
+## Acceptance criteria [4/4]
 
 - [x] `find --tag iteration --limit 20 --format json` on the own KB ≤ 12 KB;
       `--fields all` reproduces the pre-change shape.
