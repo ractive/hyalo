@@ -359,7 +359,7 @@ fn cookbook_shows_format_without_config() {
 /// that follows (i.e., just the flag table rows).
 fn global_flags_block(help: &str) -> &str {
     let start = help
-        .find("Global flags (apply to all commands):")
+        .find("Global flags (apply to all commands")
         .expect("no 'Global flags' section in --help");
     let slice = &help[start..];
     // The block ends at the first blank line after the heading.

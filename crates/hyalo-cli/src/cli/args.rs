@@ -343,7 +343,12 @@ pub(crate) struct Cli {
     /// Text mode: '-> hyalo ...  # description' lines — concrete, copy-pasteable commands with descriptions.
     /// JSON mode: populates the "hints" array in the envelope (always present, empty when suppressed).
     /// Suppressed when --jq is active.
-    #[arg(long, global = true)]
+    //
+    // iter-254 (HELP-9): hidden from `-h`. A flag that forces on what is
+    // already on teaches nothing on the page an agent reads first, and
+    // `--no-hints` sitting right beside it already says which way the default
+    // points. `--help` still documents it.
+    #[arg(long, global = true, hide_short_help = true)]
     pub hints: bool,
 
     /// Disable drill-down hints (on by default)
