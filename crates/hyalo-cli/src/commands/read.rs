@@ -587,6 +587,94 @@ mod tests {
         assert_eq!(lines[1], "next");
     }
 
+    /// iteration 253: the whole-file line count derived from the single body
+    /// pass (`fm_lines + body.len()`) must equal what a dedicated scan of the
+    /// file's bytes returns — `scanner::count_lines` is the same counter
+    /// `scanner::count_file_lines` streams, i.e. exactly the number `read`
+    /// reported before the second read was removed.
+    ///
+    /// The cases mirror the pathological inputs the iter-252 `find` suite
+    /// pins for `lines`: CRLF, no trailing newline, invalid UTF-8, and a line
+    /// over the per-line cap — the three inputs where "one call to
+    /// `read_line_capped` is one line" could plausibly break down.
+    #[test]
+    fn derived_line_count_matches_a_whole_file_scan() {
+        let huge = "x".repeat(scanner::MAX_BODY_LINE_BYTES + 1);
+        let cases: Vec<(&str, Vec<u8>)> = vec![
+            ("empty", Vec::new()),
+            ("lone newline", b"\n".to_vec()),
+            (
+                "no frontmatter, trailing newline",
+                b"# H\n\nbody\n".to_vec(),
+            ),
+            (
+                "no frontmatter, no trailing newline",
+                b"# H\n\nbody".to_vec(),
+            ),
+            ("frontmatter only", b"---\ntitle: T\n---\n".to_vec()),
+            ("frontmatter only, no eol", b"---\ntitle: T\n---".to_vec()),
+            (
+                "frontmatter and body",
+                b"---\ntitle: T\n---\n\n# H\n\nbody\n".to_vec(),
+            ),
+            (
+                "frontmatter and body, no eol",
+                b"---\ntitle: T\n---\n\n# End".to_vec(),
+            ),
+            (
+                "crlf throughout",
+                b"---\r\ntitle: T\r\n---\r\n\r\n# H\r\nbody\r\n".to_vec(),
+            ),
+            (
+                "multi-byte utf-8",
+                "---\ntitle: Üñïçôdé\n---\n\n日本語のテキスト。\n"
+                    .as_bytes()
+                    .to_vec(),
+            ),
+            ("trailing blank line", b"a\n\n".to_vec()),
+            (
+                "invalid utf-8 body line",
+                b"---\ntitle: T\n---\n\n\xff\xfe bad\nafter\n".to_vec(),
+            ),
+            ("invalid utf-8 first line", b"\xff bad\nafter\n".to_vec()),
+            (
+                "invalid utf-8 final line, no eol",
+                b"before\n\xff bad".to_vec(),
+            ),
+            (
+                "oversized middle line",
+                format!("before\n{huge}\nafter\n").into_bytes(),
+            ),
+            (
+                "oversized final line, no eol",
+                format!("before\n{huge}").into_bytes(),
+            ),
+            (
+                "oversized first line",
+                format!("{huge}\nafter\n").into_bytes(),
+            ),
+        ];
+
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, content) in cases {
+            let path = tmp.path().join("case.md");
+            std::fs::write(&path, &content).unwrap();
+            let (body, fm_lines) = read_body_lines(&path).unwrap();
+            assert_eq!(
+                fm_lines + body.len(),
+                scanner::count_lines(&content),
+                "derived line count disagrees with a whole-file scan for {name:?}"
+            );
+            // The two counters must also agree with the streaming one `read`
+            // still uses on the `--frontmatter`-only path.
+            assert_eq!(
+                scanner::count_file_lines(&path).unwrap(),
+                scanner::count_lines(&content),
+                "the streaming scan disagrees with the slice scan for {name:?}"
+            );
+        }
+    }
+
     // -- parse_line_range --
 
     #[test]
