@@ -600,14 +600,24 @@ fn example_command_lines(help: &str) -> Vec<String> {
         if cmd.contains(" | ") {
             continue;
         }
-        // A wrapped continuation would parse as a separate command; clap's
-        // wrap column is the only thing that could split one, and no example
-        // is allowed to be that long, so an unbalanced quote means the line
-        // was cut and the test would be checking a fragment.
-        if cmd.matches('\'').count() % 2 != 0 || cmd.matches('"').count() % 2 != 0 {
-            continue;
+        // A `cmd-a && cmd-b` chain is not one argv either, but unlike a
+        // pipeline both halves are whole hyalo invocations — so check each
+        // one rather than dropping the example (iter-255: `new --help`
+        // documents the scaffold-then-`set` chain).
+        for part in cmd.split(" && ") {
+            let part = part.trim();
+            if !part.starts_with("hyalo ") {
+                continue;
+            }
+            // A wrapped continuation would parse as a separate command; clap's
+            // wrap column is the only thing that could split one, and no example
+            // is allowed to be that long, so an unbalanced quote means the line
+            // was cut and the test would be checking a fragment.
+            if part.matches('\'').count() % 2 != 0 || part.matches('"').count() % 2 != 0 {
+                continue;
+            }
+            out.push(part.to_owned());
         }
-        out.push(cmd.to_owned());
     }
     out
 }

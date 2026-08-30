@@ -34,6 +34,29 @@ use crate::output::{CommandOutcome, Format};
 use anyhow::Result;
 use hyalo_core::discovery::{self, FileResolveError};
 
+/// What actually happens to a file containing invalid UTF-8 bytes, in one
+/// sentence — shared verbatim by `read`'s line placeholder and `find`'s
+/// full-text-search skip warning (UX-3, iter-255).
+///
+/// The two used to contradict each other. `read` substituted `<line skipped:
+/// invalid UTF-8 (lossy in search; fix encoding to read)>`, promising that
+/// search still saw the line in lossy form, while `find <text>` — the
+/// default BM25 full-text path, which needs the body as a `String` — dropped
+/// the whole file with `warning: skipping <file>: stream did not contain
+/// valid UTF-8`. Only the regex path (`find -e`) is genuinely lossy: it scans
+/// bytes and reports the match with U+FFFD replacement characters.
+///
+/// Rather than change what either command *does* (which would be a
+/// behaviour change needing a DEC), both now state the same three facts:
+/// the encoding is the problem, full-text search excludes the file, and
+/// `-e` still reaches it. A single constant is the only way to keep them
+/// from drifting apart again, and
+/// `invalid_utf8_wording_is_shared_by_read_and_find` in
+/// `tests/e2e/iteration255_followups.rs` pins that both surfaces really do
+/// print it — alongside a second test that checks each claim against real
+/// behaviour, so the two can agree without both being wrong.
+pub(crate) const INVALID_UTF8_CONSEQUENCE: &str = "invalid UTF-8 — the file is excluded from full-text search (`find -e` still matches it lossily)";
+
 /// Refuse a write whose destination resolves outside the vault.
 ///
 /// One gate for the whole boundary family (iter-202): every writer that builds

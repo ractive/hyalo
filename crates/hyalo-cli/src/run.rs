@@ -700,6 +700,30 @@ fn run_inner() -> Result<(), AppError> {
                 return Err(AppError::Exit(2));
             }
 
+            // Intercept `--property` / `--tag` on the `new` subcommand.
+            // `new` scaffolds strictly from the schema type's declared
+            // required properties and defaults; UX-5 (dogfood v0.22.0) is
+            // that nothing in the failure told the reader where properties
+            // *do* get set, and clap's nearest-match tip picks `--type`.
+            // Point at the `new … && set …` chain instead of growing `new`'s
+            // flag surface (decision-log: no new CLI flags without a payoff
+            // the existing commands cannot deliver).
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && crate::suggest::top_level_subcommand(&raw_args, &Cli::command()) == Some("new")
+                && (crate::suggest::unknown_arg_is(&e, "--property")
+                    || crate::suggest::unknown_arg_is(&e, "-p")
+                    || crate::suggest::unknown_arg_is(&e, "--tag")
+                    || crate::suggest::unknown_arg_is(&e, "-t"))
+            {
+                eprintln!(
+                    "error: `hyalo new` scaffolds from the type's schema and accepts no \
+                     --property/--tag\n\n\
+                     hint: create the file, then set what the schema does not declare:\n\n    \
+                     hyalo new --type <TYPE> --file <FILE> && hyalo set <FILE> --property k=v\n"
+                );
+                return Err(AppError::Exit(2));
+            }
+
             // Only attempt subcommand suggestions when clap couldn't recognise a
             // flag or subcommand — this avoids misleading tips for other error kinds.
             if matches!(
