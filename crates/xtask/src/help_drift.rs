@@ -396,7 +396,7 @@ pub fn parse_short_help_entries(help: &str) -> Vec<ShortHelpEntry> {
 
     let starts_entry = |line: &str| {
         let indent = line.len() - line.trim_start().len();
-        if indent < 2 || indent >= CONTINUATION_INDENT {
+        if !(2..CONTINUATION_INDENT).contains(&indent) {
             return false;
         }
         let rest = line.trim_start();

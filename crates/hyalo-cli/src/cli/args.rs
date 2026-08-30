@@ -499,20 +499,31 @@ pub(crate) struct FindFilters {
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
-    /// all|properties|properties-typed|tags|sections|tasks|links|backlinks|title (default: title,properties,tags)
+    /// all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
     ///
-    /// Comma-separated list of optional fields to include: all, properties, properties-typed, tags,
-    /// sections (alias: outline), tasks, links, backlinks, title (default: title, properties, tags
-    /// — excludes sections, tasks, links, backlinks, and properties-typed). Use 'all' to
-    /// include every field. 'file', 'modified', 'size' (bytes) and 'lines' are always included.
-    /// A filter that implies a field returns it without --fields: --section adds sections,
-    /// --task adds tasks, --broken-links/--dead-end add links, --orphan adds links and backlinks,
-    /// and --sort links_count/backlinks_count add the field they rank on. 'properties' is a
-    /// {key: value} map WITHOUT the promoted 'title' property (which has its own field whenever
-    /// 'title' is included); 'properties-typed' is a [{name, type, value}] array; 'backlinks'
-    /// requires scanning all files; 'title' is the frontmatter title property or first H1 heading
-    /// (null if neither found). Note: in JSON output, `properties-typed` is serialized as
-    /// `properties_typed` (underscore).
+    /// Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
+    /// exactly the named fields plus file (filters add what they need).
+    ///
+    /// `file` is the only unconditional key — it names the result — so `--fields title` returns
+    /// {file, title} and `--fields size,lines` returns {file, size, lines}. `modified`, `size`
+    /// and `lines` are ordinary members of the default set: cheap enough to always pay for, and
+    /// the inputs an agent uses to choose its next call (`read --lines`, recency), but dropped
+    /// when an explicit --fields does not name them. `--fields file` is accepted and means
+    /// {file}; `--fields all` selects everything. A saved view's pinned `fields` behaves exactly
+    /// like an explicit --fields; a CLI --fields on top replaces the pin rather than adding to it.
+    ///
+    /// A filter that implies a field still returns it, on top of whatever set is in force:
+    /// --section adds sections, --task adds tasks, --broken-links adds links,
+    /// --orphan/--dead-end add links and backlinks, and --sort links_count/backlinks_count add
+    /// the field they rank on.
+    ///
+    /// 'properties' is a {key: value} map WITHOUT the promoted 'title' property (which has its
+    /// own field whenever 'title' is included, and stays in the map when the frontmatter value
+    /// is a list or a map and so cannot be promoted); 'properties-typed' is a
+    /// [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the
+    /// frontmatter title property — any scalar, stringified as written — or the first H1
+    /// heading (null if neither found). 'outline' is an alias for 'sections'. Note: in JSON
+    /// output, `properties-typed` is serialized as `properties_typed` (underscore).
     #[arg(
         long,
         value_name = "FIELDS",
@@ -570,17 +581,17 @@ pub(crate) struct FindFilters {
     #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub strict: bool,
-    /// Only orphan files: no inbound and no outbound links
+    /// Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
     ///
-    /// Only return orphan files: no inbound links and no outbound links (auto-includes backlinks
-    /// field).
+    /// Deciding orphanhood needs both directions of the graph, so both fields come back
+    /// whether or not --fields names them.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub orphan: bool,
-    /// Only dead-end files: inbound links but no outbound links
+    /// Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
     ///
-    /// Only return dead-end files: have inbound links but no outbound links (auto-includes links
-    /// field).
+    /// Deciding dead-endedness needs both directions of the graph, so both fields come back
+    /// whether or not --fields names them.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub dead_end: bool,
@@ -704,11 +715,15 @@ impl FindFilters {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Search and filter markdown files — returns file objects with metadata, structure, tasks, and links
+    /// Search and filter markdown files — returns one compact object per file (see --fields)
     #[command(long_about = "Search and filter markdown files.\n\n\
             Returns a JSON envelope: {\"results\": [...], \"total\": N, \"hints\": [...]}.\n\
-            Each item in results contains the file path, modified time, \
-            and optionally: frontmatter properties, tags, document sections, tasks, and links.\n\n\
+            Each item carries the default field set — file, modified, size, lines, title, \
+            properties, tags — where `title` is promoted out of `properties`. \
+            --fields adds sections, tasks, links, backlinks and properties-typed, and an \
+            explicit --fields is an exact projection: exactly the named fields plus `file`, \
+            which is the one key no projection can drop. A filter that needs a field adds it \
+            regardless.\n\n\
             SEARCH MODES:\n\
             - PATTERN (positional): BM25 ranked full-text search with stemming. Results are sorted by \
             relevance score (highest first) unless --sort is specified. Each result includes a numeric \
