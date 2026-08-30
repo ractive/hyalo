@@ -1954,3 +1954,86 @@ title: Y
         "resolved path should be vault-relative sibling/y.md"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iteration 254 (DEC-255) — which frontmatter `title` values promote
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_scalar_promotes_stringified_as_written() {
+    use super::build::promoted_title_string;
+    use serde_json::json;
+
+    for (value, expected) in [
+        (json!("Notes"), "Notes"),
+        (json!(42), "42"),
+        (json!(-7), "-7"),
+        (json!(1.0), "1.0"),
+        (json!(0.5), "0.5"),
+        // An unquoted ISO date is parsed as a string by the frontmatter
+        // reader, so it promotes as the text the author typed.
+        (json!("2026-08-30"), "2026-08-30"),
+        (json!(true), "true"),
+        (json!(false), "false"),
+    ] {
+        assert_eq!(
+            promoted_title_string(&value).as_deref(),
+            Some(expected),
+            "for {value}"
+        );
+    }
+}
+
+#[test]
+fn absent_shaped_and_collection_titles_do_not_promote() {
+    use super::build::promoted_title_string;
+    use serde_json::json;
+
+    for value in [
+        serde_json::Value::Null,
+        json!(""),
+        json!("   "),
+        json!("\t\n"),
+        json!(["a", "b"]),
+        json!({"k": "v"}),
+        json!([]),
+        json!({}),
+    ] {
+        assert!(
+            promoted_title_string(&value).is_none(),
+            "{value} must not promote"
+        );
+    }
+}
+
+#[test]
+fn extract_title_falls_back_to_the_h1_when_the_property_cannot_promote() {
+    use super::build::extract_title;
+    use hyalo_core::types::OutlineSection;
+    use serde_json::json;
+
+    let sections = vec![OutlineSection {
+        level: 1,
+        heading: Some("From the body".to_owned()),
+        line: 1,
+        tasks: None,
+        code_blocks: Vec::new(),
+        links: Vec::new(),
+    }];
+
+    let mut props = indexmap::IndexMap::new();
+    props.insert("title".to_owned(), json!(["a", "b"]));
+    assert_eq!(
+        extract_title(&props, Some(&sections)),
+        json!("From the body")
+    );
+
+    props.insert("title".to_owned(), json!(42));
+    assert_eq!(extract_title(&props, Some(&sections)), json!("42"));
+
+    // Nothing at all: the honest answer is null, not a filename (DEC-255).
+    assert_eq!(
+        extract_title(&indexmap::IndexMap::new(), None),
+        serde_json::Value::Null
+    );
+}

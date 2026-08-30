@@ -881,6 +881,70 @@ mod tests {
         assert_eq!(f.links, DEFAULT_FIELD_NAMES.contains(&"links"));
         assert_eq!(f.tasks, DEFAULT_FIELD_NAMES.contains(&"tasks"));
         assert_eq!(f.backlinks, DEFAULT_FIELD_NAMES.contains(&"backlinks"));
+        assert_eq!(f.modified, DEFAULT_FIELD_NAMES.contains(&"modified"));
+        assert_eq!(f.size, DEFAULT_FIELD_NAMES.contains(&"size"));
+        assert_eq!(f.lines, DEFAULT_FIELD_NAMES.contains(&"lines"));
+    }
+
+    #[test]
+    fn an_explicit_selection_drops_the_default_set_members_it_omits() {
+        // iter-254 (DEC-254): `modified`/`size`/`lines` are ordinary members of
+        // the default set, so naming any field at all turns off the ones not
+        // named. `file` is not a member — it is unconditional — but is accepted
+        // as a name so `--fields file` can mean "just the paths".
+        let f = Fields::parse(&["title".to_owned()]).unwrap();
+        assert!(f.title);
+        for (name, on) in [
+            ("modified", f.modified),
+            ("size", f.size),
+            ("lines", f.lines),
+            ("properties", f.properties),
+            ("tags", f.tags),
+        ] {
+            assert!(!on, "{name} should be dropped by `--fields title`");
+        }
+    }
+
+    #[test]
+    fn the_droppable_default_members_can_be_asked_for_by_name() {
+        let f = Fields::parse(&["size,lines".to_owned()]).unwrap();
+        assert!(f.size && f.lines);
+        assert!(!f.modified && !f.title && !f.properties && !f.tags);
+
+        let f = Fields::parse(&["modified".to_owned()]).unwrap();
+        assert!(f.modified);
+        assert!(!f.size && !f.lines);
+    }
+
+    #[test]
+    fn fields_file_is_accepted_and_selects_nothing_else() {
+        let f = Fields::parse(&["file".to_owned()]).unwrap();
+        assert!(!f.modified && !f.size && !f.lines);
+        assert!(!f.title && !f.properties && !f.properties_typed && !f.tags);
+        assert!(!f.sections && !f.tasks && !f.links && !f.backlinks);
+    }
+
+    #[test]
+    fn fields_all_turns_on_the_droppable_default_members_too() {
+        let f = Fields::parse(&["all".to_owned()]).unwrap();
+        assert!(f.modified && f.size && f.lines);
+        assert!(f.sections && f.tasks && f.links && f.backlinks && f.properties_typed);
+    }
+
+    #[test]
+    fn the_unknown_field_error_states_the_projection_rule() {
+        let err = Fields::parse(&["status".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field \"status\""), "{err}");
+        assert!(
+            err.contains("Without --fields: file, modified, size, lines, title, properties, tags."),
+            "{err}"
+        );
+        assert!(
+            err.contains("With --fields: exactly the named fields plus file"),
+            "{err}"
+        );
     }
 
     #[test]

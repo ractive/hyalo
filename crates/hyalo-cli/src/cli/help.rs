@@ -692,3 +692,67 @@ pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
 
     out.join("\n\n")
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests — iteration 254 (COH-1/COH-2/HELP-4)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both renderings must name the same flags, in the same order, minus the
+    /// deliberate `POINTER_OMITS` — that equality is the whole point of the
+    /// shared list, and it is exactly what drifted before.
+    #[test]
+    fn the_pointer_and_the_reference_block_name_the_same_flags() {
+        let pointer = global_pointer(false, false);
+        let block = global_flags_block(false, false);
+        for (name, row) in GLOBAL_FLAGS {
+            assert!(
+                block.contains(row),
+                "the reference block is missing {name}:\n{block}"
+            );
+            if POINTER_OMITS.contains(name) {
+                assert!(
+                    !pointer.contains(name),
+                    "{name} is omitted from the pointer but appeared: {pointer}"
+                );
+            } else {
+                assert!(pointer.contains(name), "{name} missing from {pointer}");
+            }
+        }
+    }
+
+    #[test]
+    fn hiding_a_config_defaulted_flag_hides_it_in_both_renderings() {
+        for (hide_dir, hide_format) in [(true, false), (false, true), (true, true)] {
+            let pointer = global_pointer(hide_dir, hide_format);
+            let block = global_flags_block(hide_dir, hide_format);
+            assert_eq!(pointer.contains("--dir"), !hide_dir, "{pointer}");
+            assert_eq!(block.contains("-d/--dir"), !hide_dir, "{block}");
+            assert_eq!(pointer.contains("--format"), !hide_format, "{pointer}");
+            assert_eq!(block.contains("--format json"), !hide_format, "{block}");
+        }
+    }
+
+    /// `--index`/`--index-file` are per-subcommand, so the reference must not
+    /// list them among the globals — the contradiction COH-2 reported.
+    #[test]
+    fn the_globals_block_claims_no_index_flags() {
+        let block = global_flags_block(false, false);
+        assert!(!block.contains("--index"), "{block}");
+    }
+
+    #[test]
+    fn the_long_help_expands_the_globals_placeholder() {
+        for (hide_dir, hide_format) in [(false, false), (true, true)] {
+            let rendered = filter_long_help(hide_dir, hide_format);
+            assert!(
+                !rendered.contains(GLOBAL_FLAGS_PLACEHOLDER),
+                "the placeholder leaked into --help (hide_dir={hide_dir}, hide_format={hide_format})"
+            );
+            assert!(rendered.contains("Global flags (apply to all commands"));
+        }
+    }
+}

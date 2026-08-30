@@ -1291,3 +1291,40 @@ fn envelope_without_dir_in_results_has_no_top_dir() {
         "no dir should be at envelope root when results has none"
     );
 }
+
+// --- iteration 254: the header degrades to whatever the projection kept ---
+
+#[test]
+fn file_object_header_carries_only_the_present_metadata_keys() {
+    for (payload, expected) in [
+        (
+            json!({"file": "a.md", "modified": "2024-01-01", "size": 12, "lines": 3}),
+            "\"a.md\"  (2024-01-01, 12 B, 3 lines)",
+        ),
+        (
+            json!({"file": "a.md", "modified": "2024-01-01"}),
+            "\"a.md\"  (2024-01-01)",
+        ),
+        (json!({"file": "a.md", "size": 12}), "\"a.md\"  (12 B)"),
+        (
+            json!({"file": "a.md", "lines": 3, "size": 12}),
+            "\"a.md\"  (12 B, 3 lines)",
+        ),
+        // An exact projection can leave nothing but the path.
+        (json!({"file": "a.md"}), "\"a.md\""),
+    ] {
+        let map = payload.as_object().unwrap().clone();
+        let filter = build_file_object_filter(&map);
+        assert_eq!(jq(&filter, &payload).unwrap(), expected, "for {payload}");
+    }
+}
+
+#[test]
+fn a_projected_file_object_still_renders_its_optional_sections() {
+    // `--fields title` yields `{file, title}`: no metadata group, but the
+    // title line must still appear under the bare path.
+    let payload = json!({"file": "a.md", "title": "Alpha"});
+    let map = payload.as_object().unwrap().clone();
+    let filter = build_file_object_filter(&map);
+    assert_eq!(jq(&filter, &payload).unwrap(), "\"a.md\"\n  title: Alpha");
+}
