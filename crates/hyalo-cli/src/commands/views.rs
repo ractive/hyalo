@@ -427,6 +427,8 @@ pub(crate) fn run(
                     dead_end,
                     title,
                     language,
+                    filenames_only,
+                    filenames0,
                     ..
                 } = filters;
                 if orphan && dead_end {
@@ -632,6 +634,23 @@ pub(crate) fn run(
                         {
                             ctx.exit_code_override = Some(1);
                         }
+                        // iter-254 (HELP-3): the same projection `find`
+                        // applies, for the same reason `--strict` had to be
+                        // wired through above — `views run -h` advertises
+                        // these two flags in its Output group, and until now
+                        // they were destructured away into `..`, so
+                        // `views run gate --filenames-only` printed the full
+                        // JSON envelope while `find --view gate
+                        // --filenames-only` printed bare paths. Applied after
+                        // the --strict check so a filename list can still be
+                        // a CI gate.
+                        let outcome = if filenames_only {
+                            crate::commands::find::project_filenames_only(outcome)
+                        } else if filenames0 {
+                            crate::commands::find::project_filenames0(outcome)
+                        } else {
+                            outcome
+                        };
                         Ok(outcome)
                     }
                     IndexResolution::Outcome(outcome) => Ok(outcome),

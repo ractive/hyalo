@@ -858,7 +858,16 @@ pub(crate) enum Commands {
             pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
             --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
-            Pass --format json to get {\"results\": {\"file\": \"...\", \"content\": \"...\"}, \"hints\": [...]}.\n\
+            Pass --format json to get \
+            {\"results\": {\"file\": \"...\", \"size\": N, \"lines\": N, \"content\": \"...\"}, \"hints\": [...]}. \
+            `size` (body bytes) and `lines` (body line count) are the same numbers `find` reports, \
+            so the two commands agree on what a read will cost. Text mode prints the body and \
+            nothing else \u{2014} a header line would corrupt `hyalo read x.md > x.txt` and every \
+            pipe into another tool \u{2014} so the size shows up there only in the hint below.\n\
+            BUDGETING A LARGE READ: over 8 KiB of body, `read` stops offering the whole file as a \
+            cheap lookup and hints at two narrower reads instead \u{2014} `read --lines 1:80` for a \
+            leading slice, or `find --file <path> --fields sections` to pick one section and then \
+            `read --section`. The hint is suppressed once --lines or --section is already in play.\n\
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             \u{00a0} hyalo read notes/todo.md\n\
@@ -876,8 +885,12 @@ pub(crate) enum Commands {
         /// Nested subsections are included.
         #[arg(short, long, value_name = "HEADING")]
         section: Option<String>,
-        /// Slice output by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to body content)
-        #[arg(short, long)]
+        /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
+        ///
+        /// The frontmatter block is not counted, so line 1 is the first line after it — even
+        /// with --frontmatter. Note that `task --line` counts differently: those numbers are
+        /// file-absolute, with the frontmatter included.
+        #[arg(short, long, value_name = "RANGE")]
         lines: Option<String>,
         /// Include the YAML frontmatter in output
         #[arg(long)]
@@ -1102,7 +1115,11 @@ pub(crate) enum Commands {
         /// Input is deduplicated; results follow first-seen order.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "file_positional", "glob"])]
         files_from: Option<String>,
-        /// Property filter for source selection: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists). Repeatable (AND)
+        /// Property filter for source selection. Same syntax as `find --property`; repeatable (AND)
+        ///
+        /// The full operator set: K=V, K!=V, K>V, K>=V, K<V, K<=V, K (exists), !K (absent),
+        /// K~=re and K~=/re/i (regex), and K may be a dot-path into a nested map — exactly
+        /// what `find --property` accepts, parsed by the same code.
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
         /// Tag filter: exact or prefix match. Repeatable (AND)
@@ -1735,7 +1752,7 @@ Repeatable (AND).\n\
             \u{00a0} hyalo lint --rule-prefix HYALO\n\
             \u{00a0} hyalo lint --max-per-rule 0\n\
             \u{00a0} hyalo lint --fix --dry-run\n\
-            \u{00a0} hyalo lint --fix-rule HYALO001\n\
+            \u{00a0} hyalo lint --fix --fix-rule HYALO001\n\
             \u{00a0} hyalo lint --fix\n\
             \u{00a0} hyalo lint --profile okf         # validate OKF bundle conformance\n\
             \u{00a0} hyalo lint --profile skills      # validate a directory of SKILL.md skills\n\
@@ -1794,7 +1811,9 @@ Repeatable (AND).\n\
         /// Override per-rule violation cap (0 = unlimited; default from config or 3)
         #[arg(long, value_name = "N", value_parser = parse_limit)]
         max_per_rule: Option<usize>,
-        /// Only autofix the specified rule(s) — repeatable
+        /// With --fix, only autofix the specified rule(s) (repeatable)
+        ///
+        /// Requires --fix: on its own it has nothing to restrict, and clap rejects it.
         #[arg(long, value_name = "RULE_ID", requires = "fix")]
         fix_rule: Vec<String>,
         /// Promote schema warnings (missing type, undeclared property, date format) to errors
@@ -2284,6 +2303,13 @@ pub(crate) enum ViewsAction {
         The view is stored in .hyalo.toml and can be recalled with `hyalo find --view <name>`.\n\
         You can combine --view with additional CLI filters to extend or override the saved set.\n\
         Overwrites if the view already exists.\n\n\
+        WHAT IS PERSISTED: every flag shown below \u{2014} not just the filters. --sort, --reverse, \
+        --limit and --fields are saved with the view, and so are the output-shaping switches \
+        --strict, --filenames-only and --filenames0, so a saved view can be a complete CI gate \
+        rather than a filter set someone still has to decorate. On recall, a CLI flag of the same \
+        name overrides the saved value; the three bools can only be turned ON by the CLI, never \
+        off. A pinned `fields` behaves exactly like an explicit --fields (an exact projection), \
+        and a CLI --fields replaces the pin rather than adding to it.\n\n\
         SIDE EFFECTS: Modifies .hyalo.toml.")]
     Set {
         /// View name (first positional arg)
@@ -2749,7 +2775,13 @@ pub(crate) enum TaskAction {
     Read {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all"])]
         line: Vec<usize>,
         #[arg(
@@ -2785,7 +2817,13 @@ pub(crate) enum TaskAction {
     Toggle {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         #[arg(
@@ -2826,7 +2864,13 @@ pub(crate) enum TaskAction {
     Set {
         #[command(flatten)]
         selection: InputSelection,
-        /// 1-based line number(s). Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7
+        /// 1-based line number(s) in the WHOLE file, frontmatter counted (repeatable: 5,7,9)
+        ///
+        /// Comma-separated or repeatable: --line 5,7,9 or --line 5 --line 7. The numbering is
+        /// file-absolute — the same one `find --fields tasks`, `lint` and `backlinks` report —
+        /// so a line number copied out of any of them can be pasted here unchanged. Note that
+        /// `read --lines` counts differently: it is relative to the body, with the frontmatter
+        /// block excluded.
         #[arg(short, long, value_delimiter = ',', action = clap::ArgAction::Append, conflicts_with_all = ["section", "all", "files_from"])]
         line: Vec<usize>,
         #[arg(
