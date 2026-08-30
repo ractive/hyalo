@@ -17,7 +17,9 @@ that make the 0.22.0 surface misleading to an agent: one silently-wrong
 bundled recipe, sixteen sentence-fragment one-liners left by the iter-251
 split, help text that still describes the pre-252 result shape, and a
 handful of help-vs-behaviour contradictions. Pure docs/help/consistency
-iteration; no new flags, no result-shape change beyond the FIND-3 fix. Ships
+iteration; no new flags. Two deliberate shape changes, both narrowing what
+iter-252 left implicit: explicit `--fields` becomes an exact projection
+(E1), and a non-string `title` stays reachable (E2). Ships
 before the 0.22.0 release so the compact shape and the short help go out
 coherent.
 
@@ -79,9 +81,11 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       size in the header line" claim or implement it (decide, record in DEC).
 - [ ] COH-16/FIND-6: `--orphan` and `--dead-end` flag lines say
       "auto-includes links and backlinks" (matches behaviour and the
-      `--fields` paragraph); FIND-1: `--fields` help states that
-      `file/modified/size/lines` are unconditional and not selectable, and
-      the "unknown field" error says the same.
+      `--fields` paragraph). `--fields` help, the text `fields:` summary
+      line and the "unknown field" error all state the E1 rule in one
+      sentence: "Without --fields: file, modified, size, lines, title,
+      properties, tags. With --fields: exactly the named fields plus file
+      (filters add what they need)."
 
 ### D. Help-vs-behaviour contradictions [0/5]
 
@@ -103,8 +107,26 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
       (frontmatter counted); `read --lines` already says body-relative —
       cross-reference both.
 
-### E. Shape edge case [0/1]
+### E. Result-shape semantics [0/2]
 
+- [ ] FIND-1 — exact projection. `file` is the only unconditional key; it
+      names the result and is never droppable. `modified`, `size`, `lines`
+      become ordinary members of the field set: present in the *default*
+      set (no `--fields`) because they are cheap (`stat`, or already
+      scanned) and are the inputs an agent uses to choose its next call
+      (`read --lines`, recency), but dropped when an explicit `--fields`
+      does not name them. So `--fields title` → `{file, title}`;
+      `--fields size,lines` → `{file, size, lines}`; `--fields all` is
+      unchanged; `--fields file` is accepted and means `{file}`. Filter
+      auto-includes (`--section`→sections, `--task`→tasks, `--broken-links`/
+      `--orphan`/`--dead-end`→links+backlinks, count sorts→that field) still
+      add to whatever set is in force. Views with a pinned `fields` follow
+      the same rule as an explicit `--fields`; CLI `--fields` on top
+      replaces the pin. Implement in the one projection point that already
+      builds the item (`commands/find.rs` field-set handling and the text
+      renderer), not as a post-filter on the JSON. Record as DEC-254 with
+      the reasoning above; update the `views --help` FIELDS paragraph, the
+      `rule-knowledgebase.md` shape notes and the bundled `SKILL.md`s.
 - [ ] FIND-3: strip `title` from `properties` only when the promoted
       top-level `title` is non-null, so a numeric/list/null `title` stays
       reachable in the default shape; text mode prints the raw value rather
@@ -145,6 +167,13 @@ FIND-8 index materialisation cost (see [[iterations/iteration-253-read-lines-sin
 - [ ] Every example line in every `--help` page executes without a clap
       usage error in a scratch KB (extend the 251 e2e that walks
       `hyalo help`).
+- [ ] Exact projection: `find --fields title --limit 1` JSON item keys are
+      exactly `["file","title"]`; `--fields size,lines` → `["file","lines",
+      "size"]`; no `--fields` → the seven default keys; `--fields title
+      --section Goal` → `["file","sections","title"]`; a view pinning
+      `fields = ["title"]` behaves like `--fields title`. Text mode shows the
+      same set. Payload for `--fields title --limit 50` on the own KB drops
+      by ≥20 % vs 0.22.0 (record the number).
 - [ ] `find --file <numeric-title>.md` default JSON exposes the raw title
       value somewhere (`title` or `properties.title`).
 - [ ] Docs in sync: README (report-only check), `rule-knowledgebase.md`,
