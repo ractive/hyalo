@@ -277,7 +277,9 @@ fn title_vault() -> TempDir {
         ("boolean", "true"),
         ("list", "[a, b]"),
         ("map", "{k: v}"),
-        ("nul", ""),
+        // Not "nul": that is a reserved device name on Windows and the
+        // file cannot be created there.
+        ("null-title", ""),
         ("blank", "\"  \""),
     ] {
         write_md(
@@ -333,7 +335,7 @@ fn a_collection_title_falls_back_to_h1_and_keeps_the_raw_value() {
 fn null_and_blank_titles_count_as_absent_but_stay_in_properties() {
     let tmp = title_vault();
     for (file, heading, raw_value) in [
-        ("nul.md", "H1 nul", serde_json::Value::Null),
+        ("null-title.md", "H1 null-title", serde_json::Value::Null),
         ("blank.md", "H1 blank", serde_json::json!("  ")),
     ] {
         let (title, raw) = title_of(tmp.path(), file);

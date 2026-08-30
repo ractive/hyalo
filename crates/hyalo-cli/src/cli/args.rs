@@ -1679,6 +1679,9 @@ Repeatable (AND).\n\
             \u{00a0} - HYALO002: `status: completed` requires all task checkboxes ticked\n\
             \u{00a0}            (only fires when the schema declares `status` as an enum\n\
             \u{00a0}            containing `completed`)\n\
+            \u{00a0} - HYALO007: frontmatter `title` is a list or a map, so it cannot be promoted\n\
+            \u{00a0}            to the `find --fields title` value (usually a quoting typo such as\n\
+            \u{00a0}            `title: [Draft] Notes`) \u{2014} the item falls back to its first H1\n\
             \u{00a0} - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
             \u{00a0}            oversized scalar) — error by default; the file still counts in\n\
             \u{00a0}            `files_checked` so a corrupt file can never leave a green lint.\n\
