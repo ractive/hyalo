@@ -1,8 +1,6 @@
 ---
 type: iteration
-title: >-
-  Iteration 256 — envelope unification, help forwarding, and --fields all index
-  cost
+title: "Iteration 256 — envelope unification, help forwarding, and --fields all index cost"
 date: 2026-08-30
 status: planned
 tags:
