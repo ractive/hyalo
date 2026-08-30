@@ -371,3 +371,190 @@ fn an_empty_vault_still_gets_a_next_step() {
         "even a filter-less empty query names a next step: {parsed}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Iteration 254 — no short-help entry ends mid-sentence
+// ---------------------------------------------------------------------------
+//
+// The iter-251 split moved the detail of each doc comment into a second
+// paragraph. Sixteen of them were cut at a line break rather than a sentence
+// boundary, so `-h` shipped lines like "…; reject writes that would". Nothing
+// failed, which is exactly why it needs a test as well as the xtask gate.
+
+/// Words a short-help line must not end on.
+const DANGLING_WORDS: &[&str] = &[
+    "and", "or", "by", "if", "to", "a", "the", "rather", "would", "(no",
+];
+
+/// Maximum rendered lines one short-help entry may occupy.
+const MAX_SHORT_HELP_LINES: usize = 2;
+
+/// Column at or beyond which a `-h` line is a wrapped continuation.
+const CONTINUATION_INDENT: usize = 10;
+
+/// One flag/argument entry parsed out of a rendered `-h` page: the flag
+/// column, the unwrapped help column, and the rendered line count.
+fn short_help_entries(help: &str) -> Vec<(String, String, usize)> {
+    let starts_entry = |line: &str| {
+        let indent = line.len() - line.trim_start().len();
+        if !(2..CONTINUATION_INDENT).contains(&indent) {
+            return false;
+        }
+        let rest = line.trim_start();
+        rest.starts_with('-') || rest.starts_with('[') || rest.starts_with('<')
+    };
+
+    let mut entries: Vec<(String, String, usize)> = Vec::new();
+    let mut current: Option<(String, Vec<String>)> = None;
+    let flush = |cur: &mut Option<(String, Vec<String>)>,
+                 out: &mut Vec<(String, String, usize)>| {
+        if let Some((flag, parts)) = cur.take() {
+            let n = parts.len();
+            out.push((flag, parts.join(" "), n));
+        }
+    };
+    for line in help.lines() {
+        if starts_entry(line) {
+            flush(&mut current, &mut entries);
+            let trimmed = line.trim_end().trim_start();
+            let (flag, help_col) = trimmed
+                .split_once("  ")
+                .map_or((trimmed, ""), |(f, h)| (f.trim(), h.trim()));
+            let parts = if help_col.is_empty() {
+                Vec::new()
+            } else {
+                vec![help_col.to_owned()]
+            };
+            current = Some((flag.to_owned(), parts));
+        } else if let Some((_, parts)) = current.as_mut() {
+            let indent = line.len() - line.trim_start().len();
+            if line.trim().is_empty() || indent < CONTINUATION_INDENT {
+                flush(&mut current, &mut entries);
+            } else {
+                parts.push(line.trim().to_owned());
+            }
+        }
+    }
+    flush(&mut current, &mut entries);
+    entries
+}
+
+/// Drop clap's trailing `[default: …]` / `[aliases: …]` annotation, which is
+/// appended after the sentence rather than being part of it.
+fn without_clap_suffix(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    let Some(open) = trimmed.rfind('[') else {
+        return trimmed;
+    };
+    if !trimmed.ends_with(']') {
+        return trimmed;
+    }
+    let inside = &trimmed[open + 1..trimmed.len() - 1];
+    if ["default:", "aliases:", "alias:", "possible values:"]
+        .iter()
+        .any(|tag| inside.starts_with(tag))
+    {
+        trimmed[..open].trim_end()
+    } else {
+        trimmed
+    }
+}
+
+/// Every gate-3e problem in one rendered `-h` page, as `(flag, reason)`.
+fn short_help_fragments(help: &str) -> Vec<(String, String)> {
+    let mut issues = Vec::new();
+    for (flag, text, lines) in short_help_entries(help) {
+        if text.is_empty() {
+            continue;
+        }
+        let text = without_clap_suffix(&text);
+        if text.ends_with([',', ';', ':']) {
+            issues.push((flag.clone(), format!("ends mid-sentence: {text:?}")));
+        } else if let Some(last) = text.split_whitespace().next_back()
+            && DANGLING_WORDS.contains(&last.trim_end_matches('.').to_lowercase().as_str())
+        {
+            issues.push((flag.clone(), format!("dangling {last:?}: {text:?}")));
+        }
+        if lines > MAX_SHORT_HELP_LINES {
+            issues.push((flag, format!("{lines} rendered lines: {text:?}")));
+        }
+    }
+    issues
+}
+
+/// Every `-h` page, discovered from the binary: the root, each subcommand, and
+/// each nested sub-action a subcommand's own `Commands:` block names.
+fn every_short_help_page(dir: &std::path::Path) -> Vec<Vec<String>> {
+    fn nested(dir: &std::path::Path, path: &[String]) -> Vec<String> {
+        let mut cmd = hyalo_no_hints();
+        cmd.args(path.iter().map(String::as_str));
+        let out = cmd.arg("-h").current_dir(dir).output().unwrap();
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let Some((_, rest)) = stdout.split_once("\nCommands:\n") else {
+            return Vec::new();
+        };
+        let block = rest.split_once("\n\n").map_or(rest, |(b, _)| b);
+        block
+            .lines()
+            .filter(|l| l.starts_with("  ") && !l.starts_with("      "))
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|n| *n != "help")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    let mut pages: Vec<Vec<String>> = vec![Vec::new()];
+    for name in subcommand_names() {
+        let path = vec![name];
+        for sub in nested(dir, &path) {
+            let mut child = path.clone();
+            child.push(sub);
+            pages.push(child);
+        }
+        pages.push(path);
+    }
+    pages
+}
+
+#[test]
+fn no_short_help_entry_ends_mid_sentence() {
+    let tmp = TempDir::new().unwrap();
+    let mut failures: Vec<String> = Vec::new();
+    for page in every_short_help_page(tmp.path()) {
+        let mut cmd = hyalo_no_hints();
+        cmd.args(page.iter().map(String::as_str));
+        let out = cmd.arg("-h").current_dir(tmp.path()).output().unwrap();
+        assert!(out.status.success(), "`hyalo {} -h` failed", page.join(" "));
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        for (flag, reason) in short_help_fragments(&stdout) {
+            failures.push(format!("hyalo {} -h — {flag}: {reason}", page.join(" ")));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "short help must read as whole sentences:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_fragment_guard_itself_catches_a_reintroduced_fragment() {
+    // Mutation test: the guard is only worth having if it fails on the exact
+    // shapes iteration 254 removed. A clean page must stay clean.
+    let clean = "Options:\n  -f, --file <FILE>  Target file(s), repeatable (excludes --glob)\n";
+    assert!(short_help_fragments(clean).is_empty(), "{clean}");
+
+    let cut_at_a_semicolon =
+        "Options:\n      --section <H>  Extract section(s) by substring match;\n";
+    assert_eq!(short_help_fragments(cut_at_a_semicolon).len(), 1);
+
+    let dangling_word =
+        "Options:\n      --profile <P>  Scaffold a preset vault flavour (okf, madr) by\n";
+    assert_eq!(short_help_fragments(dangling_word).len(), 1);
+
+    let dangling_before_a_default = "Options:\n      --threshold <N>  Similarity for a file to be considered a [default: 0.8]\n";
+    assert_eq!(short_help_fragments(dangling_before_a_default).len(), 1);
+
+    let three_lines = "Options:\n      --wordy  one two three\n               four five six\n               seven eight nine\n";
+    assert_eq!(short_help_fragments(three_lines).len(), 1);
+}
