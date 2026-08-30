@@ -47,16 +47,35 @@ pub(super) fn format_value_as_text(
                     return result;
                 }
             }
-            // Use blank-line separator between FileObjects for readability.
+            // A `find` listing: render each item through the FileObject filter
+            // directly, with a blank-line separator for readability.
+            //
+            // iter-254: routing the items here rather than through the generic
+            // per-value dispatch also keeps an exact `--fields` projection from
+            // colliding with a single-payload key signature — `--fields
+            // backlinks` yields `{file, backlinks}`, which is byte-identical to
+            // a `backlinks` command result and used to render as one.
             let is_file_objects = arr
                 .first()
                 .and_then(|v| v.as_object())
-                .is_some_and(|m| m.contains_key("file") && m.contains_key("modified"));
-            let sep = if is_file_objects { "\n\n" } else { "\n" };
+                .is_some_and(is_file_object);
+            if is_file_objects {
+                return arr
+                    .iter()
+                    .map(|v| match v.as_object() {
+                        Some(m) if is_file_object(m) => {
+                            apply_jq_filter(&build_file_object_filter(m), v, cache)
+                                .unwrap_or_else(|| format_value_as_text(v, cache))
+                        }
+                        _ => format_value_as_text(v, cache),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+            }
             arr.iter()
                 .map(|v| format_value_as_text(v, cache))
                 .collect::<Vec<_>>()
-                .join(sep)
+                .join("\n")
         }
         serde_json::Value::Object(map) => {
             let sig = key_signature(map);
@@ -124,7 +143,7 @@ pub(super) fn format_value_as_text(
             // vocabulary — precise enough that a lint entry (`file` +
             // `violations`) or any other `file`-bearing payload still falls
             // through to its own renderer.
-            if map.contains_key("file") && map.keys().all(|k| is_file_object_key(k)) {
+            if is_file_object(map) {
                 let filter = build_file_object_filter(map);
                 if let Some(output) = apply_jq_filter(&filter, value, cache) {
                     return output;
@@ -169,6 +188,16 @@ pub(super) fn format_scalar(value: &serde_json::Value, cache: &mut JaqFilterCach
         }
         serde_json::Value::Object(_) => format_value_as_text(value, cache),
     }
+}
+
+/// Whether `map` is a [`hyalo_core::types::FileObject`] — a `file` key and no
+/// key outside the FileObject vocabulary.
+///
+/// Since iteration 254 an exact `--fields` projection can reduce an item to
+/// `{file}`, so no single optional key can serve as the marker; the test is
+/// "nothing foreign present" instead.
+fn is_file_object(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    map.contains_key("file") && map.keys().all(|k| is_file_object_key(k))
 }
 
 /// Whether `key` belongs to the [`hyalo_core::types::FileObject`] vocabulary.

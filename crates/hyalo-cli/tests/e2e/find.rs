@@ -167,7 +167,10 @@ fn find_all_files_have_required_fields() {
 
     for entry in &json.results {
         assert!(!entry.file.is_empty(), "missing file field in {entry:?}");
-        let modified = entry.modified.as_str();
+        let modified = entry
+            .modified
+            .as_deref()
+            .expect("default field set includes modified");
         // ISO 8601: YYYY-MM-DDTHH:MM:SSZ = 20 chars
         assert_eq!(modified.len(), 20, "unexpected modified format: {modified}");
         assert!(modified.ends_with('Z'));
@@ -662,7 +665,14 @@ fn find_sort_modified() {
     let arr = &json.results;
     assert_eq!(arr.len(), 4);
 
-    let times: Vec<&str> = arr.iter().map(|v| v.modified.as_str()).collect();
+    let times: Vec<&str> = arr
+        .iter()
+        .map(|v| {
+            v.modified
+                .as_deref()
+                .expect("default field set includes modified")
+        })
+        .collect();
     let mut sorted = times.clone();
     sorted.sort_unstable();
     assert_eq!(times, sorted, "results not sorted by modified time");
