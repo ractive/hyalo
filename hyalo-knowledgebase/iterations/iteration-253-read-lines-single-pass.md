@@ -41,35 +41,35 @@ section) for the one case still forced to eat a full second read anyway.
 
 ## Tasks
 
-- [ ] `read_body_lines` returns the frontmatter line count alongside the body
+- [x] `read_body_lines` returns the frontmatter line count alongside the body
       lines (e.g. `(Vec<String>, usize)`), without adding I/O — it already
       has this number from `skip_frontmatter`, it just isn't propagated.
-- [ ] In `commands/read.rs::run`, capture the raw body line count right after
+- [x] In `commands/read.rs::run`, capture the raw body line count right after
       `read_body_lines` returns (before `--section`/`--lines` narrow
       `content_lines`), and compute `total_lines = fm_lines + raw_body_lines`
       when `need_body` was true. Keep `scanner::count_file_lines` only for
       the `need_body == false` (`--frontmatter`-only) path.
-- [ ] Unit/e2e test: `total_lines` computed this way matches
+- [x] Unit/e2e test: `total_lines` computed this way matches
       `scanner::count_lines` applied to the whole file, across the same
       CRLF / no-trailing-newline / invalid-UTF-8 / oversized-line cases the
       iter-252 suite already covers for `find` — reuse or extend
       `find_result_shape.rs`'s baseline-comparison helper rather than
       duplicating it.
-- [ ] Confirm no behavior change for `--frontmatter`-only reads (still one
+- [x] Confirm no behavior change for `--frontmatter`-only reads (still one
       full-file scan, not zero — `lines` requires reading the file; this
       iteration only removes the *second* read on the already-body-reading
       paths).
 
 ## Acceptance criteria
 
-- [ ] `read` without `--frontmatter`-only reads the file's bytes once, not
+- [x] `read` without `--frontmatter`-only reads the file's bytes once, not
       twice (verified by the new test comparing against the pre-253 double-
       read behavior, or by inspecting call sites — no new I/O-counting
       instrumentation needs to ship).
-- [ ] `read`'s reported `lines` is byte-identical to today's for every
+- [x] `read`'s reported `lines` is byte-identical to today's for every
       existing `find_result_shape.rs` / `read` e2e case (CRLF, UTF-8,
       no-EOL, frontmatter-only, `--section`, `--lines`).
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`.
 
 ## Non-goals
