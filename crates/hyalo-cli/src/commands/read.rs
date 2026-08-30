@@ -199,8 +199,16 @@ fn oversized_line_placeholder() -> String {
 /// was skipped because of its encoding, not its size, and the old behaviour
 /// of blaming the per-line limit misdiagnosed the problem.  The line's
 /// position is preserved, same as the oversized-line case.
+///
+/// The consequence half of the sentence is
+/// [`crate::commands::INVALID_UTF8_CONSEQUENCE`], shared with `find`'s
+/// full-text skip warning so the two can no longer disagree about what
+/// happens to such a file (UX-3, iter-255).
 fn invalid_utf8_line_placeholder() -> String {
-    "<line skipped: invalid UTF-8 (lossy in search; fix encoding to read)>".to_owned()
+    format!(
+        "<line skipped: {}>",
+        crate::commands::INVALID_UTF8_CONSEQUENCE
+    )
 }
 
 /// Read the raw body lines from a markdown file, skipping frontmatter.

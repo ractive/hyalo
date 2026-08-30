@@ -523,6 +523,21 @@ pub fn find(
                     let full_path = dir.join(&entry.rel_path);
                     let file_content = match std::fs::read_to_string(&full_path) {
                         Ok(s) => s,
+                        // UX-3 (iter-255): `read_to_string` reports invalid
+                        // UTF-8 as a bare `InvalidData` io error ("stream did
+                        // not contain valid UTF-8"), which says nothing about
+                        // what that costs the caller. Name the consequence in
+                        // the same words `read`'s placeholder uses, so the two
+                        // surfaces agree; every other io error (permissions, a
+                        // file deleted mid-run) keeps its own message.
+                        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                            crate::warn::warn(format!(
+                                "skipping {}: {}",
+                                entry.rel_path,
+                                crate::commands::INVALID_UTF8_CONSEQUENCE
+                            ));
+                            return;
+                        }
                         Err(e) => {
                             crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
                             return;

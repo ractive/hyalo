@@ -1918,9 +1918,13 @@ Repeatable (AND).\n\
             - Refuses with an error if the target file already exists\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
             - Frontmatter is limited to 64 KiB / 2000 lines; schema templates exceeding this are rejected\n\n\
+            PROPERTIES: `new` writes only what the type's schema declares — there is no\n\
+            `--property` flag. Set anything else with `hyalo set` immediately after; the two\n\
+            chain in one shell command (see the third example below).\n\n\
             EXAMPLES:\n\
             hyalo new --type iteration --file iterations/iter-99-example.md\n\
-            hyalo new --type note --file notes/2026-05-24-standup.md\n\n\
+            hyalo new --type note --file notes/2026-05-24-standup.md\n\
+            hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft\n\n\
             OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
             Text mode: `created <rel-path>`.\n\n\
             SIDE EFFECTS: Writes one new file. When `--index` or `--index-file` is set,\n\
