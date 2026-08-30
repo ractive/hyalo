@@ -301,6 +301,18 @@ pub fn append(
             Err(e) => return Err(e),
         };
 
+        // BUG-2 (iter-255): the command has just `stat`ed and read this file
+        // while holding the snapshot index open, so a file that changed on
+        // disk since the last `create-index` gets its entry repaired here —
+        // whether or not the mutation below turns out to be a no-op. Without
+        // it, a `set` that finds the property already at its target value
+        // reports `0 modified` and leaves `find --index` describing a body
+        // that is no longer on disk. Costs no extra I/O: the staleness check
+        // reuses the `mtime`/size fingerprint read above.
+        if !dry_run {
+            journal.refresh_if_stale(rel_path, full_path, mtime)?;
+        }
+
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
             continue;

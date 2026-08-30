@@ -127,6 +127,61 @@ impl<'a> MutationJournal<'a> {
         Ok(())
     }
 
+    /// Refresh `rel_path`'s entry when the file on disk no longer matches
+    /// what the snapshot recorded — even though *this* command wrote nothing
+    /// to it.
+    ///
+    /// BUG-2 (dogfood v0.22.0, iter-255): every other journal method is a
+    /// *write* record, so a mutation command that read a file and then found
+    /// nothing to change (`set --property status=completed` on a file whose
+    /// `status` is already `completed`) left the entry exactly as the last
+    /// `create-index` saw it. If the file's *body* had meanwhile been edited
+    /// by hand, the snapshot kept describing the old body: `find <word>
+    /// --index` missed a word that a disk scan finds, and the entry's
+    /// `links`/`size`/`lines`/`bm25_tokens` all described bytes that are no
+    /// longer there. The mutation commands are the one place that both reads
+    /// the file and holds the index open, so they are where the repair
+    /// belongs.
+    ///
+    /// `fingerprint` is the `(mtime, size)` pair the caller already `stat`ed
+    /// for its concurrent-write guard, so the staleness check costs no extra
+    /// I/O: a whole-second mtime difference, or a size difference, means the
+    /// bytes changed since the snapshot. Size is only consulted when the
+    /// stored `size` is non-zero — snapshots written before iter-252 default
+    /// it to `0`, and treating that as "size changed" would rescan every
+    /// file in an old index. The size comparison is what catches the common
+    /// case of an edit landing in the *same second* the index was built.
+    ///
+    /// Refreshing rescans the file wholesale (properties, tags, sections,
+    /// tasks, links, size, lines, BM25 tokens, mtime) and re-registers its
+    /// outbound edges in the persisted link graph — the same repair
+    /// [`Self::rescan_modified`] performs for externally rewritten bodies.
+    /// A file the index has never seen is left alone: inventing entries is
+    /// the write paths' upsert guarantee, not a read's.
+    ///
+    /// Returns whether a refresh happened. No-op when no index is loaded.
+    pub fn refresh_if_stale(
+        &mut self,
+        rel_path: &str,
+        full_path: &Path,
+        fingerprint: (std::time::SystemTime, u64),
+    ) -> Result<bool> {
+        let Some(idx) = self.index.as_mut() else {
+            return Ok(false);
+        };
+        let Some(entry) = idx.get(rel_path) else {
+            return Ok(false);
+        };
+        let (mtime, size) = fingerprint;
+        let size_changed = entry.size != 0 && entry.size != size;
+        if !size_changed && entry.modified == hyalo_core::index::format_mtime(mtime, full_path) {
+            return Ok(false);
+        }
+        idx.refresh_entry_and_links_at(full_path, rel_path)?;
+        self.dirty = true;
+        Ok(true)
+    }
+
     /// Record a freshly created file (the `new` write path).
     ///
     /// Scans `full_path` from disk and inserts a complete entry under

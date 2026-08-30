@@ -588,10 +588,22 @@ impl SnapshotIndex {
     /// Returns `Ok(true)` if `rel_path` was found and refreshed, `Ok(false)`
     /// if it is not in the index (a no-op).
     pub fn refresh_entry_and_links(&mut self, dir: &Path, rel_path: &str) -> Result<bool> {
+        self.refresh_entry_and_links_at(&dir.join(rel_path), rel_path)
+    }
+
+    /// [`Self::refresh_entry_and_links`] for callers that already hold the
+    /// file's full path.
+    ///
+    /// `dir.join(rel_path)` is not always the path a command actually read:
+    /// a positional file argument may reach the command through a symlink or
+    /// a canonicalised prefix, and re-deriving it from `dir` would scan a
+    /// different file (or none). Mutation commands carry both halves, so they
+    /// pass the one they read (iter-255, BUG-2).
+    pub fn refresh_entry_and_links_at(&mut self, full_path: &Path, rel_path: &str) -> Result<bool> {
         if !self.path_index.contains_key(rel_path) {
             return Ok(false);
         }
-        let file_links = self.rescan_entry(dir, rel_path)?;
+        let file_links = self.rescan_entry_at(full_path, rel_path)?;
         self.graph.remove_source(rel_path);
         if let Some(fl) = file_links {
             self.insert_graph_links(fl);
@@ -1703,6 +1715,17 @@ pub fn format_modified(path: &Path) -> Result<String> {
     let mtime = meta
         .modified()
         .with_context(|| format!("mtime not available for {}", path.display()))?;
+    Ok(format_mtime(mtime, path))
+}
+
+/// Format an already-`stat`ed mtime exactly as [`format_modified`] would.
+///
+/// Callers that hold a fresh [`SystemTime`] (mutation commands read one per
+/// file for their concurrent-write guard) use this to compare against an
+/// index entry's stored `modified` without paying a second `stat`
+/// (iter-255, BUG-2). `path` is used only for the pre-1970 warning.
+#[must_use]
+pub fn format_mtime(mtime: SystemTime, path: &Path) -> String {
     let secs = mtime.duration_since(SystemTime::UNIX_EPOCH).map_or_else(
         |_| {
             crate::warn::warn(format!(
@@ -1713,7 +1736,7 @@ pub fn format_modified(path: &Path) -> Result<String> {
         },
         |d| d.as_secs(),
     );
-    Ok(format_iso8601(secs))
+    format_iso8601(secs)
 }
 
 /// Format Unix timestamp as ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
