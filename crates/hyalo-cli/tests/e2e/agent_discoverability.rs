@@ -19,14 +19,17 @@ const TOP_SHORT_HELP_MAX: usize = 2560;
 /// `hyalo <cmd> -h` ceiling (3 KiB).
 const SUB_SHORT_HELP_MAX: usize = 3072;
 
-/// Every top-level subcommand name, read out of `hyalo help` rather than
+/// Every top-level subcommand name, read out of `hyalo --help` rather than
 /// hard-coded, so a command added later is covered without touching this file.
 fn subcommand_names() -> Vec<String> {
-    let output = hyalo_no_hints().arg("help").output().unwrap();
+    // `--help`, not `help`: since iter-256 (HELP-5) `hyalo help` forwards to
+    // the short `-h` page, which renders the hand-grouped COMMANDS block
+    // instead of clap's `Commands:` table this parser reads.
+    let output = hyalo_no_hints().arg("--help").output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     // The block between the `Commands:` heading and the `Options:` that
-    // follows it — `hyalo help` prints the long help, whose COOKBOOK lines are
-    // also two-space indented and would otherwise be read as command names.
+    // follows it — the long help's COOKBOOK lines are also two-space indented
+    // and would otherwise be read as command names.
     let commands = stdout
         .split_once("Commands:")
         .map_or(stdout.as_str(), |(_, rest)| rest);
@@ -719,5 +722,67 @@ fn every_documented_example_parses_without_a_clap_usage_error() {
         failures.is_empty(),
         "documented examples that do not parse:\n{}",
         failures.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// iter-256 HELP-5: `hyalo help <cmd>` is the SHORT page
+// ---------------------------------------------------------------------------
+
+fn stdout_of(args: &[&str]) -> String {
+    let output = hyalo_no_hints().args(args).output().unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// Measured on v0.22.0: `hyalo help find` was 28.7 KB against `hyalo find -h`
+/// at 3.0 KB. Agents type `help <cmd>` out of habit, so the two must be the
+/// same page — not merely a similar one, because the short page carries the
+/// collapsed globals pointer and the `--help` footer that make it navigable.
+#[test]
+fn help_subcommand_renders_the_short_page_verbatim() {
+    for cmd in ["find", "set", "lint", "links"] {
+        assert_eq!(
+            stdout_of(&["help", cmd]),
+            stdout_of(&[cmd, "-h"]),
+            "`hyalo help {cmd}` must be byte-identical to `hyalo {cmd} -h`"
+        );
+    }
+    // Bare `help` is the root short page, and a subcommand path still resolves.
+    assert_eq!(stdout_of(&["help"]), stdout_of(&["-h"]));
+    assert_eq!(
+        stdout_of(&["help", "task", "toggle"]),
+        stdout_of(&["task", "toggle", "-h"])
+    );
+}
+
+/// The long page is still reachable, and is still the big one — this pins the
+/// direction of the saving so a later refactor cannot quietly swap them back.
+#[test]
+fn the_long_page_stays_reachable_and_much_larger() {
+    let short = stdout_of(&["help", "find"]);
+    let long = stdout_of(&["find", "--help"]);
+    assert!(
+        long.len() > short.len() * 4,
+        "`find --help` ({}) should dwarf `help find` ({})",
+        long.len(),
+        short.len()
+    );
+    assert!(
+        short.contains("hyalo find --help"),
+        "the short page must name the long one: {short}"
+    );
+}
+
+/// HELP-13: clap's generated `help` subcommand had no did-you-mean. Because
+/// the forward rewrites argv to `<cmd> -h`, the typo now hits clap's normal
+/// unknown-subcommand path and gets the suggestion for free.
+#[test]
+fn help_with_a_typo_suggests_the_real_command() {
+    let output = hyalo_no_hints().args(["help", "fnd"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("unrecognized subcommand 'fnd'") && stderr.contains("'find'"),
+        "expected a did-you-mean for `help fnd`: {stderr}"
     );
 }
