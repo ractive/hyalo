@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 255 — dogfood v0.22.0 remaining bugs: stale --index set, UTF-8 placeholder wording, new --property"
 date: 2026-08-30
-status: in-progress
+status: completed
 tags:
   - iteration
   - dogfood-fixes
