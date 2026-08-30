@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 209 — configurable thresholds for the links auto noisy-title note
 date: 2026-08-22
-status: deferred
+status: superseded
 tags:
   - iteration
   - links

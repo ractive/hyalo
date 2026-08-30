@@ -7,7 +7,7 @@ tags:
   - llm
   - cli
   - distribution
-status: shelved
+status: superseded
 branch: iter-38/agent-integration
 ---
 

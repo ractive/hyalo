@@ -7,7 +7,7 @@ tags:
   - performance
   - parallelization
   - rayon
-status: shelved
+status: superseded
 branch: iter-18/parallel-processing
 ---
 
