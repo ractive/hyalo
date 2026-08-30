@@ -1257,7 +1257,7 @@ pub fn find(
     // `title:` that is null, blank, a list or a map does not promote (the
     // result's `title` falls back to the H1), so removing it would leave the
     // authored value unreachable from every output; it stays put and
-    // `HYALO013` reports the collection case.
+    // `HYALO007` reports the collection case.
     if fields.title && fields.properties {
         for obj in &mut results {
             if let Some(props) = obj.properties.as_mut()
