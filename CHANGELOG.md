@@ -11,6 +11,37 @@ and this project adheres to
 
 ### Changed
 
+- **`hyalo help <cmd>` now prints the short `-h` page, not the long `--help`
+  one.** `hyalo help find` was 28 701 bytes where `hyalo find -h` is 2 992 —
+  a 9.6x tax on the phrasing agents reach for first. The two are now
+  byte-identical, and a subcommand path works (`hyalo help task toggle`).
+  Because the forward is an argv rewrite rather than a page rendered from a
+  `Help` arm, it inherits everything the short page is assembled from — the
+  collapsed globals pointer, `find`'s composed examples, the footer naming
+  `hyalo find --help` for the long form — and it inherits clap's did-you-mean
+  for an unknown name, which the generated `help` subcommand never had:
+  `hyalo help fnd` now suggests `find`. The long page is unchanged and one
+  line away.
+- **The envelope's `dry_run` claim is now true.** `hyalo --help`'s RESULTS
+  CONVENTIONS said "every mutating command reports `dry_run` and
+  `skipped_count`"; measured across all 23 mutating commands, 18 reported
+  neither or reported the same fact under a different name (`apply`,
+  `applied`). Every mutation result that is an object now carries `dry_run` —
+  added to batch `mv`, `new`, `types remove`, `madr toc`, `okf index`,
+  `okf log`, `changelog add` and `changelog release`. `apply`/`applied` are
+  kept and are always its exact inverse, so nothing that reads them breaks.
+  `skipped_count` is documented for what it is: bulk-family-only (`set`,
+  `remove`, `append`, `properties rename`, `tags rename`), because a
+  single-target command has no scanned-but-unchanged set. `task toggle`/`task
+  set` return an array of per-task records with no top-level object and are
+  named as the exception; their dry-run records are the ones carrying
+  `old_status`.
+- The root `-h` command group labelled `config and scaffolds (write
+  .hyalo.toml)` now reads `setup (writes config/index, not your notes)`:
+  `create-index`/`drop-index` write a snapshot index, not `.hyalo.toml`, and
+  what a caller needs from that label is whether the group can touch their
+  markdown.
+
 - **BREAKING: an explicit `--fields` is an exact projection.** `--fields
   title` used to return `{file, modified, size, lines, title}` — the four
   "structural" keys were unconditional, so a projection could never cost less
@@ -143,6 +174,20 @@ and this project adheres to
 
 ### Fixed
 
+- **Building the wikilink stem index was quadratic in vaults that reuse one
+  basename.** `CaseInsensitiveIndex::insert` deduped by linear-scanning the
+  *stem* bucket, so a docs tree naming every page `index.md` put its whole
+  file list in a single bucket: on MDN's 14 399 files that was ~104 million
+  string comparisons, 62.4 ms, every time a command needed outbound-link
+  resolution. Dedupe is now decided against the path bucket, which holds only
+  the case-variants of one path and is written in the same call — 62.4 ms
+  becomes 4.2 ms. The visible symptom was `find --fields all` costing ~20%
+  more wall time than the default field set on an indexed vault even at
+  `--limit 1` (0.448 s vs 0.371 s); it is now 0.368 s, i.e. free. The whole
+  delta was this one call — `sections`, `tasks`, `backlinks` and
+  `properties-typed` were never the cost. Unindexed vaults share the same
+  code path, so `links fix`, `--broken-links`, `--orphan` and `--dead-end`
+  improve too.
 - **A mutation that changed nothing left the index describing a file that no
   longer existed.** `set`/`append`/`remove` only touched the snapshot when they
   actually wrote, so `set note.md --property status=completed --index` on a file

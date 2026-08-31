@@ -177,7 +177,14 @@ fn generators_and_scaffolds_report_dry_run_as_a_bool() {
         vec!["madr", "toc"],
         vec!["okf", "index"],
         vec!["okf", "log", "--message", "hello"],
-        vec!["changelog", "add", "--category", "Added", "--message", "thing"],
+        vec![
+            "changelog",
+            "add",
+            "--category",
+            "Added",
+            "--message",
+            "thing",
+        ],
         vec!["changelog", "release", "1.0.0"],
         // Batch `mv` runs last: it relocates the files the other cases read.
         vec!["mv", "--glob", "*.md", "--to", "sub"],
@@ -219,7 +226,10 @@ fn task_mutations_signal_dry_run_through_old_status() {
         v.as_array().map_or_else(|| v.clone(), |a| a[0].clone())
     };
 
-    let preview = results(tmp.path(), &["task", "toggle", "todo.md", "--all", "--dry-run"]);
+    let preview = results(
+        tmp.path(),
+        &["task", "toggle", "todo.md", "--all", "--dry-run"],
+    );
     assert!(
         first(&preview).get("old_status").is_some(),
         "a dry-run task record must carry `old_status`: {preview}"

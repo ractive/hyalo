@@ -1065,7 +1065,10 @@ mod tests {
         for _ in 0..5 {
             idx.insert("docs/guide/index.md");
         }
-        assert_eq!(idx.lookup_all("DOCS/GUIDE/INDEX.MD"), ["docs/guide/index.md"]);
+        assert_eq!(
+            idx.lookup_all("DOCS/GUIDE/INDEX.MD"),
+            ["docs/guide/index.md"]
+        );
         assert_eq!(idx.lookup_stem_all("index"), ["docs/guide/index.md"]);
         assert_eq!(idx.lookup_stem("index"), Some("docs/guide/index.md"));
     }
@@ -1085,8 +1088,15 @@ mod tests {
             idx.insert(p);
         }
         assert_eq!(idx.lookup_stem_all("index").len(), paths.len());
-        assert_eq!(idx.lookup_stem("index"), None, "500 candidates is ambiguous");
-        assert_eq!(idx.lookup_unique("FILES/P42/INDEX.MD"), Some("files/p42/index.md"));
+        assert_eq!(
+            idx.lookup_stem("index"),
+            None,
+            "500 candidates is ambiguous"
+        );
+        assert_eq!(
+            idx.lookup_unique("FILES/P42/INDEX.MD"),
+            Some("files/p42/index.md")
+        );
     }
 
     /// Two paths differing only in case share a `map` bucket but are distinct
