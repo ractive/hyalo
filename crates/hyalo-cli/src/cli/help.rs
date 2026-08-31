@@ -19,7 +19,7 @@ COMMANDS \u{2014} write (mutates files):
   task mv             Checkbox read/toggle/set | move-rename, rewriting links
   links new           fix broken / auto-link mentions | scaffold from a type
   madr okf changelog  ADR toc | OKF index+log | Keep a Changelog add/release
-COMMANDS \u{2014} config and scaffolds (write .hyalo.toml):
+COMMANDS \u{2014} setup (writes config/index, not your notes):
   init deinit              Create/remove .hyalo.toml (--claude --pi --profile)
   types lint-rules views   Schemas | lint rule catalog | saved find queries
   create-index drop-index  Snapshot index for faster repeated queries
@@ -36,7 +36,7 @@ pub(crate) const HELP_EXAMPLES_SHORT: &str = "EXAMPLES (each composes 2-3 featur
   hyalo find --section Tasks --task todo --filenames-only
   hyalo find --broken-links --strict --glob 'docs/**/*.md'
   hyalo set --property status=done --where-property status=draft --glob '**/*.md'
-Everything else:  hyalo <cmd> -h  ==  hyalo help <cmd>  |  full reference: hyalo --help";
+Everything else:  hyalo <cmd> -h (== hyalo help <cmd>)  |  hyalo --help";
 
 /// `find -h` tail: composed examples, the global-options pointer, and the
 /// pointer at `find --help` (iteration 251).
