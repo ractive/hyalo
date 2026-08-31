@@ -457,6 +457,34 @@ mod tests {
     }
 
     #[test]
+    fn body_search_suggestion_leads_the_hints() {
+        let mut ctx = ctx_with(&["title~=/DEC-25/"], &[]);
+        ctx.body_search_suggestion = Some(crate::hints::BodySearchSuggestion {
+            key: "title".to_owned(),
+            pattern: "DEC-25".to_owned(),
+        });
+        let hints = zero_result_hints(&ctx);
+        assert_eq!(
+            hints[0].description,
+            "No `title` matches that regex, but body text does — search bodies instead"
+        );
+        assert_eq!(hints[0].cmd, "hyalo find -e DEC-25");
+        assert!(!hints[0].writes, "a body search never mutates the vault");
+    }
+
+    #[test]
+    fn no_body_search_hint_without_a_confirmed_match() {
+        let ctx = ctx_with(&["title~=/DEC-25/"], &[]);
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("search bodies instead")),
+            "the hint is only emitted when the probe actually matched: {hints:?}"
+        );
+    }
+
+    #[test]
     fn unknown_key_points_at_the_properties_listing() {
         let ctx = ctx_with(&["nosuchkey=1"], &[]);
         let hints = zero_result_hints(&ctx);

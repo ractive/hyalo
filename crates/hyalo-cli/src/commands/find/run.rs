@@ -547,6 +547,120 @@ mod tests {
         }
     }
 
+    // --- iter-258: the zero-result body probe -------------------------------
+
+    fn probe_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            std::fs::write(tmp.path().join(rel), body).unwrap();
+        }
+        tmp
+    }
+
+    fn probe_index(dir: &std::path::Path) -> hyalo_core::index::ScannedIndex {
+        let files = hyalo_core::discovery::discover_files(dir).unwrap();
+        let pairs: Vec<(std::path::PathBuf, String)> = files
+            .iter()
+            .map(|p| (p.clone(), hyalo_core::discovery::relative_path(dir, p)))
+            .collect();
+        hyalo_core::index::ScannedIndex::build(
+            &pairs,
+            None,
+            &hyalo_core::index::ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap()
+        .index
+    }
+
+    fn probe(dir: &std::path::Path, filter: &str, already_searched_body: bool) -> Option<String> {
+        let index = probe_index(dir);
+        let filters = vec![hyalo_core::filter::parse_property_filter(filter).unwrap()];
+        zero_result_body_search(&index, dir, &filters, already_searched_body)
+            .map(|s| format!("{}:{}", s.key, s.pattern))
+    }
+
+    /// The motivating case: `DEC-NNN` lives in `##` headings, not in `title`.
+    #[test]
+    fn body_probe_fires_when_only_the_body_matches() {
+        let tmp = probe_vault(&[(
+            "decision-log.md",
+            "---\ntitle: Decision log\n---\n\n## DEC-251 — something\n",
+        )]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-25/", false).as_deref(),
+            Some("title:DEC-25")
+        );
+    }
+
+    /// The absence half of the same rule: no body match ⇒ no promise.
+    #[test]
+    fn body_probe_stays_silent_when_the_body_does_not_match_either() {
+        let tmp = probe_vault(&[(
+            "decision-log.md",
+            "---\ntitle: Decision log\n---\n\n## DEC-251 — something\n",
+        )]);
+        assert_eq!(probe(tmp.path(), "title~=/NOSUCHTHING/", false), None);
+    }
+
+    #[test]
+    fn body_probe_skips_a_query_that_already_searched_bodies() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## DEC-251\n")]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-25/", true),
+            None,
+            "a caller who already passed PATTERN / -e needs no body-search hint"
+        );
+    }
+
+    #[test]
+    fn body_probe_ignores_non_regex_property_filters() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## DEC-251\n")]);
+        let index = probe_index(tmp.path());
+        let filters = vec![
+            hyalo_core::filter::parse_property_filter("status=draft").unwrap(),
+            hyalo_core::filter::parse_property_filter("!archived").unwrap(),
+        ];
+        assert!(zero_result_body_search(&index, tmp.path(), &filters, false).is_none());
+    }
+
+    /// An empty regex matches the first body line of the first file, which
+    /// would suggest the useless `hyalo find -e ''`.
+    #[test]
+    fn body_probe_refuses_an_empty_pattern() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\nbody\n")]);
+        assert_eq!(probe(tmp.path(), "title~=", false), None);
+    }
+
+    /// The probe matches fenced code, because `find -e` does.
+    #[test]
+    fn body_probe_matches_inside_fenced_code() {
+        let tmp = probe_vault(&[(
+            "a.md",
+            "---\ntitle: A\n---\n\n```sh\nhyalo find -e DEC-251\n```\n",
+        )]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-251/", false).as_deref(),
+            Some("title:DEC-251")
+        );
+    }
+
+    /// `find -e` is case-insensitive, so the probe must be too — otherwise a
+    /// case-sensitive property regex could suppress a hint whose suggested
+    /// command would in fact have found something.
+    #[test]
+    fn body_probe_is_case_insensitive_like_find_e() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## dec-251\n")]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-251/", false).as_deref(),
+            Some("title:DEC-251")
+        );
+    }
+
     /// Previously e2e-only: `--strict` with findings ⇒ exit 1 (UX-2).
     #[test]
     fn strict_exit_code_policy() {

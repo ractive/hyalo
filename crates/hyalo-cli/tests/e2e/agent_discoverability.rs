@@ -333,6 +333,100 @@ fn a_second_filter_earns_a_drop_the_most_selective_hint() {
     );
 }
 
+// --- iter-258: zero-result `title~=` points at body search -----------------
+
+/// A vault shaped like the decision log that motivated iteration 258: the
+/// `DEC-NNN` identifiers are `##` body headings, so `--property title~=` is
+/// correct and empty while `find -e` is what the caller wanted.
+fn dec_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "decision-log.md",
+        "---\ntitle: Decision log\n---\n\n## DEC-251 — hints\n\ntext\n",
+    );
+    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n\nunrelated\n");
+    tmp
+}
+
+fn body_search_hint(parsed: &serde_json::Value) -> Option<&serde_json::Value> {
+    parsed["hints"].as_array()?.iter().find(|h| {
+        h["description"]
+            .as_str()
+            .is_some_and(|d| d.contains("search bodies instead"))
+    })
+}
+
+fn find_json(tmp: &TempDir, args: &[&str]) -> serde_json::Value {
+    let output = hyalo()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("find")
+        .args(args)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn a_title_regex_that_only_matches_body_text_suggests_find_e() {
+    let tmp = dec_vault();
+    let parsed = find_json(&tmp, &["--property", "title~=/DEC-25/"]);
+    assert_eq!(parsed["total"], 0);
+    let hint =
+        body_search_hint(&parsed).unwrap_or_else(|| panic!("no body-search hint: {parsed}"));
+    assert_eq!(
+        hint["description"],
+        "No `title` matches that regex, but body text does — search bodies instead"
+    );
+    let cmd = hint["cmd"].as_str().unwrap();
+    assert!(
+        cmd.contains("find -e DEC-25"),
+        "the hint hands over the equivalent body search: {cmd}"
+    );
+    assert_eq!(hint["writes"], false);
+
+    // The promise the hint makes must hold: running it returns results.
+    // The hint already carries `--dir` and `--format json` from this run.
+    let args = shell_split(cmd);
+    let rerun = hyalo().args(&args[1..]).output().unwrap();
+    let rerun: serde_json::Value = serde_json::from_slice(&rerun.stdout).unwrap();
+    assert_eq!(
+        rerun["total"], 1,
+        "the suggested command must actually find something: {rerun}"
+    );
+}
+
+#[test]
+fn no_body_search_hint_when_the_body_does_not_match_either() {
+    let tmp = dec_vault();
+    let parsed = find_json(&tmp, &["--property", "title~=/NOSUCHTHING/"]);
+    assert_eq!(parsed["total"], 0);
+    assert!(
+        body_search_hint(&parsed).is_none(),
+        "nothing in the body matches, so there is nothing to suggest: {parsed}"
+    );
+    assert!(
+        !parsed["hints"].as_array().unwrap().is_empty(),
+        "the other zero-result hints still fire: {parsed}"
+    );
+}
+
+#[test]
+fn no_body_search_hint_when_the_query_already_searched_bodies() {
+    let tmp = dec_vault();
+    let parsed = find_json(
+        &tmp,
+        &["-e", "DEC-25", "--property", "title~=/DEC-25/", "--tag", "nope"],
+    );
+    assert_eq!(parsed["total"], 0);
+    assert!(
+        body_search_hint(&parsed).is_none(),
+        "a caller who already passed -e needs no body-search lesson: {parsed}"
+    );
+}
+
 #[test]
 fn a_zero_result_hint_is_a_runnable_command() {
     let tmp = vault();
