@@ -1772,10 +1772,7 @@ mod tests {
     #[test]
     fn run_init_okf_profile_merges_config() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected success");
-        };
+        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap().to_text();
         assert!(out.contains("merged 'okf' profile"), "summary: {out}");
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1794,10 +1791,7 @@ mod tests {
     #[test]
     fn run_init_okf_profile_claude_installs_skill() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected success");
-        };
+        let out = run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap().to_text();
         assert!(
             out.contains("created  .claude/skills/okf/SKILL.md"),
             "{out}"
@@ -1838,10 +1832,7 @@ mod tests {
         run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
         // A second run makes no change → the summary should say "unchanged",
         // not "updated".
-        let outcome = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
+        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap().to_text();
         assert!(
             out.contains("unchanged  .hyalo.toml  ('okf' profile already applied)"),
             "re-run summary should report unchanged: {out}"
@@ -1856,10 +1847,7 @@ mod tests {
     fn run_deinit_removes_okf_skill() {
         let tmp = tempfile::TempDir::new().unwrap();
         run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap();
-        let outcome = run_deinit_in(tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
+        let out = run_deinit_in(None, tmp.path()).unwrap().to_text();
         assert!(
             out.contains("removed  .claude/skills/okf/SKILL.md"),
             "{out}"
@@ -1879,19 +1867,13 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run
-        let outcome1 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out1) = outcome1 else {
-            panic!("expected success");
-        };
+        let out1 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap().to_text();
         assert!(out1.contains("created  .claude/skills/hyalo/SKILL.md"));
         assert!(out1.contains("created  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
         // Second run — should say "updated", not "created"
-        let outcome2 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out2) = outcome2 else {
-            panic!("expected success");
-        };
+        let out2 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap().to_text();
         assert!(out2.contains("updated  .claude/skills/hyalo/SKILL.md"));
         assert!(out2.contains("updated  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out2.contains("updated  .claude/rules/knowledgebase.md"));
@@ -1904,10 +1886,7 @@ mod tests {
         // Create initial .hyalo.toml
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected success");
-        };
+        let out = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap().to_text();
         assert!(out.contains(".hyalo.toml"));
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1926,8 +1905,7 @@ mod tests {
         )
         .unwrap();
 
-        let outcome = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap();
-        assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
+        run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
         // dir updated, other keys preserved.
@@ -1942,10 +1920,7 @@ mod tests {
 
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let outcome = run_init_in(None, false, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected success");
-        };
+        let out = run_init_in(None, false, false, None, tmp.path()).unwrap().to_text();
         assert!(out.contains("skipped  .hyalo.toml"));
 
         // Content unchanged
@@ -1957,8 +1932,7 @@ mod tests {
     fn run_init_rule_uses_detected_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
 
-        let outcome = run_init_in(Some("my-notes"), true, false, None, tmp.path()).unwrap();
-        assert!(matches!(outcome, CommandOutcome::RawOutput(_)));
+        run_init_in(Some("my-notes"), true, false, None, tmp.path()).unwrap();
 
         let rule_content = fs::read_to_string(
             tmp.path()
@@ -2043,10 +2017,7 @@ mod tests {
     #[test]
     fn run_init_creates_missing_dir_when_explicit() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let outcome = run_init_in(Some("my-new-docs"), false, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
+        let out = run_init_in(Some("my-new-docs"), false, false, None, tmp.path()).unwrap().to_text();
         assert!(
             out.contains("created  my-new-docs/"),
             "summary mentions created dir"
@@ -2061,10 +2032,7 @@ mod tests {
     fn run_init_does_not_create_dir_when_auto_detected() {
         let tmp = tempfile::TempDir::new().unwrap();
         // No --dir flag, auto-detection falls back to "."
-        let outcome = run_init_in(None, false, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
+        let out = run_init_in(None, false, false, None, tmp.path()).unwrap().to_text();
         // No directory creation line — only the .hyalo.toml line.
         // The dir creation line always ends with "/" so check for that form.
         assert!(
@@ -2079,13 +2047,10 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
 
-        let outcome = run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected success");
-        };
+        let out = run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap().to_text();
         // Warning emitted.
         assert!(
-            out.contains("warning  .hyalo.toml was malformed"),
+            out.contains("warning  .hyalo.toml  (was malformed"),
             "malformed warning present"
         );
         // File overwritten with a valid table.
@@ -2154,17 +2119,14 @@ mod tests {
         // Set up all artifacts that init --claude would create.
         run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
 
-        let outcome = run_deinit_in(tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
+        let out = run_deinit_in(None, tmp.path()).unwrap().to_text();
 
         assert!(out.contains("removed  .claude/skills/hyalo/SKILL.md"));
         assert!(out.contains("removed  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out.contains("removed  .claude/rules/knowledgebase.md"));
         assert!(
-            out.contains("removed  .claude/CLAUDE.md (empty after stripping)")
-                || out.contains("updated  .claude/CLAUDE.md (stripped managed section)")
+            out.contains("removed  .claude/CLAUDE.md  (empty after stripping)")
+                || out.contains("updated  .claude/CLAUDE.md  (stripped managed section)")
         );
         assert!(out.contains("removed  .hyalo.toml"));
 
@@ -2201,17 +2163,14 @@ mod tests {
 
         // First run with artifacts present.
         run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap();
-        run_deinit_in(tmp.path()).unwrap();
+        run_deinit_in(None, tmp.path()).unwrap();
 
         // Second run — no artifacts; must not error and must say "skipped".
-        let outcome = run_deinit_in(tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
-        assert!(out.contains("skipped  .claude/skills/hyalo/SKILL.md (not found)"));
-        assert!(out.contains("skipped  .claude/skills/hyalo-tidy/SKILL.md (not found)"));
-        assert!(out.contains("skipped  .claude/rules/knowledgebase.md (not found)"));
-        assert!(out.contains("skipped  .hyalo.toml (not found)"));
+        let out = run_deinit_in(None, tmp.path()).unwrap().to_text();
+        assert!(out.contains("skipped  .claude/skills/hyalo/SKILL.md  (not found)"));
+        assert!(out.contains("skipped  .claude/skills/hyalo-tidy/SKILL.md  (not found)"));
+        assert!(out.contains("skipped  .claude/rules/knowledgebase.md  (not found)"));
+        assert!(out.contains("skipped  .hyalo.toml  (not found)"));
     }
 
     #[test]
@@ -2226,11 +2185,8 @@ mod tests {
         );
         fs::write(claude_dir.join("CLAUDE.md"), &content).unwrap();
 
-        let outcome = run_deinit_in(tmp.path()).unwrap();
-        let CommandOutcome::RawOutput(out) = outcome else {
-            panic!("expected RawOutput");
-        };
-        assert!(out.contains("updated  .claude/CLAUDE.md (stripped managed section)"));
+        let out = run_deinit_in(None, tmp.path()).unwrap().to_text();
+        assert!(out.contains("updated  .claude/CLAUDE.md  (stripped managed section)"));
 
         let remaining = fs::read_to_string(claude_dir.join("CLAUDE.md")).unwrap();
         assert!(
