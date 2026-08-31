@@ -1,11 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
-
-use crate::output::CommandOutcome;
 
 // ---------------------------------------------------------------------------
 // Embedded skill content
@@ -92,6 +91,256 @@ fn active_profiles_from_config(toml_path: &Path) -> Vec<String> {
 const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "content", "pages"];
 
 // ---------------------------------------------------------------------------
+// Structured report
+// ---------------------------------------------------------------------------
+
+/// One filesystem action an `init`/`deinit` run took — or deliberately did not.
+#[derive(Debug, Clone, Serialize)]
+pub struct Action {
+    /// What happened: `created`, `updated`, `unchanged`, `removed`, `skipped`
+    /// or `warning`.
+    action: &'static str,
+    /// The file or directory, relative to [`Report::root`], exactly as the
+    /// text summary prints it.
+    target: String,
+    /// Why, when the verb alone does not say it (`already exists`,
+    /// `not found`, `stripped managed section`, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+/// What an `init`/`deinit` run did, rendered either as the human summary or as
+/// the `--format json` body (DEC-262).
+///
+/// Both commands write config and integration files rather than notes, so they
+/// stay outside the mutation-envelope contract (DEC-257) — but they are no
+/// longer text-only: an agent that asks for `--format json` now gets this
+/// structure instead of a summary it cannot parse.
+#[derive(Debug, Clone, Serialize)]
+pub struct Report {
+    /// `"init"` or `"deinit"`.
+    command: &'static str,
+    /// Absolute path of the directory holding the `.hyalo.toml` and the
+    /// `.claude`/`.pi` integration files this run touched.
+    root: String,
+    /// The `dir = "…"` value written to `.hyalo.toml` (`init` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir: Option<String>,
+    /// Every action, in the order the run performed them.
+    actions: Vec<Action>,
+    /// Trailing advice that is not about one specific file (currently only the
+    /// pi install hint).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
+    /// Whether `root` is not the process CWD, because `--dir` named a tree
+    /// outside it. The text rendering then leads with a `target` line so the
+    /// summary can never be misread as one about CWD (DEC-261).
+    #[serde(skip_serializing)]
+    external_root: bool,
+}
+
+impl Report {
+    fn new(command: &'static str, scope: &Scope, dir: Option<String>) -> Self {
+        Self {
+            command,
+            root: scope.root.display().to_string(),
+            dir,
+            actions: Vec::new(),
+            notes: Vec::new(),
+            external_root: scope.external,
+        }
+    }
+
+    /// Record an action whose verb says everything (`created  .hyalo.toml`).
+    fn push(&mut self, action: &'static str, target: impl Into<String>) {
+        self.actions.push(Action {
+            action,
+            target: target.into(),
+            detail: None,
+        });
+    }
+
+    /// Record an action that needs a parenthesised reason.
+    fn push_detail(
+        &mut self,
+        action: &'static str,
+        target: impl Into<String>,
+        detail: impl Into<String>,
+    ) {
+        self.actions.push(Action {
+            action,
+            target: target.into(),
+            detail: Some(detail.into()),
+        });
+    }
+
+    /// The human summary — one line per action, in order.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        // A run whose root is not CWD says so first: without it the body reads
+        // exactly like a run against the current directory, which is how a
+        // `--dir`-scoped `deinit` used to look while deleting the wrong tree.
+        if self.external_root {
+            let _ = writeln!(out, "target   {}", self.root);
+        }
+        for action in &self.actions {
+            match &action.detail {
+                Some(detail) => {
+                    let _ = writeln!(out, "{}  {}  ({detail})", action.action, action.target);
+                }
+                None => {
+                    let _ = writeln!(out, "{}  {}", action.action, action.target);
+                }
+            }
+        }
+        for note in &self.notes {
+            let _ = writeln!(out, "\n{note}");
+        }
+        out.trim_end().to_owned()
+    }
+
+    /// The `--format json` body. Serialization of a plain struct of owned
+    /// strings cannot fail; an empty object is returned instead of panicking.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or_else(|_| serde_json::json!({}))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `--dir` scoping
+// ---------------------------------------------------------------------------
+
+/// Where an `init`/`deinit` run puts — or looks for — a project's hyalo files.
+///
+/// `--dir` names the *vault*; the vault decides the *root* (the directory that
+/// holds `.hyalo.toml` and the `.claude`/`.pi` integration files):
+///
+/// - vault at or below CWD (`--dir docs`, `--dir /repo/docs` from `/repo`, or
+///   no `--dir` at all) → root stays CWD, `dir` is written CWD-relative;
+/// - vault outside CWD (`--dir /elsewhere/vault`, `--dir ../sibling`) → the
+///   root moves into that tree and `dir` becomes `"."`.
+///
+/// This is what keeps `init` from writing a config it would refuse to read on
+/// the next run (a project-local `.hyalo.toml` may not set an absolute `dir`,
+/// nor one that escapes its own directory — iter-221/243), and what stops a
+/// `--dir`-scoped `deinit` from deleting CWD's integration files. See DEC-261.
+struct Scope {
+    /// Directory holding `.hyalo.toml` and the integration files.
+    root: PathBuf,
+    /// Value for the `dir` key — always relative to [`Self::root`].
+    dir_value: String,
+    /// True when [`Self::root`] is not CWD.
+    external: bool,
+}
+
+fn resolve_scope(dir: Option<&str>, cwd: &Path) -> Scope {
+    let Some(raw) = dir else {
+        return Scope {
+            root: cwd.to_path_buf(),
+            dir_value: auto_detect_dir(cwd),
+            external: false,
+        };
+    };
+    let requested = {
+        let p = Path::new(raw);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        }
+    };
+    match relative_within(cwd, &requested) {
+        Some(rel) => Scope {
+            root: cwd.to_path_buf(),
+            dir_value: rel,
+            external: false,
+        },
+        None => Scope {
+            root: requested,
+            dir_value: ".".to_owned(),
+            external: true,
+        },
+    }
+}
+
+/// `target` expressed relative to `base` with forward slashes, or `None` when
+/// it does not lie at or below `base`.
+///
+/// Both sides go through [`real_path`] first, so a target that only *looks*
+/// outside (an absolute spelling of a subdirectory, `sub/../kb`, a `/tmp`
+/// symlink into `/private/tmp` on macOS) is still recognised as inside — and a
+/// symlink that genuinely points out of the tree is recognised as outside.
+fn relative_within(base: &Path, target: &Path) -> Option<String> {
+    let target_real = real_path(target);
+    let rel = target_real.strip_prefix(real_path(base)).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    Some(if parts.is_empty() {
+        ".".to_owned()
+    } else {
+        parts.join("/")
+    })
+}
+
+/// Canonicalize as much of `path` as exists on disk, keeping the rest verbatim.
+///
+/// Plain `canonicalize` is not enough here: `init --dir docs` names a directory
+/// that usually does not exist yet, and comparing a canonicalized CWD against a
+/// merely-lexical target would misfile every `/tmp`-rooted vault on macOS
+/// (`/tmp` is a symlink to `/private/tmp`). Canonicalizing the deepest existing
+/// ancestor puts both sides in the same spelling.
+fn real_path(path: &Path) -> PathBuf {
+    let normalized = normalize_lexically(path);
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = normalized.clone();
+    loop {
+        if let Ok(canonical) = dunce::canonicalize(&current) {
+            let mut out = canonical;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let (Some(name), Some(parent)) = (
+            current.file_name().map(std::ffi::OsStr::to_os_string),
+            current.parent().map(Path::to_path_buf),
+        ) else {
+            return normalized;
+        };
+        if parent.as_os_str().is_empty() {
+            return normalized;
+        }
+        suffix.push(name);
+        current = parent;
+    }
+}
+
+/// Resolve `.` and `..` components without touching the filesystem.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public command entry point
 // ---------------------------------------------------------------------------
 
@@ -103,12 +352,15 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 ///   writes a managed section to `.claude/CLAUDE.md`.
 /// - `pi`: when `true`, also installs the hyalo and hyalo-tidy skills for pi,
 ///   the hyalo extension, and a package.json.
+///
+/// When `dir` names a tree outside CWD, the whole run moves into that tree
+/// (see [`Scope`]) instead of writing a CWD-local config pointing at it.
 pub fn run_init(
     dir: Option<&str>,
     claude: bool,
     pi: bool,
     profile: Option<&str>,
-) -> Result<CommandOutcome> {
+) -> Result<Report> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
     run_init_in(dir, claude, pi, profile, &cwd)
 }
@@ -119,7 +371,7 @@ fn run_init_in(
     pi: bool,
     profile: Option<&str>,
     cwd: &Path,
-) -> Result<CommandOutcome> {
+) -> Result<Report> {
     // Resolve the profile up front so an unknown name errors before any files
     // are written.
     let profile = match profile {
@@ -127,20 +379,30 @@ fn run_init_in(
         None => None,
     };
 
-    let mut summary = String::new();
-
-    // Resolve the directory value once, so we can use it both for .hyalo.toml
-    // and for the rules file path substitution.
+    // Resolve, once, both the value written as `dir` and the root everything
+    // else is written under (DEC-261). `dir_value` is always root-relative, so
+    // the config this run writes is one the next run can actually read.
+    let scope = resolve_scope(dir, cwd);
     let dir_explicit = dir.is_some();
-    let dir_value = match dir {
-        Some(d) => d.to_owned(),
-        None => auto_detect_dir(cwd),
-    };
+    let dir_value = scope.dir_value.clone();
+    let mut report = Report::new("init", &scope, Some(dir_value.clone()));
+    let root = scope.root.as_path();
 
-    // Create the target directory if it doesn't exist and --dir was explicit.
-    // Skip "." since the current directory always exists.
+    if root.is_file() {
+        anyhow::bail!("--dir path '{}' is a file, not a directory", root.display());
+    }
+    // A vault outside CWD becomes its own project root, so create the tree
+    // itself before writing `.hyalo.toml` into it.
+    if scope.external && !root.exists() {
+        fs::create_dir_all(root)
+            .with_context(|| format!("failed to create directory {}", root.display()))?;
+        report.push("created", format!("{}/", root.display()));
+    }
+
+    // Create the vault directory if it doesn't exist and --dir was explicit.
+    // Skip "." since the root directory always exists by now.
     if dir_explicit && dir_value != "." {
-        let target = cwd.join(&dir_value);
+        let target = root.join(&dir_value);
         if target.is_file() {
             anyhow::bail!(
                 "--dir path '{}' is a file, not a directory",
@@ -150,17 +412,17 @@ fn run_init_in(
         if !target.exists() {
             fs::create_dir_all(&target)
                 .with_context(|| format!("failed to create directory {}", target.display()))?;
-            let _ = writeln!(summary, "created  {dir_value}/");
+            report.push("created", format!("{dir_value}/"));
         }
     }
 
     // ------------------------------------------------------------------
     // Step 1: create or update .hyalo.toml
     // ------------------------------------------------------------------
-    let toml_path = cwd.join(".hyalo.toml");
+    let toml_path = root.join(".hyalo.toml");
     let toml_existed = toml_path.exists();
     if toml_existed && !dir_explicit {
-        let _ = writeln!(summary, "skipped  .hyalo.toml (already exists)");
+        report.push_detail("skipped", ".hyalo.toml", "already exists");
     } else {
         let toml_content = if toml_existed {
             // Read and parse the existing file; update only the `dir` key so
@@ -177,9 +439,10 @@ fn run_init_in(
                 doc.to_string()
             } else {
                 // Malformed existing file — overwrite with just dir and note it.
-                let _ = writeln!(
-                    summary,
-                    "warning  .hyalo.toml was malformed; existing content replaced"
+                report.push_detail(
+                    "warning",
+                    ".hyalo.toml",
+                    "was malformed; existing content replaced",
                 );
                 minimal_toml_dir(&dir_value)
             }
@@ -189,9 +452,9 @@ fn run_init_in(
         fs::write(&toml_path, &toml_content)
             .with_context(|| format!("failed to write {}", toml_path.display()))?;
         if toml_existed {
-            let _ = writeln!(summary, "updated  .hyalo.toml  (dir = \"{dir_value}\")");
+            report.push_detail("updated", ".hyalo.toml", format!("dir = \"{dir_value}\""));
         } else {
-            let _ = writeln!(summary, "created  .hyalo.toml  (dir = \"{dir_value}\")");
+            report.push_detail("created", ".hyalo.toml", format!("dir = \"{dir_value}\""));
         }
     }
 
@@ -221,16 +484,16 @@ fn run_init_in(
             crate::warn::warn(conflict.line(profile.name));
         }
         if profile_unchanged {
-            let _ = writeln!(
-                summary,
-                "unchanged  .hyalo.toml  ('{}' profile already applied)",
-                profile.name
+            report.push_detail(
+                "unchanged",
+                ".hyalo.toml",
+                format!("'{}' profile already applied", profile.name),
             );
         } else {
-            let _ = writeln!(
-                summary,
-                "updated  .hyalo.toml  (merged '{}' profile)",
-                profile.name
+            report.push_detail(
+                "updated",
+                ".hyalo.toml",
+                format!("merged '{}' profile", profile.name),
             );
         }
 
@@ -242,8 +505,8 @@ fn run_init_in(
         // not already set (idempotent, never clobbers a user override) and the
         // root file actually exists but the vault-local one does not.
         if profile.name == "changelog" && dir_value != "." {
-            let root_changelog = cwd.join("CHANGELOG.md");
-            let vault_changelog = cwd.join(&dir_value).join("CHANGELOG.md");
+            let root_changelog = root.join("CHANGELOG.md");
+            let vault_changelog = root.join(&dir_value).join("CHANGELOG.md");
             if root_changelog.is_file() && !vault_changelog.is_file() {
                 let existing_raw = fs::read_to_string(&toml_path)
                     .with_context(|| format!("failed to read {}", toml_path.display()))?;
@@ -264,9 +527,10 @@ fn run_init_in(
                         }
                         fs::write(&toml_path, doc.to_string())
                             .with_context(|| format!("failed to write {}", toml_path.display()))?;
-                        let _ = writeln!(
-                            summary,
-                            "updated  .hyalo.toml  ([changelog] path = \"CHANGELOG.md\")"
+                        report.push_detail(
+                            "updated",
+                            ".hyalo.toml",
+                            "[changelog] path = \"CHANGELOG.md\"",
                         );
                     }
                 }
@@ -275,7 +539,7 @@ fn run_init_in(
     }
 
     if !claude && !pi {
-        return Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()));
+        return Ok(report);
     }
 
     // ------------------------------------------------------------------
@@ -283,7 +547,7 @@ fn run_init_in(
     // ------------------------------------------------------------------
     if claude {
         // Step 2: write (overwrite) .claude/skills/hyalo/SKILL.md
-        let skill_path = cwd
+        let skill_path = root
             .join(".claude")
             .join("skills")
             .join("hyalo")
@@ -300,13 +564,13 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", skill_path.display()))?;
         if skill_existed {
-            let _ = writeln!(summary, "updated  .claude/skills/hyalo/SKILL.md");
+            report.push("updated", ".claude/skills/hyalo/SKILL.md");
         } else {
-            let _ = writeln!(summary, "created  .claude/skills/hyalo/SKILL.md");
+            report.push("created", ".claude/skills/hyalo/SKILL.md");
         }
 
         // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
-        let tidy_skill_path = cwd
+        let tidy_skill_path = root
             .join(".claude")
             .join("skills")
             .join("hyalo-tidy")
@@ -323,13 +587,13 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
         if tidy_skill_existed {
-            let _ = writeln!(summary, "updated  .claude/skills/hyalo-tidy/SKILL.md");
+            report.push("updated", ".claude/skills/hyalo-tidy/SKILL.md");
         } else {
-            let _ = writeln!(summary, "created  .claude/skills/hyalo-tidy/SKILL.md");
+            report.push("created", ".claude/skills/hyalo-tidy/SKILL.md");
         }
 
         // Step 4: write (overwrite) .claude/rules/knowledgebase.md
-        let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
+        let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
         let rules_existed = rules_path.exists();
         let rules_dir = rules_path
             .parent()
@@ -340,9 +604,9 @@ fn run_init_in(
         fs::write(&rules_path, &rule_content)
             .with_context(|| format!("failed to write {}", rules_path.display()))?;
         if rules_existed {
-            let _ = writeln!(summary, "updated  .claude/rules/knowledgebase.md");
+            report.push("updated", ".claude/rules/knowledgebase.md");
         } else {
-            let _ = writeln!(summary, "created  .claude/rules/knowledgebase.md");
+            report.push("created", ".claude/rules/knowledgebase.md");
         }
 
         // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md.
@@ -351,7 +615,7 @@ fn run_init_in(
         // several profiles carries a drift-check reminder for each — and the
         // lines survive across `init --profile` runs because they are rebuilt
         // from the config each time, not just from the current `--profile`.
-        let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
+        let claude_md_path = root.join(".claude").join("CLAUDE.md");
         let managed_section = {
             let active = active_profiles_from_config(&toml_path);
             let mut body = String::from(CLAUDE_MD_HINT);
@@ -367,7 +631,7 @@ fn run_init_in(
             let (new_content, action) = upsert_managed_section(&existing, &managed_section);
             fs::write(&claude_md_path, &new_content)
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            let _ = writeln!(summary, "updated  .claude/CLAUDE.md ({action})");
+            report.push_detail("updated", ".claude/CLAUDE.md", action);
         } else {
             // Create the file and any parent directories.
             let claude_dir = claude_md_path
@@ -378,13 +642,13 @@ fn run_init_in(
             let content = format!("{managed_section}\n");
             fs::write(&claude_md_path, content)
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            let _ = writeln!(summary, "created  .claude/CLAUDE.md (with managed section)");
+            report.push_detail("created", ".claude/CLAUDE.md", "with managed section");
         }
 
         // Step 6: install any profile-specific skills (e.g. `okf`).
         if let Some(profile) = profile {
             for (skill_dir, skill_body) in profile.skills {
-                let profile_skill_path = cwd
+                let profile_skill_path = root
                     .join(".claude")
                     .join("skills")
                     .join(skill_dir)
@@ -398,7 +662,7 @@ fn run_init_in(
                 fs::write(&profile_skill_path, skill_body)
                     .with_context(|| format!("failed to write {}", profile_skill_path.display()))?;
                 let verb = if existed { "updated" } else { "created" };
-                let _ = writeln!(summary, "{verb}  .claude/skills/{skill_dir}/SKILL.md");
+                report.push(verb, format!(".claude/skills/{skill_dir}/SKILL.md"));
             }
         }
     }
@@ -408,7 +672,7 @@ fn run_init_in(
     // ------------------------------------------------------------------
     if pi {
         // Step 6: write (overwrite) .pi/skills/hyalo/SKILL.md
-        let pi_skill_path = cwd
+        let pi_skill_path = root
             .join(".pi")
             .join("skills")
             .join("hyalo")
@@ -425,13 +689,13 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
         if pi_skill_existed {
-            let _ = writeln!(summary, "updated  .pi/skills/hyalo/SKILL.md");
+            report.push("updated", ".pi/skills/hyalo/SKILL.md");
         } else {
-            let _ = writeln!(summary, "created  .pi/skills/hyalo/SKILL.md");
+            report.push("created", ".pi/skills/hyalo/SKILL.md");
         }
 
         // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
-        let pi_tidy_skill_path = cwd
+        let pi_tidy_skill_path = root
             .join(".pi")
             .join("skills")
             .join("hyalo-tidy")
@@ -449,13 +713,13 @@ fn run_init_in(
         )
         .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
         if pi_tidy_skill_existed {
-            let _ = writeln!(summary, "updated  .pi/skills/hyalo-tidy/SKILL.md");
+            report.push("updated", ".pi/skills/hyalo-tidy/SKILL.md");
         } else {
-            let _ = writeln!(summary, "created  .pi/skills/hyalo-tidy/SKILL.md");
+            report.push("created", ".pi/skills/hyalo-tidy/SKILL.md");
         }
 
         // Step 8: write (overwrite) .pi/extensions/hyalo.ts
-        let pi_extension_path = cwd.join(".pi").join("extensions").join("hyalo.ts");
+        let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
         let pi_extension_existed = pi_extension_path.exists();
         let pi_extension_dir = pi_extension_path
             .parent()
@@ -466,13 +730,13 @@ fn run_init_in(
         fs::write(&pi_extension_path, PI_EXTENSION_CONTENT)
             .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
         if pi_extension_existed {
-            let _ = writeln!(summary, "updated  .pi/extensions/hyalo.ts");
+            report.push("updated", ".pi/extensions/hyalo.ts");
         } else {
-            let _ = writeln!(summary, "created  .pi/extensions/hyalo.ts");
+            report.push("created", ".pi/extensions/hyalo.ts");
         }
 
         // Step 9: write (overwrite) .pi/package.json
-        let pi_package_path = cwd.join(".pi").join("package.json");
+        let pi_package_path = root.join(".pi").join("package.json");
         let pi_package_existed = pi_package_path.exists();
         let pi_package_dir = pi_package_path
             .parent()
@@ -482,16 +746,16 @@ fn run_init_in(
         fs::write(&pi_package_path, PI_PACKAGE_JSON_CONTENT)
             .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
         if pi_package_existed {
-            let _ = writeln!(summary, "updated  .pi/package.json");
+            report.push("updated", ".pi/package.json");
         } else {
-            let _ = writeln!(summary, "created  .pi/package.json");
+            report.push("created", ".pi/package.json");
             // One-time hint: the vendored copy never updates itself. Suggest
             // the git package source so `pi update` delivers fixes.
-            let _ = writeln!(summary, "\n{PI_INSTALL_HINT}");
+            report.notes.push(PI_INSTALL_HINT.to_owned());
         }
     }
 
-    Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()))
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -499,28 +763,38 @@ fn run_init_in(
 // ---------------------------------------------------------------------------
 
 /// Remove hyalo configuration and Claude Code / pi integration artifacts.
-pub fn run_deinit() -> Result<CommandOutcome> {
+///
+/// `dir` is the global `--dir` value. It is honoured exactly as `init` honours
+/// it (see [`Scope`]): a vault at or below CWD leaves the root at CWD, while a
+/// vault outside CWD moves the whole removal into that tree. Before iter-257
+/// `--dir` was ignored here, so `hyalo --dir /elsewhere deinit` deleted CWD's
+/// `.hyalo.toml` and `.claude` integration files instead — DEC-261.
+pub fn run_deinit(dir: Option<&str>) -> Result<Report> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    run_deinit_in(&cwd)
+    run_deinit_in(dir, &cwd)
 }
 
-fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
-    let mut summary = String::new();
+fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
+    // `deinit` removes integration files, never the vault itself, so the vault
+    // value resolved here only decides *which tree* is the target.
+    let scope = resolve_scope(dir, cwd);
+    let root = scope.root.as_path();
+    let mut report = Report::new("deinit", &scope, None);
 
     // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
-    let skill_path = cwd
+    let skill_path = root
         .join(".claude")
         .join("skills")
         .join("hyalo")
         .join("SKILL.md");
-    remove_artifact(&skill_path, ".claude/skills/hyalo/SKILL.md", &mut summary)?;
+    remove_artifact(&skill_path, ".claude/skills/hyalo/SKILL.md", &mut report)?;
     let skill_dir = skill_path
         .parent()
         .context("skill path has no parent directory")?;
-    remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut summary)?;
+    remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut report)?;
 
     // Step 2: Remove .claude/skills/hyalo-tidy/SKILL.md and parent dir if empty.
-    let tidy_skill_path = cwd
+    let tidy_skill_path = root
         .join(".claude")
         .join("skills")
         .join("hyalo-tidy")
@@ -528,47 +802,47 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
     remove_artifact(
         &tidy_skill_path,
         ".claude/skills/hyalo-tidy/SKILL.md",
-        &mut summary,
+        &mut report,
     )?;
     let tidy_skill_dir = tidy_skill_path
         .parent()
         .context("tidy skill path has no parent directory")?;
-    remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut summary)?;
+    remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut report)?;
 
     // Step 2b: Remove profile skills (e.g. `okf`) and their parent dirs if empty.
     for profile in crate::commands::profiles::PROFILES {
         for (skill_dir, _body) in profile.skills {
-            let profile_skill_path = cwd
+            let profile_skill_path = root
                 .join(".claude")
                 .join("skills")
                 .join(skill_dir)
                 .join("SKILL.md");
             let label = format!(".claude/skills/{skill_dir}/SKILL.md");
-            remove_artifact(&profile_skill_path, &label, &mut summary)?;
+            remove_artifact(&profile_skill_path, &label, &mut report)?;
             if let Some(parent) = profile_skill_path.parent() {
                 remove_dir_if_empty(
                     parent,
                     &format!(".claude/skills/{skill_dir}/"),
-                    &mut summary,
+                    &mut report,
                 )?;
             }
         }
     }
 
     // Step 3: Remove .claude/rules/knowledgebase.md and parent dir if empty.
-    let rules_path = cwd.join(".claude").join("rules").join("knowledgebase.md");
-    remove_artifact(&rules_path, ".claude/rules/knowledgebase.md", &mut summary)?;
+    let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
+    remove_artifact(&rules_path, ".claude/rules/knowledgebase.md", &mut report)?;
     let rules_dir = rules_path
         .parent()
         .context("rules path has no parent directory")?;
-    remove_dir_if_empty(rules_dir, ".claude/rules/", &mut summary)?;
+    remove_dir_if_empty(rules_dir, ".claude/rules/", &mut report)?;
 
     // Step 4: Remove .claude/skills/ if empty.
-    let all_skills_dir = cwd.join(".claude").join("skills");
-    remove_dir_if_empty(&all_skills_dir, ".claude/skills/", &mut summary)?;
+    let all_skills_dir = root.join(".claude").join("skills");
+    remove_dir_if_empty(&all_skills_dir, ".claude/skills/", &mut report)?;
 
     // Step 5: Strip the managed section from .claude/CLAUDE.md.
-    let claude_md_path = cwd.join(".claude").join("CLAUDE.md");
+    let claude_md_path = root.join(".claude").join("CLAUDE.md");
     if claude_md_path.exists() {
         let content = fs::read_to_string(&claude_md_path)
             .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
@@ -577,44 +851,38 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
             if stripped.is_empty() {
                 fs::remove_file(&claude_md_path)
                     .with_context(|| format!("failed to remove {}", claude_md_path.display()))?;
-                let _ = writeln!(
-                    summary,
-                    "removed  .claude/CLAUDE.md (empty after stripping)"
-                );
+                report.push_detail("removed", ".claude/CLAUDE.md", "empty after stripping");
             } else {
                 fs::write(&claude_md_path, &stripped)
                     .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-                let _ = writeln!(
-                    summary,
-                    "updated  .claude/CLAUDE.md (stripped managed section)"
-                );
+                report.push_detail("updated", ".claude/CLAUDE.md", "stripped managed section");
             }
         } else {
-            let _ = writeln!(summary, "skipped  .claude/CLAUDE.md (no managed section)");
+            report.push_detail("skipped", ".claude/CLAUDE.md", "no managed section");
         }
     } else {
-        let _ = writeln!(summary, "skipped  .claude/CLAUDE.md (not found)");
+        report.push_detail("skipped", ".claude/CLAUDE.md", "not found");
     }
 
     // Clean up .claude/ itself if now empty.
-    let claude_dir = cwd.join(".claude");
-    remove_dir_if_empty(&claude_dir, ".claude/", &mut summary)?;
+    let claude_dir = root.join(".claude");
+    remove_dir_if_empty(&claude_dir, ".claude/", &mut report)?;
 
     // Step 6: Remove pi artifacts
     // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
-    let pi_skill_path = cwd
+    let pi_skill_path = root
         .join(".pi")
         .join("skills")
         .join("hyalo")
         .join("SKILL.md");
-    remove_artifact(&pi_skill_path, ".pi/skills/hyalo/SKILL.md", &mut summary)?;
+    remove_artifact(&pi_skill_path, ".pi/skills/hyalo/SKILL.md", &mut report)?;
     let pi_skill_dir = pi_skill_path
         .parent()
         .context("pi skill path has no parent directory")?;
-    remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut summary)?;
+    remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut report)?;
 
     // Remove .pi/skills/hyalo-tidy/SKILL.md and parent dir if empty.
-    let pi_tidy_skill_path = cwd
+    let pi_tidy_skill_path = root
         .join(".pi")
         .join("skills")
         .join("hyalo-tidy")
@@ -622,62 +890,62 @@ fn run_deinit_in(cwd: &Path) -> Result<CommandOutcome> {
     remove_artifact(
         &pi_tidy_skill_path,
         ".pi/skills/hyalo-tidy/SKILL.md",
-        &mut summary,
+        &mut report,
     )?;
     let pi_tidy_skill_dir = pi_tidy_skill_path
         .parent()
         .context("pi tidy skill path has no parent directory")?;
-    remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut summary)?;
+    remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut report)?;
 
     // Remove .pi/skills/ if empty (after removing hyalo and hyalo-tidy subdirectories)
-    let pi_skills_parent_dir = cwd.join(".pi").join("skills");
-    remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut summary)?;
+    let pi_skills_parent_dir = root.join(".pi").join("skills");
+    remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut report)?;
 
     // Remove .pi/extensions/hyalo.ts
-    let pi_extension_path = cwd.join(".pi").join("extensions").join("hyalo.ts");
-    remove_artifact(&pi_extension_path, ".pi/extensions/hyalo.ts", &mut summary)?;
+    let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
+    remove_artifact(&pi_extension_path, ".pi/extensions/hyalo.ts", &mut report)?;
     let pi_extension_dir = pi_extension_path
         .parent()
         .context("pi extension path has no parent directory")?;
-    remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut summary)?;
+    remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut report)?;
 
     // Remove .pi/package.json
-    let pi_package_path = cwd.join(".pi").join("package.json");
-    remove_artifact(&pi_package_path, ".pi/package.json", &mut summary)?;
+    let pi_package_path = root.join(".pi").join("package.json");
+    remove_artifact(&pi_package_path, ".pi/package.json", &mut report)?;
     let pi_package_dir = pi_package_path
         .parent()
         .context("pi package.json path has no parent directory")?;
-    remove_dir_if_empty(pi_package_dir, ".pi/", &mut summary)?;
+    remove_dir_if_empty(pi_package_dir, ".pi/", &mut report)?;
 
     // Remove .pi/ if empty.
-    let pi_dir = cwd.join(".pi");
-    remove_dir_if_empty(&pi_dir, ".pi/", &mut summary)?;
+    let pi_dir = root.join(".pi");
+    remove_dir_if_empty(&pi_dir, ".pi/", &mut report)?;
 
     // Step 7: Remove .hyalo.toml.
-    let toml_path = cwd.join(".hyalo.toml");
-    remove_artifact(&toml_path, ".hyalo.toml", &mut summary)?;
+    let toml_path = root.join(".hyalo.toml");
+    remove_artifact(&toml_path, ".hyalo.toml", &mut report)?;
 
-    Ok(CommandOutcome::RawOutput(summary.trim_end().to_owned()))
+    Ok(report)
 }
 
-/// Remove `path` if it exists and append a status line to `summary`.
+/// Remove `path` if it exists and record the outcome on `report`.
 /// Returns `Ok(true)` if the file was actually removed.
-fn remove_artifact(path: &Path, label: &str, summary: &mut String) -> Result<bool> {
+fn remove_artifact(path: &Path, label: &str, report: &mut Report) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => {
-            let _ = writeln!(summary, "removed  {label}");
+            report.push("removed", label);
             Ok(true)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let _ = writeln!(summary, "skipped  {label} (not found)");
+            report.push_detail("skipped", label, "not found");
             Ok(false)
         }
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
     }
 }
 
-/// Remove `dir` if it exists and is empty. Appends a status line to `summary` only if removed.
-fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<()> {
+/// Remove `dir` if it exists and is empty. Records an action only if removed.
+fn remove_dir_if_empty(dir: &Path, label: &str, report: &mut Report) -> Result<()> {
     if dir.is_dir() {
         let is_empty = fs::read_dir(dir)
             .with_context(|| format!("failed to read directory {}", dir.display()))?
@@ -686,7 +954,7 @@ fn remove_dir_if_empty(dir: &Path, label: &str, summary: &mut String) -> Result<
         if is_empty {
             fs::remove_dir(dir)
                 .with_context(|| format!("failed to remove directory {}", dir.display()))?;
-            let _ = writeln!(summary, "removed  {label}");
+            report.push("removed", label);
         }
     }
     Ok(())
