@@ -308,37 +308,6 @@ struct SnapshotData {
     bm25_index: Option<Bm25InvertedIndex>,
 }
 
-#[derive(Deserialize)]
-struct SnapshotDataNoBm25 {
-    header: SnapshotHeader,
-    entries: Vec<IndexEntry>,
-    graph: LinkGraph,
-    #[serde(default)]
-    bm25_index: Option<serde::de::IgnoredAny>,
-}
-
-#[derive(Deserialize)]
-struct SnapshotDataAllIgnored {
-    #[serde(default)]
-    header: Option<serde::de::IgnoredAny>,
-    #[serde(default)]
-    entries: Option<serde::de::IgnoredAny>,
-    #[serde(default)]
-    graph: Option<serde::de::IgnoredAny>,
-    #[serde(default)]
-    bm25_index: Option<serde::de::IgnoredAny>,
-}
-
-#[derive(Deserialize)]
-struct SnapshotDataEntriesOnly {
-    header: SnapshotHeader,
-    entries: Vec<IndexEntry>,
-    #[serde(default)]
-    graph: Option<serde::de::IgnoredAny>,
-    #[serde(default)]
-    bm25_index: Option<serde::de::IgnoredAny>,
-}
-
 /// Borrowed variant used only for serialization — avoids cloning all entries.
 #[derive(Serialize)]
 struct SnapshotDataRef<'a> {
@@ -816,24 +785,8 @@ impl SnapshotIndex {
     ///
     /// Returns `Ok(Some(index))` on success, `Ok(None)` on schema mismatch.
     fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
-        let __t0 = std::time::Instant::now();
         match rmp_serde::from_slice::<SnapshotData>(bytes) {
             Ok(data) => {
-                eprintln!("[T] rmp decode: {:?}", __t0.elapsed());
-                {
-                    let eb = rmp_serde::to_vec_named(&data.entries).unwrap();
-                    let gb = rmp_serde::to_vec_named(&data.graph).unwrap();
-                    let bb = data.bm25_index.as_ref().map(|b| rmp_serde::to_vec_named(b).unwrap().len()).unwrap_or(0);
-                    eprintln!("[T] SIZE entries={} MiB graph={} MiB bm25={} MiB", eb.len()/1048576, gb.len()/1048576, bb/1048576);
-                    let t = std::time::Instant::now();
-                    let d: Vec<IndexEntry> = rmp_serde::from_slice(&eb).unwrap();
-                    eprintln!("[T] SIZE entries-alone decode: {:?} ({})", t.elapsed(), d.len());
-                    let t = std::time::Instant::now();
-                    let d2: serde::de::IgnoredAny = rmp_serde::from_slice(&eb).unwrap();
-                    eprintln!("[T] SIZE entries-alone walk: {:?}", t.elapsed());
-                    drop((d, d2));
-                }
-                let __t1 = std::time::Instant::now();
                 // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
                 // All consts are hoisted to the top of the arm so they appear before
                 // any statements (clippy::items_after_statements).
@@ -911,8 +864,6 @@ impl SnapshotIndex {
                     }
                 }
 
-                eprintln!("[T] sec1 path validation: {:?}", __t1.elapsed());
-                let __t2 = std::time::Instant::now();
                 // SEC-3 (defense-in-depth): reject snapshots whose link graph or
                 // BM25 index would expand to an implausibly large in-memory
                 // structure.  A crafted snapshot could claim a plausible number
@@ -955,8 +906,6 @@ impl SnapshotIndex {
                     return None;
                 }
 
-                eprintln!("[T] sec3+bm25 validation: {:?}", __t2.elapsed());
-                let __t3 = std::time::Instant::now();
                 // Entries are stored in sorted order (ScannedIndex::build sorts
                 // before saving).  Re-sort here to guarantee the invariant even
                 // if an older snapshot was created without sorting.
@@ -971,13 +920,9 @@ impl SnapshotIndex {
                 // The graph's lowercased companion map is `#[serde(skip)]`, so a
                 // freshly-deserialized graph has an empty one — rebuild it from
                 // the restored index keys so `backlinks_ci` works off snapshots.
-                eprintln!("[T] sort + path_index: {:?}", __t3.elapsed());
-                let __t4 = std::time::Instant::now();
                 let mut graph = data.graph;
                 graph.rebuild_lower_index();
-                eprintln!("[T] rebuild_lower_index: {:?}", __t4.elapsed());
-                let __t5 = std::time::Instant::now();
-                let __r = Some(Self {
+                Some(Self {
                     entries,
                     path_index,
                     graph,
@@ -985,9 +930,7 @@ impl SnapshotIndex {
                     bm25_index: data.bm25_index,
                     frontmatter_link_props: None,
                     case_index_cache: None,
-                });
-                eprintln!("[T] construct: {:?}", __t5.elapsed());
-                __r
+                })
             }
             Err(e) => {
                 if warn {
@@ -1008,38 +951,10 @@ impl SnapshotIndex {
     /// fall back to a disk scan. A warning is printed to stderr in this case.
     /// Returns `Err` only for hard I/O failures.
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        let __tr = std::time::Instant::now();
         let Some(bytes) = read_index_bytes(path, true)? else {
             return Ok(None);
         };
-        eprintln!("[T] read bytes ({} MiB): {:?}", bytes.len() / 1048576, __tr.elapsed());
-        {
-            let t = std::time::Instant::now();
-            let d = rmp_serde::from_slice::<SnapshotDataAllIgnored>(&bytes).unwrap();
-            eprintln!("[T] EXP walk-only (all ignored): {:?}", t.elapsed());
-            drop(d);
-        }
-        {
-            let t = std::time::Instant::now();
-            let d = rmp_serde::from_slice::<SnapshotDataNoBm25>(&bytes).unwrap();
-            eprintln!("[T] EXP decode skipping bm25: {:?} (entries={})", t.elapsed(), d.entries.len());
-            let t2 = std::time::Instant::now();
-            drop(d);
-            eprintln!("[T] EXP drop no-bm25 data: {:?}", t2.elapsed());
-        }
-        {
-            let t = std::time::Instant::now();
-            let d = rmp_serde::from_slice::<SnapshotDataEntriesOnly>(&bytes).unwrap();
-            eprintln!("[T] EXP decode entries only: {:?} (entries={})", t.elapsed(), d.entries.len());
-            drop(d);
-        }
-        let __ta = std::time::Instant::now();
-        let __r = Ok(Self::load_inner(&bytes, true));
-        eprintln!("[T] load_inner total: {:?}", __ta.elapsed());
-        let __td = std::time::Instant::now();
-        drop(bytes);
-        eprintln!("[T] drop bytes: {:?}", __td.elapsed());
-        __r
+        Ok(Self::load_inner(&bytes, true))
     }
 
     /// Load a snapshot silently — identical to [`load`] but suppresses the
