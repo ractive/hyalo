@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 258 — zero-result title~= hint toward body search"
 date: 2026-08-31
-status: in-progress
+status: completed
 tags:
   - iteration
   - dogfood-fixes
@@ -32,7 +32,7 @@ doesn't fit cleanly, close as won't-fix rather than growing a special case.
 
 ## Tasks
 
-### HINT-1: zero-result `--property 'title~=...'` hint [0/1]
+### HINT-1: zero-result `--property 'title~=...'` hint [1/1]
 
 - [x] Read how the existing zero-result hint logic works (did-you-mean over
       property values, filter-dropping suggestion) and decide whether a
@@ -57,6 +57,32 @@ doesn't fit cleanly, close as won't-fix rather than growing a special case.
 
 - Any new CLI flag. This is a hint-text change at most — see
   `feedback_no_cli_surface_growth`.
+
+## Outcome
+
+Implemented, not closed as won't-fix — it fitted the existing machinery. A
+zero-result `find` that carried a `--property K~=RE` filter now probes whether
+the same regex matches body prose and, only when it does, leads the zero-result
+hints with the equivalent `hyalo find -e '<RE>'`. See
+[[decision-log#DEC-263: a zero-result property-regex query probes the body before hinting (2026-08-31)]]
+for why the probe confirms the match instead of offering unconditional advice,
+and for the budget that keeps it affordable.
+
+- The probe is bounded at 512 files / 8 MiB with a first-match early exit, runs
+  only on the zero-result path, only when a property regex filter is active, and
+  never when the query already searched bodies (`PATTERN` / `-e`).
+- Measured on this vault (437 files, 4 MB, release build): the worst case — a
+  regex matching nothing anywhere, so the whole vault is probed — added ~10 ms
+  to a ~20 ms query. A match short-circuits far earlier.
+- No new flag and no new config key, per the non-goal below.
+- Verified live: `hyalo find --property 'title~=/DEC-25/'` against this vault,
+  whose `DEC-NNN` ids are `##` headings, now emits
+  `-> hyalo find -e DEC-25  # No \`title\` matches that regex, but body text does — search bodies instead`.
+
+Touched: `crates/hyalo-cli/src/commands/find/run.rs` (probe),
+`crates/hyalo-cli/src/hints.rs` + `hints/zero_result.rs` (hint),
+`dispatch.rs`/`run.rs` (plumbing), `templates/rule-knowledgebase.md`,
+`.claude/skills/hyalo/SKILL.md`, `CHANGELOG.md`, `decision-log.md`.
 
 ## Links
 

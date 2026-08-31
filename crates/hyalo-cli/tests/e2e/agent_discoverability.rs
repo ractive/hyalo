@@ -345,7 +345,11 @@ fn dec_vault() -> TempDir {
         "decision-log.md",
         "---\ntitle: Decision log\n---\n\n## DEC-251 — hints\n\ntext\n",
     );
-    write_md(tmp.path(), "note.md", "---\ntitle: Note\n---\n\nunrelated\n");
+    write_md(
+        tmp.path(),
+        "note.md",
+        "---\ntitle: Note\n---\n\nunrelated\n",
+    );
     tmp
 }
 
@@ -374,8 +378,7 @@ fn a_title_regex_that_only_matches_body_text_suggests_find_e() {
     let tmp = dec_vault();
     let parsed = find_json(&tmp, &["--property", "title~=/DEC-25/"]);
     assert_eq!(parsed["total"], 0);
-    let hint =
-        body_search_hint(&parsed).unwrap_or_else(|| panic!("no body-search hint: {parsed}"));
+    let hint = body_search_hint(&parsed).unwrap_or_else(|| panic!("no body-search hint: {parsed}"));
     assert_eq!(
         hint["description"],
         "No `title` matches that regex, but body text does — search bodies instead"
@@ -418,7 +421,14 @@ fn no_body_search_hint_when_the_query_already_searched_bodies() {
     let tmp = dec_vault();
     let parsed = find_json(
         &tmp,
-        &["-e", "DEC-25", "--property", "title~=/DEC-25/", "--tag", "nope"],
+        &[
+            "-e",
+            "DEC-25",
+            "--property",
+            "title~=/DEC-25/",
+            "--tag",
+            "nope",
+        ],
     );
     assert_eq!(parsed["total"], 0);
     assert!(
