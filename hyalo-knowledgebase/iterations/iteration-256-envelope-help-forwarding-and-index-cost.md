@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 256 — envelope unification, help forwarding, and --fields all index cost"
 date: 2026-08-30
-status: in-progress
+status: completed
 tags:
   - iteration
   - dogfood-fixes
@@ -25,7 +25,7 @@ task, not because they are related to each other.
 
 ## Tasks
 
-### COH-9: "every mutating command reports dry_run and skipped_count" is false [0/2]
+### COH-9: "every mutating command reports dry_run and skipped_count" is false [2/2]
 
 - [x] Read `dogfood-v0220-help-efficiency-and-find-shape.md`'s COH-9 section
       in full (`hyalo read dogfood-results/dogfood-v0220-help-efficiency-and-find-shape.md --section COH-9`)
@@ -38,7 +38,7 @@ task, not because they are related to each other.
       documented-contract question, not a one-line fix. Update the bundled
       `SKILL.md`s and `CLAUDE.md` if the contract text changes.
 
-### HELP-5: `hyalo help <cmd>` renders the full `--help`, not `-h` [0/1]
+### HELP-5: `hyalo help <cmd>` renders the full `--help`, not `-h` [1/1]
 
 - [x] Decide whether `hyalo help <cmd>` should forward to the short `-h`
       page instead (agents default to `help <cmd>` out of habit and get the
@@ -50,7 +50,7 @@ task, not because they are related to each other.
       --help` in iter-251/254 — verify it's still accurate) and close this
       as won't-fix with a DEC explaining the clap constraint.
 
-### FIND-8: `--fields all` costs ~20% wall time on an indexed vault [0/1]
+### FIND-8: `--fields all` costs ~20% wall time on an indexed vault [1/1]
 
 - [x] Profile `find --fields all --index --limit 1` vs `find --index --limit 1`
       on a large indexed vault (reuse the `bench_scale` xtask harness —
@@ -64,7 +64,7 @@ task, not because they are related to each other.
       easier now than when FIND-8 was first filed) or whether the cost is
       inherent and just needs documenting on `--fields all`'s help text.
 
-### Root `-h` example set and command-group reshuffle (LOW) [0/1]
+### Root `-h` example set and command-group reshuffle (LOW) [1/1]
 
 - [x] Revisit the top-level `-h` COMMANDS grouping and the five EXAMPLES
       lines chosen in iter-251/254 against a fresh dogfood pass — 254's
