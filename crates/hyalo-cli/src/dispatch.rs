@@ -215,6 +215,13 @@ pub(crate) struct CommandContext<'a> {
     /// zero-result did-you-mean can be computed without a second scan. Empty
     /// for every command other than an empty `find`.
     pub zero_result_values: std::collections::BTreeMap<String, Vec<String>>,
+    /// A `--property K~=RE` filter whose regex matched no frontmatter value but
+    /// *does* match body prose, confirmed by the bounded probe `find` runs on
+    /// the zero-result path (iter-258). `run.rs` moves it into the hint context
+    /// so the empty result can point at `find -e` instead of leaving the caller
+    /// to guess that the text lives in bodies. `None` for every other command
+    /// and for any empty `find` without a property regex filter.
+    pub zero_result_body_search: Option<crate::hints::BodySearchSuggestion>,
 }
 
 /// Resolve the effective limit for a list command.

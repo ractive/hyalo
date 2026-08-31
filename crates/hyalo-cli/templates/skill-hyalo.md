@@ -86,6 +86,12 @@ hyalo find --title "meeting"           # substring match on displayed title
 hyalo find --title "/^Design/i"        # regex on displayed title
 ```
 
+Neither one sees body prose. An identifier that lives in a `##` heading — `DEC-251` in a
+decision log, say — is not a title, so `--property 'title~=/DEC-25/'` correctly returns
+nothing. When that happens hyalo checks whether the same regex occurs in body text and, if
+it does, leads the zero-result hints with the body search that works
+(`hyalo find -e 'DEC-25'`). Read the hints before re-guessing the filter.
+
 `--section` uses case-insensitive **substring** matching by default — `"Tasks"` matches
 `"Tasks [4/4]"`, `"My Tasks"`, etc. Use `"/regex/"` for regex. Prefix `##` to pin heading level.
 

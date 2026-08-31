@@ -3793,3 +3793,45 @@ rendering is one line per action and the JSON body is `serde_json::to_value` of
 the same struct, so the two can never drift. Text lines are now uniformly
 `verb  target  (detail)` — previously some details were separated by one space
 and some by two.
+
+## DEC-263: a zero-result property-regex query probes the body before hinting (2026-08-31)
+
+**Decision:** When a `find` returns nothing and carried a `--property K~=RE`
+filter, hyalo probes whether the same regex matches body prose and — only if it
+does — leads the zero-result hints with `hyalo find -e '<RE>'`. The probe is
+bounded at 512 files / 8 MiB with a first-match early exit, runs on the
+zero-result path only, and never on a query that already searched bodies
+(`PATTERN` / `-e`). No new flag, no new config key.
+
+**Why:** Iteration 256's dogfooding hit `hyalo find --property 'title~=/DEC-25/'`
+against this decision log, whose `DEC-NNN` identifiers are `##` body headings.
+The query is correct, the empty answer is correct, and the useful command
+(`hyalo find -e 'DEC-25'`) is one flag away — but nothing on the zero-result
+path said so. That is precisely the gap iteration 251's hint machinery exists to
+close, so this is an addition to it, not a special case bolted on beside it.
+
+**Why a probe rather than unconditional advice:** an unconditional "try body
+search" line costs nothing but is wrong about as often as it is right, and a
+hint that is sometimes wrong is a hint agents learn to skip (see
+[[iterations/iteration-180-hint-trust]]). Confirming the match first makes the
+hint a statement of fact: the command it prints is known to return something.
+The probe compiles `(?i)<RE>` — exactly what `find -e` compiles — and matches
+body and fenced-code lines, so the hint and the command it suggests cannot
+disagree. For the same reason the probe ignores `--file`/`--glob` scoping and
+every other filter, and the suggested command drops them: promising results
+inside a narrower scope than was checked would be the lie this design is
+avoiding.
+
+**Why the budget is affordable:** the probe reads bodies, which a
+frontmatter-only query otherwise never does — so it is bounded rather than
+trusted to be small. Measured on this vault (437 files, 4 MB, release build) the
+worst case, a regex that matches nothing anywhere, added ~10 ms to a ~20 ms
+query; a match short-circuits far earlier. It fires only when a query already
+returned zero *and* filtered on a property regex, so no query that found
+anything pays for it. A vault above the ceiling simply does not get the hint,
+which is the right trade against turning every empty query into a full body
+scan.
+
+**Rejected:** a `--search-bodies` / `--also-body` flag, and a config key for the
+probe budget. Both grow the CLI surface under dogfood pressure, which
+`feedback_no_cli_surface_growth` rules out; the hint text is the whole feature.

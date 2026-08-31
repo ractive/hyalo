@@ -290,6 +290,16 @@ and this project adheres to
   is now an ordinary code comment.
 - `hyalo-cli` crates.io publish (v0.21.0) failed at the tarball verify step because the pi integration files were embedded via `include_str!` reaching outside the crate into the top-level `pi-package/` directory, which `cargo package` cannot see. The four files are now vendored inside `crates/hyalo-cli/templates/pi/`, kept in sync with `pi-package/` by a new `check-pi-package-sync` CI gate (`just sync-pi-package` to fix drift).
 
+### Added
+
+- **A zero-result `--property K~=RE` query now points at body search when the
+  same regex matches body prose.** `hyalo find --property 'title~=/DEC-25/'`
+  against a decision log whose `DEC-NNN` ids are `##` headings was correct and
+  useless; the empty result now leads with `hyalo find -e 'DEC-25'`. The hint
+  is emitted only after a bounded probe (512 files / 8 MiB, first match wins)
+  confirmed the suggested command returns something, and only on the
+  zero-result path — no new flag, and no cost on any query that matched.
+
 ## [0.21.0] - 2026-08-28
 
 ### Added

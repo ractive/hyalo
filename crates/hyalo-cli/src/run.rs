@@ -2154,6 +2154,7 @@ fn run_inner() -> Result<(), AppError> {
         lint_profiles: lint_profiles_active,
         files_from_counters: None,
         zero_result_values: std::collections::BTreeMap::new(),
+        zero_result_body_search: None,
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -2196,6 +2197,10 @@ fn run_inner() -> Result<(), AppError> {
         // paid for. Hand them to the hint layer so the zero-result
         // did-you-mean names real values instead of guessing.
         hctx.observed_property_values = std::mem::take(&mut ctx.zero_result_values);
+        // iter-258: same trip, one more answer — when the empty query filtered
+        // on a property *regex* that body text does match, the hint layer can
+        // say so and hand over the equivalent `find -e`.
+        hctx.body_search_suggestion = ctx.zero_result_body_search.take();
     }
 
     let exit_code_override = ctx.exit_code_override;

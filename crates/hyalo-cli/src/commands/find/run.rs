@@ -282,6 +282,16 @@ pub(crate) fn run(
             if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
                 ctx.zero_result_values =
                     observed_property_values(resolved.as_index(), &prop_filters);
+                // iter-258: `--property 'title~=/DEC-25/'` against a vault whose
+                // `DEC-NNN` ids are `##` body headings is correct *and* useless:
+                // the caller wanted `find -e 'DEC-25'`. Probe (bounded, and only
+                // here) whether body text actually matches before saying so.
+                ctx.zero_result_body_search = zero_result_body_search(
+                    resolved.as_index(),
+                    dir,
+                    &prop_filters,
+                    pattern.is_some() || regexp.is_some(),
+                );
             }
             // iter-235: `--filenames-only` projects the find result
             // set onto raw file paths (one per line, no envelope,
@@ -305,6 +315,142 @@ pub(crate) fn run(
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),
     }
+}
+
+/// Files the zero-result body probe will open before giving up (iter-258).
+///
+/// The probe runs only when a `find` matched nothing *and* filtered on a
+/// property regex, so the ceiling bounds a path that is already the cheapest
+/// one in the command: a vault larger than this simply does not get the hint,
+/// which is the right trade against turning every empty query into a full body
+/// scan.
+const BODY_PROBE_MAX_FILES: usize = 512;
+
+/// Bytes the zero-result body probe will read before giving up (iter-258).
+///
+/// Accounted from [`hyalo_core::index::IndexEntry::size`], which a snapshot
+/// written before iteration 252 reports as `0`; against such an index only
+/// [`BODY_PROBE_MAX_FILES`] bounds the probe.
+const BODY_PROBE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Body-line visitor that answers one question — "does this regex match
+/// anywhere in this file?" — and stops the scan the moment it knows.
+///
+/// Deliberately not [`hyalo_core::content_search::ContentSearchVisitor`]: that
+/// one collects every match with its section context, which is exactly the
+/// work a yes/no probe must not do.
+struct BodyProbeVisitor<'a> {
+    re: &'a regex::Regex,
+    hit: bool,
+}
+
+impl hyalo_core::scanner::FileVisitor for BodyProbeVisitor<'_> {
+    fn on_body_line(
+        &mut self,
+        raw: &str,
+        _cleaned: &str,
+        _line_num: usize,
+    ) -> hyalo_core::scanner::ScanAction {
+        self.probe(raw)
+    }
+
+    fn on_code_block_line(
+        &mut self,
+        raw: &str,
+        _line_num: usize,
+    ) -> hyalo_core::scanner::ScanAction {
+        // `find -e` searches fenced code too, so the probe must agree.
+        self.probe(raw)
+    }
+
+    fn needs_frontmatter(&self) -> bool {
+        false
+    }
+}
+
+impl BodyProbeVisitor<'_> {
+    fn probe(&mut self, raw: &str) -> hyalo_core::scanner::ScanAction {
+        if self.re.is_match(raw) {
+            self.hit = true;
+            hyalo_core::scanner::ScanAction::Stop
+        } else {
+            hyalo_core::scanner::ScanAction::Continue
+        }
+    }
+}
+
+/// Whether a zero-result `--property K~=RE` query's regex matches body prose,
+/// and so deserves a "search bodies instead" hint (iter-258).
+///
+/// Returns `None` — no hint — unless every one of these holds:
+///
+/// * the query did not already search bodies (`PATTERN` / `-e`), because a
+///   caller who did needs no lesson about body search;
+/// * some `--property K~=RE` filter is active, with a non-empty pattern (an
+///   empty regex matches the first line of the first file and would suggest
+///   `find -e ''`);
+/// * the regex, compiled the way `find -e` compiles it, matches a body line
+///   within [`BODY_PROBE_MAX_FILES`] / [`BODY_PROBE_MAX_BYTES`].
+///
+/// The last point is why the hint can be stated as a fact: it is only emitted
+/// after the suggested command has been shown to return something. The probe
+/// deliberately ignores `--file` / `--glob` scoping and every other filter, and
+/// the suggested command drops them to match — a hint that promised results
+/// inside a narrower scope than it checked would be a lie.
+fn zero_result_body_search(
+    index: &dyn hyalo_core::index::VaultIndex,
+    dir: &std::path::Path,
+    filters: &[hyalo_core::filter::PropertyFilter],
+    already_searched_body: bool,
+) -> Option<crate::hints::BodySearchSuggestion> {
+    use hyalo_core::filter::PropertyFilter;
+
+    if already_searched_body {
+        return None;
+    }
+    let (key, pattern) = filters.iter().find_map(|f| match f {
+        PropertyFilter::RegexMatch { key, pattern } => Some((key.as_str(), pattern.as_str())),
+        _ => None,
+    })?;
+    if pattern.is_empty() {
+        return None;
+    }
+    // Compile exactly what `hyalo find -e <pattern>` compiles — case-insensitive
+    // by default — so the hint and the command it suggests cannot disagree.
+    let probe = regex::RegexBuilder::new(&format!("(?i){pattern}"))
+        .size_limit(1 << 20)
+        .build()
+        .ok()?;
+
+    let mut files_left = BODY_PROBE_MAX_FILES;
+    let mut bytes_left = BODY_PROBE_MAX_BYTES;
+    for entry in index.entries() {
+        // Both ceilings are checked *before* the read, so the budget is a real
+        // bound rather than one the last file is allowed to overrun.
+        if files_left == 0 || entry.size > bytes_left {
+            return None;
+        }
+        files_left -= 1;
+        bytes_left -= entry.size;
+        let mut visitor = BodyProbeVisitor {
+            re: &probe,
+            hit: false,
+        };
+        // A file the index knows but the filesystem does not (a snapshot built
+        // elsewhere) is skipped, not escalated: this is a hint, not a query.
+        if hyalo_core::scanner::scan_file_multi(&dir.join(&entry.rel_path), &mut [&mut visitor])
+            .is_err()
+        {
+            continue;
+        }
+        if visitor.hit {
+            return Some(crate::hints::BodySearchSuggestion {
+                key: key.to_owned(),
+                pattern: pattern.to_owned(),
+            });
+        }
+    }
+    None
 }
 
 /// Maximum distinct values collected per property key for the zero-result
@@ -401,6 +547,120 @@ mod tests {
             Some(t) => CommandOutcome::success_with_total("{}".to_owned(), t),
             None => CommandOutcome::success("{}".to_owned()),
         }
+    }
+
+    // --- iter-258: the zero-result body probe -------------------------------
+
+    fn probe_vault(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            std::fs::write(tmp.path().join(rel), body).unwrap();
+        }
+        tmp
+    }
+
+    fn probe_index(dir: &std::path::Path) -> hyalo_core::index::ScannedIndex {
+        let files = hyalo_core::discovery::discover_files(dir).unwrap();
+        let pairs: Vec<(std::path::PathBuf, String)> = files
+            .iter()
+            .map(|p| (p.clone(), hyalo_core::discovery::relative_path(dir, p)))
+            .collect();
+        hyalo_core::index::ScannedIndex::build(
+            &pairs,
+            None,
+            &hyalo_core::index::ScanOptions {
+                scan_body: false,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap()
+        .index
+    }
+
+    fn probe(dir: &std::path::Path, filter: &str, already_searched_body: bool) -> Option<String> {
+        let index = probe_index(dir);
+        let filters = vec![hyalo_core::filter::parse_property_filter(filter).unwrap()];
+        zero_result_body_search(&index, dir, &filters, already_searched_body)
+            .map(|s| format!("{}:{}", s.key, s.pattern))
+    }
+
+    /// The motivating case: `DEC-NNN` lives in `##` headings, not in `title`.
+    #[test]
+    fn body_probe_fires_when_only_the_body_matches() {
+        let tmp = probe_vault(&[(
+            "decision-log.md",
+            "---\ntitle: Decision log\n---\n\n## DEC-251 — something\n",
+        )]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-25/", false).as_deref(),
+            Some("title:DEC-25")
+        );
+    }
+
+    /// The absence half of the same rule: no body match ⇒ no promise.
+    #[test]
+    fn body_probe_stays_silent_when_the_body_does_not_match_either() {
+        let tmp = probe_vault(&[(
+            "decision-log.md",
+            "---\ntitle: Decision log\n---\n\n## DEC-251 — something\n",
+        )]);
+        assert_eq!(probe(tmp.path(), "title~=/NOSUCHTHING/", false), None);
+    }
+
+    #[test]
+    fn body_probe_skips_a_query_that_already_searched_bodies() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## DEC-251\n")]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-25/", true),
+            None,
+            "a caller who already passed PATTERN / -e needs no body-search hint"
+        );
+    }
+
+    #[test]
+    fn body_probe_ignores_non_regex_property_filters() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## DEC-251\n")]);
+        let index = probe_index(tmp.path());
+        let filters = vec![
+            hyalo_core::filter::parse_property_filter("status=draft").unwrap(),
+            hyalo_core::filter::parse_property_filter("!archived").unwrap(),
+        ];
+        assert!(zero_result_body_search(&index, tmp.path(), &filters, false).is_none());
+    }
+
+    /// An empty regex matches the first body line of the first file, which
+    /// would suggest the useless `hyalo find -e ''`.
+    #[test]
+    fn body_probe_refuses_an_empty_pattern() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\nbody\n")]);
+        assert_eq!(probe(tmp.path(), "title~=", false), None);
+    }
+
+    /// The probe matches fenced code, because `find -e` does.
+    #[test]
+    fn body_probe_matches_inside_fenced_code() {
+        let tmp = probe_vault(&[(
+            "a.md",
+            "---\ntitle: A\n---\n\n```sh\nhyalo find -e DEC-251\n```\n",
+        )]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-251/", false).as_deref(),
+            Some("title:DEC-251")
+        );
+    }
+
+    /// `find -e` is case-insensitive, so the probe must be too — otherwise a
+    /// case-sensitive property regex could suppress a hint whose suggested
+    /// command would in fact have found something.
+    #[test]
+    fn body_probe_is_case_insensitive_like_find_e() {
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\n## dec-251\n")]);
+        assert_eq!(
+            probe(tmp.path(), "title~=/DEC-251/", false).as_deref(),
+            Some("title:DEC-251")
+        );
     }
 
     /// Previously e2e-only: `--strict` with findings ⇒ exit 1 (UX-2).
