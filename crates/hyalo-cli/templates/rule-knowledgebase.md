@@ -22,7 +22,14 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `.results.violations`, `links auto` → `.results.matched`). Top-level `results` keys are always
   present — `0`, `false`, `[]` and `null` included — so `.results.dry_run` is `false`, not
   missing, on any non-dry-run mutation; only per-item records inside arrays omit optional keys.
-  Every mutating command reports `dry_run` and `skipped_count`.
+  Every mutating command whose `results` is an object reports `dry_run` (the `apply`-style
+  generators — `madr`, `okf`, `changelog` — and batch `mv` also keep their older `apply`/`applied`
+  key, which is always its exact inverse). `skipped_count` is reported by the bulk-mutation family
+  only — `set`, `remove`, `append`, `properties rename`, `tags rename` — because a single-target
+  command has no scanned-but-unchanged set. `task toggle`/`task set` return an array of per-task
+  records with no top-level object: their dry-run records carry `old_status`, applied records do
+  not. `init`/`deinit` and `create-index`/`drop-index` write config/index rather than notes and are
+  outside this contract.
 - **Config discovery**: `.hyalo.toml` is read from the current directory, or from the nearest
   parent whose configured vault contains it — running from inside the vault keeps the config.
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect

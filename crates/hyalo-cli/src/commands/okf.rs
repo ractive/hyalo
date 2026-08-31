@@ -404,6 +404,7 @@ pub fn run_index(
     let payload = serde_json::json!({
         "command": "okf index",
         "apply": apply,
+        "dry_run": !apply,
         "scanned": plans.len(),
         "changed": changed.len() - write_failures.len(),
         "skipped_malformed": skipped_malformed,
@@ -1018,6 +1019,7 @@ pub fn run_log(
     let payload = serde_json::json!({
         "command": "okf log",
         "apply": apply,
+        "dry_run": !apply,
         "file": rel_path,
         "date": today,
         "entry": entry_line,

@@ -168,6 +168,9 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
     let val = serde_json::json!({
         "action": "removed",
         "type": type_name,
+        // iter-256 COH-9: `types remove` has no --dry-run; the key is still
+        // emitted so `.results.dry_run` answers "did this write?" uniformly.
+        "dry_run": false,
     });
     Ok(CommandOutcome::success(format_success(Format::Json, &val)))
 }

@@ -3558,3 +3558,133 @@ prompt. A header line corrupts every one of those, and there is no flag-free
 way for a consumer to strip it. The information is not lost: the number that
 matters (this file is big, read less of it) is already delivered by the hint,
 at exactly the moment it is actionable.
+
+## DEC-257: `dry_run` is universal on object-shaped mutation results; `skipped_count` is bulk-family-only (2026-08-31)
+
+**Decision:** the envelope claim "every mutating command reports `dry_run` and
+`skipped_count`" was false for 18 of 23 mutating commands. Resolve it by
+making the first half true and correcting the second, rather than by softening
+both.
+
+- `dry_run` is now emitted by every mutating command whose `results` is an
+  object. Added in iteration 256 to batch `mv`, `new`, `types remove`,
+  `madr toc`, `okf index`, `okf log`, `changelog add` and `changelog release`.
+- `apply` (the generators) and `applied` (batch `mv`) are retained and are
+  always the exact inverse of `dry_run`. They predate the convention and are
+  load-bearing for the text formatters; a rename would be a breaking change
+  bought for nothing.
+- `skipped_count` stays with the bulk-mutation family only — `set`, `remove`,
+  `append`, `properties rename`, `tags rename`.
+- `task toggle` / `task set` are the documented exception: their `results` is
+  an *array* of per-task records (collapsing to a bare object at length one),
+  so there is no top-level object to carry the flag. `old_status` is present
+  on dry-run records and absent on applied ones; that key is the
+  discriminator.
+- `init` / `deinit` and `create-index` / `drop-index` are outside the
+  contract: they write config and index files, not notes.
+
+**Why not add `skipped_count` everywhere:** a single-target command has no
+scanned-but-unchanged set. A hard-coded `0` reads like a measurement and is
+none — worse than an absent key, which at least makes the caller look.
+
+**Why not just soften the sentence:** the `dry_run` half is the one a script
+actually branches on ("did this write?"), and before this iteration answering
+it needed per-command knowledge of four different spellings. That is exactly
+the drift the results-shape inventory exists to prevent.
+
+**Enforcement:** `crates/hyalo-cli/tests/e2e/results_shape.rs` walks both
+families and asserts the flag's presence, its type, and its agreement with
+`apply`/`applied`; a second test pins the `task` exception's discriminator.
+Contract text updated in `cli/args.rs` (RESULTS CONVENTIONS),
+`templates/rule-knowledgebase.md` and `templates/skill-hyalo.md`.
+
+## DEC-258: `hyalo help <cmd>` forwards to the short `-h` page (2026-08-31)
+
+**Decision:** `hyalo help <cmd>` renders the same page as `hyalo <cmd> -h`,
+byte for byte. Measured on v0.22.0: `hyalo help find` was 28 701 bytes against
+`hyalo find -h`'s 2 992 — a 9.6x tax on the phrasing agents reach for first.
+
+**How, and why clap does not block it:** the iteration plan asked to confirm
+clap-derive can intercept `Subcommand::Help` before committing. It can.
+`disable_help_subcommand = true` on the root suppresses clap's generated
+subcommand, and a `Commands::Help { command: Vec<String> }` variant reserves
+the name (so it appears in shell completions and the COMMAND REFERENCE). The
+forward itself is an argv rewrite in `run_inner`: `hyalo [globals] help
+<path>...` becomes `hyalo <path>... -h` before clap parses.
+
+**Why rewrite argv rather than render a page from the `Help` arm:** rendering
+our own would produce a *similar* page, not the same one. The short page is
+assembled at parse time — globals collapsed to a one-line pointer, `find`'s
+composed examples, the `--help` footer — and all of that is inherited free by
+rewriting. Two bonuses fall out: root globals are irrelevant to a help page so
+dropping them costs nothing, and an unknown name now hits clap's ordinary
+unknown-subcommand path, which restores the did-you-mean the generated `help`
+subcommand never had (`hyalo help fnd` → "a similar subcommand exists:
+'find'"). That closes HELP-13.
+
+**Escape hatch:** every short page ends with a pointer at its long form, so
+`hyalo find --help` is one line away from where the reader already is. Nested
+group help (`hyalo task help toggle`) still uses clap's generated subcommand
+and still renders the long page; that is a per-group `disable_help_subcommand`
+with no replacement, which would remove the name rather than improve it.
+
+## DEC-259: FIND-8's 20% was a quadratic stem dedupe, not lazy-field materialisation (2026-08-31)
+
+**Decision:** fixed, not documented as inherent. The hypothesis on file — that
+`--fields all` materialises heavy per-entry fields before `--limit` is applied
+— was wrong, and the fix is in `hyalo-core`, not in `find`'s projection.
+
+**Measurement** (release build, MDN vault, 14 399 files, 123 MB snapshot
+index, best of 7):
+
+| invocation | before | after |
+| --- | --- | --- |
+| `find --index --limit 1` | 0.371 s | 0.371 s |
+| `find --index --limit 1 --fields all` | 0.448 s (+20.4%) | 0.368 s |
+| `find --index --limit 1 --fields links` | 0.447 s | 0.381 s |
+| `find --index --limit 1 --fields backlinks` | 0.380 s | 0.380 s |
+
+Per-field timing localised the entire delta to `links`; `sections`, `tasks`,
+`backlinks` and `properties-typed` were free. Instrumenting `maybe_case_index`
+put 62.4 ms of the ~76 ms delta in one call: `build_case_index_from_snapshot`.
+
+**Root cause:** `CaseInsensitiveIndex::insert` deduped by linear-scanning the
+*stem* bucket. MDN names every page `index.md`, so all 14 399 paths shared one
+bucket and the build was O(n²) — ~104 million string comparisons. Deduping
+against the `map` bucket instead (which holds only the case-variants of one
+path, and is written in the same call, so membership in one implies membership
+in the other) makes it O(1) amortised: 62.4 ms → 4.2 ms, a 15x improvement.
+
+**Why the cost could never have been fixed by limit-awareness:** resolving a
+single file's outbound links needs a vault-wide stem map, because a link in
+any one file can point at any file. `--limit 1` cannot shrink it. The
+lazy-projection idea DEC-254 made available would have bought nothing here;
+the win was an algorithmic bug that the `--fields all` measurement happened to
+surface.
+
+**Scope of the fix:** `build_case_index_from_dir` shares `insert`, so
+unindexed vaults with a repeated basename — `index.md`, `README.md` — get the
+same improvement across `links fix`, `--broken-links`, `--orphan` and
+`--dead-end`. Three unit tests in `case_index.rs` pin what the removed scan
+was there for: re-inserting a path is still a no-op in both maps, many paths
+sharing one stem are all recorded and the stem stays ambiguous, and two paths
+differing only in case stay separate candidates.
+
+## DEC-260: the root `-h` grouping and examples stand; one label was factually wrong (2026-08-31)
+
+**Decision:** iteration 254 deferred "revisit the top-level `-h` COMMANDS
+grouping and the five EXAMPLES lines against a fresh dogfood pass". Revisited;
+no reshuffle. The three-way read / write / setup split and the five composed
+examples still read correctly, and the plan's own instruction was not to force
+a change for its own sake.
+
+One thing was not cosmetic and was fixed: the third group was labelled
+`COMMANDS — config and scaffolds (write .hyalo.toml)`, but `create-index` and
+`drop-index` write a snapshot index and `completions` writes nothing. The
+label now reads `COMMANDS — setup (writes config/index, not your notes)`,
+which is both accurate and the distinction that actually matters to a caller
+deciding whether a command can touch their markdown.
+
+`help` earns no COMMANDS row: the footer names it directly
+(`hyalo <cmd> -h (== hyalo help <cmd>)`), and a row would cost a line of a
+page held to a 2 560-byte ceiling to say what the footer already says.

@@ -19,6 +19,16 @@ pub fn unknown_arg_is(err: &clap::Error, flag: &str) -> bool {
 /// merely *contain* the subcommand name as a value (`hyalo read append …` or
 /// `hyalo --dir append …`).
 pub fn top_level_subcommand<'a>(args: &'a [String], cmd: &clap::Command) -> Option<&'a str> {
+    top_level_subcommand_index(args, cmd).map(|i| args[i].as_str())
+}
+
+/// Index into `args` of the first token that names a top-level subcommand.
+///
+/// Same scan as [`top_level_subcommand`], but returns the position rather than
+/// the name — iter-256 needs it to rewrite `hyalo help <path>` into
+/// `hyalo <path> -h` before clap parses, and the position is what says where
+/// the subcommand path starts.
+pub fn top_level_subcommand_index(args: &[String], cmd: &clap::Command) -> Option<usize> {
     // Value-taking root flags whose next token must be skipped (e.g. `--dir`).
     let value_flags: Vec<&str> = cmd
         .get_arguments()
@@ -29,7 +39,7 @@ pub fn top_level_subcommand<'a>(args: &'a [String], cmd: &clap::Command) -> Opti
     let top_level_names: Vec<&str> = cmd.get_subcommands().map(clap::Command::get_name).collect();
 
     let mut skip_next = false;
-    for arg in args.iter().skip(1) {
+    for (idx, arg) in args.iter().enumerate().skip(1) {
         if skip_next {
             skip_next = false;
             continue;
@@ -46,13 +56,8 @@ pub fn top_level_subcommand<'a>(args: &'a [String], cmd: &clap::Command) -> Opti
         if arg.starts_with('-') {
             continue;
         }
-        if let Some(name) = top_level_names.iter().find(|&&n| n == arg.as_str()) {
-            // Return a slice of the matching argv element rather than the
-            // borrowed name table entry, so lifetimes tie to `args`.
-            return args
-                .iter()
-                .find(|a| a.as_str() == *name)
-                .map(String::as_str);
+        if top_level_names.contains(&arg.as_str()) {
+            return Some(idx);
         }
     }
     None

@@ -162,6 +162,7 @@ fn effective_index_path_for(
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
+        | Commands::Help { .. }
         | Commands::Config { .. }
         | Commands::Types { .. }
         | Commands::Okf { .. }
@@ -606,6 +607,9 @@ fn run_inner() -> Result<(), AppError> {
     // they don't exist on the subcommand Command node yet.  This is a known
     // clap limitation with `global = true` derive args.
     let raw_args: Vec<String> = std::env::args().collect();
+    // iter-256 HELP-5: `hyalo help <cmd>` becomes `hyalo <cmd> -h` here, so
+    // the short-help reshaping below applies to it unchanged.
+    let raw_args = crate::cli::help::rewrite_help_to_short_page(raw_args, &cmd);
 
     // iter-251: reshape *short* help only. `-h` is what an agent reads first
     // and 7.7 KB of it (29 KB for `--help`) is what stopped them reading past
@@ -1815,6 +1819,7 @@ fn run_inner() -> Result<(), AppError> {
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
+            | Commands::Help { .. }
             | Commands::Config { .. }
             | Commands::Madr { .. }
             | Commands::Changelog { .. } => None,

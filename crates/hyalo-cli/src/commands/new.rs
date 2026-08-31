@@ -181,6 +181,10 @@ pub(crate) fn create_new(
                 "type": type_name,
                 "file": rel_path,
                 "created": true,
+                // iter-256 COH-9: `new` has no --dry-run, but the mutation
+                // envelope contract says every object-shaped mutation result
+                // carries `dry_run`, so scripts can branch on one key.
+                "dry_run": false,
             });
             format_success(Format::Json, &val)
         }

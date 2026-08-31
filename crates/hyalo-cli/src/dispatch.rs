@@ -53,10 +53,12 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
 ///
 /// Equivalent to [`build_case_index_from_dir`] but seeds the stem map from
 /// the snapshot's entries (`rel_path` list) instead of walking the disk.
-/// Cost is a linear scan over `snap.entries()`, expected to be microseconds
-/// vs seconds for the disk-walk variant on large vaults.
+/// Cost is a linear scan over `snap.entries()` — about 4 ms for MDN's 14 399
+/// files (iter-256), against seconds for the disk-walk variant. It was 62 ms
+/// until iter-256 removed a quadratic dedupe scan in
+/// [`CaseInsensitiveIndex::insert`]; see FIND-8.
 pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsensitiveIndex {
-    let mut idx = CaseInsensitiveIndex::new();
+    let mut idx = CaseInsensitiveIndex::with_capacity(snap.entries().len());
     for entry in snap.entries() {
         idx.insert(&entry.rel_path);
     }
@@ -705,6 +707,10 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Completion { .. } => {
             unreachable!("Completion is dispatched before this match reached")
         }
+        // iter-256 HELP-5: `help <cmd>` is rewritten to `<cmd> -h` in argv
+        // before clap parses, so the variant only exists to reserve the name
+        // (and to put `help` in shell completions and the COMMAND REFERENCE).
+        Commands::Help { .. } => unreachable!("Help is rewritten to `<cmd> -h` before parsing"),
         Commands::Views { action } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::views::run`.
             views_commands::run(ctx, action)
