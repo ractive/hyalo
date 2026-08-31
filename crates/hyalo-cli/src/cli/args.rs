@@ -1370,10 +1370,18 @@ Repeatable (AND).\n\
             re-running is idempotent. A changed scalar prints a `conflict:` line to\n\
             stderr — nothing is lost silently.\n\
             With --profile <name> --claude, also installs the bundled skill for it.\n\n\
-            Use the global --dir flag to specify the markdown directory to record in .hyalo.toml.\n\n\
+            Use the global --dir flag to name the markdown directory. A vault at or below the\n\
+            current directory keeps .hyalo.toml here and records `dir` relative to it; a vault\n\
+            outside it (an absolute path elsewhere, ../sibling) makes that tree its own project\n\
+            root, writing .hyalo.toml there with dir = \".\" — so the config written is always\n\
+            one hyalo can read back (a project-local .hyalo.toml may not set an absolute dir).\n\n\
+            The summary prints as text even when piped; pass --format json (or --jq) for a\n\
+            machine-readable envelope of what was written.\n\n\
             EXAMPLES:\n\
             hyalo init\n\
             hyalo --dir kb init\n\
+            hyalo --dir /elsewhere/vault init\n\
+            hyalo init --dir kb --format json\n\
             hyalo --dir kb init --claude\n\
             hyalo --dir kb init --pi\n\
             hyalo init --profile okf\n\
@@ -1399,7 +1407,17 @@ Repeatable (AND).\n\
     #[command(
         long_about = "Remove .hyalo.toml and all Claude Code / pi integration artifacts created by `init`.\n\n\
             Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\
-            Safe to run when artifacts are already absent (idempotent)."
+            Safe to run when artifacts are already absent (idempotent).\n\n\
+            The global --dir flag selects the tree to clean, exactly as it does for `init`: a\n\
+            vault inside the current directory still cleans the current project, while --dir\n\
+            naming a tree outside it cleans that tree instead (and the summary leads with a\n\
+            `target` line).\n\n\
+            The summary prints as text even when piped; pass --format json (or --jq) for a\n\
+            machine-readable envelope of what was removed.\n\n\
+            EXAMPLES:\n\
+            hyalo deinit\n\
+            hyalo --dir /elsewhere/vault deinit\n\
+            hyalo deinit --format json"
     )]
     Deinit,
     /// Build a snapshot index for faster repeated read-only queries

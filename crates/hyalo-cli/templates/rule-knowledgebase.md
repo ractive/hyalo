@@ -29,9 +29,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
   command has no scanned-but-unchanged set. `task toggle`/`task set` return an array of per-task
   records with no top-level object: their dry-run records carry `old_status`, applied records do
   not. `init`/`deinit` and `create-index`/`drop-index` write config/index rather than notes and are
-  outside this contract.
+  outside this contract. `init`/`deinit` still answer `--format json` (and `--jq`) with their own
+  minimal envelope — `results.command`, `results.root`, `results.actions[]` of
+  `{action, target, detail?}`, plus a hoisted top-level `dir` for `init` — but stay text when
+  merely piped, because their summary is a progress report, not a result set.
 - **Config discovery**: `.hyalo.toml` is read from the current directory, or from the nearest
   parent whose configured vault contains it — running from inside the vault keeps the config.
+- **`init`/`deinit` follow `--dir` too**: a vault at or below the current directory leaves the
+  project root at CWD (`init` records `dir` relative to it, `deinit` cleans CWD); a `--dir` naming
+  a tree *outside* CWD moves the whole operation into that tree — `init` writes its `.hyalo.toml`
+  there with `dir = "."`, `deinit` removes that tree's integration files and never CWD's. Both
+  lead their summary with a `target <path>` line whenever the root is not CWD.
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every

@@ -324,10 +324,10 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo config [--raw] [-d/--dir DIR]                    # --raw also prints the .hyalo.toml text
 
   Init (configuration, one-time setup):
-    hyalo init [--claude] [--pi] [--profile <PROFILE>] [-d/--dir DIR]
+    hyalo init [--claude] [--pi] [--profile <PROFILE>] [-d/--dir DIR]   # a vault outside CWD roots there
 
   Deinit (remove hyalo configuration):
-    hyalo deinit
+    hyalo deinit [-d/--dir DIR]                            # picks the tree to clean; default CWD
 
   Create-index (build snapshot for faster queries):
     hyalo create-index [-o/--output PATH] [--allow-outside-vault]   # --path is an alias for --output

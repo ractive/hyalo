@@ -544,6 +544,12 @@ Pass `--format text` or `--format json` to override, or set a default in `.hyalo
 `text` is the compact, low-token format designed for LLM consumption — less noise than
 JSON, fewer tokens. Use it when orienting yourself or scanning results.
 
+**`init` and `deinit` are the exception to auto-detection.** Their summary is a human
+progress report, so it stays text even when piped; pass `--format json` (or `--jq`) to get
+`{results: {command, root, actions: [{action, target, detail?}], notes?}, hints, dir}`
+instead. `--dir` scopes them like every other command: naming a tree outside the current
+directory initializes — or cleans — *that* tree, not this one.
+
 **`--format text` and `--jq` are mutually exclusive.** `--jq` operates on JSON, so it
 requires JSON output. Piping naturally produces JSON, so `--jq` works without an
 explicit flag in most contexts. If you need to filter/reshape output, just pipe through

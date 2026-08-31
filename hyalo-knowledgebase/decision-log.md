@@ -3688,3 +3688,108 @@ deciding whether a command can touch their markdown.
 `help` earns no COMMANDS row: the footer names it directly
 (`hyalo <cmd> -h (== hyalo help <cmd>)`), and a row would cost a line of a
 page held to a 2 560-byte ceiling to say what the footer already says.
+
+## DEC-261: `init`/`deinit` follow `--dir`; a vault outside CWD moves the root (2026-08-31)
+
+**Decision:** `--dir` names the *vault*, and the vault decides the *root* — the
+directory that holds `.hyalo.toml` and the `.claude`/`.pi` integration files.
+One rule, shared by both commands:
+
+- vault at or below CWD (`--dir docs`, `--dir /repo/docs` run from `/repo`, no
+  `--dir` at all) → root stays CWD; `init` records `dir` **relative** to it,
+  `deinit` cleans CWD;
+- vault outside CWD (`--dir /elsewhere/vault`, `--dir ../sibling`) → the root
+  moves into that tree: `init` writes `.hyalo.toml` *there* with `dir = "."`,
+  `deinit` removes *that* tree's files and never CWD's.
+
+A run whose root is not CWD leads its summary with `target   <path>`.
+
+**What was broken.** Both bugs were hit live during iteration 256's own
+dogfooding pass, from inside this repo, and had to be repaired by hand
+(commits `78fc09b5`, `0c96ec77`):
+
+- `init --dir <other-tree>` wrote `.hyalo.toml` into **CWD** with `dir =
+  "<absolute path>"`. A project-local config may not set an absolute `dir`
+  (iter-221 H-1, tightened in iter-243/244), so the very next hyalo run refused
+  the file it had just written — an `init` that produces a config `config`
+  rejects.
+- `deinit` ignored `--dir` outright and always targeted CWD, so
+  `hyalo --dir <temp-vault> deinit` deleted this repo's `.hyalo.toml`,
+  `.claude/CLAUDE.md` and three `.claude` symlinks while its summary looked, at
+  a glance, like a no-op (a dozen `skipped … (not found)` lines around the real
+  removals).
+
+**Why this rule and not the alternatives.** Three were on the table for
+`init`: write `dir` relative to the config file, write the config into the
+other tree, or refuse the combination. Relative-to-config only works while the
+target is *inside* the config's directory — `../..`-style values are refused by
+the same boundary rule, so it fixes `--dir /repo/docs` and nothing else. It is
+therefore kept, but only as the in-bounds half of the rule. Refusal was
+rejected because `hyalo --dir /elsewhere/vault init` has an obvious intent and
+no other spelling; making the user `cd` first is a worse CLI. Moving the root
+is what the user asked for in every reading of the flag.
+
+For `deinit` the choice was honour-or-refuse. Honouring wins for the same
+reason, and it is strictly safer than the status quo either way: the failure
+mode being fixed is *deleting the tree the user did not name*.
+
+**Implementation note.** Containment is decided on canonicalized paths — the
+deepest existing ancestor is canonicalized and the not-yet-created remainder
+re-appended — so an absolute spelling of a subdirectory, a `sub/../kb`
+round-trip, and macOS's `/tmp` → `/private/tmp` symlink all resolve to
+"inside", while a symlink that genuinely leaves the tree resolves to "outside".
+This mirrors what `validate_project_local_dir` already does for reads, so
+`init` cannot write a `dir` that the reader would then refuse.
+
+**Non-goal:** the rest of `init`/`deinit`'s UX. The interleaved
+`skipped … (not found)` noise in `deinit`'s summary is unchanged apart from the
+`target` header; it is now structured in JSON (DEC-262), which is the fix that
+matters for agents.
+
+## DEC-262: `init`/`deinit` answer `--format json`, but stay text when merely piped (2026-08-31)
+
+**Decision:** both commands emit a minimal envelope on an explicit
+`--format json` (or `--jq`, which implies it), and the text summary in every
+other case — including when stdout is a pipe. `--format github` is refused with
+the same message every non-lint command gives.
+
+```json
+{
+  "results": {
+    "command": "init",
+    "root": "/abs/path/to/project",
+    "actions": [
+      {"action": "created", "target": ".hyalo.toml", "detail": "dir = \"docs\""},
+      {"action": "skipped", "target": ".claude/CLAUDE.md", "detail": "not found"}
+    ],
+    "notes": ["…pi install hint…"]
+  },
+  "hints": [],
+  "dir": "docs"
+}
+```
+
+`action` is one of `created`, `updated`, `unchanged`, `removed`, `skipped`,
+`warning`; `detail` is present only when the verb alone is ambiguous; `dir` is
+hoisted to the top level by the shared envelope builder and is absent for
+`deinit`, which has no vault value to report.
+
+**Why not the full mutation-envelope contract.** DEC-257 put `init`/`deinit`
+outside it: they write config and integration files, not notes, so
+`dry_run`/`skipped_count`/per-file records have nothing to describe. That
+stands. What did not stand was answering `--format json` with unparseable text.
+
+**Why text still wins a bare pipe.** Every list/mutation command flips to JSON
+when stdout is not a terminal, and `init`/`deinit` deliberately do not. Their
+output is a progress report a human reads while setting a project up — the same
+argument that keeps `read`'s results raw text under a pipe (DEC-256) — and
+`hyalo init | tee setup.log` should not start emitting JSON. An agent that
+wants structure asks for it, which is one flag, and the flag is now documented
+in both help pages.
+
+**Implementation note.** The summary is no longer built as a string. Both
+commands accumulate a `Report { command, root, dir, actions, notes }`; the text
+rendering is one line per action and the JSON body is `serde_json::to_value` of
+the same struct, so the two can never drift. Text lines are now uniformly
+`verb  target  (detail)` — previously some details were separated by one space
+and some by two.

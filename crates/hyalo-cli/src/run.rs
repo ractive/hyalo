@@ -64,6 +64,60 @@ fn early_format(
         .unwrap_or_else(|| resolve_format_by_tty(std::io::stdout().is_terminal()))
 }
 
+/// Print an `init`/`deinit` report in the requested format (DEC-262).
+///
+/// These two do **not** flip to JSON just because stdout is a pipe, unlike the
+/// pipeline commands: their summary is a human progress report, the same stance
+/// `read` takes for note bodies. `--format json` — or `--jq`, which implies it —
+/// opts in; everything else prints the text summary.
+fn emit_init_report(
+    report: &crate::commands::init::Report,
+    format: Option<Format>,
+    jq: Option<&str>,
+) -> Result<(), AppError> {
+    let json = match format {
+        Some(f) => f == Format::Json,
+        None => jq.is_some(),
+    };
+    if !json {
+        // Sanitized because the summary can echo vault-derived strings (a `dir`
+        // value, a profile skill directory) that never pass through the JSON
+        // pipeline's own sanitization.
+        println!(
+            "{}",
+            crate::output::sanitize_control_chars(&report.to_text())
+        );
+        return Ok(());
+    }
+    let envelope = crate::output::build_envelope_value(&report.to_json(), None, &[]);
+    if let Some(filter) = jq {
+        return match crate::output::apply_jq_filter_result(filter, &envelope) {
+            Ok(filtered) => {
+                println!("{}", crate::output::sanitize_control_chars(&filtered));
+                Ok(())
+            }
+            Err(e) => Err(AppError::User(crate::output::format_error(
+                Format::Json,
+                "jq filter failed",
+                None,
+                None,
+                Some(&e),
+            ))),
+        };
+    }
+    println!(
+        "{}",
+        crate::output::sanitize_control_chars(&crate::output::format_prebuilt_envelope(
+            Format::Json,
+            &envelope,
+            None,
+            &[],
+            &envelope,
+        ))
+    );
+    Ok(())
+}
+
 /// Express the resolved vault `dir` as a path relative to `cwd`, using
 /// forward slashes, for `--format github` annotation prefixing.
 ///
@@ -827,6 +881,24 @@ fn run_inner() -> Result<(), AppError> {
         // (2 is reserved for internal errors — iter-181 task 2).
         return Err(AppError::Exit(1));
     }
+    // `--format github` is lint-only everywhere else (see the rejection further
+    // down, which `init`/`deinit` never reach because they dispatch here first).
+    // Reject it with the identical message rather than silently printing text.
+    if cli.format == Some(Format::Github)
+        && matches!(&cli.command, Commands::Init { .. } | Commands::Deinit)
+    {
+        eprintln!(
+            "{}",
+            crate::output::format_error(
+                Format::Text,
+                "--format github is only supported by `hyalo lint`",
+                None,
+                Some("valid formats for this command are: json, text"),
+                None,
+            )
+        );
+        return Err(AppError::Exit(1));
+    }
     if let Commands::Init {
         claude,
         pi,
@@ -834,38 +906,14 @@ fn run_inner() -> Result<(), AppError> {
     } = &mut cli.command
     {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        match init_commands::run_init(init_dir, *claude, *pi, profile.as_deref()) {
-            Ok(CommandOutcome::RawBytes(_)) => {
-                // init/deinit never produce RawBytes; handled for exhaustiveness.
-                unreachable!("init/deinit do not emit RawBytes")
-            }
-            Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                // Sanitized because RawOutput content may echo raw file text (init/deinit
-                // summaries can include vault-derived strings) that never passes through
-                // the JSON pipeline's own sanitization.
-                println!("{}", crate::output::sanitize_control_chars(&output));
-                return Ok(());
-            }
-            Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-            Err(e) => return Err(AppError::Internal(e)),
-        }
+        let report = init_commands::run_init(init_dir, *claude, *pi, profile.as_deref())
+            .map_err(AppError::Internal)?;
+        return emit_init_report(&report, cli.format, cli.jq.as_deref());
     }
     if let Commands::Deinit = &mut cli.command {
-        match init_commands::run_deinit() {
-            Ok(CommandOutcome::RawBytes(_)) => {
-                // init/deinit never produce RawBytes; handled for exhaustiveness.
-                unreachable!("init/deinit do not emit RawBytes")
-            }
-            Ok(CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output)) => {
-                // Sanitized because RawOutput content may echo raw file text (init/deinit
-                // summaries can include vault-derived strings) that never passes through
-                // the JSON pipeline's own sanitization.
-                println!("{}", crate::output::sanitize_control_chars(&output));
-                return Ok(());
-            }
-            Ok(CommandOutcome::UserError(output)) => return Err(AppError::User(output)),
-            Err(e) => return Err(AppError::Internal(e)),
-        }
+        let deinit_dir = cli.dir.as_deref().and_then(|p| p.to_str());
+        let report = init_commands::run_deinit(deinit_dir).map_err(AppError::Internal)?;
+        return emit_init_report(&report, cli.format, cli.jq.as_deref());
     }
     if let Commands::Completion { shell } = &mut cli.command {
         let mut cmd = Cli::command();
