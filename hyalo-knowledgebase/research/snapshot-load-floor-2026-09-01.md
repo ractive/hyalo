@@ -2,7 +2,7 @@
 title: "Where the snapshot-index load floor goes: 87 of 116 MiB is BM25 nobody reads"
 type: research
 date: 2026-09-01
-status: done
+status: completed
 tags: [research, performance, index, bm25, messagepack]
 related:
   - "[[iterations/iteration-259-index-snapshot-load-perf]]"

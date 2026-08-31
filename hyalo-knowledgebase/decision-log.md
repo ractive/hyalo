@@ -3835,3 +3835,66 @@ scan.
 **Rejected:** a `--search-bodies` / `--also-body` flag, and a config key for the
 probe budget. Both grow the CLI surface under dogfood pressure, which
 `feedback_no_cli_surface_growth` rules out; the hint text is the whole feature.
+
+## DEC-264: the snapshot floor is BM25 traversal, and it is worth fixing (2026-09-01)
+
+**Decision:** The ~0.37 s snapshot-load floor 256 flagged is **not** inherent.
+76 % of a 116 MiB `.hyalo-index` is the BM25 inverted index, and a `find` with
+no text query spends ~230 ms of its ~360 ms on that section without ever
+reading it. The fix — stop the MessagePack parse at the `bm25_index` key and
+decode it only on demand — is wire-compatible and measured at 240 ms → 61.5 ms
+for the decode. It is scoped to
+[[iterations/iteration-260-lazy-bm25-snapshot-load]] rather than landed in 259,
+because making it *safe* is a design problem, not a patch. Full numbers:
+[[research/snapshot-load-floor-2026-09-01]].
+
+**Why the floor is not I/O:** reading the whole 116 MiB is 19 ms warm
+(6.0 GiB/s) and 59 ms cold with `F_NOCACHE` (1.9 GiB/s) — 5–17 % of the
+command. Every "read fewer bytes / stream the read / mmap it" idea is aimed at
+the smallest term in the sum. mmap was already rejected on macOS in
+[[research/performance-parallelization]]; nothing here reopens that.
+
+**Why the floor is not the entries either:** the plan's stated suspects —
+allocation shape and post-decode reconstruction — do not survive measurement.
+All 14 375 `IndexEntry` values materialize from their own 19 MiB buffer in
+41 ms. The re-sort, `path_index` rebuild and `rebuild_lower_index` together
+cost 2 ms. DEC-259 already removed the one genuinely quadratic piece.
+
+**Why `IgnoredAny` is not the answer:** the obvious lazy-field trick — mark
+`bm25_index` as `IgnoredAny` — saves 35 ms of 240 ms. Decoding the whole
+document while materializing *nothing at all* still costs 179 ms. Three
+quarters of the decode is serde token-walking 87 MiB of `Posting` maps and
+`positions: Vec<u32>` arrays; skipping construction while still walking the
+bytes buys almost nothing. This is the finding that redirects the work: the
+target is traversal, not materialization.
+
+**Why early-stop rather than a format change:** `rmp_serde::to_vec_named`
+writes the snapshot as a map with string keys and emits `bm25_index` last, so a
+hand-written `Deserialize` that `break`s on that key skips all 87 MiB without
+reading them, and `from_slice` accepts the unconsumed tail. The bytes on disk
+do not change, every existing index stays readable, and the iteration's own
+non-goal against uncovered wire-format changes is respected. An opaque
+length-prefixed BM25 blob would be the more robust shape, but it breaks every
+index in the field to buy the same 180 ms — so it stays on the shelf unless
+early-stop proves unworkable.
+
+**Why 260 and not 259:** the load-side change is small; the blast radius is
+not. `write_snapshot` re-serializes `self.bm25_index`, so a snapshot loaded
+lazily and then saved by `set` / `remove` / `append` / `task toggle` / `mv` /
+`lint --fix --index` would silently drop the search index. SEC-3
+(`total_postings`) and MED-1 (`validate_doc_ids`) currently run before the
+index is exposed and reject the *whole* snapshot on failure — a contract that
+does not compose with a section that fails at first use mid-query. And
+early-stop is load-bearing on `bm25_index` being the last derive-emitted field,
+an invariant no test pins today. Those are three decisions and a regression
+test, which is an iteration, not a patch.
+
+**Also recorded:** teardown is a real 59 ms of every indexed command — 43 ms of
+it freeing the BM25 index's millions of small `Vec<u32>` allocations at process
+exit. It is invisible to any measurement that stops when the command prints,
+and it disappears for free alongside the decode saving.
+
+**Rejected:** recording the floor as inherent and closing 259 with a "not worth
+chasing" DEC. That was the plan's other permitted outcome and it would have
+been wrong — a 2.4× win on the most common indexed command, at zero format
+cost, is not noise.
