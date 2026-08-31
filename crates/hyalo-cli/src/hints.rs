@@ -33,6 +33,23 @@ const SITE_URL_MIN_BROKEN: u64 = 500;
 /// unresolved absolute site URLs, not fixable file references.
 const SITE_URL_BROKEN_PERCENT: u64 = 95;
 
+/// A zero-result `--property K~=REGEX` query whose regex nevertheless matches
+/// body prose somewhere in the vault (iteration 258).
+///
+/// The canonical case is `--property 'title~=/DEC-25/'` run against a decision
+/// log whose `DEC-NNN` identifiers are `##` body headings rather than
+/// frontmatter titles: the filter is correct, the empty answer is correct, and
+/// the thing the caller was actually after is one flag away. `find` sets this
+/// only after a bounded probe *confirmed* a body match, so the hint reports a
+/// fact rather than speculating.
+#[derive(Debug, Clone)]
+pub struct BodySearchSuggestion {
+    /// Property key whose regex filter matched nothing (`title`, …).
+    pub key: String,
+    /// Regex source to hand to `find -e`, exactly as the user wrote it.
+    pub pattern: String,
+}
+
 /// A single drill-down hint: a concrete command plus a short human-readable description.
 #[derive(Debug, Clone)]
 pub struct Hint {
@@ -213,6 +230,12 @@ pub struct HintContext {
     /// nothing (iter-251). Feeds the zero-result did-you-mean and the
     /// "values of `K` in this vault" hint; empty on every non-empty result.
     pub observed_property_values: std::collections::BTreeMap<String, Vec<String>>,
+    /// Set when a zero-result `find` carried a `--property K~=RE` filter whose
+    /// regex matches body text somewhere in the vault (iteration 258).
+    /// Confirmed by a bounded body probe on the zero-result path, never
+    /// guessed; `None` on every non-empty result and whenever the probe found
+    /// nothing within its budget.
+    pub body_search_suggestion: Option<BodySearchSuggestion>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -270,6 +293,7 @@ impl HintContext {
             lint_fix_rules: vec![],
             okf_profile_active: false,
             observed_property_values: std::collections::BTreeMap::new(),
+            body_search_suggestion: None,
         }
     }
 
