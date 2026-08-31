@@ -425,11 +425,13 @@ fn zero_result_body_search(
     let mut files_left = BODY_PROBE_MAX_FILES;
     let mut bytes_left = BODY_PROBE_MAX_BYTES;
     for entry in index.entries() {
-        if files_left == 0 || bytes_left == 0 {
+        // Both ceilings are checked *before* the read, so the budget is a real
+        // bound rather than one the last file is allowed to overrun.
+        if files_left == 0 || entry.size > bytes_left {
             return None;
         }
         files_left -= 1;
-        bytes_left = bytes_left.saturating_sub(entry.size);
+        bytes_left -= entry.size;
         let mut visitor = BodyProbeVisitor {
             re: &probe,
             hit: false,
