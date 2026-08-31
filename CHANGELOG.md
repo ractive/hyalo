@@ -174,6 +174,37 @@ and this project adheres to
 
 ### Fixed
 
+- **`hyalo init --dir <tree-outside-CWD>` wrote a config it then refused to
+  read.** The `.hyalo.toml` landed in the *current* directory with an
+  absolute `dir`, which a project-local config is not allowed to set
+  (iter-221 H-1, tightened in iter-243/244) — so the very next hyalo run
+  rejected the file `init` had just written. `--dir` now decides the project
+  root as well as the vault: a vault at or below CWD keeps `.hyalo.toml` here
+  and records `dir` relative to it, while a vault outside CWD makes that tree
+  its own root, written there with `dir = "."`. Containment is decided on
+  canonicalized paths, so an absolute spelling of a subdirectory, a
+  `sub/../kb` round-trip and macOS's `/tmp` → `/private/tmp` symlink all
+  resolve to "inside" — matching what the reader's own bounds check does
+  (DEC-261).
+- **`hyalo --dir <other-tree> deinit` deleted the *current* tree's
+  integration files.** `deinit` ignored `--dir` entirely and always targeted
+  CWD, so a probe aimed at a throwaway vault removed this repo's own
+  `.hyalo.toml`, `.claude/CLAUDE.md` and three `.claude` symlinks — under a
+  summary whose dozen interleaved `skipped … (not found)` lines read like a
+  no-op at a glance. `deinit` now follows the same root rule as `init` and
+  can no longer touch a tree the user did not name. Any run whose root is not
+  CWD leads its summary with a `target <path>` line (DEC-261).
+- **`init`/`deinit` ignored `--format json`.** Both printed their text
+  summary regardless, so an agent piping JSON got unparseable output. They
+  now answer an explicit `--format json` (or `--jq`, which implies it) with a
+  minimal envelope — `results.command`, `results.root`, `results.actions[]`
+  of `{action, target, detail?}`, plus a hoisted top-level `dir` for `init` —
+  and refuse `--format github` with the same message every other non-lint
+  command gives. They deliberately stay text when merely piped: the summary
+  is a setup progress report, not a result set, so `hyalo init | tee
+  setup.log` keeps working (DEC-262). Text and JSON are rendered from one
+  `Report` struct and cannot drift.
+
 - **Building the wikilink stem index was quadratic in vaults that reuse one
   basename.** `CaseInsensitiveIndex::insert` deduped by linear-scanning the
   *stem* bucket, so a docs tree naming every page `index.md` put its whole
