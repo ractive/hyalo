@@ -40,6 +40,7 @@ mod iteration245_followups;
 mod iteration249_followups;
 mod iteration254_shape;
 mod iteration255_followups;
+mod iteration257_init_scope;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

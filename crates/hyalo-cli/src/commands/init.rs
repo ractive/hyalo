@@ -95,8 +95,12 @@ const CANDIDATE_DIRS: &[&str] = &["docs", "knowledgebase", "wiki", "notes", "con
 // ---------------------------------------------------------------------------
 
 /// One filesystem action an `init`/`deinit` run took — or deliberately did not.
+///
+/// Named `Step` rather than `Action` only because a struct may not carry a
+/// field named after itself (`clippy::struct_field_names`); the serialized
+/// field stays `action`, and the list stays `actions`.
 #[derive(Debug, Clone, Serialize)]
-pub struct Action {
+pub struct Step {
     /// What happened: `created`, `updated`, `unchanged`, `removed`, `skipped`
     /// or `warning`.
     action: &'static str,
@@ -127,7 +131,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "Option::is_none")]
     dir: Option<String>,
     /// Every action, in the order the run performed them.
-    actions: Vec<Action>,
+    actions: Vec<Step>,
     /// Trailing advice that is not about one specific file (currently only the
     /// pi install hint).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -153,7 +157,7 @@ impl Report {
 
     /// Record an action whose verb says everything (`created  .hyalo.toml`).
     fn push(&mut self, action: &'static str, target: impl Into<String>) {
-        self.actions.push(Action {
+        self.actions.push(Step {
             action,
             target: target.into(),
             detail: None,
@@ -167,7 +171,7 @@ impl Report {
         target: impl Into<String>,
         detail: impl Into<String>,
     ) {
-        self.actions.push(Action {
+        self.actions.push(Step {
             action,
             target: target.into(),
             detail: Some(detail.into()),
@@ -820,11 +824,7 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
             let label = format!(".claude/skills/{skill_dir}/SKILL.md");
             remove_artifact(&profile_skill_path, &label, &mut report)?;
             if let Some(parent) = profile_skill_path.parent() {
-                remove_dir_if_empty(
-                    parent,
-                    &format!(".claude/skills/{skill_dir}/"),
-                    &mut report,
-                )?;
+                remove_dir_if_empty(parent, &format!(".claude/skills/{skill_dir}/"), &mut report)?;
             }
         }
     }
@@ -1772,7 +1772,9 @@ mod tests {
     #[test]
     fn run_init_okf_profile_merges_config() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path())
+            .unwrap()
+            .to_text();
         assert!(out.contains("merged 'okf' profile"), "summary: {out}");
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1791,7 +1793,9 @@ mod tests {
     #[test]
     fn run_init_okf_profile_claude_installs_skill() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let out = run_init_in(Some("."), true, false, Some("okf"), tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("."), true, false, Some("okf"), tmp.path())
+            .unwrap()
+            .to_text();
         assert!(
             out.contains("created  .claude/skills/okf/SKILL.md"),
             "{out}"
@@ -1832,7 +1836,9 @@ mod tests {
         run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap();
         // A second run makes no change → the summary should say "unchanged",
         // not "updated".
-        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("."), false, false, Some("okf"), tmp.path())
+            .unwrap()
+            .to_text();
         assert!(
             out.contains("unchanged  .hyalo.toml  ('okf' profile already applied)"),
             "re-run summary should report unchanged: {out}"
@@ -1867,13 +1873,17 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         // First run
-        let out1 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap().to_text();
+        let out1 = run_init_in(Some("docs"), true, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         assert!(out1.contains("created  .claude/skills/hyalo/SKILL.md"));
         assert!(out1.contains("created  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out1.contains("created  .claude/rules/knowledgebase.md"));
 
         // Second run — should say "updated", not "created"
-        let out2 = run_init_in(Some("docs"), true, false, None, tmp.path()).unwrap().to_text();
+        let out2 = run_init_in(Some("docs"), true, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         assert!(out2.contains("updated  .claude/skills/hyalo/SKILL.md"));
         assert!(out2.contains("updated  .claude/skills/hyalo-tidy/SKILL.md"));
         assert!(out2.contains("updated  .claude/rules/knowledgebase.md"));
@@ -1886,7 +1896,9 @@ mod tests {
         // Create initial .hyalo.toml
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let out = run_init_in(Some("newdir"), false, false, None, tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("newdir"), false, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         assert!(out.contains(".hyalo.toml"));
 
         let content = fs::read_to_string(tmp.path().join(".hyalo.toml")).unwrap();
@@ -1920,7 +1932,9 @@ mod tests {
 
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \"old\"\n").unwrap();
 
-        let out = run_init_in(None, false, false, None, tmp.path()).unwrap().to_text();
+        let out = run_init_in(None, false, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         assert!(out.contains("skipped  .hyalo.toml"));
 
         // Content unchanged
@@ -2017,7 +2031,9 @@ mod tests {
     #[test]
     fn run_init_creates_missing_dir_when_explicit() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let out = run_init_in(Some("my-new-docs"), false, false, None, tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("my-new-docs"), false, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         assert!(
             out.contains("created  my-new-docs/"),
             "summary mentions created dir"
@@ -2032,7 +2048,9 @@ mod tests {
     fn run_init_does_not_create_dir_when_auto_detected() {
         let tmp = tempfile::TempDir::new().unwrap();
         // No --dir flag, auto-detection falls back to "."
-        let out = run_init_in(None, false, false, None, tmp.path()).unwrap().to_text();
+        let out = run_init_in(None, false, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         // No directory creation line — only the .hyalo.toml line.
         // The dir creation line always ends with "/" so check for that form.
         assert!(
@@ -2047,7 +2065,9 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         fs::write(tmp.path().join(".hyalo.toml"), "\"just a string\"\n").unwrap();
 
-        let out = run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap().to_text();
+        let out = run_init_in(Some("docs"), false, false, None, tmp.path())
+            .unwrap()
+            .to_text();
         // Warning emitted.
         assert!(
             out.contains("warning  .hyalo.toml  (was malformed"),
@@ -2202,5 +2222,129 @@ mod tests {
             "managed section removed"
         );
         assert!(!remaining.contains(SECTION_END), "managed section removed");
+    }
+
+    // -----------------------------------------------------------------
+    // `--dir` scoping (iter-257, DEC-261)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn scope_without_dir_stays_in_cwd() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let scope = resolve_scope(None, tmp.path());
+        assert_eq!(scope.root, tmp.path());
+        assert!(!scope.external);
+    }
+
+    #[test]
+    fn scope_relative_dir_stays_in_cwd() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        for (arg, expected) in [
+            (".", "."),
+            ("docs", "docs"),
+            ("docs/", "docs"),
+            ("sub/../kb", "kb"),
+            ("./notes", "notes"),
+        ] {
+            let scope = resolve_scope(Some(arg), tmp.path());
+            assert_eq!(scope.dir_value, expected, "--dir {arg}");
+            assert_eq!(scope.root, tmp.path(), "--dir {arg}");
+            assert!(!scope.external, "--dir {arg}");
+        }
+    }
+
+    #[test]
+    fn scope_absolute_dir_under_cwd_is_relativized() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let docs = tmp.path().join("docs");
+        let scope = resolve_scope(Some(docs.to_str().unwrap()), tmp.path());
+        assert_eq!(scope.dir_value, "docs");
+        assert_eq!(scope.root, tmp.path());
+        assert!(!scope.external);
+    }
+
+    #[test]
+    fn scope_dir_outside_cwd_moves_the_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cwd = tmp.path().join("project");
+        let vault = tmp.path().join("vault");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&vault).unwrap();
+
+        for arg in [vault.to_str().unwrap(), "../vault"] {
+            let scope = resolve_scope(Some(arg), &cwd);
+            assert!(scope.external, "--dir {arg}");
+            assert_eq!(scope.dir_value, ".", "--dir {arg}");
+            assert_eq!(
+                real_path(&scope.root),
+                real_path(&vault),
+                "--dir {arg} roots at the named tree"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_lexically_collapses_dot_segments() {
+        assert_eq!(
+            normalize_lexically(Path::new("a/./b/../c")),
+            Path::new("a/c")
+        );
+        assert_eq!(normalize_lexically(Path::new("./")), Path::new("."));
+    }
+
+    #[test]
+    fn init_dir_outside_cwd_writes_into_that_tree() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cwd = tmp.path().join("project");
+        let vault = tmp.path().join("vault");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let out = run_init_in(Some(vault.to_str().unwrap()), false, false, None, &cwd)
+            .unwrap()
+            .to_text();
+        assert!(
+            !cwd.join(".hyalo.toml").exists(),
+            "CWD keeps no config: {out}"
+        );
+        let written = fs::read_to_string(vault.join(".hyalo.toml")).unwrap();
+        assert!(written.contains(r#"dir = ".""#), "config: {written}");
+        assert!(out.starts_with("target   "), "summary: {out}");
+    }
+
+    #[test]
+    fn deinit_dir_outside_cwd_does_not_touch_cwd() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cwd = tmp.path().join("project");
+        let other = tmp.path().join("other");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        run_init_in(Some("."), true, false, None, &cwd).unwrap();
+        run_init_in(Some("."), true, false, None, &other).unwrap();
+
+        let out = run_deinit_in(Some(other.to_str().unwrap()), &cwd)
+            .unwrap()
+            .to_text();
+        assert!(cwd.join(".hyalo.toml").exists(), "CWD untouched: {out}");
+        assert!(
+            cwd.join(".claude").join("CLAUDE.md").exists(),
+            "CWD untouched: {out}"
+        );
+        assert!(!other.join(".hyalo.toml").exists(), "target cleaned: {out}");
+    }
+
+    #[test]
+    fn report_json_carries_actions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let report = run_init_in(Some("docs"), false, false, None, tmp.path()).unwrap();
+        let json = report.to_json();
+        assert_eq!(json["command"], "init");
+        assert_eq!(json["dir"], "docs");
+        let actions = json["actions"].as_array().unwrap();
+        assert!(
+            actions
+                .iter()
+                .any(|a| a["action"] == "created" && a["target"] == ".hyalo.toml"),
+            "json: {json}"
+        );
     }
 }
