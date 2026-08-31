@@ -75,6 +75,16 @@ impl CaseInsensitiveIndex {
         Self::default()
     }
 
+    /// Create an empty index sized for `capacity` paths.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: HashMap::with_capacity(capacity),
+            stem_map: HashMap::with_capacity(capacity),
+            case_insensitive_paths: false,
+        }
+    }
+
     /// Enable or disable case-insensitive path lookups.
     /// Has no effect on stem lookups, which are always active.
     pub fn set_case_insensitive_paths(&mut self, enabled: bool) {
@@ -89,12 +99,24 @@ impl CaseInsensitiveIndex {
 
     /// Insert a real relative path (forward-slash form). Stores a lowercase key.
     /// Deduplicates: inserting the same path twice has no effect.
+    ///
+    /// Dedupe is decided against `map` alone, never against `stem_map`
+    /// (iter-256, FIND-8). The two are written together, so membership in one
+    /// implies membership in the other — but their bucket sizes are wildly
+    /// different. A `map` bucket holds only the case-variants of one path
+    /// (effectively one entry); a `stem_map` bucket holds every file sharing a
+    /// basename, and a docs tree that names every page `index.md` puts the
+    /// whole vault in a single bucket. Scanning that bucket per insert made
+    /// building the index quadratic: 14 399 MDN files cost 62 ms of pure
+    /// string comparison, which was the entire measured cost of
+    /// `find --fields links` on an indexed vault.
     pub fn insert(&mut self, rel_path: &str) {
         let key = rel_path.to_ascii_lowercase();
         let candidates = self.map.entry(key).or_default();
-        if !candidates.iter().any(|c| c == rel_path) {
-            candidates.push(rel_path.to_owned());
+        if candidates.iter().any(|c| c == rel_path) {
+            return;
         }
+        candidates.push(rel_path.to_owned());
 
         // Also index by filename stem for Obsidian-style bare wikilink resolution.
         let fname = rel_path.rsplit('/').next().unwrap_or(rel_path);
@@ -107,10 +129,10 @@ impl CaseInsensitiveIndex {
             fname
         };
         let stem_key = stem.to_ascii_lowercase();
-        let stem_candidates = self.stem_map.entry(stem_key).or_default();
-        if !stem_candidates.iter().any(|c| c == rel_path) {
-            stem_candidates.push(rel_path.to_owned());
-        }
+        self.stem_map
+            .entry(stem_key)
+            .or_default()
+            .push(rel_path.to_owned());
     }
 
     /// Look up a relative path (any casing). Returns the canonical real path
@@ -1029,5 +1051,57 @@ mod tests {
     fn sweep_on_missing_dir_is_a_noop() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(sweep_stale_case_probes(&tmp.path().join("nope")), 0);
+    }
+
+    // ---- iter-256 FIND-8: dedupe is decided against `map`, not `stem_map` ----
+
+    /// The quadratic scan removed in iter-256 was the *stem* dedupe. These are
+    /// the two properties that scan was there for; both must still hold now
+    /// that the `map` bucket decides duplicates for both maps.
+    #[test]
+    fn reinserting_the_same_path_is_still_a_no_op_in_both_maps() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for _ in 0..5 {
+            idx.insert("docs/guide/index.md");
+        }
+        assert_eq!(idx.lookup_all("DOCS/GUIDE/INDEX.MD"), ["docs/guide/index.md"]);
+        assert_eq!(idx.lookup_stem_all("index"), ["docs/guide/index.md"]);
+        assert_eq!(idx.lookup_stem("index"), Some("docs/guide/index.md"));
+    }
+
+    /// A docs tree that names every page `index.md` puts the whole vault in one
+    /// stem bucket — the shape (MDN, 14 399 files) that made the old dedupe
+    /// quadratic. Every distinct path must still be recorded, and the stem must
+    /// still report itself ambiguous.
+    #[test]
+    fn many_paths_sharing_one_stem_are_all_recorded_and_stay_ambiguous() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        let paths: Vec<String> = (0..500).map(|i| format!("files/p{i}/index.md")).collect();
+        for p in &paths {
+            idx.insert(p);
+            // Re-inserting mid-stream must not add a second copy.
+            idx.insert(p);
+        }
+        assert_eq!(idx.lookup_stem_all("index").len(), paths.len());
+        assert_eq!(idx.lookup_stem("index"), None, "500 candidates is ambiguous");
+        assert_eq!(idx.lookup_unique("FILES/P42/INDEX.MD"), Some("files/p42/index.md"));
+    }
+
+    /// Two paths differing only in case share a `map` bucket but are distinct
+    /// entries — the case the `map`-side dedupe must not collapse.
+    #[test]
+    fn case_variants_of_one_path_stay_separate_candidates() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.insert("Notes/Foo.md");
+        idx.insert("Notes/foo.md");
+        idx.insert("Notes/Foo.md");
+        let mut all = idx.lookup_all("notes/foo.md").to_vec();
+        all.sort();
+        assert_eq!(all, ["Notes/Foo.md", "Notes/foo.md"]);
+        assert_eq!(idx.lookup_unique("notes/foo.md"), None, "ambiguous by case");
+        assert_eq!(idx.lookup_stem_all("Foo").len(), 2);
     }
 }
