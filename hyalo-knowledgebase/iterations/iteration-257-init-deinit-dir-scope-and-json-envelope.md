@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 257 — init/deinit --dir scoping and JSON envelope gap"
 date: 2026-08-31
-status: in-progress
+status: completed
 tags:
   - iteration
   - dogfood-fixes
