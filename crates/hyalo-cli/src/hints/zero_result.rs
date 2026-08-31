@@ -12,6 +12,15 @@
 //! 3. *Which filter killed the query?* — the same query with its most
 //!    selective filter dropped, ready to paste.
 //!
+//! Iteration 258 added a fourth, ahead of the others because it is the only
+//! one backed by a confirmed match: *was the text I searched for in the body
+//! rather than the frontmatter?* — fired when a `--property K~=RE` filter
+//! matched no property value but the same regex matches body prose, as
+//! `--property 'title~=/DEC-25/'` does against a decision log whose `DEC-NNN`
+//! ids are `##` headings. See
+//! [`crate::commands::find::run`]'s `zero_result_body_search` for the probe
+//! and its budget.
+//!
 //! The observed values come from the `find` scan itself
 //! ([`crate::dispatch::CommandContext::zero_result_values`]): the index was
 //! already walked to evaluate the filter, so collecting the distinct values of
@@ -227,6 +236,22 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
     let observed: &BTreeMap<String, Vec<String>> = &ctx.observed_property_values;
     let mut hints: Vec<Hint> = Vec::new();
     let filters = active_filters(ctx);
+
+    // 0. The property regex matched no frontmatter value, but the same regex
+    //    does match body prose — which is almost always what the caller meant.
+    //    Leads the list because it is the only zero-result hint backed by a
+    //    confirmed match rather than a heuristic (iter-258).
+    if let Some(suggestion) = &ctx.body_search_suggestion {
+        hints.push(Hint::new(
+            format!(
+                "No `{}` matches that regex, but body text does — search bodies instead",
+                suggestion.key
+            ),
+            HintBuilder::cmd("find")
+                .flag_value("-e", &suggestion.pattern)
+                .finish(ctx),
+        ));
+    }
 
     // 1. Did-you-mean over the observed values of each filtered key.
     for (key, value) in equality_property_filters(ctx) {
