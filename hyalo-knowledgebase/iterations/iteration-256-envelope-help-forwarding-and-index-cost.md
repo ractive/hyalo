@@ -162,8 +162,13 @@ member writes `.hyalo.toml`; `create-index`/`drop-index` write an index and
   that silently replaced this repo's own 199-line `.hyalo.toml` with a
   one-line broken file. `init` should either write the path relative to the
   config's own directory or refuse to write a config it will not accept.
-  Related: `deinit` also operates on CWD while `--dir` points elsewhere, so
-  the pair is easy to fire at the wrong tree.
+  Worse, `deinit` **also** operates on CWD while `--dir` points elsewhere: a
+  single `hyalo --dir <temp-vault> deinit` from this repo deleted its
+  `.hyalo.toml`, its `.claude/CLAUDE.md`, and the three `.claude` symlinks
+  into `crates/hyalo-cli/templates/`. Nothing warned, and the summary listed
+  the removals interleaved with a dozen `skipped … (not found)` lines, which
+  reads like a no-op at a glance. `init`/`deinit` should either honour `--dir`
+  for their target or refuse when `--dir` names a tree other than CWD.
 - `hyalo find --property 'title~=/DEC-25/'` returns 0 results against a
   decision log whose DEC headings are `##` body headings, not titles — correct
   behaviour, but the natural query for "which DEC numbers are taken" is
