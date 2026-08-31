@@ -97,6 +97,43 @@ commands should be held to.
 | **J-8** | `properties` and `tags` summaries are bare arrays | Already consistent with each other; `properties` adds `type` because a property has one and a tag does not. |
 | **J-9** | `LintOutput` (`files_with_issues`, `limited`) vs `ExtLintOutput` (`files_with_violations`, `files_truncated`) | **Resolved in [[iterations/iteration-234-lint-dead-output-cleanup]]**: the unreachable `LintOutput` shape and `lint_files_with_options` were deleted, so only `ExtLintOutput` remains. Original note: `LintOutput` was no longer reachable from any production path — `lint_files_with_options` was called only from unit tests. Renaming a dead shape is churn; the live drift it caused is D-5. Flagged here so a future cleanup iteration could delete it rather than re-survey it. |
 
+## Amendment — iteration 256 (COH-9)
+
+The iter-216 survey covered the *mutation family* (`set`/`remove`/`append`,
+the renames, `mv` single, `links fix`/`auto`, `lint --fix`) and derived R1–R4
+from it. What it did not cover is the rest of the write surface, and the
+sentence the survey's rules were compressed into — "every mutating command
+reports `dry_run` and `skipped_count`" — was written as if it had. A
+re-enumeration against v0.22.0, running each command with `--format json` and
+recording its top-level `results` keys, found 18 of 23 mutating commands
+outside the claim.
+
+The gap by shape, not by command:
+
+| shape | commands | before iter-256 |
+| --- | --- | --- |
+| bulk mutation | `set`, `remove`, `append`, `properties rename`, `tags rename` | `dry_run` + `skipped_count` — compliant |
+| single-target object | `mv` (single) | `dry_run`, no `skipped_count` |
+| batch object | `mv --glob` | `applied`, no `dry_run` |
+| bulk-report object | `links fix`, `links auto`, `lint --fix` | `dry_run`, no `skipped_count` |
+| config writer | `types set`, `lint-rules set/remove` | `dry_run`; `types remove` had neither |
+| generator | `madr toc`, `okf index/log`, `changelog add/release` | `apply` (the inverse), no `dry_run` |
+| scaffold | `new` | neither |
+| array payload | `task toggle`, `task set` | no top-level object at all |
+| outside the contract | `init`, `deinit`, `create-index`, `drop-index` | text-only or index-only |
+
+Resolved by [[decision-log#DEC-257]]: `dry_run` made universal on every
+object-shaped result (`apply`/`applied` retained as its exact inverse),
+`skipped_count` scoped to the bulk family in the contract text, `task
+toggle`/`task set` named as the array exception. R2/R3/R4 stand; the sentence
+that overstated them does not.
+
+**New rule R5 — a claim in the contract text is a testable claim.** D-4's fix
+was applied to the commands the survey happened to list, and the summary
+sentence generalised it. `results_shape.rs` now walks both families rather
+than a hand-picked subset, so the enumeration and the sentence cannot drift
+apart again without a test failing.
+
 ## Not attempted
 
 A general schema/versioning mechanism for the envelope was out of scope by
