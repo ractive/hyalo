@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 258 — zero-result title~= hint toward body search"
 date: 2026-08-31
-status: planned
+status: in-progress
 tags:
   - iteration
   - dogfood-fixes
@@ -34,7 +34,7 @@ doesn't fit cleanly, close as won't-fix rather than growing a special case.
 
 ### HINT-1: zero-result `--property 'title~=...'` hint [0/1]
 
-- [ ] Read how the existing zero-result hint logic works (did-you-mean over
+- [x] Read how the existing zero-result hint logic works (did-you-mean over
       property values, filter-dropping suggestion) and decide whether a
       `title~=` query that matches nothing can cheaply also check whether
       the same regex matches body text anywhere in the vault, and if so,
@@ -47,10 +47,10 @@ doesn't fit cleanly, close as won't-fix rather than growing a special case.
 
 ## Acceptance criteria
 
-- [ ] HINT-1 is either implemented (with a test covering the new hint
+- [x] HINT-1 is either implemented (with a test covering the new hint
       trigger and its absence when body search also finds nothing) or
       explicitly closed as won't-fix with a DEC recorded.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, all `xtask check-*`, `hyalo lint --strict`.
 
 ## Non-goals

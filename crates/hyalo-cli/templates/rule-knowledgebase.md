@@ -8,7 +8,10 @@ Prefer `hyalo` CLI for operations on files in this directory:
   full syntax reference (operators, sort keys, `--fields` values, output shapes, cookbook).
 - **Empty result sets are self-documenting**: a `find` that matches nothing echoes the filters it
   applied and hints at the next step (did-you-mean over the values the property really has, and the
-  same query with its most selective filter dropped).
+  same query with its most selective filter dropped). When the empty query filtered on a property
+  regex (`--property 'title~=/DEC-25/'`) whose pattern *does* occur in body prose, the hints lead
+  with the equivalent body search (`hyalo find -e 'DEC-25'`) — read them before re-guessing the
+  filter, because identifiers that live in `##` headings are never frontmatter titles.
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"`
 - **Title regex**: `hyalo find --property 'title~=link'`
