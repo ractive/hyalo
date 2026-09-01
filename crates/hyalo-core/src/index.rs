@@ -3269,6 +3269,85 @@ Content.
         assert_eq!(bm25.doc_count(), original.doc_count());
     }
 
+    /// `bytes_after_key` is the one piece of pointer arithmetic the early stop
+    /// rests on: it turns "the reader borrowed this key out of the buffer" into
+    /// "the value starts here". Getting it wrong slices the buffer at a bogus
+    /// offset, so the in-bounds answer and every out-of-bounds refusal are
+    /// pinned directly rather than only through the decode path.
+    #[test]
+    fn bytes_after_key_locates_the_value_or_refuses() {
+        let whole = b"\x00\x01header\x02\x03".as_slice();
+
+        // A key that really is a slice of `whole`: the tail starts right after
+        // it, and the returned slice is the same allocation, not a copy.
+        let key = std::str::from_utf8(&whole[2..8]).expect("ascii");
+        assert_eq!(key, "header");
+        let tail = bytes_after_key(whole, key).expect("an interior key resolves");
+        assert_eq!(tail, b"\x02\x03");
+        assert!(std::ptr::eq(tail.as_ptr(), whole[8..].as_ptr()));
+
+        // A key ending exactly at the end of the buffer yields an empty tail
+        // rather than being refused for straddling the boundary.
+        let last = std::str::from_utf8(&whole[8..]).expect("control bytes are valid utf-8");
+        assert_eq!(
+            bytes_after_key(whole, last).expect("a trailing key resolves"),
+            b"",
+            "a key ending at the buffer's end has an empty tail, not no tail"
+        );
+
+        // A key the reader did NOT borrow out of `whole` — the case that forces
+        // the eager fallback — must be refused, not turned into a wild offset.
+        // Taken from the middle of a longer independent buffer, so the refusal
+        // is decided by the bounds check and not by a length coincidence.
+        let elsewhere = String::from("xxxheaderxxx");
+        let owned_key = &elsewhere[3..9];
+        assert_eq!(owned_key, "header");
+        assert!(
+            bytes_after_key(whole, owned_key).is_none(),
+            "a key outside the buffer must not resolve to an offset"
+        );
+
+        // A key that starts inside the buffer but runs past its end is refused
+        // too — the check covers the key's whole extent, not just its start.
+        let short = &whole[..7];
+        assert!(
+            bytes_after_key(short, key).is_none(),
+            "a key overrunning the buffer end must be refused"
+        );
+    }
+
+    /// A deferred section whose bytes do not decode must be refused the same way
+    /// a section failing `validate_bm25` is: reported absent, so the caller live
+    /// scans. The snapshot around it is still perfectly good and must survive —
+    /// this is the mid-query failure that made "reject the whole snapshot"
+    /// untenable in the first place.
+    #[test]
+    fn deferred_bm25_section_with_corrupt_bytes_is_refused() {
+        let mut bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&sample_bm25()));
+        // Corrupt the tail — the `bm25_index` value is the last thing in the
+        // envelope, so trailing garbage lands inside it and nowhere else.
+        let len = bytes.len();
+        for b in &mut bytes[len - 16..] {
+            *b = 0xC1; // never-valid MessagePack byte
+        }
+
+        let index = SnapshotIndex::load_inner(bytes, false)
+            .expect("header/entries/graph decode fine; only the BM25 tail is junk");
+        assert_eq!(
+            index.entries().len(),
+            1,
+            "a corrupt BM25 section must not cost the entries"
+        );
+        assert!(
+            index.bm25_index().is_none(),
+            "an undecodable BM25 section must be refused, not panic or be handed out"
+        );
+        assert!(
+            index.bm25_index().is_none(),
+            "the refusal must be cached, not retried on every query"
+        );
+    }
+
     #[test]
     fn is_pid_alive_zero_returns_false() {
         assert!(
