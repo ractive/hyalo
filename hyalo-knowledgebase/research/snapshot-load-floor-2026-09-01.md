@@ -193,3 +193,42 @@ pursue it rather than record the floor as inherent is [[decision-log#DEC-264]].
 - **The post-decode reconstruction the plan suspected** — re-sort,
   `path_index`, `rebuild_lower_index` — is 2 ms combined. 256's DEC-259 already
   removed the one genuinely quadratic piece (`CaseInsensitiveIndex::insert`).
+
+## Outcome (2026-09-01, [[iterations/iteration-260-lazy-bm25-snapshot-load]])
+
+Landed. Same vault, same 121 614 239-byte index, release build, median of 7
+runs, warm cache — `before` is `origin/main` at the merge of 259, `after` is
+the branch:
+
+| command | before | after | |
+|---|---:|---:|---|
+| `find --limit 1 --index` (no text query) | 396.2 ms | **151.3 ms** | **2.6x** |
+| `find promise --limit 10 --index` (BM25 path) | 398.8 ms | 402.1 ms | +0.8 %, noise |
+
+The projection above said ~360 ms → ~150 ms and a ~2.4x. The after-number
+landed on 151.3 ms, within 1 ms of the projection; the before-number measured
+396 ms rather than 360 ms on this run, which makes the realised ratio 2.6x. The
+whole saving is the one the breakdown predicted: ~180 ms of decode traversal,
+~6–12 ms of skipped BM25 validation, ~43 ms of skipped teardown.
+
+**The text path pays nothing measurable.** This was the open question — a
+deferred section that is then decoded does strictly more work than one decoded
+inline (an extra `OnceLock` check, a `Mutex::take`, and a second pass over the
+same buffer bytes). At 399 → 402 ms the difference is inside the run-to-run
+spread of either binary. Mutating commands (`set`, `remove`, `append`, `task
+toggle`, `mv`, `lint --fix --index`) take the same forced-decode path via
+`save_to`, so they are covered by the same number.
+
+**Format compatibility, verified both directions.** An index written by
+`origin/main` and read by the branch, and one written by the branch and read by
+`origin/main`, return identical files with identical BM25 scores. The two files
+also differ byte-for-byte — but so do two indexes built back to back by the
+*same* binary (269 differing bytes of 914, from `created_at`/`pid` in the header
+and `HashMap` iteration order in the graph). That nondeterminism predates this
+work and is unrelated to it; the schema and key order are unchanged, which is
+what the compatibility claim rests on.
+
+The design decisions that made this safe — retaining the snapshot buffer rather
+than re-reading the file, forcing the decode on save rather than splicing raw
+bytes, and demoting SEC-3/MED-1 from "reject the snapshot" to "refuse the
+section" — are [[decision-log#DEC-265]].

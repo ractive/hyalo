@@ -11,6 +11,21 @@ and this project adheres to
 
 ### Changed
 
+- **Loading a `.hyalo-index` snapshot no longer decodes the BM25 inverted
+  index.** On a MDN-scale vault (14 375 entries, 116 MiB index) the BM25
+  section is 76 % of the file, and a `find` with no text query spent ~230 ms of
+  its ~400 ms walking postings it never read. The snapshot envelope is now
+  visited by hand and the parse stops at the `bm25_index` key, leaving the
+  section undecoded until something actually searches text. Measured on that
+  vault, release build, median of 7 runs: `find --limit 1 --index` **396 ms →
+  151 ms (2.6x)**; a text `find <query> --index`, which does decode the
+  section, is 399 ms → 402 ms — inside run-to-run noise. The on-disk format is
+  unchanged: indexes written before this release load unchanged, and indexes
+  written after it are read by the previous release, verified both directions.
+  Mutating commands (`set`, `remove`, `append`, `task toggle`, `mv`,
+  `lint --fix --index`) force the section before re-saving, so none of them can
+  drop the search index from a snapshot they only meant to patch.
+
 - **`hyalo help <cmd>` now prints the short `-h` page, not the long `--help`
   one.** `hyalo help find` was 28 701 bytes where `hyalo find -h` is 2 992 —
   a 9.6x tax on the phrasing agents reach for first. The two are now

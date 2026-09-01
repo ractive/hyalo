@@ -3898,3 +3898,62 @@ and it disappears for free alongside the decode saving.
 chasing" DEC. That was the plan's other permitted outcome and it would have
 been wrong — a 2.4× win on the most common indexed command, at zero format
 cost, is not noise.
+
+## DEC-265: the deferred BM25 section keeps the snapshot bytes, and refuses at use (2026-09-01)
+
+**Decision:** [[iterations/iteration-260-lazy-bm25-snapshot-load]] implements
+DEC-264's early stop with three sub-decisions, recorded here because each had a
+viable alternative the plan left open.
+
+**1. Deferred, not `load_with(bm25: bool)`.** The plan offered a call-site
+decision — every load site declares whether it will search text — or a lazy
+re-read keyed off the index path. Both were rejected in favour of a third
+shape: `SnapshotIndex` keeps the snapshot buffer it already read, plus the
+offset of the `bm25_index` value, and decodes on first `bm25_index()` behind a
+`OnceLock`. A `load_with` flag is the fastest possible answer but it is a new
+correctness obligation at ~20 call sites, silently wrong when someone adds a
+text path to a command that loads with `false`, and it leaks a storage detail
+into every caller. The lazy re-read is worse still: it needs the index path
+threaded through `SnapshotIndex`, and it re-opens a file that may have been
+replaced since the load — a mutating command in another process rewrites it
+atomically — so the section could disagree with the entries it was loaded
+beside. Keeping the buffer costs the file's size in RSS until first use, which
+is *less* than the decoded structure it stands in for, and the buffer is taken
+and dropped by the decode, so a text query's steady state is unchanged.
+Measured: the non-text path goes 396 ms → 151 ms and the text path 399 ms →
+402 ms, i.e. deferring costs the text query nothing measurable.
+
+**2. The save hazard is closed by forcing, not by carrying raw bytes.**
+`save_to` calls `self.bm25.get()`, so a mutating command that never searched
+text still decodes the section before re-serializing it. Splicing the raw
+undecoded bytes into the new envelope would be faster and was the plan's other
+option, but it means hand-assembling MessagePack around a `rmp_serde`-produced
+document and keeping that splice correct against every future envelope change —
+real risk of writing a subtly malformed index, for a saving on commands that
+are already doing file I/O and a full re-scan. Mutating commands therefore pay
+exactly what they paid before this change; nothing regresses, and the section
+can never be silently dropped. Pinned by
+`save_to_preserves_an_untouched_deferred_bm25_section` and by the e2e
+`bm25_section_survives_a_mutating_command`.
+
+**3. SEC-3 / MED-1 refuse the section, not the snapshot.** They used to run
+before the index was exposed, and `load_inner` rejected the *whole* snapshot on
+failure, falling back to a disk scan. A deferred section fails at first use,
+mid-query, where that fallback no longer composes — the entries are already in
+hand and the caller is inside `find`. The new contract: a section that fails
+`validate_bm25` is dropped and the index reports "no BM25 section", which is a
+state every caller already handles by live scanning. The crafted postings still
+never reach `score()`, which is what SEC-3 and MED-1 exist to guarantee; only
+the blast radius shrinks from "reject everything" to "reject the bad section".
+The `load_inner_rejects_bm25_*` tests were adapted to the new control flow, not
+weakened — they still assert the refusal, and additionally that it stays
+refused on a second access rather than being retried.
+
+**Also pinned:** `bm25_index_is_the_last_envelope_key` fails loudly if a future
+field reorder moves the key, and the visitor itself degrades safely — it only
+takes the early stop once `header`, `entries` and `graph` are all in hand, and
+otherwise decodes the value in place (`envelope_with_bm25_not_last_falls_back_to_eager_decode`).
+Slower, never wrong.
+
+**Rejected:** the opaque length-prefixed BM25 blob, again — DEC-264 parked it
+and early-stop worked, so it stays parked.
