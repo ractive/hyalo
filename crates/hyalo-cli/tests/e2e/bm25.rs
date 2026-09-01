@@ -1021,3 +1021,92 @@ fn stemmer_iso_639_1_de_accepted() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// 30. iter-260 — mutating commands must not drop the persisted BM25 section
+// ---------------------------------------------------------------------------
+
+/// Snapshot loading defers the BM25 section (iter-260), so a mutating command
+/// that re-saves the snapshot re-serializes a field it never asked for. If the
+/// deferred section were not forced before the write, `set`, `remove`,
+/// `append`, `task toggle`, `mv` and `lint --fix --index` would each silently
+/// delete the search index they were only meant to patch — leaving `find
+/// --index` quietly falling back to a live scan for the rest of the vault's
+/// life.
+#[test]
+fn bm25_section_survives_a_mutating_command() {
+    use hyalo_core::index::SnapshotIndex;
+
+    let tmp = setup_bm25_vault();
+    let index_path = tmp.path().join(".hyalo-index");
+
+    let index_output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "create-index failed: {}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let before = SnapshotIndex::load(&index_path)
+        .unwrap()
+        .expect("freshly built index loads");
+    let docs_before = before
+        .bm25_index()
+        .expect("create-index must persist a BM25 section")
+        .doc_count();
+    drop(before);
+
+    // A mutating command that touches one file and re-saves the snapshot.
+    let set_output = hyalo_no_hints()
+        .args([
+            "--dir",
+            tmp.path().to_str().unwrap(),
+            "set",
+            "rust_deep.md",
+            "--property",
+            "reviewed=true",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        set_output.status.success(),
+        "set failed: {}",
+        String::from_utf8_lossy(&set_output.stderr)
+    );
+
+    // The rewritten snapshot still carries a BM25 section.
+    let after = SnapshotIndex::load(&index_path)
+        .unwrap()
+        .expect("rewritten index loads");
+    let docs_after = after
+        .bm25_index()
+        .expect("a mutating command must not drop the BM25 section")
+        .doc_count();
+    assert_eq!(
+        docs_after, docs_before,
+        "the rewritten BM25 section must still cover every document"
+    );
+    drop(after);
+
+    // And a text query through the rewritten snapshot is still BM25-ranked.
+    let (status, json, stderr) = find_json(&tmp, &["rust", "--index"]);
+    assert!(status.success(), "stderr: {stderr}");
+    let arr = unwrap_results(&json);
+    assert!(
+        arr.len() >= 2,
+        "expected BM25 results from the rewritten index: {arr:?}"
+    );
+    assert_eq!(
+        arr[0]["file"].as_str().unwrap(),
+        "rust_deep.md",
+        "rust_deep.md should still rank first after a mutation: {arr:?}"
+    );
+    assert!(
+        arr[0]["score"].as_f64().is_some_and(|s| s > 0.0),
+        "results must still carry a positive BM25 score: {arr:?}"
+    );
+}
