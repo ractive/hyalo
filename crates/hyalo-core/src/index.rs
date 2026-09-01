@@ -664,6 +664,15 @@ impl Bm25Section {
     fn is_present(&self) -> bool {
         !matches!(self, Self::Absent)
     }
+
+    /// Whether the section is still undecoded — the state the whole iteration
+    /// exists to reach. Tests assert it so a regression that quietly re-enables
+    /// the eager path (a field reorder, a reader that stops borrowing) shows up
+    /// as a failure rather than as 180 ms nobody notices.
+    #[cfg(test)]
+    fn is_deferred(&self) -> bool {
+        matches!(self, Self::Deferred { decoded, .. } if decoded.get().is_none())
+    }
 }
 
 /// A vault index loaded from a MessagePack snapshot file.
@@ -1373,6 +1382,12 @@ impl SnapshotIndex {
     /// Return the persisted BM25 inverted index, if present.
     pub fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
         self.bm25.get()
+    }
+
+    /// Whether the BM25 section is still undecoded (test-only perf invariant).
+    #[cfg(test)]
+    fn bm25_is_deferred(&self) -> bool {
+        self.bm25.is_deferred()
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -2873,40 +2888,51 @@ Content.
     // Security tests
     // -------------------------------------------------------------------------
 
-    fn make_snapshot_bytes(rel_path: &str) -> Vec<u8> {
-        let data = SnapshotData {
+    fn test_entry(rel_path: &str) -> IndexEntry {
+        IndexEntry {
+            rel_path: rel_path.to_owned(),
+            modified: "2024-01-01T00:00:00Z".to_owned(),
+            size: 0,
+            lines: 0,
+            properties: IndexMap::default(),
+            tags: vec![],
+            sections: vec![],
+            tasks: vec![],
+            links: vec![],
+            self_anchors: Vec::new(),
+            bm25_tokens: None,
+            bm25_language: None,
+            bm25_tokenizer_version: None,
+        }
+    }
+
+    /// Serialize a snapshot envelope exactly as `write_snapshot` does, so
+    /// crafted-input tests exercise the real wire format (field order included).
+    fn snapshot_bytes(entries: &[IndexEntry], bm25: Option<&Bm25InvertedIndex>) -> Vec<u8> {
+        let graph = LinkGraph::default();
+        let data = SnapshotDataRef {
             header: SnapshotHeader {
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,
                 pid: std::process::id(),
             },
-            entries: vec![IndexEntry {
-                rel_path: rel_path.to_owned(),
-                modified: "2024-01-01T00:00:00Z".to_owned(),
-                size: 0,
-                lines: 0,
-                properties: IndexMap::default(),
-                tags: vec![],
-                sections: vec![],
-                tasks: vec![],
-                links: vec![],
-                self_anchors: Vec::new(),
-                bm25_tokens: None,
-                bm25_language: None,
-                bm25_tokenizer_version: None,
-            }],
-            graph: LinkGraph::default(),
-            bm25_index: None,
+            entries,
+            graph: &graph,
+            bm25_index: bm25,
         };
-        rmp_serde::to_vec_named(&data).unwrap()
+        rmp_serde::to_vec_named(&data).expect("snapshot envelope serializes")
+    }
+
+    fn make_snapshot_bytes(rel_path: &str) -> Vec<u8> {
+        snapshot_bytes(&[test_entry(rel_path)], None)
     }
 
     #[test]
     fn load_inner_rejects_parent_traversal() {
         let bytes = make_snapshot_bytes("../../escape.md");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            SnapshotIndex::load_inner(bytes, false).is_none(),
             "snapshot with '..' path components must be rejected"
         );
     }
@@ -2917,7 +2943,7 @@ Content.
         // but is_absolute() returns false, so the component check must catch it)
         let bytes = make_snapshot_bytes("/etc/passwd");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            SnapshotIndex::load_inner(bytes, false).is_none(),
             "snapshot with absolute rel_path must be rejected"
         );
 
@@ -2927,7 +2953,7 @@ Content.
         {
             let bytes = make_snapshot_bytes("C:\\Windows\\System32\\config\\sam");
             assert!(
-                SnapshotIndex::load_inner(&bytes, false).is_none(),
+                SnapshotIndex::load_inner(bytes, false).is_none(),
                 "snapshot with Windows absolute rel_path must be rejected"
             );
         }
@@ -2946,7 +2972,7 @@ Content.
         // `load_inner_rejects_absolute_path`.
         let bytes = make_snapshot_bytes("C:notes.md");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            SnapshotIndex::load_inner(bytes, false).is_none(),
             "snapshot with a drive-relative rel_path must be rejected"
         );
     }
@@ -2958,7 +2984,7 @@ Content.
         // component) but resolves to an ADS on `notes.md`, not the file.
         let bytes = make_snapshot_bytes("notes.md:hidden-stream");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            SnapshotIndex::load_inner(bytes, false).is_none(),
             "snapshot with an NTFS-ADS rel_path must be rejected"
         );
     }
@@ -2967,14 +2993,36 @@ Content.
     fn load_inner_rejects_null_byte() {
         let bytes = make_snapshot_bytes("foo\0bar.md");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
+            SnapshotIndex::load_inner(bytes, false).is_none(),
             "snapshot with null-byte path must be rejected"
+        );
+    }
+
+    /// SEC-3 / MED-1 under lazy decoding (iter-260).
+    ///
+    /// A crafted BM25 section is still refused — it just cannot reject the whole
+    /// snapshot any more, because the decode happens mid-query. The observable
+    /// contract is that the poisoned postings never reach `score()`:
+    /// `bm25_index()` reports the section as absent, which is exactly the state
+    /// callers already handle by live scanning.
+    fn assert_bm25_section_refused(bm25: Bm25InvertedIndex, what: &str) {
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&bm25));
+        let index = SnapshotIndex::load_inner(bytes, false)
+            .unwrap_or_else(|| panic!("{what}: the snapshot itself is well-formed and must load"));
+        assert!(
+            index.bm25_index().is_none(),
+            "{what}: the BM25 section must be refused, never handed to score()"
+        );
+        // Second call goes through the cached `OnceLock` — still refused.
+        assert!(
+            index.bm25_index().is_none(),
+            "{what}: a refused BM25 section must stay refused"
         );
     }
 
     #[test]
     fn load_inner_rejects_bm25_out_of_bounds_doc_id() {
-        use crate::bm25::{Bm25InvertedIndex, Posting};
+        use crate::bm25::Posting;
         use std::collections::HashMap;
 
         // Build a BM25 index where the posting list references doc_id 999
@@ -2995,42 +3043,12 @@ Content.
             5.0,
         );
 
-        let data = SnapshotData {
-            header: SnapshotHeader {
-                vault_dir: "/tmp/vault".to_owned(),
-                site_prefix: None,
-                created_at: 0,
-                pid: std::process::id(),
-            },
-            entries: vec![IndexEntry {
-                rel_path: "doc.md".to_owned(),
-                modified: "2024-01-01T00:00:00Z".to_owned(),
-                size: 0,
-                lines: 0,
-                properties: IndexMap::default(),
-                tags: vec![],
-                sections: vec![],
-                tasks: vec![],
-                links: vec![],
-                self_anchors: Vec::new(),
-                bm25_tokens: None,
-                bm25_language: None,
-                bm25_tokenizer_version: None,
-            }],
-            graph: LinkGraph::default(),
-            bm25_index: Some(bad_bm25),
-        };
-        let bytes = rmp_serde::to_vec_named(&data).unwrap();
-
-        assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
-            "snapshot with out-of-bounds BM25 doc_id must be rejected (MED-1)"
-        );
+        assert_bm25_section_refused(bad_bm25, "out-of-bounds BM25 doc_id (MED-1)");
     }
 
     #[test]
     fn load_inner_rejects_bm25_mismatched_doc_lengths() {
-        use crate::bm25::{Bm25InvertedIndex, Posting};
+        use crate::bm25::Posting;
         use std::collections::HashMap;
 
         // doc_lengths.len() != doc_paths.len() — structurally invalid
@@ -3050,37 +3068,203 @@ Content.
             7.5,
         );
 
-        let data = SnapshotData {
+        assert_bm25_section_refused(bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
+    }
+
+    // -------------------------------------------------------------------------
+    // Lazy BM25 section (iter-260)
+    // -------------------------------------------------------------------------
+
+    fn sample_bm25() -> Bm25InvertedIndex {
+        use crate::bm25::Posting;
+        use std::collections::HashMap;
+
+        let mut postings: HashMap<String, Vec<Posting>> = HashMap::new();
+        postings.insert(
+            "rust".to_owned(),
+            vec![Posting {
+                doc_id: 0,
+                term_freq: 2,
+                positions: vec![0, 4],
+            }],
+        );
+        postings.insert(
+            "index".to_owned(),
+            vec![Posting {
+                doc_id: 0,
+                term_freq: 1,
+                positions: vec![2],
+            }],
+        );
+        Bm25InvertedIndex::new_for_test(postings, vec![5], vec!["doc.md".to_owned()], 5.0)
+    }
+
+    /// The whole lazy-load scheme rests on `bm25_index` being the LAST key
+    /// `rmp_serde::to_vec_named` emits for the envelope: the visitor stops there
+    /// and keeps everything after it as the section's bytes, so a field declared
+    /// after `bm25_index` would be silently dropped on load.
+    ///
+    /// A future field reorder must fail here, loudly, rather than quietly
+    /// costing ~180 ms per indexed command again (or losing data).
+    #[test]
+    fn bm25_index_is_the_last_envelope_key() {
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&sample_bm25()));
+
+        // Walk the top-level map and collect its keys in wire order.
+        struct EnvelopeKeys(Vec<String>);
+
+        impl<'de> Deserialize<'de> for EnvelopeKeys {
+            fn deserialize<D>(d: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct V;
+
+                impl<'de> serde::de::Visitor<'de> for V {
+                    type Value = EnvelopeKeys;
+
+                    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str("the snapshot envelope map")
+                    }
+
+                    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+                    where
+                        A: serde::de::MapAccess<'de>,
+                    {
+                        let mut keys = Vec::new();
+                        while let Some(k) = map.next_key::<String>()? {
+                            keys.push(k);
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                        Ok(EnvelopeKeys(keys))
+                    }
+                }
+
+                d.deserialize_map(V)
+            }
+        }
+
+        let keys = rmp_serde::from_slice::<EnvelopeKeys>(&bytes)
+            .expect("envelope is a MessagePack map")
+            .0;
+
+        assert_eq!(
+            keys,
+            vec!["header", "entries", "graph", "bm25_index"],
+            "snapshot envelope field order changed; `bm25_index` must stay last \
+             or SnapshotSeed's early stop drops the fields after it"
+        );
+    }
+
+    /// A snapshot without a BM25 section must load, and stay BM25-less.
+    #[test]
+    fn load_inner_without_bm25_section_reports_absent() {
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], None);
+        let index = SnapshotIndex::load_inner(bytes, false).expect("snapshot loads");
+        assert!(index.bm25_index().is_none());
+    }
+
+    /// The deferred section must decode to exactly what was written — and must
+    /// genuinely still be deferred until something asks for it.
+    #[test]
+    fn deferred_bm25_section_decodes_to_the_written_index() {
+        let original = sample_bm25();
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&original));
+        let index = SnapshotIndex::load_inner(bytes, false).expect("snapshot loads");
+
+        assert!(
+            index.bm25_is_deferred(),
+            "loading must leave the BM25 section undecoded — that is the whole point"
+        );
+        // Asking whether a section exists must not force the decode.
+        assert!(index.bm25.is_present());
+        assert!(index.bm25_is_deferred());
+
+        let loaded = index.bm25_index().expect("BM25 section decodes on demand");
+        assert_eq!(loaded.total_postings(), original.total_postings());
+        assert_eq!(loaded.doc_count(), original.doc_count());
+        // Repeated access is cached, not re-decoded, and stays equivalent.
+        let again = index.bm25_index().expect("cached BM25 section");
+        assert_eq!(again.total_postings(), original.total_postings());
+    }
+
+    /// Forward-safety for the early stop: if a future envelope ever emits
+    /// `bm25_index` before another field, the visitor must fall back to decoding
+    /// the value in place instead of dropping the fields behind it. Slower, but
+    /// never wrong.
+    #[test]
+    fn envelope_with_bm25_not_last_falls_back_to_eager_decode() {
+        #[derive(Serialize)]
+        struct Reordered<'a> {
+            header: SnapshotHeader,
+            bm25_index: Option<&'a Bm25InvertedIndex>,
+            entries: &'a [IndexEntry],
+            graph: &'a LinkGraph,
+        }
+
+        let original = sample_bm25();
+        let entries = vec![test_entry("doc.md")];
+        let graph = LinkGraph::default();
+        let bytes = rmp_serde::to_vec_named(&Reordered {
             header: SnapshotHeader {
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,
                 pid: std::process::id(),
             },
-            entries: vec![IndexEntry {
-                rel_path: "doc.md".to_owned(),
-                modified: "2024-01-01T00:00:00Z".to_owned(),
-                size: 0,
-                lines: 0,
-                properties: IndexMap::default(),
-                tags: vec![],
-                sections: vec![],
-                tasks: vec![],
-                links: vec![],
-                self_anchors: Vec::new(),
-                bm25_tokens: None,
-                bm25_language: None,
-                bm25_tokenizer_version: None,
-            }],
-            graph: LinkGraph::default(),
-            bm25_index: Some(bad_bm25),
-        };
-        let bytes = rmp_serde::to_vec_named(&data).unwrap();
+            bm25_index: Some(&original),
+            entries: &entries,
+            graph: &graph,
+        })
+        .expect("reordered envelope serializes");
 
+        let index = SnapshotIndex::load_inner(bytes, false)
+            .expect("a reordered envelope must still load, not be dropped");
         assert!(
-            SnapshotIndex::load_inner(&bytes, false).is_none(),
-            "snapshot with mismatched BM25 doc_lengths/doc_paths must be rejected (MED-1)"
+            !index.bm25_is_deferred(),
+            "with bm25_index not last the visitor must decode it eagerly"
         );
+        assert_eq!(index.entries().len(), 1, "no field may be lost");
+        assert_eq!(
+            index
+                .bm25_index()
+                .expect("eagerly decoded section")
+                .total_postings(),
+            original.total_postings()
+        );
+    }
+
+    /// The save hazard the lazy load introduces: `save_to` re-serializes the
+    /// BM25 section, so a snapshot that was never asked for its section must
+    /// still write it back rather than silently dropping it. Every mutating
+    /// command (`set`, `remove`, `append`, `task toggle`, `mv`,
+    /// `lint --fix --index`) goes through this path.
+    #[test]
+    fn save_to_preserves_an_untouched_deferred_bm25_section() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("first.hyalo-index");
+        let original = sample_bm25();
+        std::fs::write(
+            &path,
+            snapshot_bytes(&[test_entry("doc.md")], Some(&original)),
+        )
+        .expect("write snapshot");
+
+        // Load, never touch the BM25 section, save somewhere else.
+        let index = SnapshotIndex::load(&path)
+            .expect("load succeeds")
+            .expect("snapshot is compatible");
+        let out = dir.path().join("second.hyalo-index");
+        index.save_to(&out).expect("re-save succeeds");
+
+        let reloaded = SnapshotIndex::load(&out)
+            .expect("reload succeeds")
+            .expect("snapshot is compatible");
+        let bm25 = reloaded
+            .bm25_index()
+            .expect("re-saved snapshot must keep its BM25 section");
+        assert_eq!(bm25.total_postings(), original.total_postings());
+        assert_eq!(bm25.doc_count(), original.doc_count());
     }
 
     #[test]
