@@ -298,17 +298,19 @@ struct SnapshotHeader {
     pid: u32,
 }
 
-/// Internal serialization envelope — header + entries + graph + optional BM25 index.
-#[derive(Serialize, Deserialize)]
-struct SnapshotData {
-    header: SnapshotHeader,
-    entries: Vec<IndexEntry>,
-    graph: LinkGraph,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    bm25_index: Option<Bm25InvertedIndex>,
-}
-
-/// Borrowed variant used only for serialization — avoids cloning all entries.
+/// The snapshot wire format — header + entries + graph + optional BM25 index,
+/// serialized by `rmp_serde::to_vec_named` as a MessagePack map with string
+/// keys in *declaration order*.
+///
+/// This is the only definition of the envelope: it is borrowed (entries and
+/// graph are never cloned to write a snapshot), and the read side is the
+/// hand-written [`SnapshotSeed`] visitor below rather than a derived
+/// `Deserialize`, so that the trailing `bm25_index` value can be left undecoded
+/// (iter-260).
+///
+/// **Field order is load-bearing.** `bm25_index` MUST stay last — the lazy load
+/// path can only skip it if every field it does need has already been visited.
+/// Pinned by `bm25_index_is_the_last_envelope_key`.
 #[derive(Serialize)]
 struct SnapshotDataRef<'a> {
     header: SnapshotHeader,
@@ -573,16 +575,39 @@ fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
     true
 }
 
+/// A BM25 section as the envelope visitor left it, with the borrow of the
+/// source buffer already resolved to an offset so the buffer can be moved.
+enum PendingBm25 {
+    Absent,
+    Eager(Box<Bm25InvertedIndex>),
+    /// Offset into the snapshot buffer where the (still undecoded) MessagePack
+    /// value of the `bm25_index` key starts.
+    Deferred(usize),
+}
+
 /// The BM25 inverted index of a loaded snapshot, decoded on demand.
+///
+/// DEC-265: the deferred variant keeps the snapshot *bytes* rather than
+/// re-reading the file on first use. Re-reading would need the index path
+/// threaded through `SnapshotIndex` and would re-open a file that may have been
+/// replaced since the load (a mutating command in another process rewrites it
+/// atomically), so the decoded section could disagree with the entries it was
+/// loaded beside. Holding the buffer costs the file's size in RSS until the
+/// first text query — less than the decoded structure it stands in for — and
+/// the buffer is dropped as soon as the decode consumes it, so a text query
+/// ends up with the same steady-state footprint as before this change.
 enum Bm25Section {
-    /// The snapshot carries no BM25 index (or its section was refused).
+    /// The snapshot carries no BM25 index, or its section was refused by
+    /// [`validate_bm25`].
     Absent,
     /// Decoded and validated.
     Loaded(Box<Bm25InvertedIndex>),
-    /// Not decoded yet. `raw[offset..]` is the MessagePack value of the
-    /// envelope's `bm25_index` key; `decoded` caches the one-shot decode.
+    /// Not decoded yet.
     Deferred {
-        raw: Vec<u8>,
+        /// The whole snapshot buffer; `raw[offset..]` is the MessagePack value
+        /// of the envelope's `bm25_index` key. Taken — and thereby freed — by
+        /// the first [`Bm25Section::get`].
+        raw: std::sync::Mutex<Option<Vec<u8>>>,
         offset: usize,
         /// Whether a refusal should print a warning (mirrors `load_inner`'s
         /// `warn`, so `load_silent` stays silent).
@@ -593,6 +618,10 @@ enum Bm25Section {
 
 impl Bm25Section {
     /// The decoded index, decoding (and validating) it on first call.
+    ///
+    /// Returns `None` for a snapshot without a BM25 section and for one whose
+    /// section is unreadable or fails [`validate_bm25`]; callers treat all three
+    /// the same way, by falling back to a live scan.
     fn get(&self) -> Option<&Bm25InvertedIndex> {
         match self {
             Self::Absent => None,
@@ -604,7 +633,13 @@ impl Bm25Section {
                 decoded,
             } => decoded
                 .get_or_init(|| {
-                    let bytes = raw.get(*offset..)?;
+                    // `take()` hands the buffer to this closure, which drops it
+                    // on return — the raw bytes do not outlive the decode.
+                    let buf = match raw.lock() {
+                        Ok(mut guard) => guard.take(),
+                        Err(poisoned) => poisoned.into_inner().take(),
+                    }?;
+                    let bytes = buf.get(*offset..)?;
                     match rmp_serde::from_slice::<Bm25InvertedIndex>(bytes) {
                         Ok(bm25) if validate_bm25(&bm25, *warn) => Some(Box::new(bm25)),
                         Ok(_) => None,
@@ -1113,17 +1148,20 @@ impl SnapshotIndex {
     fn load_inner(bytes: Vec<u8>, warn: bool) -> Option<Self> {
         use serde::de::DeserializeSeed as _;
 
+        // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
+        const MAX_ENTRIES: usize = 5_000_000;
+        const MAX_GRAPH_EDGES: usize = 50_000_000;
+
         // Visit the envelope by hand so the `bm25_index` value can be left
-        // undecoded (iter-260). The borrow of `bytes` ends with this block; the
+        // undecoded (iter-260). The borrow of `bytes` ends with this block: the
         // deferred tail is converted to an offset so `bytes` can be moved into
         // the returned index.
-        let decoded = {
+        let (header, entries, graph, pending_bm25) = {
             let mut de = rmp_serde::Deserializer::from_read_ref(bytes.as_slice());
-            match (SnapshotSeed {
+            let seed = SnapshotSeed {
                 whole: bytes.as_slice(),
-            })
-            .deserialize(&mut de)
-            {
+            };
+            match seed.deserialize(&mut de) {
                 Ok(decoded) => {
                     let bm25 = match decoded.bm25 {
                         DecodedBm25::Absent => PendingBm25::Absent,
@@ -1132,7 +1170,7 @@ impl SnapshotIndex {
                             PendingBm25::Deferred(bytes.len() - tail.len())
                         }
                     };
-                    Some((decoded.header, decoded.entries, decoded.graph, bm25))
+                    (decoded.header, decoded.entries, decoded.graph, bm25)
                 }
                 Err(e) => {
                     if warn {
@@ -1140,172 +1178,146 @@ impl SnapshotIndex {
                             "warning: index file is incompatible ({e}); falling back to disk scan"
                         );
                     }
-                    None
+                    return None;
                 }
             }
         };
-        let (header, entries, graph, pending_bm25) = decoded?;
-        let data = SnapshotData {
-            header,
-            entries,
-            graph,
-        };
 
-        {
-            {
-                // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
-                // All consts are hoisted to the top of the arm so they appear before
-                // any statements (clippy::items_after_statements).
-                const MAX_ENTRIES: usize = 5_000_000;
-                const MAX_GRAPH_EDGES: usize = 50_000_000;
-
-                // SEC-2 (defense-in-depth): reject snapshots with an implausible
-                // number of entries — a crafted MessagePack header claiming millions
-                // of entries can trigger large allocations even with file-size caps.
-                if data.entries.len() > MAX_ENTRIES {
-                    if warn {
-                        eprintln!(
-                            "warning: index file contains {} entries (limit {}); falling back to disk scan",
-                            data.entries.len(),
-                            MAX_ENTRIES
-                        );
-                    }
-                    return None;
-                }
-
-                // SEC-1: Validate every rel_path before trusting snapshot data.
-                // Reject the entire snapshot if any path is unsafe — a crafted
-                // snapshot with path-traversal entries could escape the vault.
-                for entry in &data.entries {
-                    let rel_path = &entry.rel_path;
-                    if rel_path.contains('\0') {
-                        if warn {
-                            eprintln!(
-                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
-                            );
-                        }
-                        return None;
-                    }
-                    if std::path::Path::new(rel_path.as_str()).is_absolute() {
-                        if warn {
-                            eprintln!(
-                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
-                            );
-                        }
-                        return None;
-                    }
-                    if std::path::Path::new(rel_path.as_str())
-                        .components()
-                        .any(|c| {
-                            matches!(
-                                c,
-                                std::path::Component::ParentDir
-                                    | std::path::Component::RootDir
-                                    | std::path::Component::Prefix(_)
-                            )
-                        })
-                    {
-                        if warn {
-                            eprintln!(
-                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
-                            );
-                        }
-                        return None;
-                    }
-                    // M-2 (adversarial-review-2026-08-23.md): the `Prefix(_)`
-                    // arm above already catches a Windows drive-relative
-                    // path like `C:foo`, but an NTFS Alternate Data Stream
-                    // marker (`a.md:stream`) has no `Prefix` component at
-                    // all — the colon sits inside an ordinary `Normal`
-                    // component. Reject it explicitly (Windows-only check;
-                    // a no-op elsewhere).
-                    if crate::discovery::has_unsafe_windows_colon(rel_path) {
-                        if warn {
-                            eprintln!(
-                                "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
-                            );
-                        }
-                        return None;
-                    }
-                }
-
-                // SEC-3 (defense-in-depth): reject snapshots whose link graph or
-                // BM25 index would expand to an implausibly large in-memory
-                // structure.  A crafted snapshot could claim a plausible number
-                // of top-level keys while hiding millions of per-key entries,
-                // causing allocations far exceeding the file size cap.
-                let edge_count = data.graph.total_edges();
-                if edge_count > MAX_GRAPH_EDGES {
-                    if warn {
-                        eprintln!(
-                            "warning: index file contains too many graph edges ({edge_count}); falling back to disk scan"
-                        );
-                    }
-                    return None;
-                }
-
-                if let Some(ref bm25) = data.bm25_index {
-                    let posting_count = bm25.total_postings();
-                    if posting_count > MAX_BM25_POSTINGS {
-                        if warn {
-                            eprintln!(
-                                "warning: index file contains too many BM25 postings ({posting_count}); falling back to disk scan"
-                            );
-                        }
-                        return None;
-                    }
-                }
-
-                // MED-1: Validate BM25 doc_id bounds before the index is used.
-                // A crafted snapshot can embed posting list entries whose doc_id
-                // values exceed doc_paths / doc_lengths, causing an out-of-bounds
-                // panic inside score(). Reject the entire snapshot if invalid.
-                if let Some(ref bm25) = data.bm25_index
-                    && !bm25.validate_doc_ids()
-                {
-                    if warn {
-                        eprintln!(
-                            "warning: index file contains out-of-bounds BM25 doc_id; falling back to disk scan"
-                        );
-                    }
-                    return None;
-                }
-
-                // Entries are stored in sorted order (ScannedIndex::build sorts
-                // before saving).  Re-sort here to guarantee the invariant even
-                // if an older snapshot was created without sorting.
-                let mut entries = data.entries;
-                entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-
-                let path_index: HashMap<String, usize> = entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| (e.rel_path.clone(), i))
-                    .collect();
-                // The graph's lowercased companion map is `#[serde(skip)]`, so a
-                // freshly-deserialized graph has an empty one — rebuild it from
-                // the restored index keys so `backlinks_ci` works off snapshots.
-                let mut graph = data.graph;
-                graph.rebuild_lower_index();
-                Some(Self {
-                    entries,
-                    path_index,
-                    graph,
-                    header: data.header,
-                    bm25_index: data.bm25_index,
-                    frontmatter_link_props: None,
-                    case_index_cache: None,
-                })
+        // SEC-2 (defense-in-depth): reject snapshots with an implausible
+        // number of entries — a crafted MessagePack header claiming millions
+        // of entries can trigger large allocations even with file-size caps.
+        if entries.len() > MAX_ENTRIES {
+            if warn {
+                eprintln!(
+                    "warning: index file contains {} entries (limit {}); falling back to disk scan",
+                    entries.len(),
+                    MAX_ENTRIES
+                );
             }
-            Err(e) => {
+            return None;
+        }
+
+        // SEC-1: Validate every rel_path before trusting snapshot data.
+        // Reject the entire snapshot if any path is unsafe — a crafted
+        // snapshot with path-traversal entries could escape the vault.
+        for entry in &entries {
+            let rel_path = &entry.rel_path;
+            if rel_path.contains('\0') {
                 if warn {
                     eprintln!(
-                        "warning: index file is incompatible ({e}); falling back to disk scan"
+                        "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
                     );
                 }
-                None
+                return None;
+            }
+            if std::path::Path::new(rel_path.as_str()).is_absolute() {
+                if warn {
+                    eprintln!(
+                        "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                    );
+                }
+                return None;
+            }
+            if std::path::Path::new(rel_path.as_str())
+                .components()
+                .any(|c| {
+                    matches!(
+                        c,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+            {
+                if warn {
+                    eprintln!(
+                        "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                    );
+                }
+                return None;
+            }
+            // M-2 (adversarial-review-2026-08-23.md): the `Prefix(_)`
+            // arm above already catches a Windows drive-relative
+            // path like `C:foo`, but an NTFS Alternate Data Stream
+            // marker (`a.md:stream`) has no `Prefix` component at
+            // all — the colon sits inside an ordinary `Normal`
+            // component. Reject it explicitly (Windows-only check;
+            // a no-op elsewhere).
+            if crate::discovery::has_unsafe_windows_colon(rel_path) {
+                if warn {
+                    eprintln!(
+                        "warning: index file contains unsafe path '{rel_path}'; falling back to disk scan"
+                    );
+                }
+                return None;
             }
         }
+
+        // SEC-3 (defense-in-depth): reject snapshots whose link graph would
+        // expand to an implausibly large in-memory structure.  A crafted
+        // snapshot could claim a plausible number of top-level keys while
+        // hiding millions of per-key entries, causing allocations far
+        // exceeding the file size cap.
+        let edge_count = graph.total_edges();
+        if edge_count > MAX_GRAPH_EDGES {
+            if warn {
+                eprintln!(
+                    "warning: index file contains too many graph edges ({edge_count}); falling back to disk scan"
+                );
+            }
+            return None;
+        }
+
+        // SEC-3 / MED-1 for the BM25 section move to `validate_bm25`, which runs
+        // at decode time — immediately here for an eagerly decoded section, on
+        // first use for a deferred one (iter-260). A refused section is dropped
+        // rather than rejecting the whole snapshot: by the time a deferred
+        // section is decoded the caller is mid-query and the "fall back to a
+        // disk scan" escape hatch no longer composes, whereas "this snapshot has
+        // no BM25 index" is a state every caller already handles by live
+        // scanning. The crafted postings still never reach `score()`.
+        let bm25 = match pending_bm25 {
+            PendingBm25::Absent => Bm25Section::Absent,
+            PendingBm25::Eager(bm25) => {
+                if validate_bm25(&bm25, warn) {
+                    Bm25Section::Loaded(bm25)
+                } else {
+                    Bm25Section::Absent
+                }
+            }
+            PendingBm25::Deferred(offset) => Bm25Section::Deferred {
+                raw: std::sync::Mutex::new(Some(bytes)),
+                offset,
+                warn,
+                decoded: std::sync::OnceLock::new(),
+            },
+        };
+
+        // Entries are stored in sorted order (ScannedIndex::build sorts
+        // before saving).  Re-sort here to guarantee the invariant even
+        // if an older snapshot was created without sorting.
+        let mut entries = entries;
+        entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+        let path_index: HashMap<String, usize> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.rel_path.clone(), i))
+            .collect();
+        // The graph's lowercased companion map is `#[serde(skip)]`, so a
+        // freshly-deserialized graph has an empty one — rebuild it from
+        // the restored index keys so `backlinks_ci` works off snapshots.
+        let mut graph = graph;
+        graph.rebuild_lower_index();
+        Some(Self {
+            entries,
+            path_index,
+            graph,
+            header,
+            bm25,
+            frontmatter_link_props: None,
+            case_index_cache: None,
+        })
     }
 
     /// Load a snapshot from a MessagePack file.
@@ -1319,7 +1331,7 @@ impl SnapshotIndex {
         let Some(bytes) = read_index_bytes(path, true)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(&bytes, true))
+        Ok(Self::load_inner(bytes, true))
     }
 
     /// Load a snapshot silently — identical to [`load`] but suppresses the
@@ -1329,7 +1341,7 @@ impl SnapshotIndex {
         let Some(bytes) = read_index_bytes(path, false)? else {
             return Ok(None);
         };
-        Ok(Self::load_inner(&bytes, false))
+        Ok(Self::load_inner(bytes, false))
     }
 
     /// Check whether this snapshot's header matches the expected vault settings.
@@ -1360,7 +1372,7 @@ impl SnapshotIndex {
 
     /// Return the persisted BM25 inverted index, if present.
     pub fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
-        self.bm25_index.as_ref()
+        self.bm25.get()
     }
 
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
@@ -1511,7 +1523,7 @@ impl VaultIndex for SnapshotIndex {
     }
 
     fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
-        self.bm25_index.as_ref()
+        self.bm25.get()
     }
 }
 
