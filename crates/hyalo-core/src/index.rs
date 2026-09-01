@@ -385,7 +385,10 @@ impl<'de> Deserialize<'de> for SnapshotKey<'de> {
                 f.write_str("a snapshot envelope field name")
             }
 
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+            fn visit_str<E: serde::de::Error>(
+                self,
+                v: &str,
+            ) -> std::result::Result<Self::Value, E> {
                 Ok(SnapshotKey {
                     field: SnapshotField::classify(v),
                     borrowed: None,
@@ -3005,8 +3008,8 @@ Content.
     /// contract is that the poisoned postings never reach `score()`:
     /// `bm25_index()` reports the section as absent, which is exactly the state
     /// callers already handle by live scanning.
-    fn assert_bm25_section_refused(bm25: Bm25InvertedIndex, what: &str) {
-        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&bm25));
+    fn assert_bm25_section_refused(bm25: &Bm25InvertedIndex, what: &str) {
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(bm25));
         let index = SnapshotIndex::load_inner(bytes, false)
             .unwrap_or_else(|| panic!("{what}: the snapshot itself is well-formed and must load"));
         assert!(
@@ -3043,7 +3046,7 @@ Content.
             5.0,
         );
 
-        assert_bm25_section_refused(bad_bm25, "out-of-bounds BM25 doc_id (MED-1)");
+        assert_bm25_section_refused(&bad_bm25, "out-of-bounds BM25 doc_id (MED-1)");
     }
 
     #[test]
@@ -3068,7 +3071,7 @@ Content.
             7.5,
         );
 
-        assert_bm25_section_refused(bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
+        assert_bm25_section_refused(&bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
     }
 
     // -------------------------------------------------------------------------
@@ -3108,9 +3111,7 @@ Content.
     /// costing ~180 ms per indexed command again (or losing data).
     #[test]
     fn bm25_index_is_the_last_envelope_key() {
-        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&sample_bm25()));
-
-        // Walk the top-level map and collect its keys in wire order.
+        // Walks the top-level map and collects its keys in wire order.
         struct EnvelopeKeys(Vec<String>);
 
         impl<'de> Deserialize<'de> for EnvelopeKeys {
@@ -3144,6 +3145,7 @@ Content.
             }
         }
 
+        let bytes = snapshot_bytes(&[test_entry("doc.md")], Some(&sample_bm25()));
         let keys = rmp_serde::from_slice::<EnvelopeKeys>(&bytes)
             .expect("envelope is a MessagePack map")
             .0;
