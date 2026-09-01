@@ -1059,23 +1059,32 @@ fn bm25_section_survives_a_mutating_command() {
         .expect("create-index must persist a BM25 section")
         .doc_count();
     drop(before);
+    let bytes_before = std::fs::read(&index_path).unwrap();
 
-    // A mutating command that touches one file and re-saves the snapshot.
-    let set_output = hyalo_no_hints()
-        .args([
-            "--dir",
-            tmp.path().to_str().unwrap(),
-            "set",
-            "rust_deep.md",
-            "--property",
-            "reviewed=true",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        set_output.status.success(),
-        "set failed: {}",
-        String::from_utf8_lossy(&set_output.stderr)
+    // Mutating commands that touch a file and re-save the snapshot. `--index`
+    // is what makes them patch the index in place instead of leaving it alone.
+    for args in [
+        ["set", "rust_deep.md", "--property", "reviewed=true"],
+        ["set", "rust_brief.md", "--tag", "reviewed"],
+    ] {
+        let out = hyalo_no_hints()
+            .args(["--dir", tmp.path().to_str().unwrap()])
+            .args(args)
+            .arg("--index")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // The snapshot must actually have been rewritten — otherwise this test
+    // would pass without ever exercising the save path it exists to guard.
+    assert_ne!(
+        std::fs::read(&index_path).unwrap(),
+        bytes_before,
+        "the mutating commands must have re-saved the snapshot"
     );
 
     // The rewritten snapshot still carries a BM25 section.
