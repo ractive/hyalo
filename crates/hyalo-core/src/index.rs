@@ -318,6 +318,319 @@ struct SnapshotDataRef<'a> {
     bm25_index: Option<&'a Bm25InvertedIndex>,
 }
 
+// ---------------------------------------------------------------------------
+// Lazy BM25 section (iter-260)
+// ---------------------------------------------------------------------------
+//
+// On a MDN-scale vault the `bm25_index` value is ~76 % of the snapshot file and
+// ~180 ms of the ~240 ms MessagePack decode, plus ~43 ms of teardown — all of it
+// paid by every indexed command, including the majority that never search text
+// (`find --property`, `links`, `lint`, `summary`, `properties`, `tags`).
+// See `research/snapshot-load-floor-2026-09-01.md`.
+//
+// `rmp_serde::to_vec_named` writes the envelope as a MessagePack map with string
+// keys in declaration order, so `bm25_index` is the *last* key. The load path
+// therefore visits the map by hand and stops when it reaches that key, keeping
+// the raw bytes of its (unread) value so the section can be decoded later if a
+// command actually needs it. Nothing about the on-disk format changes.
+
+/// Which envelope field a top-level map key names.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SnapshotField {
+    Header,
+    Entries,
+    Graph,
+    Bm25,
+    /// A key this version does not know — its value is skipped.
+    Unknown,
+}
+
+impl SnapshotField {
+    fn classify(name: &str) -> Self {
+        match name {
+            "header" => Self::Header,
+            "entries" => Self::Entries,
+            "graph" => Self::Graph,
+            "bm25_index" => Self::Bm25,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// A top-level envelope key, plus the borrowed key text when the MessagePack
+/// reader handed us a slice pointing into the source buffer.
+///
+/// The borrowed slice is what makes the early stop possible: the value of a map
+/// entry starts at the byte immediately after its key, so the key's address
+/// inside the buffer locates the start of the `bm25_index` value without any
+/// separate offset bookkeeping.
+struct SnapshotKey<'de> {
+    field: SnapshotField,
+    borrowed: Option<&'de str>,
+}
+
+impl<'de> Deserialize<'de> for SnapshotKey<'de> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct KeyVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for KeyVisitor {
+            type Value = SnapshotKey<'de>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a snapshot envelope field name")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
+                Ok(SnapshotKey {
+                    field: SnapshotField::classify(v),
+                    borrowed: None,
+                })
+            }
+
+            fn visit_borrowed_str<E: serde::de::Error>(
+                self,
+                v: &'de str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(SnapshotKey {
+                    field: SnapshotField::classify(v),
+                    borrowed: Some(v),
+                })
+            }
+
+            fn visit_bytes<E: serde::de::Error>(
+                self,
+                v: &[u8],
+            ) -> std::result::Result<Self::Value, E> {
+                let name = std::str::from_utf8(v).unwrap_or("");
+                Ok(SnapshotKey {
+                    field: SnapshotField::classify(name),
+                    borrowed: None,
+                })
+            }
+
+            fn visit_borrowed_bytes<E: serde::de::Error>(
+                self,
+                v: &'de [u8],
+            ) -> std::result::Result<Self::Value, E> {
+                match std::str::from_utf8(v) {
+                    Ok(name) => Ok(SnapshotKey {
+                        field: SnapshotField::classify(name),
+                        borrowed: Some(name),
+                    }),
+                    Err(_) => Ok(SnapshotKey {
+                        field: SnapshotField::Unknown,
+                        borrowed: None,
+                    }),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(KeyVisitor)
+    }
+}
+
+/// The `bm25_index` value as the envelope visitor left it.
+enum DecodedBm25<'de> {
+    /// The envelope has no `bm25_index` key.
+    Absent,
+    /// Raw, still-undecoded MessagePack bytes of the value.
+    Deferred(&'de [u8]),
+    /// Decoded in full — the fallback taken when the early stop is not safe
+    /// (key not borrowed from the buffer, or `bm25_index` not last).
+    Eager(Box<Bm25InvertedIndex>),
+}
+
+/// Result of visiting the top-level envelope map.
+struct DecodedSnapshot<'de> {
+    header: SnapshotHeader,
+    entries: Vec<IndexEntry>,
+    graph: LinkGraph,
+    bm25: DecodedBm25<'de>,
+}
+
+/// Seed carrying the whole source buffer so the visitor can turn a borrowed key
+/// slice into "everything after this key".
+struct SnapshotSeed<'de> {
+    whole: &'de [u8],
+}
+
+/// Bytes of `whole` that follow `key`, when `key` really is a slice of `whole`.
+///
+/// Returns `None` when the reader did not borrow (so the pointer says nothing
+/// about a position in `whole`) — the caller then falls back to a full decode.
+fn bytes_after_key<'de>(whole: &'de [u8], key: &str) -> Option<&'de [u8]> {
+    let base = whole.as_ptr().addr();
+    let start = key.as_ptr().addr();
+    let end = start.checked_add(key.len())?;
+    let limit = base.checked_add(whole.len())?;
+    if start < base || end > limit {
+        return None;
+    }
+    Some(&whole[end - base..])
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for SnapshotSeed<'de> {
+    type Value = DecodedSnapshot<'de>;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for SnapshotSeed<'de> {
+    type Value = DecodedSnapshot<'de>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a hyalo index snapshot envelope")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        use serde::de::Error as _;
+
+        let mut header: Option<SnapshotHeader> = None;
+        let mut entries: Option<Vec<IndexEntry>> = None;
+        let mut graph: Option<LinkGraph> = None;
+        let mut bm25 = DecodedBm25::Absent;
+
+        while let Some(key) = map.next_key::<SnapshotKey<'de>>()? {
+            match key.field {
+                SnapshotField::Header => header = Some(map.next_value()?),
+                SnapshotField::Entries => entries = Some(map.next_value()?),
+                SnapshotField::Graph => graph = Some(map.next_value()?),
+                SnapshotField::Bm25 => {
+                    // Only skip the value when every other field is already in
+                    // hand: the tail we keep runs to the end of the buffer, so
+                    // stopping before a field we still need would lose it. In a
+                    // snapshot written by any hyalo version this is always true
+                    // — `bm25_index` is emitted last (pinned by
+                    // `bm25_index_is_the_last_envelope_key`).
+                    let tail = if header.is_some() && entries.is_some() && graph.is_some() {
+                        key.borrowed.and_then(|k| bytes_after_key(self.whole, k))
+                    } else {
+                        None
+                    };
+                    match tail {
+                        Some(tail) => {
+                            bm25 = DecodedBm25::Deferred(tail);
+                            // The whole point: return without reading the value.
+                            break;
+                        }
+                        None => bm25 = DecodedBm25::Eager(map.next_value()?),
+                    }
+                }
+                SnapshotField::Unknown => {
+                    map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+
+        Ok(DecodedSnapshot {
+            header: header.ok_or_else(|| A::Error::missing_field("header"))?,
+            entries: entries.ok_or_else(|| A::Error::missing_field("entries"))?,
+            graph: graph.ok_or_else(|| A::Error::missing_field("graph"))?,
+            bm25,
+        })
+    }
+}
+
+/// Maximum total postings accepted in a snapshot's BM25 index (SEC-3).
+const MAX_BM25_POSTINGS: usize = 50_000_000;
+
+/// SEC-3 + MED-1 validation of a decoded BM25 index.
+///
+/// Returns `false` — and warns when `warn` — for an index that would let a
+/// crafted snapshot blow up memory (`total_postings`) or panic inside `score()`
+/// with an out-of-bounds `doc_id` (`validate_doc_ids`). A refused section is
+/// treated as absent, which routes text queries to the live-scan fallback
+/// exactly as a snapshot without a BM25 index does.
+fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
+    let posting_count = bm25.total_postings();
+    if posting_count > MAX_BM25_POSTINGS {
+        if warn {
+            eprintln!(
+                "warning: index file contains too many BM25 postings ({posting_count}); ignoring the BM25 section"
+            );
+        }
+        return false;
+    }
+    if !bm25.validate_doc_ids() {
+        if warn {
+            eprintln!(
+                "warning: index file contains out-of-bounds BM25 doc_id; ignoring the BM25 section"
+            );
+        }
+        return false;
+    }
+    true
+}
+
+/// The BM25 inverted index of a loaded snapshot, decoded on demand.
+enum Bm25Section {
+    /// The snapshot carries no BM25 index (or its section was refused).
+    Absent,
+    /// Decoded and validated.
+    Loaded(Box<Bm25InvertedIndex>),
+    /// Not decoded yet. `raw[offset..]` is the MessagePack value of the
+    /// envelope's `bm25_index` key; `decoded` caches the one-shot decode.
+    Deferred {
+        raw: Vec<u8>,
+        offset: usize,
+        /// Whether a refusal should print a warning (mirrors `load_inner`'s
+        /// `warn`, so `load_silent` stays silent).
+        warn: bool,
+        decoded: std::sync::OnceLock<Option<Box<Bm25InvertedIndex>>>,
+    },
+}
+
+impl Bm25Section {
+    /// The decoded index, decoding (and validating) it on first call.
+    fn get(&self) -> Option<&Bm25InvertedIndex> {
+        match self {
+            Self::Absent => None,
+            Self::Loaded(bm25) => Some(bm25),
+            Self::Deferred {
+                raw,
+                offset,
+                warn,
+                decoded,
+            } => decoded
+                .get_or_init(|| {
+                    let bytes = raw.get(*offset..)?;
+                    match rmp_serde::from_slice::<Bm25InvertedIndex>(bytes) {
+                        Ok(bm25) if validate_bm25(&bm25, *warn) => Some(Box::new(bm25)),
+                        Ok(_) => None,
+                        Err(e) => {
+                            if *warn {
+                                eprintln!(
+                                    "warning: index file has an unreadable BM25 section ({e}); ignoring it"
+                                );
+                            }
+                            None
+                        }
+                    }
+                })
+                .as_deref(),
+        }
+    }
+
+    /// Whether the snapshot carries a BM25 section, *without* decoding it.
+    ///
+    /// Used on hot paths that only need the yes/no answer (deciding whether an
+    /// incrementally re-scanned entry must be re-tokenized).
+    fn is_present(&self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+}
+
 /// A vault index loaded from a MessagePack snapshot file.
 ///
 /// Created by [`SnapshotIndex::save`] and loaded by [`SnapshotIndex::load`].
@@ -328,8 +641,9 @@ pub struct SnapshotIndex {
     path_index: HashMap<String, usize>,
     graph: LinkGraph,
     header: SnapshotHeader,
-    /// Persisted BM25 inverted index (if the snapshot was built with `bm25_tokenize = true`).
-    bm25_index: Option<Bm25InvertedIndex>,
+    /// Persisted BM25 inverted index (if the snapshot was built with
+    /// `bm25_tokenize = true`), decoded lazily on first use (iter-260).
+    bm25: Bm25Section,
     /// Frontmatter property names scanned for `[[wikilink]]` values when
     /// `rescan_entry` / `rename_entry` re-scan a file after a mutation. Not
     /// persisted in the snapshot — callers must set it for each session via
@@ -414,7 +728,7 @@ impl SnapshotIndex {
     /// `language` still wins inside [`scan_one_file`]).
     fn bm25_scan_args(&self, rel_path: &str) -> (bool, Option<String>) {
         (
-            self.bm25_index.is_some(),
+            self.bm25.is_present(),
             self.path_index
                 .get(rel_path)
                 .and_then(|&i| self.entries[i].bm25_language.clone()),
@@ -435,7 +749,9 @@ impl SnapshotIndex {
     /// `create-index` build and `find --index` scores stay byte-identical to
     /// a disk scan without an intervening rebuild.
     pub fn rebuild_bm25_index(&mut self) {
-        let Some(old) = self.bm25_index.as_ref() else {
+        // Forces a deferred section: a rebuild needs the old postings to
+        // reconstruct tokens for entries the mutation wave never touched.
+        let Some(old) = self.bm25.get() else {
             return;
         };
         let reconstructed = old.reconstruct_all_tokens();
@@ -453,7 +769,11 @@ impl SnapshotIndex {
                 })
             })
             .collect();
-        self.bm25_index = Some(crate::bm25::Bm25InvertedIndex::build_from_tokens(docs));
+        // Replacing the section with the rebuilt index also drops the retained
+        // snapshot bytes the deferred variant was holding.
+        self.bm25 = Bm25Section::Loaded(Box::new(
+            crate::bm25::Bm25InvertedIndex::build_from_tokens(docs),
+        ));
     }
 
     /// Re-scan a single file and replace its index entry.
@@ -766,13 +1086,19 @@ impl SnapshotIndex {
     /// Re-serialize and atomically save the (possibly mutated) snapshot.
     ///
     /// Reuses the original header's `vault_dir` and `site_prefix`.
+    ///
+    /// Forces a deferred BM25 section (iter-260) before re-serializing: the
+    /// snapshot on disk must keep the section it came with, or every mutating
+    /// command (`set`, `remove`, `append`, `task toggle`, `mv`,
+    /// `lint --fix --index`) would silently delete the search index it was
+    /// only ever meant to patch.
     pub fn save_to(&self, path: &Path) -> Result<()> {
         write_snapshot(
             self,
             path,
             &self.header.vault_dir,
             self.header.site_prefix.as_deref(),
-            self.bm25_index.as_ref(),
+            self.bm25.get(),
         )
     }
 
@@ -784,15 +1110,54 @@ impl SnapshotIndex {
     /// warning when the schema is incompatible.
     ///
     /// Returns `Ok(Some(index))` on success, `Ok(None)` on schema mismatch.
-    fn load_inner(bytes: &[u8], warn: bool) -> Option<Self> {
-        match rmp_serde::from_slice::<SnapshotData>(bytes) {
-            Ok(data) => {
+    fn load_inner(bytes: Vec<u8>, warn: bool) -> Option<Self> {
+        use serde::de::DeserializeSeed as _;
+
+        // Visit the envelope by hand so the `bm25_index` value can be left
+        // undecoded (iter-260). The borrow of `bytes` ends with this block; the
+        // deferred tail is converted to an offset so `bytes` can be moved into
+        // the returned index.
+        let decoded = {
+            let mut de = rmp_serde::Deserializer::from_read_ref(bytes.as_slice());
+            match (SnapshotSeed {
+                whole: bytes.as_slice(),
+            })
+            .deserialize(&mut de)
+            {
+                Ok(decoded) => {
+                    let bm25 = match decoded.bm25 {
+                        DecodedBm25::Absent => PendingBm25::Absent,
+                        DecodedBm25::Eager(bm25) => PendingBm25::Eager(bm25),
+                        DecodedBm25::Deferred(tail) => {
+                            PendingBm25::Deferred(bytes.len() - tail.len())
+                        }
+                    };
+                    Some((decoded.header, decoded.entries, decoded.graph, bm25))
+                }
+                Err(e) => {
+                    if warn {
+                        eprintln!(
+                            "warning: index file is incompatible ({e}); falling back to disk scan"
+                        );
+                    }
+                    None
+                }
+            }
+        };
+        let (header, entries, graph, pending_bm25) = decoded?;
+        let data = SnapshotData {
+            header,
+            entries,
+            graph,
+        };
+
+        {
+            {
                 // Limits used by the SEC-2 and SEC-3 defense-in-depth checks below.
                 // All consts are hoisted to the top of the arm so they appear before
                 // any statements (clippy::items_after_statements).
                 const MAX_ENTRIES: usize = 5_000_000;
                 const MAX_GRAPH_EDGES: usize = 50_000_000;
-                const MAX_BM25_POSTINGS: usize = 50_000_000;
 
                 // SEC-2 (defense-in-depth): reject snapshots with an implausible
                 // number of entries — a crafted MessagePack header claiming millions
