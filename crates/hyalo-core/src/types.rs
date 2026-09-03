@@ -180,6 +180,16 @@ pub struct LinkInfo {
     /// links keep today's shape.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub broken_anchor: bool,
+    /// The full heading text to write instead, when this link's dead fragment
+    /// is the prefix of exactly one heading in the target file (iter-261 /
+    /// DEC-268): `[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`.
+    ///
+    /// Only ever set alongside `broken_anchor`, and only when the prefix is
+    /// unambiguous — two matching headings yield no suggestion. It is a
+    /// suggestion, never an automatic rewrite: a silent prefix match would hide
+    /// the typos this rule exists to surface. Skipped from JSON when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_fragment: Option<String>,
     /// `true` when the link's target normalizes to a path *above* the vault
     /// root, so it can never resolve to a scanned file. Implies `path: None`,
     /// but is deliberately distinguished from a broken target: the file is out

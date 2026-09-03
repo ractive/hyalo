@@ -1693,6 +1693,44 @@ mod tests {
         assert!(result.confidence >= 0.7);
     }
 
+    // --- iter-261: fuzzy never crosses an extension, and never reports 0.0 ---
+
+    #[test]
+    fn matcher_never_crosses_an_explicit_non_md_extension() {
+        // BUG-5 / DEC-266: a `.base` target may only match a `.base` file. The
+        // candidate set is the vault's notes, so there is no match at all —
+        // `Companies.base → Templates/Company Template.md` is gone.
+        let matcher = LinkMatcher::new(
+            make_files(&["Templates/Company Template.md", "Categories/Posts.md"]),
+            0.5,
+        );
+        assert!(matcher.find_match("Companies.base", "__test__").is_none());
+        assert!(matcher.find_match("Posts.base", "__test__").is_none());
+        assert!(
+            matcher
+                .find_match("task-plugins-sorted.png", "__test__")
+                .is_none()
+        );
+        // A bare stem and an explicit `.md` still match normally.
+        assert!(matcher.find_match("Posts", "__test__").is_some());
+        assert!(matcher.find_match("Posts.md", "__test__").is_some());
+    }
+
+    #[test]
+    fn matcher_drops_zero_confidence_candidates() {
+        // UX-8: `[[lithou]]` was listed against `lighthousedino.md` at
+        // confidence 0.0 — a candidate nobody would ever apply.
+        let matcher = LinkMatcher::new(make_files(&["lighthousedino.md"]), 0.6);
+        match matcher.find_match("lithou", "__test__") {
+            None => {}
+            Some(r) => assert!(
+                r.confidence > 0.0,
+                "no candidate may be reported at confidence {}",
+                r.confidence
+            ),
+        }
+    }
+
     #[test]
     fn matcher_no_match() {
         let matcher = LinkMatcher::new(make_files(&["completely-unrelated.md"]), 0.95);

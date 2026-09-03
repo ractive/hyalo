@@ -933,6 +933,24 @@ pub fn find(
                         // iter-261 (UX-6): the reported bucket —
                         // wikilink/embed/markdown/external/attachment.
                         let kind = LinkKindLabel::classify(link, path.as_deref());
+                        // DEC-268 (iter-261): a dead fragment that is the
+                        // prefix of exactly one heading in the target file gets
+                        // the full heading text as a suggestion — the
+                        // `[[decision-log#DEC-068]]` shape. Reported, never
+                        // applied: an automatic prefix match would silently
+                        // paper over a typo.
+                        let suggested_fragment = match (broken_anchor, &path, &link.fragment) {
+                            (true, Some(target_path), Some(fragment)) => index
+                                .get(target_path)
+                                .and_then(|target_entry| {
+                                    hyalo_core::anchor::unique_heading_by_prefix(
+                                        fragment,
+                                        &target_entry.sections,
+                                    )
+                                })
+                                .map(str::to_owned),
+                            _ => None,
+                        };
                         LinkInfo {
                             target: link.target.clone(),
                             path,
@@ -945,6 +963,7 @@ pub fn find(
                             line: *line,
                             fragment: link.fragment.clone(),
                             broken_anchor,
+                            suggested_fragment,
                             out_of_vault,
                         }
                     })
@@ -965,20 +984,34 @@ pub fn find(
                     // entries (`path == entry.rel_path`) are excluded from
                     // the `--orphan`/`--dead-end` outbound-edge count below so
                     // this does not change those verdicts.
-                    .chain(entry.self_anchors.iter().map(|(line, fragment)| LinkInfo {
-                        target: String::new(),
-                        path: Some(entry.rel_path.clone()),
-                        label: None,
-                        // A same-file heading jump is a wikilink-shaped
-                        // reference to this very file, never an attachment.
-                        kind: LinkKindLabel::Wikilink,
-                        line: *line,
-                        fragment: Some(fragment.clone()),
-                        broken_anchor: !hyalo_core::anchor::fragment_matches_headings(
+                    .chain(entry.self_anchors.iter().map(|(line, fragment)| {
+                        let broken_anchor = !hyalo_core::anchor::fragment_matches_headings(
                             fragment,
                             &entry.sections,
-                        ),
-                        out_of_vault: false,
+                        );
+                        LinkInfo {
+                            target: String::new(),
+                            path: Some(entry.rel_path.clone()),
+                            label: None,
+                            // A same-file heading jump is a wikilink-shaped
+                            // reference to this very file, never an attachment.
+                            kind: LinkKindLabel::Wikilink,
+                            line: *line,
+                            fragment: Some(fragment.clone()),
+                            broken_anchor,
+                            // DEC-268: same unique-prefix suggestion as for a
+                            // cross-file anchor, against this file's headings.
+                            suggested_fragment: broken_anchor
+                                .then(|| {
+                                    hyalo_core::anchor::unique_heading_by_prefix(
+                                        fragment,
+                                        &entry.sections,
+                                    )
+                                })
+                                .flatten()
+                                .map(str::to_owned),
+                            out_of_vault: false,
+                        }
                     }))
                     .collect::<Vec<_>>(),
             )

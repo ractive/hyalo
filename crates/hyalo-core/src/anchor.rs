@@ -162,6 +162,58 @@ fn heading_slugs(sections: &[OutlineSection]) -> Vec<String> {
     slugs
 }
 
+/// The one heading a broken fragment is a **prefix** of, if there is exactly
+/// one (iter-261 / DEC-268).
+///
+/// The own knowledgebase writes `[[decision-log#DEC-068]]` — an anchor that
+/// names a decision id, while the heading it means is
+/// `## DEC-068: Snapshot index format`. Obsidian calls that broken, and it is:
+/// the fix is to write the whole heading. This finds the heading to suggest.
+///
+/// Returns `None` when nothing starts with the fragment, and — deliberately —
+/// also when **two or more** headings do: an ambiguous prefix is a guess, and a
+/// guess is exactly what makes a silent prefix match hide typos. Comparison is
+/// ASCII-case-insensitive on the trimmed heading text, matching
+/// [`fragment_matches_headings`]. Block refs and templated headings are never
+/// suggested.
+///
+/// The suggestion is *reported*, never applied on its own: `find --broken-links`
+/// surfaces it as `suggested_fragment` so the author can confirm it.
+#[must_use]
+pub fn unique_heading_by_prefix<'a>(
+    fragment: &str,
+    sections: &'a [OutlineSection],
+) -> Option<&'a str> {
+    if is_block_ref(fragment) {
+        return None;
+    }
+    let needle = normalize_for_match(fragment);
+    if needle.is_empty() {
+        return None;
+    }
+    let mut found: Option<&'a str> = None;
+    for section in sections {
+        let Some(heading) = section.heading.as_deref().map(str::trim) else {
+            continue;
+        };
+        if heading.len() <= needle.len() || is_templated_heading(heading) {
+            continue;
+        }
+        let Some(prefix) = heading.get(..needle.len()) else {
+            continue;
+        };
+        if !prefix.eq_ignore_ascii_case(&needle) {
+            continue;
+        }
+        if found.is_some() {
+            // Two headings share the prefix — ambiguous, so no suggestion.
+            return None;
+        }
+        found = Some(heading);
+    }
+    found
+}
+
 /// Validate a link fragment against a target file's outline sections.
 ///
 /// Returns `true` when the fragment matches one of the headings under the
@@ -447,5 +499,62 @@ mod tests {
         // verbatim.
         let secs = [sec(Some("100%done"))];
         assert!(fragment_matches_headings("100%done", &secs));
+    }
+
+    // --- iter-261 / DEC-268: unique heading prefix ---
+
+    fn secs(headings: &[&str]) -> Vec<OutlineSection> {
+        headings
+            .iter()
+            .enumerate()
+            .map(|(i, h)| OutlineSection {
+                level: 2,
+                heading: Some((*h).to_owned()),
+                line: i + 1,
+                links: Vec::new(),
+                tasks: None,
+                code_blocks: Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unique_prefix_suggests_the_full_heading() {
+        let sections = secs(&["DEC-068: Snapshot index format", "DEC-070: Something else"]);
+        assert_eq!(
+            unique_heading_by_prefix("DEC-068", &sections),
+            Some("DEC-068: Snapshot index format")
+        );
+        // Case-insensitive, like every other anchor comparison.
+        assert_eq!(
+            unique_heading_by_prefix("dec-070", &sections),
+            Some("DEC-070: Something else")
+        );
+    }
+
+    #[test]
+    fn ambiguous_prefix_suggests_nothing() {
+        let sections = secs(&["DEC-06: first", "DEC-06: second"]);
+        assert_eq!(unique_heading_by_prefix("DEC-06", &sections), None);
+    }
+
+    #[test]
+    fn prefix_of_nothing_and_exact_heading_suggest_nothing() {
+        let sections = secs(&["DEC-068: Snapshot index format"]);
+        // No heading starts with it.
+        assert_eq!(unique_heading_by_prefix("DEC-999", &sections), None);
+        // An exact match is not a *prefix* fix — the anchor already resolves,
+        // so it never reaches this helper, and it suggests nothing anyway.
+        assert_eq!(
+            unique_heading_by_prefix("DEC-068: Snapshot index format", &sections),
+            None
+        );
+    }
+
+    #[test]
+    fn block_refs_and_templated_headings_are_never_suggested() {
+        let sections = secs(&["{{ title }} rest"]);
+        assert_eq!(unique_heading_by_prefix("{{ title }}", &sections), None);
+        assert_eq!(unique_heading_by_prefix("^abc123", &secs(&["^abc123 x"])), None);
     }
 }
