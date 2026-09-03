@@ -2894,7 +2894,10 @@ mod tests {
     #[test]
     fn escaped_alias_pipe_splits_target_and_alias() {
         let mut links = Vec::new();
-        extract_links_from_text(r"[[obsidian-advanced-uri\|Advanced URI Plugin]]", &mut links);
+        extract_links_from_text(
+            r"[[obsidian-advanced-uri\|Advanced URI Plugin]]",
+            &mut links,
+        );
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "obsidian-advanced-uri");
         assert_eq!(links[0].label.as_deref(), Some("Advanced URI Plugin"));

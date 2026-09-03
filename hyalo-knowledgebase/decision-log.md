@@ -3957,3 +3957,109 @@ Slower, never wrong.
 
 **Rejected:** the opaque length-prefixed BM25 blob, again — DEC-264 parked it
 and early-stop worked, so it stays parked.
+
+## DEC-266: an explicit non-`.md` extension is an attachment reference, and nothing crosses it (2026-09-03)
+
+**Decision:** [[iterations/iteration-261-link-resolution-obsidian-compat]]
+makes a link target that carries an explicit non-`.md` extension
+(`img.png`, `Books.base`, `report.pdf`) a reference to a *vault file* rather
+than to a note. Two halves:
+
+**1. It resolves against every vault file, not just the notes.** The
+case/stem index is now seeded with the vault's attachments as well as its
+`.md` files, so `![[img.png]]` resolves by unique basename anywhere in the
+vault, `![[sub/img.png]]` also resolves against the source folder, and
+`[[Templates/Bases/Books.base]]` resolves by path — the same set of spellings
+Obsidian's "shortest path when possible" setting accepts. A resolved one is
+reported with `kind: "attachment"`: never broken, never in
+`find --broken-links` / `summary.links.broken` / HYALO006, and never a graph
+edge for `--orphan` / `--dead-end`. On kepano-obsidian 53 of 66 "broken" links
+were `.base` embeds; on Obsidian Hub 83 were `.png` / `.gif` / `.jpg`.
+
+Only files that *have* an extension are indexed as attachments. An
+extension-less `LICENSE` would key on the same basename as `LICENSE.md` and
+turn a link that resolves today into an ambiguous one; that trade is not worth
+the handful of extension-less files a vault holds.
+
+**2. `links fix` never matches across an explicit extension.** A broken
+`Companies.base` may only be matched against a `*.base` file, and the fix
+candidate set is the vault's notes, so it has no candidate at all and stays
+honestly `unfixable`. Before this, `links fix` offered
+`Companies.base → Templates/Company Template.md` (0.45) and
+`Posts.base → Categories/Posts.md` (0.60), which
+`--apply-fuzzy --min-confidence 0.5` would have written — turning a Bases embed
+into a note link.
+
+The same rule takes `[[beta.markdown]] → beta.md` off the table, which one
+`index_journal` e2e relied on. That is the intended consequence, not
+collateral: `.markdown` is not `.md`, Obsidian would look for a file literally
+named `beta.markdown`, and the sanctioned extension repair (`foo` ↔ `foo.md`)
+is a separate strategy that still runs.
+
+**Also:** a fuzzy candidate whose composite confidence is `0.0` is no longer
+reported at all. `[[lithou]]` was being listed against `lighthousedino.md` at
+confidence 0.0 — a suggestion nobody would ever apply, and pure noise in the
+report.
+
+**Rejected:** a `[links] attachments = false` opt-out. Resolving an attachment
+is what Obsidian does; a vault that wants its images reported as broken links
+is not a vault hyalo needs to serve, and the project rule is no new surface
+from dogfood pressure.
+
+## DEC-267: link resolution folds case on every platform (2026-09-03)
+
+**Decision:** case-insensitive *link resolution* is the default everywhere —
+`find --broken-links`, `summary`, HYALO006, `backlinks`, `--orphan`,
+`--dead-end`, `mv` — regardless of what the filesystem does. Opt out with
+`[links] case_insensitive = "false"`. Exact-case still wins when both spellings
+exist, because the literal path is tried before the folded lookup.
+
+**Why not the filesystem probe.** `mode_enabled(Auto, dir)` asks "does this
+filesystem distinguish `Foo.md` from `foo.md`?", which is the right question
+for a `--file` argument naming a real path and the wrong one for a wikilink.
+Obsidian resolves `[[AidenLx]]` to `People/aidenlx.md` on every platform, so
+the same vault reported those 48 links as case-mismatched on macOS and as
+broken on Linux. The probe still governs `--file` resolution and schema
+exemption matching; only the link resolver was moved off it, via
+`links_case_insensitive(mode)`.
+
+**What `links fix --case-insensitive` now means.** It is *not* a no-op, and it
+is not deprecated. Since resolution folds case, a case-only mismatch is never
+broken and never counted under `broken`, so the flag no longer changes what
+resolves — but it still suppresses the cosmetic `link-case-mismatch` rewrite
+plans, which is a real thing to want on a vault (MDN's `en-US` / `en-us`) that
+does not intend to normalise its link spellings. `case_mismatches` keeps
+reporting them so an author who *does* want to normalise still can.
+
+**Rejected:** removing the flag, and making it a warning-only no-op — the
+plan's tentative proposal. Both throw away a control that still does something
+useful; the narrower reading costs nothing and keeps `links fix --dry-run`
+usable on a case-folded checkout.
+
+## DEC-268: a dead anchor gets a suggestion, never a silent prefix match (2026-09-03)
+
+**Decision:** when a link's `#fragment` names no heading in the target file but
+is the **prefix of exactly one** heading there, the link carries
+`suggested_fragment` with that heading's full text.
+`[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`. Two or more
+matching headings suggest nothing; so do zero. `find --broken-links` renders
+it as `— did you mean "#DEC-068: Snapshot index format"?`, and the link stays
+`broken_anchor: true` throughout.
+
+This is option (a) from the plan — a suggestion — and it is deliberately a
+*report*, not a rewrite. The own knowledgebase's 25 such anchors across 10
+files are correctly broken per Obsidian, and the author is the one who knows
+whether `#DEC-068` meant that heading or a heading that no longer exists.
+
+**Rejected: (b), an opt-in `[links] anchor_prefix_match = true` that makes a
+unique prefix *resolve*.** A silent prefix match hides typos — `#Task` would
+quietly resolve against `## Tasks and open questions` — and it would make
+`find --broken-links` answer differently for the same vault depending on a
+config key, which is exactly the inconsistency DEC-267 just removed for case.
+
+**Rejected: auto-applying the suggestion in `links fix`.** Same objection one
+step further: an automatic rewrite of a fragment the author never wrote is a
+guess written to disk, and the fix belongs behind human eyes. The suggestion
+being visible in the report the `links fix` anchor note already points at
+("N broken anchor(s) — see `find --broken-links`") is the whole affordance
+needed.

@@ -555,6 +555,9 @@ mod tests {
     fn block_refs_and_templated_headings_are_never_suggested() {
         let sections = secs(&["{{ title }} rest"]);
         assert_eq!(unique_heading_by_prefix("{{ title }}", &sections), None);
-        assert_eq!(unique_heading_by_prefix("^abc123", &secs(&["^abc123 x"])), None);
+        assert_eq!(
+            unique_heading_by_prefix("^abc123", &secs(&["^abc123 x"])),
+            None
+        );
     }
 }

@@ -105,7 +105,27 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.
 - **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone.
-- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.path == null and (.out_of_vault | not)) or .broken_anchor) | "\($f.file):\(.line) \(.target)"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
+- **Link kinds (iter-261)**: every entry in `find --fields links` carries `kind` —
+  `wikilink` | `embed` (`![[…]]`) | `markdown` | `external` (any `scheme:` URI: `https:`,
+  `obsidian://`, `mailto:`, `file://`) | `attachment` (resolved to a non-`.md` vault file — an
+  image, a PDF, an Obsidian `.base`). `external` and `attachment` links are never broken: they
+  stay out of `find --broken-links`, `summary.links.broken` and HYALO006, and are not graph
+  edges for `--orphan`/`--dead-end`. Text mode prints the kind after the arrow unless it is
+  `wikilink`.
+- **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
+  on every platform, not only on a case-insensitive filesystem. Opt out with
+  `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the
+  cosmetic `link-case-mismatch` rewrite plans.
+- **Attachments resolve like Obsidian**: `![[img.png]]` matches a unique basename anywhere in
+  the vault, `![[sub/img.png]]` also resolves against the source folder, and
+  `[[Templates/Bases/Books.base]]` resolves by path. `links fix` never matches across an
+  explicit extension (DEC-266), so a broken `Companies.base` is unfixable rather than rewritten
+  into `Company Template.md`.
+- **Anchor suggestions** (DEC-268): a broken `#fragment` that is the prefix of exactly one
+  heading in the target file carries `suggested_fragment` with the full heading text —
+  `[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`. Reported, never auto-applied;
+  an ambiguous prefix suggests nothing.
+- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: HYALO006 does not check anchors (see above), so use `hyalo find --broken-links --strict` instead — exits 1 if any file has a broken target or broken anchor, 0 otherwise. `--strict` is a general `find` flag (works with any filter, e.g. `find --property status=draft --strict`), not anchor-specific. `hyalo links fix` also gets a one-line stderr-adjacent note ("N broken anchor(s) — see `find --broken-links`") when anchors are broken but targets are not, and `hyalo summary`'s `links.broken_anchors` figure is distinct from `links.broken` (link-count vs file-count units, so don't expect the raw numbers to match).
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`
 

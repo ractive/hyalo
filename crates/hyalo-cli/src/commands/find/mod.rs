@@ -1128,17 +1128,12 @@ pub fn find(
         // per-link output (`path`/`broken_anchor`); this filter only decides
         // which files to surface.
         if broken_links {
-            let has_broken = obj
-                .links
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .any(|l| {
-                    // iter-261: an external URI and a resolved attachment are
-                    // never broken, whatever their `path` says.
-                    l.kind.is_resolvable_vault_link()
-                        && ((l.path.is_none() && !l.out_of_vault) || l.broken_anchor)
-                });
+            let has_broken = obj.links.as_deref().unwrap_or(&[]).iter().any(|l| {
+                // iter-261: an external URI and a resolved attachment are
+                // never broken, whatever their `path` says.
+                l.kind.is_resolvable_vault_link()
+                    && ((l.path.is_none() && !l.out_of_vault) || l.broken_anchor)
+            });
             if !has_broken {
                 continue;
             }

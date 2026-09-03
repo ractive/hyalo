@@ -174,7 +174,10 @@ fn attachments_resolve_from_every_folder_and_are_never_broken() {
         )
     );
 
-    assert_eq!(run_json(&tmp, &["summary"])["results"]["links"]["broken"], 0);
+    assert_eq!(
+        run_json(&tmp, &["summary"])["results"]["links"]["broken"],
+        0
+    );
     assert_eq!(
         run_json(&tmp, &["lint", "--rule", "HYALO006"])["results"]["violations"],
         0
@@ -252,7 +255,11 @@ fn escaped_alias_pipe_resolves_and_survives_a_move() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let row = std::fs::read_to_string(tmp.path().join("table.md")).unwrap();
     assert!(
         row.contains("| [[advanced-uri\\|Advanced URI Plugin]] | yes |"),
@@ -276,7 +283,10 @@ fn case_only_mismatches_resolve_for_every_consumer() {
     );
 
     assert_eq!(run_json(&tmp, &["find", "--broken-links"])["total"], 0);
-    assert_eq!(run_json(&tmp, &["summary"])["results"]["links"]["broken"], 0);
+    assert_eq!(
+        run_json(&tmp, &["summary"])["results"]["links"]["broken"],
+        0
+    );
     assert_eq!(
         run_json(&tmp, &["lint", "--rule", "HYALO006"])["results"]["violations"],
         0
@@ -384,7 +394,11 @@ fn a_dead_anchor_with_one_prefix_match_suggests_the_full_heading() {
 fn attachments_round_trip_through_the_index_snapshot() {
     let tmp = attachment_vault();
     let out = hyalo(&tmp).arg("create-index").output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let json = run_json(
         &tmp,
@@ -414,14 +428,17 @@ fn an_index_without_attachments_still_loads() {
         .args(["set", "root.md", "--property", "status=done", "--index"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let json = run_json(
         &tmp,
         &["find", "--file", "root.md", "--fields", "links", "--index"],
     );
     assert_eq!(
-        json["results"][0]["links"][0]["path"],
-        "02 Attachments/x.png",
+        json["results"][0]["links"][0]["path"], "02 Attachments/x.png",
         "a re-saved snapshot must keep its attachment list"
     );
 }

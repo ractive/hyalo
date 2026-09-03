@@ -584,10 +584,7 @@ fn target_is_attachment(target: &str, case_index: &CaseInsensitiveIndex) -> bool
     if case_index.contains_path(&normalized) || case_index.lookup_unique(&normalized).is_some() {
         return true;
     }
-    let basename = normalized
-        .rsplit('/')
-        .next()
-        .unwrap_or(normalized.as_str());
+    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
     case_index
         .lookup_stem(basename)
         .is_some_and(|path| !crate::discovery::has_md_extension(path))
