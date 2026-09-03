@@ -114,18 +114,6 @@ impl LinkKindLabel {
         }
     }
 
-    /// The lowercase wire name, matching the serialized JSON value.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Wikilink => "wikilink",
-            Self::Embed => "embed",
-            Self::Markdown => "markdown",
-            Self::External => "external",
-            Self::Attachment => "attachment",
-        }
-    }
-
     /// Whether a link of this kind can ever be reported broken.
     ///
     /// An external URI names nothing in the vault and an attachment already
