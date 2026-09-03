@@ -212,6 +212,8 @@ mod tests {
             kind: links::LinkKind::Wikilink,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[[my-note]]");
     }
@@ -224,6 +226,8 @@ mod tests {
             kind: links::LinkKind::Wikilink,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
     }
@@ -236,6 +240,8 @@ mod tests {
             kind: links::LinkKind::Markdown,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[Example](https://example.com)");
     }
@@ -248,6 +254,8 @@ mod tests {
             kind: links::LinkKind::Markdown,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }
