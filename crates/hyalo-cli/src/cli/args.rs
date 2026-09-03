@@ -591,6 +591,9 @@ pub(crate) struct FindFilters {
     /// reported broken.
     /// Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
     /// reports, and links are listed in document order.
+    /// An external URI (`obsidian://`, `mailto:`, `https:`) and a link that resolves to a
+    /// non-`.md` vault file (an image, a `.base`) are never broken — they are reported with
+    /// `kind` `external` / `attachment` and never qualify a file here.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub broken_links: bool,
@@ -811,6 +814,15 @@ pub(crate) enum Commands {
             --sort links_count|backlinks_count). Properties are a {key: value} map and do NOT repeat \
             the promoted title; use --fields properties-typed for a [{name, type, value}] array. \
             --format text prints the included field names under the results.\n\
+            LINK KINDS: every entry in --fields links carries kind — wikilink (plain [[note]]), \
+            embed (![[note]] / ![[img.png]]), markdown ([text](note.md)), external (any scheme: \
+            URI: https, obsidian://, mailto:, file://) or attachment (resolved to a non-.md vault \
+            file: an image, a PDF, an Obsidian .base). external and attachment links never count \
+            as broken, never appear under --broken-links or HYALO006, and are not graph edges for \
+            --orphan/--dead-end. Text mode prints the kind after the arrow unless it is wikilink. \
+            A broken #anchor whose text is the prefix of exactly one heading in the target file \
+            also carries suggested_fragment, the full heading to write instead (never applied \
+            automatically).\n\
             SIZE: size/lines let a caller budget before reading -- pair them with \
             `read --lines A:B` or `read --section H` instead of pulling a large body whole.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
@@ -2684,9 +2696,15 @@ pub(crate) enum LinksAction {
         /// whole vault and does not require the full path.
         #[arg(long)]
         expand_short_form: bool,
-        /// Treat links that resolve only by case folding as resolved, not fixable
+        /// Suppress the cosmetic case-mismatch rewrite plans
         ///
-        /// (UX-6, iter-244.)
+        /// (UX-6, iter-244; narrowed by DEC-267 in iter-261.)
+        ///
+        /// Since iter-261 link *resolution* folds case on every platform, so a
+        /// case-only mismatch is never broken and never counted under
+        /// `broken` — this flag no longer changes what resolves. What it still
+        /// does is hide the `link-case-mismatch` fix plans themselves, for a
+        /// vault that does not want its link spellings normalised.
         ///
         /// On case-folded vault layouts (MDN-style `en-US` vs `en-us`
         /// directories on macOS/Windows), a plain `links fix --dry-run`

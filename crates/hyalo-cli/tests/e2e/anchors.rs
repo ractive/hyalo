@@ -1107,11 +1107,11 @@ fn link_lines_are_rendered_in_text_output() {
     assert!(output.status.success());
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.contains("line 8: \"Foo.md#nope\" → \"Foo.md\" (broken anchor)"),
+        text.contains("line 8: \"Foo.md#nope\" → \"Foo.md\" (markdown) (broken anchor)"),
         "text output must prefix each link with its source line, got:\n{text}"
     );
     assert!(
-        text.contains("line 10: \"missing.md\" (unresolved)"),
+        text.contains("line 10: \"missing.md\" (markdown) (unresolved)"),
         "a broken target must be located too, got:\n{text}"
     );
 }
