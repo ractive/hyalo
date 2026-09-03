@@ -16,7 +16,7 @@ use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter;
 use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 use hyalo_core::schema::SchemaConfig;
-use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode, mode_enabled};
+use hyalo_core::{CaseInsensitiveIndex, CaseInsensitiveMode};
 
 /// Default output limit for list commands when no `--limit` is passed and no
 /// `default_limit` is set in `.hyalo.toml`.
@@ -46,6 +46,15 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
             idx.insert(&rel);
         }
     }
+    // iter-261 / BUG-5, BUG-6: attachments (`.png`, `.base`, `.pdf`) are vault
+    // files Obsidian resolves links against, so they go into the same index —
+    // keyed by full path and by basename. Their basename key carries the
+    // extension (`img.png`), so it can never collide with a note stem.
+    if let Ok(attachments) = discovery::discover_attachments(dir) {
+        for rel in &attachments {
+            idx.insert(rel);
+        }
+    }
     idx
 }
 
@@ -61,6 +70,11 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
     let mut idx = CaseInsensitiveIndex::with_capacity(snap.entries().len());
     for entry in snap.entries() {
         idx.insert(&entry.rel_path);
+    }
+    // iter-261: attachments recorded by `create-index` (empty for a snapshot
+    // written by an older hyalo, which simply degrades to the old behaviour).
+    for rel in snap.attachments() {
+        idx.insert(rel);
     }
     idx
 }
@@ -116,7 +130,10 @@ pub(crate) fn maybe_case_index(
     } else {
         build_case_index_from_dir(dir)
     };
-    idx.set_case_insensitive_paths(mode_enabled(mode, dir));
+    // DEC-267 (iter-261): link resolution folds case on every platform unless
+    // the vault opts out — not "whatever this filesystem does", so the
+    // filesystem probe plays no part here.
+    idx.set_case_insensitive_paths(hyalo_core::links_case_insensitive(mode));
     Some(idx)
 }
 

@@ -586,6 +586,23 @@ pub fn mode_enabled(mode: CaseInsensitiveMode, dir: &Path) -> bool {
     }
 }
 
+/// Whether **link resolution** should fold ASCII case (iter-261 / DEC-267).
+///
+/// Deliberately *not* [`mode_enabled`]: that one answers "does this filesystem
+/// distinguish `Foo.md` from `foo.md`?", which is the right question for a
+/// `--file` argument naming a real path, and the wrong one for a wikilink.
+/// Obsidian resolves `[[AidenLx]]` to `People/aidenlx.md` on every platform, so
+/// `find --broken-links`, `summary`, HYALO006, `backlinks`, `--orphan`,
+/// `--dead-end` and `mv` all fold case unless the vault explicitly opts out
+/// with `[links] case_insensitive = "false"`.
+///
+/// Takes no directory: there is nothing to probe. Before iter-261 the same
+/// vault reported 48 links as case-mismatched on macOS and broken on Linux.
+#[must_use]
+pub fn links_case_insensitive(mode: CaseInsensitiveMode) -> bool {
+    !matches!(mode, CaseInsensitiveMode::Off)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

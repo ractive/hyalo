@@ -66,6 +66,77 @@ pub struct TagSummaryEntry {
 // Link types
 // ---------------------------------------------------------------------------
 
+/// What a link in the `--fields links` inventory *is* — the reported `kind`
+/// (iter-261, dogfood UX-6).
+///
+/// Distinct from [`crate::links::LinkKind`], which is the two-valued *syntax*
+/// the resolver branches on. This is the user-facing bucket, and it mixes
+/// syntax (`embed`, `markdown`) with verdict (`external`, `attachment`)
+/// because that is what a reader triaging a link report needs: without it,
+/// telling `![[img.png]]` from `[[note]]` from `<obsidian://…>` meant going
+/// back to the file.
+///
+/// Precedence when several could apply — `external` beats `attachment` beats
+/// `embed` beats the syntax kinds — so exactly one label is reported per link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkKindLabel {
+    /// `[[note]]` — a plain wikilink to a vault note.
+    #[default]
+    Wikilink,
+    /// `![[note]]` / `![[img.png]]` — an embed.
+    Embed,
+    /// `[text](note.md)` — a markdown link to a vault file.
+    Markdown,
+    /// `[text](https://…)`, `[[obsidian://…]]` — a URI, resolved by nothing.
+    External,
+    /// A link that resolved to a vault file which is **not** markdown — an
+    /// image, a PDF, an Obsidian `.base`. Never broken, never a graph edge.
+    Attachment,
+}
+
+impl LinkKindLabel {
+    /// The label for a parsed link and its resolution result.
+    #[must_use]
+    pub fn classify(link: &crate::links::Link, resolved_path: Option<&str>) -> Self {
+        if link.external {
+            return Self::External;
+        }
+        if resolved_path.is_some_and(|p| !crate::discovery::has_md_extension(p)) {
+            return Self::Attachment;
+        }
+        if link.embed {
+            return Self::Embed;
+        }
+        match link.kind {
+            crate::links::LinkKind::Wikilink => Self::Wikilink,
+            crate::links::LinkKind::Markdown => Self::Markdown,
+        }
+    }
+
+    /// The lowercase wire name, matching the serialized JSON value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wikilink => "wikilink",
+            Self::Embed => "embed",
+            Self::Markdown => "markdown",
+            Self::External => "external",
+            Self::Attachment => "attachment",
+        }
+    }
+
+    /// Whether a link of this kind can ever be reported broken.
+    ///
+    /// An external URI names nothing in the vault and an attachment already
+    /// resolved, so neither counts toward `links.broken`, HYALO006 or
+    /// `find --broken-links`.
+    #[must_use]
+    pub fn is_resolvable_vault_link(self) -> bool {
+        !matches!(self, Self::External | Self::Attachment)
+    }
+}
+
 /// A single link with its resolution status.
 /// Used by `find` (links field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +144,12 @@ pub struct LinkInfo {
     pub target: String,
     pub path: Option<String>,
     pub label: Option<String>,
+    /// What this link is: `wikilink` | `embed` | `markdown` | `external` |
+    /// `attachment` (iter-261, dogfood UX-6). Always serialized — a link
+    /// always has a kind — and defaulted to `wikilink` when reading JSON
+    /// written by an older hyalo.
+    #[serde(default)]
+    pub kind: LinkKindLabel,
     /// 1-based source line the link was written on (iter-215, dogfood UX-6).
     ///
     /// `find --broken-links` used to list every link of a matching file with no

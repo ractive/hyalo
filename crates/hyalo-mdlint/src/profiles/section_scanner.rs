@@ -120,6 +120,11 @@ impl FileVisitor for SectionScanner {
         links::extract_links_from_text(cleaned, &mut line_links);
 
         for link in line_links {
+            // iter-261: a section's link list is a vault-link inventory; an
+            // external URI (now parsed rather than dropped) does not belong.
+            if link.external {
+                continue;
+            }
             let formatted = format_link_string(&link);
             self.current.links.push(formatted);
         }

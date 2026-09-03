@@ -25,7 +25,8 @@ use hyalo_core::heading::{SectionFilter, SectionRange, build_section_scope, in_s
 use hyalo_core::index::VaultIndex;
 use hyalo_core::link_graph::is_self_link;
 use hyalo_core::types::{
-    BacklinkInfo, ContentMatch, FileObject, FindTaskInfo, LinkInfo, OutlineSection, PropertyInfo,
+    BacklinkInfo, ContentMatch, FileObject, FindTaskInfo, LinkInfo, LinkKindLabel, OutlineSection,
+    PropertyInfo,
 };
 
 use build::{TitleMatcher, extract_title, matches_task_filter};
@@ -887,14 +888,21 @@ pub fn find(
                         // kind-branching that used to live here. The helper owns
                         // the markdown site-absolute / path-qualified / bare
                         // basename normalization and the final `resolve_target`.
-                        let path = discovery::resolve_link_from_source(
-                            &canonical_dir,
-                            &entry.rel_path,
-                            link.kind,
-                            &link.target,
-                            site_prefix,
-                            case_index,
-                        );
+                        // iter-261 / BUG-2: an external URI resolves to
+                        // nothing by definition — skip the whole resolution
+                        // pass rather than let it fail and read as broken.
+                        let path = if link.external {
+                            None
+                        } else {
+                            discovery::resolve_link_from_source(
+                                &canonical_dir,
+                                &entry.rel_path,
+                                link.kind,
+                                &link.target,
+                                site_prefix,
+                                case_index,
+                            )
+                        };
                         // L-21: broken-anchor check. Only runs when the TARGET
                         // resolved (`path` is `Some`) — a broken target is never
                         // also reported as a broken anchor. The target file's
@@ -916,15 +924,20 @@ pub fn find(
                         // is out of scope, not broken — flag it so
                         // `--broken-links` can leave it out of the headline.
                         let out_of_vault = path.is_none()
+                            && !link.external
                             && discovery::link_target_escapes_vault(
                                 &entry.rel_path,
                                 link.kind,
                                 &link.target,
                             );
+                        // iter-261 (UX-6): the reported bucket —
+                        // wikilink/embed/markdown/external/attachment.
+                        let kind = LinkKindLabel::classify(link, path.as_deref());
                         LinkInfo {
                             target: link.target.clone(),
                             path,
                             label: link.label.clone(),
+                            kind,
                             // iter-215 (dogfood UX-6): the 1-based source line,
                             // already carried by the index entry, so a
                             // `--broken-links` report points at the link
@@ -956,6 +969,9 @@ pub fn find(
                         target: String::new(),
                         path: Some(entry.rel_path.clone()),
                         label: None,
+                        // A same-file heading jump is a wikilink-shaped
+                        // reference to this very file, never an attachment.
+                        kind: LinkKindLabel::Wikilink,
                         line: *line,
                         fragment: Some(fragment.clone()),
                         broken_anchor: !hyalo_core::anchor::fragment_matches_headings(
@@ -1084,7 +1100,12 @@ pub fn find(
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .any(|l| (l.path.is_none() && !l.out_of_vault) || l.broken_anchor);
+                .any(|l| {
+                    // iter-261: an external URI and a resolved attachment are
+                    // never broken, whatever their `path` says.
+                    l.kind.is_resolvable_vault_link()
+                        && ((l.path.is_none() && !l.out_of_vault) || l.broken_anchor)
+                });
             if !has_broken {
                 continue;
             }
@@ -1103,12 +1124,16 @@ pub fn find(
         // — that IS a real outbound edge (NEW-12's own scope is "same-file
         // heading jump", not every link whose target happens to be the file
         // itself), and excluding it too was broader than intended and untested.
+        //
+        // iter-261: an external URI and an attachment embed are not edges in
+        // the note graph either — a note whose only links are `![[img.png]]`
+        // and `[docs](https://…)` is still a dead end.
         let has_real_outbound = || {
             obj.links
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .any(|l| !l.target.is_empty())
+                .any(|l| !l.target.is_empty() && l.kind.is_resolvable_vault_link())
         };
 
         // --- Apply orphan filter (no inbound AND no outbound links) ---

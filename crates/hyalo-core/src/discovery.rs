@@ -172,10 +172,44 @@ pub fn discover_files(dir: &Path) -> Result<Vec<PathBuf>> {
     discover_files_with_include(dir, include)
 }
 
+/// Which files a vault walk should collect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileKind {
+    /// `*.md` — the notes that make up the vault (the historical behaviour).
+    Markdown,
+    /// Every other file that carries an extension — the vault's attachments
+    /// (iter-261). Extension-less files are skipped; see [`discover_attachments`].
+    NonMarkdown,
+}
+
+impl FileKind {
+    fn accepts(self, path: &Path) -> bool {
+        match path.extension() {
+            // `Markdown` keeps the historical case-sensitive `== "md"` test;
+            // `NonMarkdown` folds case so a stray `.MD` is not misfiled as an
+            // attachment. A file matching neither is simply not collected.
+            Some(ext) => match self {
+                Self::Markdown => ext == "md",
+                Self::NonMarkdown => !ext.eq_ignore_ascii_case("md"),
+            },
+            None => false,
+        }
+    }
+}
+
 /// Test-friendly variant of [`discover_files`] with an explicit include
 /// override, bypassing the process-global `OnceLock` (which can only be set
 /// once per process). Production code uses [`discover_files`].
 fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Result<Vec<PathBuf>> {
+    discover_files_with_include_ext(dir, include, FileKind::Markdown)
+}
+
+/// The shared vault walk, parameterized by which files to keep.
+fn discover_files_with_include_ext(
+    dir: &Path,
+    include: Option<&ScanInclude>,
+    kind: FileKind,
+) -> Result<Vec<PathBuf>> {
     let (tx, rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel::<String>();
     let walk_root = dir.to_path_buf();
@@ -219,7 +253,7 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
                 }
             };
             let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+            if kind.accepts(path) && path.is_file() {
                 let _ = tx.send(path.to_path_buf());
             }
             ignore::WalkState::Continue
@@ -302,6 +336,89 @@ fn discover_files_with_include(dir: &Path, include: Option<&ScanInclude>) -> Res
     kept.sort();
 
     Ok(kept)
+}
+
+/// Whether a vault-relative path or link target ends in `.md` (case-insensitive).
+#[must_use]
+pub fn has_md_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+/// Whether a link target carries an **explicit, non-markdown** file extension —
+/// `img.png`, `Books.base`, `report.pdf` (iter-261 / BUG-5, BUG-6).
+///
+/// Such a target is an attachment reference: Obsidian resolves it against every
+/// file in the vault (not just the notes) and never treats it as a note. A bare
+/// `[[Foo]]` or a `[[Foo.md]]` is *not* one, and neither is a target whose only
+/// dot sits in a directory component (`v1.2/notes`).
+#[must_use]
+pub fn has_non_md_extension(target: &str) -> bool {
+    let name = target.rsplit(['/', '\\']).next().unwrap_or(target);
+    // A leading dot is a hidden-file marker, not an extension (`.gitignore`).
+    let Some(dot) = name.rfind('.') else {
+        return false;
+    };
+    if dot == 0 || dot + 1 == name.len() {
+        return false;
+    }
+    !name[dot + 1..].eq_ignore_ascii_case("md")
+}
+
+/// Collect every non-`.md` file under `dir` that carries a file extension,
+/// as vault-relative forward-slash paths (iter-261 / BUG-5, BUG-6).
+///
+/// These are the vault's **attachments** — images, PDFs, Obsidian `.base`
+/// files — which Obsidian resolves links against exactly like notes. They are
+/// indexed by basename and by path so `![[img.png]]` and `[[Books.base]]`
+/// resolve the way Obsidian's "shortest path when possible" setting does.
+///
+/// Extension-less files are deliberately skipped: their basename key would
+/// collide with a note's stem (`LICENSE` vs `LICENSE.md`) and turn a link that
+/// resolves today into an ambiguous one.
+pub fn discover_attachments(dir: &Path) -> Result<Vec<String>> {
+    let include = match SCAN_INCLUDE.get() {
+        Some(Some(inc)) => Some(inc),
+        _ => None,
+    };
+    let files = discover_files_with_include_ext(dir, include, FileKind::NonMarkdown)?;
+    Ok(files.iter().map(|f| relative_path(dir, f)).collect())
+}
+
+/// Resolve a link target that carries an explicit non-`.md` extension, using
+/// the vault-wide attachment index (iter-261 / BUG-5, BUG-6).
+///
+/// Beyond what [`resolve_target`] already does for any target (literal path,
+/// case-insensitive path, unique basename), this adds the *source-relative*
+/// attempt Obsidian makes for a partially-qualified wikilink: `![[sub/x.png]]`
+/// written in `notes/a.md` also finds `notes/sub/x.png`. Markdown destinations
+/// already normalize against the source directory, so this only fills the
+/// wikilink gap.
+///
+/// Returns `None` for any target without a non-`.md` extension, so callers can
+/// use it as a pure fallback after their normal resolution attempt.
+#[must_use]
+pub fn resolve_attachment_from_source(
+    canonical_dir: &Path,
+    source_rel: &str,
+    kind: crate::links::LinkKind,
+    target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
+    if !has_non_md_extension(target) {
+        return None;
+    }
+    if kind != crate::links::LinkKind::Wikilink {
+        return None;
+    }
+    let normalized = target.replace('\\', "/");
+    if !normalized.contains('/') || normalized.starts_with('/') {
+        return None;
+    }
+    let src_rel = crate::link_graph::normalize_target(Path::new(source_rel), &normalized);
+    resolve_target(canonical_dir, &src_rel, site_prefix, case_index)
 }
 
 /// Resolve a path argument relative to `--dir`. Verifies it exists and is `.md`.
@@ -1126,7 +1243,20 @@ pub fn resolve_link_from_source(
     let resolved = normalize_link_target(kind, source_rel, target, |src_rel| {
         resolve_target(canonical_dir, src_rel, site_prefix, case_index).is_some()
     });
-    resolve_target(canonical_dir, resolved.as_ref(), site_prefix, case_index)
+    resolve_target(canonical_dir, resolved.as_ref(), site_prefix, case_index).or_else(|| {
+        // iter-261 / BUG-6: a partially-qualified attachment wikilink
+        // (`![[sub/img.png]]`) is also resolved relative to the source folder,
+        // the way Obsidian does. Pure fallback — `None` for every target
+        // without an explicit non-`.md` extension.
+        resolve_attachment_from_source(
+            canonical_dir,
+            source_rel,
+            kind,
+            target,
+            site_prefix,
+            case_index,
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1369,6 +1499,23 @@ pub(crate) fn classify_link_from_source(
     expand_short_form: bool,
 ) -> (String, LinkResolution) {
     use crate::links::LinkKind;
+
+    // iter-261 / BUG-5, BUG-6: a target with an explicit non-`.md` extension is
+    // an attachment reference. If it resolves to a real vault file it is simply
+    // fine — never a case-mismatch to "correct", never a relocation, and never
+    // (see `link_score`) a fuzzy `.base → .md` candidate.
+    if has_non_md_extension(&link.target)
+        && let Some(path) = resolve_link_from_source(
+            canonical_dir,
+            source_rel,
+            link.kind,
+            &link.target,
+            site_prefix,
+            case_index,
+        )
+    {
+        return (path, LinkResolution::Resolved(None));
+    }
 
     match link.kind {
         LinkKind::Wikilink => {

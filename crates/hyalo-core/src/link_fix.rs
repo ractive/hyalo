@@ -401,6 +401,12 @@ pub fn detect_broken_links_from_index(
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
+            // iter-261 / BUG-2: an external URI is not a vault link at all —
+            // it is neither counted nor classified, so it can never land in
+            // `unfixable` (2895 of them did on the Obsidian Hub vault).
+            if link.external {
+                continue;
+            }
             total_links += 1;
 
             let (resolved_target, resolution) = classify_link_from_source(

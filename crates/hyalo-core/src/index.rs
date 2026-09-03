@@ -296,6 +296,17 @@ struct SnapshotHeader {
     created_at: u64,
     /// PID of the process that created this snapshot.
     pid: u32,
+    /// Vault-relative paths of the vault's **attachments** — every non-`.md`
+    /// file carrying an extension (iter-261 / BUG-5, BUG-6).
+    ///
+    /// The entries list holds only notes, so without this an `--index` run
+    /// could not resolve `![[img.png]]` or `[[Books.base]]` and would report
+    /// links the same command resolves off-disk as broken. Defaulted on load,
+    /// and skipped when empty, so snapshots written by an older hyalo keep
+    /// loading and snapshots of vaults with no attachments are byte-identical
+    /// to before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachments: Vec<String>,
 }
 
 /// The snapshot wire format — header + entries + graph + optional BM25 index,
@@ -1146,7 +1157,16 @@ impl SnapshotIndex {
             &self.header.vault_dir,
             self.header.site_prefix.as_deref(),
             self.bm25.get(),
+            &self.header.attachments,
         )
+    }
+
+    /// The vault's attachment paths as recorded when the snapshot was built
+    /// (iter-261). Empty for a snapshot written before attachments were
+    /// indexed, or for a vault that has none.
+    #[must_use]
+    pub fn attachments(&self) -> &[String] {
+        &self.header.attachments
     }
 
     // ------------------------------------------------------------------
@@ -1379,7 +1399,21 @@ impl SnapshotIndex {
         site_prefix: Option<&str>,
         bm25_index: Option<&Bm25InvertedIndex>,
     ) -> Result<()> {
-        write_snapshot(index, path, vault_dir, site_prefix, bm25_index)
+        write_snapshot(index, path, vault_dir, site_prefix, bm25_index, &[])
+    }
+
+    /// Like [`save`](Self::save) but also records the vault's attachment paths
+    /// (iter-261) so `--index` runs resolve `![[img.png]]` and `[[Books.base]]`
+    /// exactly as an off-disk run does.
+    pub fn save_with_attachments(
+        index: &dyn VaultIndex,
+        path: &Path,
+        vault_dir: &str,
+        site_prefix: Option<&str>,
+        bm25_index: Option<&Bm25InvertedIndex>,
+        attachments: &[String],
+    ) -> Result<()> {
+        write_snapshot(index, path, vault_dir, site_prefix, bm25_index, attachments)
     }
 
     /// Return the persisted BM25 inverted index, if present.
@@ -1454,6 +1488,7 @@ fn write_snapshot(
     vault_dir: &str,
     site_prefix: Option<&str>,
     bm25_index: Option<&Bm25InvertedIndex>,
+    attachments: &[String],
 ) -> Result<()> {
     let header = SnapshotHeader {
         vault_dir: vault_dir.to_owned(),
@@ -1462,6 +1497,7 @@ fn write_snapshot(
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
         pid: std::process::id(),
+        attachments: attachments.to_vec(),
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -2316,6 +2352,11 @@ impl FileVisitor for SectionScanner {
         let mut line_links: Vec<links::Link> = Vec::new();
         links::extract_links_from_text(cleaned, &mut line_links);
         for link in line_links {
+            // iter-261: a section's link list is a vault-link inventory; an
+            // external URI (now parsed rather than dropped) does not belong.
+            if link.external {
+                continue;
+            }
             self.current.links.push(format_link_string(&link));
         }
 
@@ -2919,6 +2960,7 @@ Content.
                 site_prefix: None,
                 created_at: 0,
                 pid: std::process::id(),
+                attachments: Vec::new(),
             },
             entries,
             graph: &graph,
@@ -3213,6 +3255,7 @@ Content.
                 site_prefix: None,
                 created_at: 0,
                 pid: std::process::id(),
+                attachments: Vec::new(),
             },
             bm25_index: Some(&original),
             entries: &entries,
