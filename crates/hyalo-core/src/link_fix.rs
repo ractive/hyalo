@@ -705,6 +705,9 @@ impl LinkMatcher {
     pub(crate) fn find_match(&self, written_target: &str, source: &str) -> Option<MatchResult> {
         // Minimum score difference to avoid ambiguous fuzzy matches.
         const TIE_DELTA: f64 = 0.01;
+        /// Composite confidence a fuzzy candidate must *exceed* to be reported
+        /// at all (iter-261 / UX-8). Zero means "nothing in common".
+        const MIN_REPORTABLE_CONFIDENCE: f64 = 0.0;
 
         // A site-absolute target (`/docs/a/b.md`) names a path from the site
         // root; the index is keyed by vault-relative paths, so strip the
@@ -717,6 +720,19 @@ impl LinkMatcher {
         } else {
             written_target
         };
+
+        // iter-261 / BUG-5 (DEC-266): never match across an explicit
+        // extension. A broken `Companies.base` or `task-plugins-sorted.png` may
+        // only be matched against a file with that same extension — and the
+        // candidate set here is the vault's `.md` notes — so it has no
+        // candidate at all and stays honestly unfixable. Before this,
+        // `links fix` offered `Companies.base → Templates/Company Template.md`
+        // (0.45) and `Posts.base → Categories/Posts.md` (0.60), i.e.
+        // `--apply-fuzzy --min-confidence 0.5` would have rewritten a Bases
+        // embed into a note link.
+        if crate::discovery::has_non_md_extension(raw_target) {
+            return None;
+        }
 
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
@@ -890,6 +906,15 @@ impl LinkMatcher {
         // Every surviving candidate already cleared `--threshold` on the stem
         // gate above, so there is no second floor to apply here.
         let best_idx = best_idx?;
+
+        // iter-261 / UX-8: a composite confidence of zero means the scorer
+        // found *nothing* in common beyond a raw stem-similarity fluke —
+        // `[[lithou]]` was listed against `lighthousedino.md` at confidence
+        // 0.0. A candidate nobody would ever apply is noise, not a suggestion,
+        // so it is not reported at all.
+        if best_score <= MIN_REPORTABLE_CONFIDENCE {
+            return None;
+        }
 
         // If a real runner-up is within TIE_DELTA of the winner the match is
         // ambiguous — decline rather than guessing. When there is no second

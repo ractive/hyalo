@@ -2292,12 +2292,19 @@ mod tests {
     }
 
     #[test]
-    fn external_markdown_links_skipped() {
+    fn external_markdown_links_are_inventoried_and_flagged() {
+        // iter-261 / BUG-2: an external destination used to be dropped at parse
+        // time. It is now kept — verbatim — and flagged, so `--fields links`
+        // can report `kind: "external"` while every resolver skips it.
         let text = "[Google](https://google.com) and [[internal]]";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "internal");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "https://google.com");
+        assert!(links[0].external);
+        assert_eq!(links[0].label.as_deref(), Some("Google"));
+        assert_eq!(links[1].target, "internal");
+        assert!(!links[1].external);
     }
 
     #[test]
@@ -2793,5 +2800,156 @@ mod tests {
             spans[0].link.label.as_deref(),
             Some(r"Contains \[test\] brackets")
         );
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / BUG-2 — external URI schemes
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn any_uri_scheme_is_external() {
+        for target in [
+            "https://a.example",
+            "HTTP://a.example",
+            "obsidian://show-plugin?id=x",
+            "mailto:a@b.example",
+            "file:///x",
+            "zotero://select/items/1",
+            "tel:+41000",
+            "x-custom.scheme+v1://y",
+        ] {
+            assert!(is_external_target(target), "{target} should be external");
+        }
+    }
+
+    #[test]
+    fn paths_and_drive_letters_are_not_external() {
+        for target in [
+            "notes/a.md",
+            "a.md#Section: two",
+            "./a.md",
+            "../out.md",
+            "",
+            "1scheme://x",
+            // A single-letter scheme is a Windows drive letter, not a URI.
+            r"C:\notes\x.md",
+            "c:/notes/x.md",
+        ] {
+            assert!(!is_external_target(target), "{target} must not be external");
+        }
+    }
+
+    #[test]
+    fn external_target_keeps_its_query_string_verbatim() {
+        // Before iter-261 the `?` split truncated this to
+        // `obsidian://show-plugin`, which is what every report printed.
+        let mut links = Vec::new();
+        extract_links_from_text("[Install](obsidian://show-plugin?id=dataview)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian://show-plugin?id=dataview");
+        assert!(links[0].external);
+        assert!(links[0].query.is_none());
+        assert!(links[0].fragment.is_none());
+    }
+
+    #[test]
+    fn mailto_and_file_destinations_are_external_links() {
+        let mut links = Vec::new();
+        extract_links_from_text("[m](mailto:a@b.example) [f](file:///x)", &mut links);
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|l| l.external));
+        assert_eq!(links[0].target, "mailto:a@b.example");
+        assert_eq!(links[1].target, "file:///x");
+    }
+
+    #[test]
+    fn drive_letter_destination_stays_a_vault_link() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[x](C:\notes\x.md)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].external, "a drive letter is not a URI scheme");
+    }
+
+    #[test]
+    fn external_wikilink_is_flagged_and_kept_whole() {
+        let mut links = Vec::new();
+        extract_links_from_text("[[obsidian://open?vault=v|Open]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian://open?vault=v");
+        assert!(links[0].external);
+        assert_eq!(links[0].label.as_deref(), Some("Open"));
+    }
+
+    #[test]
+    fn external_markdown_link_produces_no_rewritable_span() {
+        // The *span* extractor still drops external destinations, so `mv` and
+        // `links fix` can never splice a new target into a URI.
+        assert!(extract_link_spans("[x](obsidian://show-plugin?id=y)").is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / BUG-7 — table-escaped alias pipe
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn escaped_alias_pipe_splits_target_and_alias() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[[obsidian-advanced-uri\|Advanced URI Plugin]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian-advanced-uri");
+        assert_eq!(links[0].label.as_deref(), Some("Advanced URI Plugin"));
+    }
+
+    #[test]
+    fn escaped_alias_pipe_with_fragment_and_embed() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[[a#h\|b]] and ![[img.png\|200]]", &mut links);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "a");
+        assert_eq!(links[0].fragment.as_deref(), Some("h"));
+        assert_eq!(links[0].label.as_deref(), Some("b"));
+        assert_eq!(links[1].target, "img.png");
+        assert_eq!(links[1].label.as_deref(), Some("200"));
+        assert!(links[1].embed);
+    }
+
+    #[test]
+    fn unescaped_alias_pipe_is_unchanged() {
+        let mut links = Vec::new();
+        extract_links_from_text("[[a|b]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "a");
+        assert_eq!(links[0].label.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn lone_trailing_backslash_is_never_part_of_the_target() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[[note\]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "note");
+    }
+
+    #[test]
+    fn escaped_pipe_leaves_its_backslash_outside_the_rewritable_span() {
+        let line = r"| [[note\|Alias]] |";
+        let spans = extract_link_spans(line);
+        assert_eq!(spans.len(), 1);
+        // The span covers `note` only, so splicing a new target keeps `\|Alias`
+        // — and therefore the table row — byte-for-byte intact.
+        assert_eq!(&line[spans[0].target_start..spans[0].target_end], "note");
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / UX-6 — embed flag
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn embeds_are_flagged_plain_wikilinks_are_not() {
+        let mut links = Vec::new();
+        extract_links_from_text("![[img.png]] and [[note]]", &mut links);
+        assert_eq!(links.len(), 2);
+        assert!(links[0].embed);
+        assert!(!links[1].embed);
     }
 }

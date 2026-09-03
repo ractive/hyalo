@@ -3675,4 +3675,164 @@ mod tests {
             "other.md"
         ));
     }
+
+    // -----------------------------------------------------------------
+    // iter-261 / BUG-5, BUG-6 — attachments
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn non_md_extension_detection() {
+        assert!(has_non_md_extension("img.png"));
+        assert!(has_non_md_extension("Templates/Bases/Books.base"));
+        assert!(has_non_md_extension("a/b.PDF"));
+        assert!(!has_non_md_extension("note"));
+        assert!(!has_non_md_extension("note.md"));
+        assert!(!has_non_md_extension("note.MD"));
+        // The dot lives in a directory component, not the filename.
+        assert!(!has_non_md_extension("v1.2/notes"));
+        // A dotfile has no extension.
+        assert!(!has_non_md_extension(".gitignore"));
+        assert!(!has_non_md_extension("trailing."));
+    }
+
+    /// A vault with one note, one attachment in a sibling folder, and a second
+    /// attachment nested under the note's own folder.
+    fn attachment_vault() -> (tempfile::TempDir, PathBuf, CaseInsensitiveIndex) {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &[
+                "notes/a.md",
+                "02 Attachments/task-plugins-sorted.png",
+                "notes/sub/img2.png",
+                "Templates/Bases/Books.base",
+            ],
+        );
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for p in [
+            "notes/a.md",
+            "02 Attachments/task-plugins-sorted.png",
+            "notes/sub/img2.png",
+            "Templates/Bases/Books.base",
+        ] {
+            idx.insert(p);
+        }
+        (tmp, canonical, idx)
+    }
+
+    #[test]
+    fn attachment_resolves_by_unique_basename() {
+        let (_tmp, canonical, idx) = attachment_vault();
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/a.md",
+                crate::links::LinkKind::Wikilink,
+                "task-plugins-sorted.png",
+                None,
+                Some(&idx),
+            ),
+            Some("02 Attachments/task-plugins-sorted.png".to_owned())
+        );
+    }
+
+    #[test]
+    fn attachment_resolves_by_full_vault_path_and_case_folded_path() {
+        let (_tmp, canonical, idx) = attachment_vault();
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/a.md",
+                crate::links::LinkKind::Wikilink,
+                "Templates/Bases/Books.base",
+                None,
+                Some(&idx),
+            ),
+            Some("Templates/Bases/Books.base".to_owned())
+        );
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/a.md",
+                crate::links::LinkKind::Wikilink,
+                "templates/bases/books.BASE",
+                None,
+                Some(&idx),
+            ),
+            Some("Templates/Bases/Books.base".to_owned())
+        );
+    }
+
+    #[test]
+    fn attachment_resolves_relative_to_the_source_folder() {
+        // BUG-6: `![[sub/img2.png]]` written in `notes/a.md` names
+        // `notes/sub/img2.png`, exactly as Obsidian resolves it.
+        let (_tmp, canonical, idx) = attachment_vault();
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/a.md",
+                crate::links::LinkKind::Wikilink,
+                "sub/img2.png",
+                None,
+                Some(&idx),
+            ),
+            Some("notes/sub/img2.png".to_owned())
+        );
+    }
+
+    #[test]
+    fn ambiguous_attachment_basename_does_not_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a/x.png", "b/x.png", "note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for p in ["a/x.png", "b/x.png", "note.md"] {
+            idx.insert(p);
+        }
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "note.md",
+                crate::links::LinkKind::Wikilink,
+                "x.png",
+                None,
+                Some(&idx),
+            ),
+            None,
+            "two attachments share the basename — Obsidian resolves neither"
+        );
+    }
+
+    #[test]
+    fn a_bare_wikilink_never_resolves_to_an_attachment() {
+        // `[[Books]]` is a note reference; only `[[Books.base]]` names the file.
+        let (_tmp, canonical, idx) = attachment_vault();
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/a.md",
+                crate::links::LinkKind::Wikilink,
+                "Books",
+                None,
+                Some(&idx),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn discover_attachments_lists_non_md_files_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &["a.md", "img/x.png", "Templates/B.base", "plain"],
+        );
+        let mut found = discover_attachments(tmp.path()).unwrap();
+        found.sort();
+        assert_eq!(found, vec!["Templates/B.base", "img/x.png"]);
+    }
 }
