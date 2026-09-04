@@ -170,7 +170,21 @@ pub(super) fn format_object_generic(
     cache: &mut JaqFilterCache,
 ) -> String {
     map.iter()
-        .map(|(k, v)| format!("{k}: {}", format_value_as_text(v, cache)))
+        .map(|(k, v)| {
+            let rendered = format_value_as_text(v, cache);
+            // iter-267 (UX-14): a multi-line value used to print its first
+            // line after `key: ` and every later line at column 0, so
+            // `modified: References/Bass on Top.md` followed by
+            // `References/Blade Runner.md` read as two more keys. Indenting
+            // the continuation two spaces makes the nesting visible — the
+            // same shape the purpose-built mutation renderers already use.
+            if rendered.contains('\n') {
+                let indented = rendered.replace('\n', "\n  ");
+                format!("{k}:\n  {indented}")
+            } else {
+                format!("{k}: {rendered}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -212,6 +226,8 @@ fn is_file_object_key(key: &str) -> bool {
             | "size"
             | "lines"
             | "title"
+            // Rides along with `title` since iter-267 (DEC-283).
+            | "title_source"
             | "properties"
             | "properties_typed"
             | "tags"

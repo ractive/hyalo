@@ -384,6 +384,14 @@ const FIND_FIELD_ORDER: &[&str] = &[
     "score",
 ];
 
+/// Keys that ride along with a `--fields` field rather than being selectable
+/// themselves, so they belong to the FileObject vocabulary but never appear in
+/// the `fields:` footer.
+///
+/// iter-267 (DEC-283): `title_source` is emitted whenever `title` is, and
+/// naming it in the footer would imply `--fields title_source` works.
+const FIND_COMPANION_KEYS: &[&str] = &["title_source"];
+
 /// The `fields:` footer under a `--format text` find listing (iter-252).
 ///
 /// The default result shape omits `sections`, `links`, `tasks`, `backlinks`
@@ -402,7 +410,10 @@ const FIND_FIELD_ORDER: &[&str] = &[
 fn find_fields_summary(results: &serde_json::Value) -> Option<String> {
     let arr = results.as_array()?;
     let first = arr.first()?.as_object()?;
-    if !first.contains_key("file") || !first.keys().all(|k| FIND_FIELD_ORDER.contains(&k.as_str()))
+    if !first.contains_key("file")
+        || !first.keys().all(|k| {
+            FIND_FIELD_ORDER.contains(&k.as_str()) || FIND_COMPANION_KEYS.contains(&k.as_str())
+        })
     {
         return None;
     }
