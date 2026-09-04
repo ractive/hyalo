@@ -379,6 +379,15 @@ fn is_zero_broken_anchors(value: &Option<usize>) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileCounts {
     pub total: usize,
+    /// Files the scan found but could not use because their frontmatter would
+    /// not parse (iter-265). `summary` reported only `total` before, so a vault
+    /// of 103 notes with 28 unparsable Templater templates said `Files: 75` and
+    /// never accounted for the missing 28. Run `hyalo lint --rule HYALO005` to
+    /// see them individually.
+    pub skipped: usize,
+    /// Files dropped before the scan by `[scan] exclude` in `.hyalo.toml`.
+    /// Zero unless the vault configures exclusions.
+    pub excluded: usize,
     pub directories: Vec<DirectoryCount>,
 }
 
@@ -387,6 +396,17 @@ pub struct FileCounts {
 pub struct DirectoryCount {
     pub directory: String,
     pub count: usize,
+    /// Files under this directory skipped for unparsable frontmatter.
+    /// Omitted from JSON when zero, so an all-clean vault's per-directory rows
+    /// stay as compact as they were.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub skipped: usize,
+}
+
+/// Serde predicate: skip a `usize` field that is zero.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
 }
 
 /// Files grouped by status property value (count only).

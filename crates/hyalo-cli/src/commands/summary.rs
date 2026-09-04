@@ -249,15 +249,50 @@ pub fn summary(
         }
     }
 
+    // Files the scan could not use (iter-265). They are absent from `total`,
+    // which is what made `Files: 75` on a 103-note vault so misleading — the
+    // 28 unparsable templates simply vanished. Attribute each to its directory
+    // so `Templates/` shows where they live.
+    let skipped_files = hyalo_core::warn::skipped_files();
+    let mut skipped_by_dir: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for skip in &skipped_files {
+        let directory = skip
+            .path
+            .rsplit_once('/')
+            .map_or_else(|| ".".to_string(), |(d, _)| d.to_string());
+        *skipped_by_dir.entry(directory).or_insert(0) += 1;
+    }
+
     // Build FileCounts — sort by count descending for compact output
     let mut directories: Vec<DirectoryCount> = dir_counts
         .into_iter()
-        .map(|(directory, count)| DirectoryCount { directory, count })
+        .map(|(directory, count)| {
+            let skipped = skipped_by_dir.get(&directory).copied().unwrap_or(0);
+            DirectoryCount {
+                directory,
+                count,
+                skipped,
+            }
+        })
         .collect();
+    // A directory that holds *only* unparsable files has no scanned count at
+    // all, so it would otherwise be missing from the listing entirely.
+    for (directory, skipped) in skipped_by_dir {
+        if !directories.iter().any(|d| d.directory == directory) {
+            directories.push(DirectoryCount {
+                directory,
+                count: 0,
+                skipped,
+            });
+        }
+    }
     directories.sort_by(|a, b| b.count.cmp(&a.count).then(a.directory.cmp(&b.directory)));
 
     let file_counts = FileCounts {
         total: total_files,
+        skipped: skipped_files.len(),
+        excluded: hyalo_core::discovery::scan_excluded_count(),
         directories,
     };
 
