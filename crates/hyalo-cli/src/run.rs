@@ -1944,6 +1944,12 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(ref mut ctx) = hint_ctx {
         ctx.quiet = cli.quiet;
         ctx.has_index = index_path_buf.is_some();
+        // iter-267 (UX-18): a vault that has already been indexed should be
+        // told to *use* the snapshot, not to build another one. Only probed
+        // when no index was requested, so the common `--index` path pays
+        // nothing for the stat.
+        ctx.snapshot_on_disk =
+            index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
         // Preserve the active index into derived `find` hints so they query the
         // same snapshot rather than silently rescanning the vault (BUG-7
         // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
