@@ -68,7 +68,7 @@ deliberately narrower than "every command", so widening it needs the same rigour
 breaks for a vault whose `[schema]` briefly goes invalid mid-edit if writes suddenly
 start refusing.
 
-### GATE-1: decide and implement
+### GATE-1: decide and implement [5/5]
 
 - [x] Re-read DEC-279 in full for why the gate was scoped to `lint`/`find --strict`/
       `views run` and not writes originally.
@@ -101,7 +101,7 @@ DEC-287 sketched one candidate shape, `set --property 'sources[]=ref=…'`, unte
 real usage — a starting point, not a commitment. The default answer is "stays an editor
 concern" unless evidence of real need turns up.
 
-### Scope questions to resolve before writing any parser
+### Scope questions to resolve before writing any parser [4/4]
 
 - [x] Does a second dogfooding cycle, or the mapl-memory `sources:` migration that
       motivated iteration 268, actually hit this gap in practice? Check the mapl-memory PR
@@ -116,7 +116,7 @@ concern" unless evidence of real need turns up.
       reads be reused for writes (symmetry argument), avoiding any new flag? Investigate
       before proposing a bespoke syntax.
 
-### ITEM-1: decide and (maybe) implement
+### ITEM-1: decide and (maybe) implement [2/3]
 
 - [x] Decide: implement a syntax, or close as won't-do. Record the reasoning in the same
       DEC as Part A or its own DEC in [[decision-log]] — there is no "silently dropped"
@@ -125,9 +125,10 @@ concern" unless evidence of real need turns up.
       implement in `set.rs` and `append.rs`, validate against
       `required-keys`/`allowed-keys`/`key-patterns` before writing, update `--help`,
       `docs/configuration.md`, [[docs/schema-and-lint]], the skill file, and CHANGELOG.
+      N/A — DEC-291 closed Part B as won't-do, so there is no syntax to implement.
 - [x] If won't-do: no code lands for Part B; the DEC is the deliverable.
 
-## Shared closing tasks
+## Shared closing tasks [3/3]
 
 - [x] DEC(s) recorded in [[decision-log]] covering both decisions.
 - [x] Changelog entry via `hyalo changelog add` for every behaviour that changed.
@@ -135,7 +136,7 @@ concern" unless evidence of real need turns up.
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*`
       gates (help drift in particular if any `--help` text changed).
 
-## Acceptance criteria
+## Acceptance criteria [5/6]
 
 - [x] A DEC resolves DEC-287's "belongs to its own decision" note: either writes now gate
       on a broken `[schema]`, or the asymmetry is kept but made discoverable in the result
@@ -147,6 +148,7 @@ concern" unless evidence of real need turns up.
 - [ ] If a syntax is implemented: `hyalo set f.md --property '<chosen syntax>' --validate`
       refuses an item missing a `required-keys` key and accepts one that satisfies
       `required-keys`/`allowed-keys`/`key-patterns`.
+      N/A — no syntax was implemented (DEC-291, won't-do).
 - [x] No new CLI flag lands without an explicit justification in the DEC.
 - [x] Gates green.
 
