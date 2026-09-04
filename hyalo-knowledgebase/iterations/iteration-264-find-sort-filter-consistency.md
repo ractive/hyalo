@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 264 — find: sort direction, null-aware filters, projection edge cases"
 date: 2026-09-03
-status: in-progress
+status: completed
 tags:
   - iteration
   - find
