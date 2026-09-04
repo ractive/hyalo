@@ -157,6 +157,43 @@ mod tests {
         assert!(!f.matches(&contacts_props()));
     }
 
+    /// A mixed list — one map, one leftover plain string — pins today's
+    /// behaviour: `resolve_path` returns `None` for a scalar with a remaining
+    /// path, so the string item is silently skipped and never matches. That
+    /// silence is exactly why the `object-list` schema type (iteration 268)
+    /// exists: `hyalo lint` is what reports the string item.
+    #[test]
+    fn dot_path_array_skips_scalar_items() {
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        props.insert(
+            "sources".to_owned(),
+            json!([
+                { "ref": "github:comparis/neon", "commit": "3c9e0f2" },
+                "https://example.org/post",
+            ]),
+        );
+
+        // The map item still matches through the dot path.
+        assert!(
+            parse_property_filter("sources.ref=github:comparis/neon")
+                .unwrap()
+                .matches(&props)
+        );
+        // The scalar item contributes nothing: its text is unreachable via
+        // `sources.ref`, so a filter for it finds no match at all.
+        assert!(
+            !parse_property_filter("sources.ref=https://example.org/post")
+                .unwrap()
+                .matches(&props)
+        );
+        // `exists` sees only the one reachable value, not two.
+        assert!(
+            parse_property_filter("sources.ref")
+                .unwrap()
+                .matches(&props)
+        );
+    }
+
     #[test]
     fn dot_path_array_index_segment_selects_one_element() {
         let props = contacts_props();

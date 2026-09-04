@@ -57,6 +57,62 @@ type = "list"
 | `boolean` | true/false |
 | `list`    | YAML sequence |
 | `enum`    | String matching one of `values` |
+| `string-list` | YAML sequence of strings; optional `item_pattern` (regex per item) |
+| `object-list` | YAML sequence of maps; `required-keys`, `allowed-keys`, `key-patterns` |
+
+#### `object-list` — lists of maps
+
+`object-list` describes a list whose items are all YAML maps, so lint can enforce the
+shape of records like a `sources:` list that pins each reference to a commit:
+
+```toml
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit", "version", "updated", "read"]
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^(github|confluence|jira|slack|person|runtime|decision):|^https?://"
+commit = "^[0-9a-f]{7,40}$"
+read = "^\\d{4}-\\d{2}-\\d{2}$"
+```
+
+- `required-keys` must be present in **every** item.
+- `allowed-keys` is the complete key set when given; a key outside it is an error.
+  Omit the list to allow any extra key.
+- `key-patterns` maps a key to a regex applied to that key's value when the key is
+  present. Strings, numbers and booleans are matched against their YAML text; a
+  list or map under a `key-patterns` key is an error. Pattern keys are optional
+  unless also listed in `required-keys`.
+- Every name in `required-keys` and `key-patterns` must appear in `allowed-keys`
+  when that list is given, otherwise the config is rejected.
+- Every `key-patterns` regex is compiled when `.hyalo.toml` is loaded, so a bad
+  regex is a `schema/malformed` error rather than a per-file lint message (this is
+  stricter than `item_pattern`, which reports an invalid regex at lint time — see
+  DEC-287).
+- An empty list is valid. A non-list value is one error.
+
+Items are validated independently and every violation is reported. Each message
+names the property, the 0-based item index and — where applicable — the key:
+
+```text
+memory/neon.md:
+  error  property "sources" item 0: must be a map, not a string; did you mean `- ref: github:comparis/neon`?
+  error  property "sources" item 1: unknown key "rev" (allowed: ref, commit, version, updated, read)
+  error  property "sources" item 2: missing required key "ref"
+  error  property "sources" item 3: key "commit" value "zzz" does not match pattern "^[0-9a-f]{7,40}$"
+  error  property "sources" item 4: key "ref" must be a scalar, got a list
+```
+
+The plain-string item is the case worth catching: `find --property sources.ref=…`
+walks dot-paths into list items but skips scalars, so a leftover string entry never
+matches and is silently absent from every query — lint is what reports it.
+
+`object-list` is **config-only**: `hyalo types set --property-type` does not accept it
+(as with `string-list`), and `--fix` has no fixer for its violations, so they report
+`autofixable: false`. Writing object items with `hyalo set` / `hyalo append` is not
+supported; `--validate` does reject a scalar or string-item value for an
+`object-list` property.
 
 ### Schema Merging
 
@@ -100,7 +156,7 @@ research/karpathy-llm-wiki.md:
 
 ### Severity Levels
 
-- **error** — schema violation (missing required property, wrong value type, invalid enum value, pattern mismatch)
+- **error** — schema violation (missing required property, wrong value type, invalid enum value, pattern mismatch, `object-list` shape violation)
 - **warn** — soft issue (no `type` property, property not declared in schema)
 
 To require `tags` on a given document type, list it in that type's `required` array

@@ -321,7 +321,7 @@ and under `results.pi` (JSON).
 
 ## Schemas
 
-Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list` — with regex patterns, enum values, and length bounds), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.
+Schemas support typed properties (`string`, `date`, `datetime`, `datetime-tz`, `number`, `boolean`, `list`, `enum`, `string-list`, `object-list` — with regex patterns, enum values, length bounds, and per-key constraints on lists of maps), per-type filename templates, path-bound types (`[[schema.bind]]`) that apply a schema to a subtree without explicit `type:` frontmatter, and reserved-file exemptions (`[schema] exempt`). Manage schemas from the CLI with `hyalo types list|show|set`, validate with `hyalo lint`, and inspect the resolved configuration with `hyalo config`.
 
 ## Saved views
 

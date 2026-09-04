@@ -308,7 +308,11 @@ fn synthesise_content(
                 },
                 None => PropValue::Null,
             },
-            Some(PropertyConstraint::List | PropertyConstraint::StringList { .. }) => {
+            Some(
+                PropertyConstraint::List
+                | PropertyConstraint::StringList { .. }
+                | PropertyConstraint::ObjectList { .. },
+            ) => {
                 // A default for list properties is uncommon; treat unparseable
                 // values as a scalar string fallback rather than fabricating items.
                 default_val.map_or(PropValue::EmptyList, PropValue::Str)

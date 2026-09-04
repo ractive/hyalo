@@ -472,6 +472,442 @@ item_pattern = "^[a-z][a-z0-9-]*$"
 }
 
 // ---------------------------------------------------------------------------
+// object-list (iteration 268 / DEC-287)
+// ---------------------------------------------------------------------------
+
+/// The `.hyalo.toml` from the iteration-268 plan.
+const OBJECT_LIST_SCHEMA: &str = r#"dir = "."
+
+[schema.types.memory.properties.title]
+type = "string"
+
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit", "version", "updated", "read"]
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^(github|confluence|jira|slack|person|runtime|decision):|^https?://"
+commit = "^[0-9a-f]{7,40}$"
+read = "^\\d{4}-\\d{2}-\\d{2}$"
+"#;
+
+/// Vault with one valid file and three files each carrying exactly one kind of
+/// object-list violation.
+fn setup_object_list_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), OBJECT_LIST_SCHEMA);
+    write_md(
+        tmp.path(),
+        "valid.md",
+        md!(r"
+---
+title: Valid
+type: memory
+sources:
+  - ref: github:comparis/neon
+    commit: 3c9e0f2
+  - ref: https://example.org/post
+    read: 2026-09-01
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "string-item.md",
+        md!(r"
+---
+title: String item
+type: memory
+sources:
+  - https://example.org/post
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "typo-key.md",
+        md!(r"
+---
+title: Typo key
+type: memory
+sources:
+  - ref: github:comparis/typo
+    rev: 3c9e0f2
+---
+Body.
+"),
+    );
+    write_md(
+        tmp.path(),
+        "bad-commit.md",
+        md!(r"
+---
+title: Bad commit
+type: memory
+sources:
+  - ref: github:comparis/badpin
+    commit: zzz
+---
+Body.
+"),
+    );
+    tmp
+}
+
+#[test]
+fn lint_object_list_reports_one_violation_per_bad_file() {
+    let tmp = setup_object_list_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "object-list violations should exit 1: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let by_file = |name: &str| -> Vec<String> {
+        results
+            .files
+            .iter()
+            .find(|f| f.file == name)
+            .map(|f| {
+                f.rule_groups
+                    .iter()
+                    .flat_map(|g| g.violations.iter().map(|v| v.message.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    assert!(
+        by_file("valid.md").is_empty(),
+        "valid.md should be clean, got: {:?}",
+        by_file("valid.md")
+    );
+
+    let string_item = by_file("string-item.md");
+    assert_eq!(string_item.len(), 1, "{string_item:?}");
+    assert!(string_item[0].contains("item 0"), "{string_item:?}");
+    assert!(
+        string_item[0].contains("- ref: https://example.org/post"),
+        "expected the fix-it hint, got: {string_item:?}"
+    );
+
+    let typo = by_file("typo-key.md");
+    assert_eq!(typo.len(), 1, "{typo:?}");
+    assert!(typo[0].contains("item 0"), "{typo:?}");
+    assert!(typo[0].contains(r#"unknown key "rev""#), "{typo:?}");
+    assert!(
+        typo[0].contains("allowed: ref, commit, version, updated, read"),
+        "{typo:?}"
+    );
+
+    let bad_commit = by_file("bad-commit.md");
+    assert_eq!(bad_commit.len(), 1, "{bad_commit:?}");
+    assert!(bad_commit[0].contains("item 0"), "{bad_commit:?}");
+    assert!(bad_commit[0].contains(r#"key "commit""#), "{bad_commit:?}");
+    assert!(bad_commit[0].contains("^[0-9a-f]{7,40}$"), "{bad_commit:?}");
+}
+
+#[test]
+fn lint_object_list_github_format_emits_one_error_per_violation() {
+    let tmp = setup_object_list_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "github"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let errors = stdout.matches("::error").count();
+    assert_eq!(
+        errors, 3,
+        "expected one ::error annotation per violation, got {errors}:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("string-item.md")
+            && stdout.contains("typo-key.md")
+            && stdout.contains("bad-commit.md"),
+        "every offending file should be annotated:\n{stdout}"
+    );
+}
+
+#[test]
+fn lint_object_list_violations_are_not_autofixable() {
+    let tmp = setup_object_list_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--fix", "--dry-run", "--format", "json"])
+        .output()
+        .unwrap();
+    let results: ExtLintFixOutput = typed_results(&output.stdout);
+    assert_eq!(
+        results.total_fixed, 0,
+        "--fix has no fixer for object-list violations"
+    );
+    let mut schema_groups = 0;
+    for file in &results.files {
+        assert!(
+            file.fixed_groups.is_empty(),
+            "{} should have nothing to fix",
+            file.file
+        );
+        for group in &file.remaining_groups {
+            if group.rule == "SCHEMA" {
+                schema_groups += 1;
+                assert!(
+                    !group.autofixable,
+                    "SCHEMA group in {} must report autofixable: false",
+                    file.file
+                );
+            }
+        }
+    }
+    assert_eq!(
+        schema_groups, 3,
+        "expected a remaining SCHEMA group for each of the three bad files"
+    );
+}
+
+#[test]
+fn find_dot_path_matches_only_the_valid_object_list_file() {
+    // The pairing that closes the hazard: the string item never matches a
+    // `sources.ref=` query, and `lint` is what reports it (see the test above).
+    let tmp = setup_object_list_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--property",
+            "sources.ref=github:comparis/neon",
+            "--format",
+            "json",
+            "--jq",
+            "[.results[].file]",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let files: Vec<String> = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(
+        files,
+        vec!["valid.md".to_owned()],
+        "only the file whose map item carries that ref matches"
+    );
+
+    // The string item's URL is unreachable through the dot path.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "find",
+            "--property",
+            "sources.ref=https://example.org/post",
+            "--format",
+            "json",
+            "--jq",
+            "[.results[].file]",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let files: Vec<String> = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(
+        files,
+        vec!["valid.md".to_owned()],
+        "string-item.md must not match: resolve_path skips scalar items"
+    );
+}
+
+#[test]
+fn set_validate_refuses_a_string_list_value_for_an_object_list_property() {
+    let tmp = setup_object_list_vault();
+
+    // With --validate the write is refused.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "set",
+            "string-item.md",
+            "-p",
+            "sources=[x]",
+            "--validate",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "--validate must refuse a string item for an object-list property"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("must be a map"),
+        "expected the object-list message, got:\n{combined}"
+    );
+
+    // Without --validate the write proceeds but carries an advisory note.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "set",
+            "string-item.md",
+            "-p",
+            "sources=[x]",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("must be a map") && stdout.contains("note"),
+        "expected an advisory note on the unvalidated write, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn append_validate_refuses_a_scalar_item_for_an_object_list_property() {
+    let tmp = setup_object_list_vault();
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "append",
+            "valid.md",
+            "-p",
+            "sources=x",
+            "--validate",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "--validate must refuse appending a scalar to an object-list property"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("must be a map"),
+        "expected the object-list message, got:\n{combined}"
+    );
+}
+
+#[test]
+fn lint_reports_schema_malformed_for_an_invalid_key_pattern_regex() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(
+        tmp.path(),
+        r#"dir = "."
+
+[schema.types.memory.properties.sources]
+type = "object-list"
+
+[schema.types.memory.properties.sources.key-patterns]
+commit = "["
+"#,
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: memory\nsources: []\n---\nBody\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--strict", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "an uncompilable key-pattern must fail the schema"
+    );
+    // `Violation::kind` is `#[serde(skip)]`, so the JSON carries the message
+    // rather than the `schema/malformed` identifier; `--strict` promoting it to
+    // error severity is what proves the kind was matched.
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let malformed: Vec<&str> = results
+        .files
+        .iter()
+        .flat_map(|f| f.rule_groups.iter())
+        .flat_map(|g| g.violations.iter())
+        .filter(|v| v.severity == "error")
+        .map(|v| v.message.as_str())
+        .collect();
+    assert_eq!(malformed.len(), 1, "{malformed:?}");
+    assert!(
+        malformed[0].contains("invalid [schema] in .hyalo.toml"),
+        "{malformed:?}"
+    );
+    assert!(malformed[0].contains("property 'sources'"), "{malformed:?}");
+    assert!(
+        malformed[0].contains("key-patterns.commit"),
+        "{malformed:?}"
+    );
+    assert!(malformed[0].contains("invalid regex"), "{malformed:?}");
+
+    // The TOML itself parses fine — only the schema is rejected.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json", "--jq", ".results.malformed"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "false",
+        "the TOML parses; it is the schema that is invalid"
+    );
+
+    // `set --validate` against a malformed `[schema]` proceeds, with a
+    // `-q`-proof stderr warning naming the error. DEC-279 (iter-265) scoped the
+    // broken-config *gate* to `lint`, `find --strict` and `views run`; a write
+    // is not in that set, and a `[schema]` that fails `TryFrom` (as opposed to
+    // a `.hyalo.toml` that fails to parse at all) does not block mutations.
+    // The consequence is that `--validate` is vacuous here — pinned rather than
+    // changed, because gating writes on it is a decision of its own (DEC-287).
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "a.md", "-p", "title=B", "--validate"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        0,
+        "a malformed [schema] warns but does not block a write today"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid [schema] in .hyalo.toml")
+            && stderr.contains("key-patterns.commit"),
+        "the write must at least be loudly warned about, got:\n{stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Summary integration
 // ---------------------------------------------------------------------------
 
