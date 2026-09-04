@@ -4709,6 +4709,21 @@ load-time check is the better behaviour, but changing `item_pattern` now would
 move an existing error from a per-file violation to a vault-wide config failure
 for vaults that have one.
 
+**Known gap, deliberately not closed here.** An invalid `key-patterns` regex
+fails `SchemaConfig::try_from`, which `lint` reports as `schema/malformed` (an
+error under `--strict`) — but a *write* does not gate on it: `set --validate`
+prints the `-q`-proof `invalid [schema] in .hyalo.toml: …` warning, loads an
+empty schema and writes anyway, so `--validate` is silently vacuous against a
+broken schema. DEC-279 (iteration 265) scoped the broken-config gate to `lint`,
+`find --strict` and `views run`, and writes are deliberately outside it; note
+that this is about a `[schema]` that fails `TryFrom`, not a `.hyalo.toml` that
+fails to parse at all, which does block every mutation. Making `--validate`
+exit 1 on an unloadable schema would change behaviour for every schema error,
+not just this one, so it belongs to its own decision. Pinned as-is by
+`lint_reports_schema_malformed_for_an_invalid_key_pattern_regex`; the
+iteration-268 plan's acceptance criterion asserting a refusal was mistaken
+about today's behaviour.
+
 **Fixed in passing: `autofixable` told the truth.** The SCHEMA group reported
 `autofixable: true` for every violation except `missing-required-no-default`,
 including `pattern` and `item_pattern` mismatches that `--fix` has no fixer for.

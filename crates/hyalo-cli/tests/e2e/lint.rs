@@ -846,11 +846,29 @@ commit = "["
         1,
         "an uncompilable key-pattern must fail the schema"
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("schema/malformed"), "{stdout}");
-    assert!(stdout.contains("property 'sources'"), "{stdout}");
-    assert!(stdout.contains("key-patterns.commit"), "{stdout}");
-    assert!(stdout.contains("invalid regex"), "{stdout}");
+    // `Violation::kind` is `#[serde(skip)]`, so the JSON carries the message
+    // rather than the `schema/malformed` identifier; `--strict` promoting it to
+    // error severity is what proves the kind was matched.
+    let results: ExtLintOutput = typed_results(&output.stdout);
+    let malformed: Vec<&str> = results
+        .files
+        .iter()
+        .flat_map(|f| f.rule_groups.iter())
+        .flat_map(|g| g.violations.iter())
+        .filter(|v| v.severity == "error")
+        .map(|v| v.message.as_str())
+        .collect();
+    assert_eq!(malformed.len(), 1, "{malformed:?}");
+    assert!(
+        malformed[0].contains("invalid [schema] in .hyalo.toml"),
+        "{malformed:?}"
+    );
+    assert!(malformed[0].contains("property 'sources'"), "{malformed:?}");
+    assert!(
+        malformed[0].contains("key-patterns.commit"),
+        "{malformed:?}"
+    );
+    assert!(malformed[0].contains("invalid regex"), "{malformed:?}");
 
     // The TOML itself parses fine — only the schema is rejected.
     let output = hyalo_no_hints()
@@ -864,16 +882,28 @@ commit = "["
         "the TOML parses; it is the schema that is invalid"
     );
 
-    // `set --validate` refuses to write against a broken schema.
+    // `set --validate` against a malformed `[schema]` proceeds, with a
+    // `-q`-proof stderr warning naming the error. DEC-279 (iter-265) scoped the
+    // broken-config *gate* to `lint`, `find --strict` and `views run`; a write
+    // is not in that set, and a `[schema]` that fails `TryFrom` (as opposed to
+    // a `.hyalo.toml` that fails to parse at all) does not block mutations.
+    // The consequence is that `--validate` is vacuous here — pinned rather than
+    // changed, because gating writes on it is a decision of its own (DEC-287).
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["set", "a.md", "-p", "title=B", "--validate"])
         .output()
         .unwrap();
-    assert_ne!(
+    assert_eq!(
         output.status.code().unwrap(),
         0,
-        "a malformed schema must block a validated write"
+        "a malformed [schema] warns but does not block a write today"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid [schema] in .hyalo.toml")
+            && stderr.contains("key-patterns.commit"),
+        "the write must at least be loudly warned about, got:\n{stderr}"
     );
 }
 
