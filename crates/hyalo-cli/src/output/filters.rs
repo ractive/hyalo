@@ -8,9 +8,25 @@
 // jq filter constants — one per output type
 // ---------------------------------------------------------------------------
 
+/// jq expression that renders one frontmatter value for text output, applied to
+/// the value itself (`.value | PROPERTY_VALUE_EXPR`).
+///
+/// A scalar prints bare. A list prints `[a, b]` — except when any item contains
+/// a `[[wikilink]]`, where the items are JSON-quoted instead:
+/// `["[[Futurism]]", "[[Nonfiction]]"]`.
+///
+/// iter-262 (UX-11): the unquoted form collided with the wikilink brackets and
+/// produced `genre: [[[Futurism]], [[Nonfiction]]]`, where the list's own
+/// brackets and the first link's are indistinguishable and the value reads like
+/// a nested list. Quoting only kicks in for wikilink-bearing lists so ordinary
+/// tag lists keep their compact rendering.
+pub(super) const PROPERTY_VALUE_EXPR: &str = r#"if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end"#;
+
 /// `PropertyInfo` (used by `--fields properties-typed`): `{name, type, value}`
-/// When value is an array (list type), join elements with ", " for readability.
-pub(super) const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
+/// When value is an array (list type), join elements with ", " for readability
+/// — or as quoted items when they carry wikilinks (see [`PROPERTY_VALUE_EXPR`]).
+pub(super) const PROPERTY_INFO_FILTER: &str =
+    r#""\(.name) (\(.type)): \(.value | if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end)""#;
 
 /// `PropertySummaryEntry`: `{count, name, type, mixed_types?}`
 ///
