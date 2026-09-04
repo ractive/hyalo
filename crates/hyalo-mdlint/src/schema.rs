@@ -317,7 +317,9 @@ pub fn lint_file_with_fix(
     // Validate required_sections against the body outline. The effective type is
     // the explicit `type:` else the `[schema.bind]` path binding, so a bound ADR
     // gets its required sections checked even without frontmatter.
-    let doc_type: Option<String> = final_props.get("type").and_then(schema::normalize_type_value);
+    let doc_type: Option<String> = final_props
+        .get("type")
+        .and_then(schema::normalize_type_value);
     let effective_type: Option<String> = doc_type
         .clone()
         .or_else(|| schema.bound_type_for(rel_path).map(ToOwned::to_owned));

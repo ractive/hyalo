@@ -811,7 +811,11 @@ fn set_default_field(
 /// Best-effort by design: a file whose frontmatter will not parse is simply
 /// not consulted, and a tie is broken by the type name so the result is
 /// deterministic.
-fn infer_property_type_from_vault(dir: &std::path::Path, type_name: &str, key: &str) -> &'static str {
+fn infer_property_type_from_vault(
+    dir: &std::path::Path,
+    type_name: &str,
+    key: &str,
+) -> &'static str {
     const DEFAULT: &str = "string";
     let Ok(files) = discovery::discover_files(dir) else {
         return DEFAULT;
@@ -829,7 +833,9 @@ fn infer_property_type_from_vault(dir: &std::path::Path, type_name: &str, key: &
         if !matches_type {
             continue;
         }
-        let Some(value) = props.get(key) else { continue };
+        let Some(value) = props.get(key) else {
+            continue;
+        };
         // `null` says nothing about the intended type.
         if value.is_null() {
             continue;

@@ -182,7 +182,13 @@ pub fn properties_rename(
         // is a text-level key-token rewrite whenever the block allows it.
         props = props
             .into_iter()
-            .map(|(k, v)| if k == from { (to.to_owned(), v) } else { (k, v) })
+            .map(|(k, v)| {
+                if k == from {
+                    (to.to_owned(), v)
+                } else {
+                    (k, v)
+                }
+            })
             .collect();
 
         if !dry_run {

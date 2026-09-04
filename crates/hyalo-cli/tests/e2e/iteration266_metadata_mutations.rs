@@ -179,7 +179,11 @@ fn tags_rename_renames_nested_children() {
     );
     assert_eq!(res["modified"].as_array().unwrap().len(), 2);
 
-    assert!(fs::read_to_string(tmp.path().join("b.md")).unwrap().contains("audio/genres"));
+    assert!(
+        fs::read_to_string(tmp.path().join("b.md"))
+            .unwrap()
+            .contains("audio/genres")
+    );
     assert!(
         fs::read_to_string(tmp.path().join("c.md"))
             .unwrap()
@@ -208,7 +212,11 @@ fn tags_rename_proceeds_when_only_children_exist() {
         1,
         "a parent with no exact occurrence must still rename its children"
     );
-    assert!(fs::read_to_string(tmp.path().join("b.md")).unwrap().contains("audio/genres"));
+    assert!(
+        fs::read_to_string(tmp.path().join("b.md"))
+            .unwrap()
+            .contains("audio/genres")
+    );
 }
 
 #[test]
@@ -296,7 +304,9 @@ fn tags_rename_with_index_leaves_the_index_consistent() {
     let tmp = index_vault();
     results(
         tmp.path(),
-        &["tags", "rename", "--from", "music", "--to", "audio", "--index"],
+        &[
+            "tags", "rename", "--from", "music", "--to", "audio", "--index",
+        ],
     );
     let indexed = results(tmp.path(), &["find", "--tag", "audio", "--index"]);
     let scanned = results(tmp.path(), &["find", "--tag", "audio"]);
@@ -339,7 +349,10 @@ fn schema_vault() -> TempDir {
 #[test]
 fn schema_binds_through_wikilinks_and_one_element_lists() {
     let tmp = schema_vault();
-    results(tmp.path(), &["types", "set", "Authors", "--required", "categories"]);
+    results(
+        tmp.path(),
+        &["types", "set", "Authors", "--required", "categories"],
+    );
     // `lint` exits non-zero when it finds errors, so read its JSON directly.
     let (_, stdout) = run(tmp.path(), &["lint", "--format", "json"]);
     let res: serde_json::Value = serde_json::from_str(&stdout).unwrap();
@@ -374,7 +387,10 @@ fn a_multi_element_type_list_still_fails_to_bind() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
     write_md(tmp.path(), "bad.md", "---\ntype: [a, b]\n---\n\n# B\n");
-    results(tmp.path(), &["types", "set", "Authors", "--required", "categories"]);
+    results(
+        tmp.path(),
+        &["types", "set", "Authors", "--required", "categories"],
+    );
     let (_, stdout) = run(tmp.path(), &["lint", "--format", "text"]);
     assert!(
         stdout.contains("must name one type"),
@@ -387,7 +403,13 @@ fn validate_refuses_a_schema_violation_under_dry_run() {
     let tmp = schema_vault();
     results(
         tmp.path(),
-        &["types", "set", "Authors", "--property-type", "rating=number"],
+        &[
+            "types",
+            "set",
+            "Authors",
+            "--property-type",
+            "rating=number",
+        ],
     );
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
@@ -463,7 +485,11 @@ fn required_property_type_is_inferred_from_the_vault() {
 #[test]
 fn summary_lists_a_mixed_type_property_once() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "a.md", "---\npublished: 2024-01-01\n---\n\n# A\n");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\npublished: 2024-01-01\n---\n\n# A\n",
+    );
     write_md(
         tmp.path(),
         "b.md",
@@ -499,7 +525,8 @@ fn summary_lists_a_mixed_type_property_once() {
         .find(|l| l.starts_with("Properties:"))
         .expect("a Properties line");
     assert!(
-        line.starts_with("Properties: 2 —") && line.contains("published (3: 2 date, 1 datetime-tz)"),
+        line.starts_with("Properties: 2 —")
+            && line.contains("published (3: 2 date, 1 datetime-tz)"),
         "the text row must carry the type breakdown: {line}"
     );
 }
@@ -507,7 +534,8 @@ fn summary_lists_a_mixed_type_property_once() {
 #[test]
 fn read_frontmatter_returns_the_block_verbatim() {
     let tmp = TempDir::new().unwrap();
-    let raw = "title: 'Buy wisely'\ntags:\n  - a\n  - b\n# a comment\nauthor:   \"Kevin\"\nempty:\n";
+    let raw =
+        "title: 'Buy wisely'\ntags:\n  - a\n  - b\n# a comment\nauthor:   \"Kevin\"\nempty:\n";
     write_md(tmp.path(), "x.md", &format!("---\n{raw}---\n\n# Body\n"));
 
     let (ok, stdout) = run(

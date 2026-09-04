@@ -171,12 +171,13 @@ pub fn summary(
         };
         *dir_counts.entry(dir_key).or_insert(0) += 1;
 
-        // Properties aggregation (skip "tags")
-        for (name, value) in entry
-            .properties
-            .iter()
-            .filter(|(n, _)| n.as_str() != "tags")
-        {
+        // Properties aggregation. iter-266 OUT-1: `tags` is counted like any
+        // other frontmatter property, so this report's property count is the
+        // same number `hyalo properties --count` gives. Excluding it here (on
+        // the grounds that tags have their own section) made two commands
+        // disagree about how many properties a vault has — 6 against 7 on
+        // Obsidian Hub — for no gain the Tags section does not already give.
+        for (name, value) in &entry.properties {
             let prop_type = infer_type(value).to_owned();
             *property_counts
                 .entry(name.clone())

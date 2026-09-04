@@ -497,7 +497,9 @@ pub fn read_frontmatter_raw(path: &Path) -> Result<Option<String>> {
         if span.has_bom { BOM } else { "" },
         span.line_ending.as_str()
     );
-    let after_open = fm_str.strip_prefix(opening_prefix.as_str()).unwrap_or(fm_str);
+    let after_open = fm_str
+        .strip_prefix(opening_prefix.as_str())
+        .unwrap_or(fm_str);
     Ok(strip_closing_delimiter(after_open)
         .filter(|yaml| !yaml.is_empty())
         .map(ToOwned::to_owned))

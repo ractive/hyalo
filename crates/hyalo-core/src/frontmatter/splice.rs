@@ -303,7 +303,13 @@ pub(super) fn rename_key_in_place(original_yaml: &str, from: &str, to: &str) -> 
     // the original map with exactly one key renamed, in the same position.
     let expected: IndexMap<String, Value> = original_map
         .into_iter()
-        .map(|(k, v)| if k == from { (to.to_owned(), v) } else { (k, v) })
+        .map(|(k, v)| {
+            if k == from {
+                (to.to_owned(), v)
+            } else {
+                (k, v)
+            }
+        })
         .collect();
     match parse_map_with(&out, verify_options()) {
         Ok(round_tripped) if map_eq(&round_tripped, &expected) => Some(out),
@@ -1750,9 +1756,15 @@ mod rename_tests {
     #[test]
     fn preserves_block_list_indentation() {
         let yaml = "kw:\n- one\n- two\nafter: x\n";
-        assert_eq!(renamed(yaml, "kw", "keywords"), "keywords:\n- one\n- two\nafter: x\n");
+        assert_eq!(
+            renamed(yaml, "kw", "keywords"),
+            "keywords:\n- one\n- two\nafter: x\n"
+        );
         let two_space = "kw:\n  - one\n  - two\n";
-        assert_eq!(renamed(two_space, "kw", "keywords"), "keywords:\n  - one\n  - two\n");
+        assert_eq!(
+            renamed(two_space, "kw", "keywords"),
+            "keywords:\n  - one\n  - two\n"
+        );
     }
 
     #[test]
