@@ -1065,6 +1065,16 @@ pub(crate) enum Commands {
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.\n\
+            UNUSABLE FILES: `results.files.total` counts only the notes hyalo could read.\n\
+            `results.files.skipped` counts files whose YAML frontmatter would not parse (list\n\
+            them with `hyalo lint --rule HYALO005`) and `results.files.excluded` counts files\n\
+            dropped by `[scan] exclude` in .hyalo.toml; each entry in\n\
+            `results.files.directories` carries its own `skipped` (omitted when zero) so the\n\
+            unusable files can be located. Text mode renders both inline as\n\
+            'Files: 75 (28 skipped, 0 excluded)', and prints the bare 'Files: N' when there is\n\
+            nothing to report. Every scanning command summarises the skips as ONE stderr line\n\
+            rather than one YAML excerpt per file; -q silences it and\n\
+            `[scan] verbose_skips = true` (or RUST_LOG=hyalo=debug) restores the detail.\n\
             VAULT DIR: with --format text the resolved vault dir is announced on stderr as\n\
             'note: kb dir: <path>', so stdout carries only the report; -q suppresses the note\n\
             and --format json keeps the dir in the payload as `.dir`.\n\n\
@@ -2165,12 +2175,23 @@ Repeatable (AND).\n\
         long_about = "Print the effective configuration for the current working directory.\n\n\
             Shows which .hyalo.toml is active (or none) and the effective values:\n\
             config_path, cwd, dir, dir_salvaged, format, hints, site_prefix, exempt.\n\n\
+            SCAN SETTINGS: `results.scan` reports the vault-walker configuration —\n\
+            `include` (hidden dot-subtrees the walker descends into), `exclude` (globs whose\n\
+            files NO command sees: dropped at discovery, so find/summary/tags/properties/\n\
+            lint/links/mv/backlinks/create-index/views/types/okf/madr and every --index read\n\
+            agree on the file set — naming one explicitly with --file is refused, with the\n\
+            matching glob quoted), and `verbose_skips` (stream the per-file YAML diagnostics\n\
+            instead of collapsing them into one end-of-run summary line).\n\n\
             MALFORMED CONFIG: when a .hyalo.toml exists but could not be parsed, `malformed`\n\
             is true and `parse_error` carries the diagnostic — every other value shown is a\n\
             built-in default, not what the file asked for, except `dir` when `dir_salvaged`\n\
             is true: a lenient re-read recovers just that key so read-only commands still\n\
             point at the configured vault. Detectable from the output alone, without\n\
-            scraping stderr — this command does not print the diagnostic there too.\n\n\
+            scraping stderr — this command does not print the diagnostic there too.\n\
+            A malformed config also makes every MUTATING command and every GATE command\n\
+            (`lint`, `find --strict`, `views run`) exit 1: their exit code is a verdict, and\n\
+            a verdict computed without the file's [lint] ignore and schemas is not the one\n\
+            the vault asked for. Plain reads still answer, with a -q-proof warning.\n\n\
             EXAMPLES:\n\
             hyalo config\n\
             hyalo config --raw\n\
