@@ -37,6 +37,27 @@ semantics ([[iterations/iteration-265-scan-exclude-and-skipped-files]]),
 the lint-ignore override for named files
 ([[iterations/iteration-267-help-hints-text-polish]]), and any new MD rule.
 
+## Carry-over from iteration 262
+
+[[iterations/iteration-262-frontmatter-wikilinks-first-class]] merged (PR #305)
+with its own scope fully landed — every task and acceptance criterion ticked
+against the real diff, nothing deferred inside the plan. Its PR review (local
+`/review-pr` pass) found and fixed one issue in-PR (an `MvResult` text-output
+shape gap) and surfaced two items that don't fit this plan's lint-autofix
+scope, so neither is folded in here:
+
+- The deeper finding — `mv`'s line-spanning-frontmatter-wikilink warning
+  misses files with no other backlink to the target, plus a related
+  pre-existing `NEW-3` ambiguous-link gap — is filed as its own plan,
+  [[iterations/iteration-269-mv-frontmatter-link-scan-gap]] (next free slot),
+  since it is `mv`/link-rewrite work, not lint autofix.
+- Templated frontmatter (`created: {{date}}`) causing a file to be silently
+  skipped, reconfirmed by iter-262's own dogfood outcome, was already tracked
+  by this plan's sibling [[iterations/iteration-265-scan-exclude-and-skipped-files]]
+  (SCAN-2) — no new item needed.
+
+No change to this plan's own scope as a result.
+
 ## Tasks
 
 ### FIX-1: MD018 respects Obsidian tag grammar (BUG-3)
