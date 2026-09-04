@@ -48,7 +48,7 @@ fixed, 2 partially, 1 never scheduled, **0 regressed**. The Hub's broken-link co
 parity is byte-identical on all nine MDN commands including BM25 scores, and no command is more
 than 1.5× its baseline.
 
-The new round found **28 bugs (6 HIGH, 10 MEDIUM, 12 LOW; BUG-1 since closed won't-fix,
+The new round found **29 bugs (6 HIGH, 10 MEDIUM, 13 LOW; BUG-1 since closed won't-fix,
 DEC-292)** and 25 UX issues. Four of the five open HIGH ones can silently corrupt a vault with
 exit 0, and none of them is in code the batch touched:
 they are older gaps the batch's new testbeds and the adversarial pass exposed. Zero panics in
@@ -345,6 +345,21 @@ same destination`. One source collides with an existing file.
 field "score"`. DEC-275 promises the footer round-trips. Drop `score` from the footer the way
 `title_source` is (DEC-283), or accept it.
 
+### BUG-29: The shipped "locate a broken link" `--jq` recipe uses `IN(…)`, which the embedded jq engine does not implement (LOW)
+
+```text
+hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.kind | IN("external","attachment") | not) and …'
+# {"cause": "jq filter error: undefined filter \"IN\"", "error": "jq filter failed"}
+```
+
+Found 2026-09-05 while checking DEC-292's wikilink. hyalo embeds jaq, which has no `IN`
+builtin; the recipe is copied verbatim into `crates/hyalo-cli/templates/rule-knowledgebase.md`,
+`crates/hyalo-cli/templates/skill-hyalo.md` and the repo's `.claude/CLAUDE.md`, so every vault
+that runs `hyalo init` ships a broken command. `(.kind == "external" or .kind == "attachment") |
+not` works. The xtask bundled-skill gate checks the skill's profile, not that its commands run;
+a fixture that executes every `--jq` recipe in the templates against the own KB would have caught
+it.
+
 ## UX issues
 
 ### UX-1: Exit-code taxonomy has three undocumented classes (LOW, judgement requested)
@@ -595,5 +610,7 @@ DEC-286 preview pass in `links auto`.
    `--broken-links` keeps anchor data; named unparsable and not-in-snapshot files are errors or
    upserts, never empty successes; newest per-file mtime in the stale probe; excluded count in the
    snapshot header.
-5. **Hint and contract polish** (BUG-17, BUG-22, BUG-25, BUG-27, UX-1, UX-2, UX-3, UX-13): the
-   `[site] prefix` hint, `--index-file` threading, exit-code taxonomy as a DEC, `rules_fixed`.
+5. **Hint and contract polish** (BUG-17, BUG-22, BUG-25, BUG-27, BUG-29, UX-1, UX-2, UX-3,
+   UX-13): the `[site] prefix` hint, the `IN()` recipe in three shipped templates plus an xtask
+   gate that executes every documented `--jq`, `--index-file` threading, exit-code taxonomy as a
+   DEC, `rules_fixed`.
