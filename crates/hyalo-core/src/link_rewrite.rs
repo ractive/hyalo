@@ -1396,7 +1396,13 @@ fn split_frontmatter_wikilink(
     if !closed {
         return None;
     }
-    let (target_path, _, _) = split_frontmatter_target(&joined);
+    // YAML folds a line break into a space (a literal block keeps the newline),
+    // so a target broken across lines reads as `Categories/ Books`. Compare
+    // with that whitespace removed: the author wrote a link to the moved file
+    // and the block scalar wrapped it, which is exactly the case worth
+    // warning about.
+    let collapsed: String = joined.chars().filter(|c| !c.is_whitespace()).collect();
+    let (target_path, _, _) = split_frontmatter_target(&collapsed);
     let matches = target_path == old_stem
         || target_path == old_rel
         || case_index.is_some_and(|idx| {
