@@ -4973,3 +4973,39 @@ which is exactly what it lacked here.
 
 **Where:** no code. `hyalo-knowledgebase/docs/schema-and-lint.md` states the
 outcome where it previously said "not supported" without saying why.
+
+## DEC-292: concurrent writers to one file are not serialised — won't fix (2026-09-05)
+
+**Decision:** hyalo does not serialise two of its own processes mutating the same
+file at the same instant, and will not gain a lock to do so. Closed won't-fix by
+the repo owner on the dogfood finding
+[[dogfood-results/dogfood-v0220-post-batch-261-270]] BUG-1.
+
+**The behaviour.** Every mutation is read → modify → write-temp → rename, guarded
+by an `(mtime, size)` fingerprint taken at read time and re-checked before the
+rename. Twenty parallel `hyalo set p.md --property kN=vN` processes all read the
+same fingerprint before any renames, all pass the check, and the last rename
+wins: 2–3 keys survive while 16–19 processes exit 0. A content hash would not
+fix it — the window between check and rename stays open — only a lock would.
+
+**Why won't-fix.** The race needs two hyalo processes writing *the same file* in
+the same tens of milliseconds. None of the ways hyalo is actually used produce
+that: a person on a PC in a repo runs one command at a time; a GitHub workflow
+runs one job's steps sequentially; the iteration loop's agents never share a
+file. Reaching it takes deliberate parallelism (`xargs -P`, `&` in a loop, two
+agents pointed at one vault), and a caller who does that is outside the
+contract. A lock would buy correctness for a case nobody has, at the cost of a
+new failure mode everybody has: a stale lock after a crash, or a platform
+dependency for the kernel-cleaned variant.
+
+**Declined alternative, recorded so it is not re-proposed blind:** an
+exclusive-create sidecar (`File::create_new` of `.<file>.hyalo-lock` around the
+read-modify-rename) would turn the silent loss into a hard error for the losing
+writer in ~20 lines with no global state, but needs a stale-lock rule of its own.
+The `fd-lock` crate (`flock` / `LockFileEx`) avoids stale locks at the price of a
+dependency. Either is the fix if a real workflow ever needs concurrent writers;
+neither is worth carrying for a hypothetical one.
+
+**Where:** no code. `hyalo --help` and the skill file may state "run mutations
+sequentially; concurrent writers to one file are not serialised" if the
+question comes up again; not added pre-emptively.

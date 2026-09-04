@@ -48,8 +48,9 @@ fixed, 2 partially, 1 never scheduled, **0 regressed**. The Hub's broken-link co
 parity is byte-identical on all nine MDN commands including BM25 scores, and no command is more
 than 1.5× its baseline.
 
-The new round found **28 bugs (6 HIGH, 10 MEDIUM, 12 LOW)** and 25 UX issues. Five of the six
-HIGH ones can silently corrupt a vault with exit 0, and none of them is in code the batch touched:
+The new round found **28 bugs (6 HIGH, 10 MEDIUM, 12 LOW; BUG-1 since closed won't-fix,
+DEC-292)** and 25 UX issues. Four of the five open HIGH ones can silently corrupt a vault with
+exit 0, and none of them is in code the batch touched:
 they are older gaps the batch's new testbeds and the adversarial pass exposed. Zero panics in
 roughly 150 hostile invocations with `RUST_BACKTRACE=1`, including truncated, zeroed and
 byte-flipped index files.
@@ -74,7 +75,12 @@ longer yields `expected string` there — but see BUG-5 for what happens once a 
 
 ## Bugs found
 
-### BUG-1: Concurrent `set`/`append` on one file loses updates while every process exits 0 (HIGH)
+### BUG-1: Concurrent `set`/`append` on one file loses updates while every process exits 0 (closed WON'T FIX, DEC-292)
+
+Closed 2026-09-05 by the repo owner: two hyalo processes writing the same file at the same
+instant needs deliberate parallelism that none of hyalo's real workflows (a PC in a repo, a
+GitHub workflow, the iteration loop) produce. Kept here as the record of the behaviour; see
+DEC-292 for the reasoning and the cheap detection option that was declined.
 
 ```text
 printf -- '---\ntitle: P3\n---\nbody\n' > p3.md
@@ -575,9 +581,8 @@ DEC-286 preview pass in `links auto`.
 
 ## Recommended next iterations
 
-1. **Write safety** (BUG-1, BUG-2, BUG-13): content-hash or lock around read-modify-rename;
-   column-0 closing fence plus an emitter guard; reject empty rename targets. Three fixes in
-   `hyalo-core`, one PR.
+1. **Write safety** (BUG-2, BUG-13): column-0 closing fence plus an emitter guard; reject empty
+   rename targets. Two fixes in `hyalo-core`, one PR. (BUG-1 closed won't-fix, DEC-292.)
 2. **Autofix and link-rewrite corruption** (BUG-3, BUG-28, BUG-4, BUG-7): MD031 on unterminated
    fences and MD019 inside code blocks, plus an audit of every autofixable rule against a
    fenced-block fixture;
