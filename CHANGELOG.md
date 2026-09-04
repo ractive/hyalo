@@ -347,6 +347,7 @@ and this project adheres to
 - `types remove` on an undeclared type explains that lint's errors come from `[schema.default]`, not from a type entry
 - A `set`/`remove`/`append --index` run that names its files no longer warns about staleness it repairs itself
 - The root `-h` banner no longer tells you not to `cd` into a vault configured as `dir = "."`
+- SCHEMA-group constraint violations (`pattern`, `item_pattern`, `object-list`) no longer report `autofixable: true` when `--fix` has no fixer for them
 
 ### Added
 
@@ -371,6 +372,7 @@ and this project adheres to
 - `hyalo new --dry-run` prints the scaffold and writes nothing (DEC-285)
 - `find` reports `title_source` (property | h1 | filename) alongside `title` (DEC-283)
 - `links auto` reports `default_excluded_titles` / `default_excluded_mentions` (DEC-286)
+- Schema: `object-list` property type with `required-keys`, `allowed-keys`, `key-patterns` for lists of maps; lint reports the item index and key, and a plain-string item gets a `- ref: <value>` fix-it hint
 
 ## [0.21.0] - 2026-08-28
 

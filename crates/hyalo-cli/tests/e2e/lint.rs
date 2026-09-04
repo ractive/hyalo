@@ -478,6 +478,9 @@ item_pattern = "^[a-z][a-z0-9-]*$"
 /// The `.hyalo.toml` from the iteration-268 plan.
 const OBJECT_LIST_SCHEMA: &str = r#"dir = "."
 
+[schema.types.memory.properties.title]
+type = "string"
+
 [schema.types.memory.properties.sources]
 type = "object-list"
 required-keys = ["ref"]
@@ -531,7 +534,7 @@ Body.
 title: Typo key
 type: memory
 sources:
-  - ref: github:comparis/neon
+  - ref: github:comparis/typo
     rev: 3c9e0f2
 ---
 Body.
@@ -545,7 +548,7 @@ Body.
 title: Bad commit
 type: memory
 sources:
-  - ref: github:comparis/neon
+  - ref: github:comparis/badpin
     commit: zzz
 ---
 Body.
@@ -576,7 +579,12 @@ fn lint_object_list_reports_one_violation_per_bad_file() {
             .files
             .iter()
             .find(|f| f.file == name)
-            .map(|f| f.violations.iter().map(|v| v.message.clone()).collect())
+            .map(|f| {
+                f.rule_groups
+                    .iter()
+                    .flat_map(|g| g.violations.iter().map(|v| v.message.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     };
 
@@ -644,21 +652,31 @@ fn lint_object_list_violations_are_not_autofixable() {
         .unwrap();
     let results: ExtLintFixOutput = typed_results(&output.stdout);
     assert_eq!(
-        results.fixed_count, 0,
+        results.total_fixed, 0,
         "--fix has no fixer for object-list violations"
     );
+    let mut schema_groups = 0;
     for file in &results.files {
-        for group in &file.violations {
+        assert!(
+            file.fixed_groups.is_empty(),
+            "{} should have nothing to fix",
+            file.file
+        );
+        for group in &file.remaining_groups {
             if group.rule == "SCHEMA" {
-                assert_eq!(
-                    group.autofixable,
-                    Some(false),
+                schema_groups += 1;
+                assert!(
+                    !group.autofixable,
                     "SCHEMA group in {} must report autofixable: false",
                     file.file
                 );
             }
         }
     }
+    assert_eq!(
+        schema_groups, 3,
+        "expected a remaining SCHEMA group for each of the three bad files"
+    );
 }
 
 #[test]
@@ -684,8 +702,8 @@ fn find_dot_path_matches_only_the_valid_object_list_file() {
     let files: Vec<String> = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(
         files,
-        vec!["valid.md".to_owned(), "typo-key.md".to_owned()],
-        "only the files whose map item carries that ref match"
+        vec!["valid.md".to_owned()],
+        "only the file whose map item carries that ref matches"
     );
 
     // The string item's URL is unreachable through the dot path.

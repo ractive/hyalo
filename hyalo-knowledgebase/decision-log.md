@@ -4651,3 +4651,81 @@ structurally and visibly, and the advisory prose still never reaches stdout.
 `common_title_offenders`, `render_common_title_note`, `NoteMode`),
 `crates/hyalo-core/src/common_words.rs`,
 `crates/hyalo-cli/src/output/filters.rs` (`LINKS_AUTO_FILTER`).
+
+## DEC-287: `object-list` is a flat, config-only schema type (2026-09-04)
+
+**Decision:** the schema language gains an `object-list` property type for lists
+whose items are maps, configured with three flat keys — `required-keys`
+(present in every item), `allowed-keys` (the complete key set; omit it to allow
+extras) and a `key-patterns` table mapping a key to a regex applied to that
+key's scalar value. `list` and `string-list` could describe neither shape nor
+per-key content, so a `sources:` list migrated from plain strings to
+`- ref: … / commit: …` records had its contract living in a TOML comment.
+
+Numbered 287, not the 286 the iteration-268 plan reserved: iteration 267 landed
+first and took 286.
+
+**The string item is the reason this exists.** `resolve_path` returns `None` for
+a scalar with a remaining path, so a leftover plain-string entry in an otherwise
+object-shaped list silently drops out of every `find --property sources.ref=…`
+query — invisible, not merely wrong. Lint is now the thing that reports it, and
+its message carries the fix-it text `- ref: <value>` so the repair is
+mechanical. `dot_path_array_skips_scalar_items` pins the skip behaviour that
+makes the pairing necessary; the skip itself is unchanged.
+
+**Semantics.** Every item must be a map: a plain string is an error *with* the
+fix-it hint, a number/bool/null/nested list an error without it. Keys in
+`key-patterns` are optional unless also in `required-keys`; a non-scalar value
+under a pattern key is an error, while numbers, bools and dates are matched
+against their YAML text. Items are validated independently and **every**
+violation is reported (no first-error cut-off, consistent with `item_pattern`),
+each message naming the property, the 0-based item index and — where applicable
+— the key. An empty list is vacuously valid; a non-list value is one error.
+
+**Deliberately flat — this is not JSON Schema.** No nested maps or lists under a
+key, no per-key types (`date`, `enum`), no cross-item uniqueness. *Rejected:
+importing JSON Schema* — a whole second constraint language, its error messages
+in someone else's vocabulary, for a need that is one level deep. *Rejected:
+`list` plus per-key `pattern` sugar* — it reads as if the pattern applied to the
+list, and gives nowhere to hang `required-keys`. *Rejected: nested types* —
+every vault shape seen so far is flat records; nesting can be added later
+without changing what is decided here.
+
+**Config-only, no new CLI surface.** `types set --property-type` still rejects
+`object-list`, exactly as it rejects `string-list` today, and gains no
+`--required-keys` / `--allowed-keys` / `--key-pattern` flags; `types set --help`
+says why. Authoring object *items* with `hyalo set` / `hyalo append` stays
+unsupported and is an editor concern until a `set --property 'sources[]=ref=…'`
+syntax is designed on its own merits (no backlog item filed). Write-time
+*validation* falls out of the shared validator, so `--validate` already refuses
+a scalar or string-item value for an `object-list` property.
+
+**Regex compile-time asymmetry, accepted knowingly.** Every `key-patterns` regex
+is compiled while `.hyalo.toml` is parsed, so an invalid one fails the schema
+(`schema/malformed`, naming `property 'sources'`, `key-patterns.commit` and the
+regex error) instead of being reported once per linted file. `item_pattern`
+still surfaces an invalid regex per file at lint time and is **left as is**: the
+load-time check is the better behaviour, but changing `item_pattern` now would
+move an existing error from a per-file violation to a vault-wide config failure
+for vaults that have one.
+
+**Fixed in passing: `autofixable` told the truth.** The SCHEMA group reported
+`autofixable: true` for every violation except `missing-required-no-default`,
+including `pattern` and `item_pattern` mismatches that `--fix` has no fixer for.
+A new kind, `schema/constraint-violation`, now carries all three
+(`pattern`, `item_pattern`, `object-list`) so their group reports
+`autofixable: false`. No fixer is added: repairing a shape violation needs a
+human decision about what the value should be.
+
+**Note on key order.** `key-patterns` is stored in an `IndexMap`, but the config
+passes through `toml::Value`, whose tables are sorted, so the keys arrive — and
+`types show` renders them — alphabetically, not in file order.
+
+**Where:** `crates/hyalo-core/src/schema.rs`
+(`PropertyConstraint::ObjectList`, `RawPropertyConstraint`, `TryFrom`),
+`crates/hyalo-mdlint/src/schema.rs` (`validate_object_list`,
+`VIOLATION_KIND_CONSTRAINT_VIOLATION`),
+`crates/hyalo-cli/src/commands/lint/file.rs` (the `autofixable` fix),
+`crates/hyalo-cli/src/commands/types.rs` (`constraint_to_json`),
+`crates/hyalo-cli/src/output/text_types.rs` (nested-map block),
+`crates/hyalo-cli/src/commands/new.rs` (scaffolds as `[]`).

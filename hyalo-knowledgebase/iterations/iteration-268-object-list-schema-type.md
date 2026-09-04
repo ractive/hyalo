@@ -10,7 +10,7 @@ tags:
 branch: iter-268/object-list-schema-type
 priority: 8
 related:
-  - "[[backlog/object-list-schema-type]]"
+  - "[[backlog/done/object-list-schema-type]]"
 ---
 
 # Iteration 268 — Schema: object-list property type
@@ -18,7 +18,7 @@ related:
 ## Goal
 
 The schema language knows `list` (any items) and `string-list` (string items with an optional
-`item_pattern`), but nothing can describe a **list of maps**. [[backlog/object-list-schema-type]]
+`item_pattern`), but nothing can describe a **list of maps**. [[backlog/done/object-list-schema-type]]
 records the motivating case: mapl-memory migrated `sources:` from plain strings to objects
 (`- ref: github:comparis/neon` / `commit: 3c9e0f2`, `- ref: https://example.org/post` /
 `read: 2026-09-01`). Since iteration 244 `find --property sources.ref=…` walks dot-paths into
@@ -210,7 +210,7 @@ object-list value is in scope only because it falls out of the shared validator 
       all violations reported, `autofixable: false`), with the mapl-memory `sources:` case as
       context and the rejected alternatives (JSON Schema import; `list` + per-key `pattern`
       sugar; nested types).
-- [ ] Backlog: tick the acceptance boxes in [[backlog/object-list-schema-type]] as they land,
+- [ ] Backlog: tick the acceptance boxes in [[backlog/done/object-list-schema-type]] as they land,
       set `status=completed` and `hyalo mv` it to `backlog/done/` at the end. The backlog schema
       has no "scheduled" status and no link property, so until then the item stays `planned`;
       this iteration's `related` property is the link, visible through
@@ -248,12 +248,12 @@ object-list value is in scope only because it falls out of the shared validator 
       check-help-drift`.
 - [ ] Changelog entries added with `hyalo changelog add`; DEC-286 recorded in [[decision-log]];
       skill file, `docs/configuration.md` and [[docs/schema-and-lint]] updated in the same PR;
-      [[backlog/object-list-schema-type]] boxes ticked, status `completed`, moved to
+      [[backlog/done/object-list-schema-type]] boxes ticked, status `completed`, moved to
       `backlog/done/`.
 
 ## Links
 
-- [[backlog/object-list-schema-type]]
+- [[backlog/done/object-list-schema-type]]
 - [[decision-log]]
 - [[docs/schema-and-lint]]
 - [[iterations/done/iteration-138-schema-extensions-and-new-command]] — introduced

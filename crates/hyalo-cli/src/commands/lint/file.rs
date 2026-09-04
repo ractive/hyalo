@@ -22,6 +22,25 @@ use hyalo_mdlint::schema::{
 use std::borrow::Cow;
 use std::path::Path;
 
+/// Whether `--fix` has a fixer for a SCHEMA violation of this kind.
+///
+/// Reporting `autofixable: true` for a violation nothing can fix promises a
+/// repair that never arrives. Two kinds have no fixer:
+/// - `missing-required-no-default`: there is no value to synthesize (mapl BUG-3);
+/// - `constraint-violation`: an `object-list` shape error or a `pattern` /
+///   `item_pattern` mismatch needs a human decision about the right value
+///   (DEC-287).
+///
+/// Shared by the read-only pass and the post-fix re-validation pass, which must
+/// agree — the post-fix path used to report every surviving violation as
+/// fixable.
+fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
+    !matches!(
+        kind,
+        Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT | VIOLATION_KIND_CONSTRAINT_VIOLATION)
+    )
+}
+
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(super) fn lint_one_file_extended(
@@ -249,22 +268,7 @@ pub(super) fn lint_one_file_extended(
                 Severity::Error => "error",
                 Severity::Warn => "warn",
             };
-            // Some SCHEMA violations have no fixer at all, so reporting them
-            // `autofixable: true` promises a fix `--fix` never applies:
-            // - a missing/empty required property with no declared default
-            //   cannot be synthesized (mapl BUG-3);
-            // - a constraint violation (object-list shape, `pattern` /
-            //   `item_pattern` mismatch) has no fixer either (DEC-286).
-            // Tag both not-autofixable so the SCHEMA group reports
-            // `autofixable: false` unless some other SCHEMA violation in the
-            // file really is fixable.
-            let autofixable = Some(!matches!(
-                v.kind,
-                Some(
-                    VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT
-                        | VIOLATION_KIND_CONSTRAINT_VIOLATION
-                )
-            ));
+            let autofixable = Some(schema_violation_is_autofixable(v.kind));
             violations_by_rule
                 .entry("SCHEMA".to_owned())
                 .or_default()
@@ -468,7 +472,11 @@ pub(super) fn lint_one_file_extended(
                             severity: sev.to_owned(),
                             fix: None,
                             fixed: false,
-                            autofixable: None,
+                            // Same rule as the read-only path above: a
+                            // violation `--fix` has no fixer for must not
+                            // report `autofixable: true` just because it
+                            // survived the fix pass.
+                            autofixable: Some(schema_violation_is_autofixable(v.kind)),
                         }
                     })
                     .collect();

@@ -2,7 +2,7 @@
 title: "Schema: object-list property type (typed list items with per-key constraints)"
 type: backlog
 date: 2026-09-03
-status: planned
+status: completed
 origin: mapl-memory sources-as-objects migration 2026-09-01 (PR comparis/mapl-memory#77)
 priority: medium
 tags:
@@ -66,8 +66,8 @@ Semantics:
 
 ## Acceptance criteria
 
-- [ ] `object-list` parses from `.hyalo.toml` with `required-keys`, `allowed-keys`, `key-patterns`
-- [ ] Lint flags: non-map item (with `- ref:` fix-it), missing required key, unknown key, pattern mismatch — each naming file, item index, key
-- [ ] `hyalo types show` renders the constraint readably
-- [ ] Existing `list` / `string-list` behavior unchanged
-- [ ] Test matrix: valid objects pass; string item, typo key, bad pattern each fail with the right message
+- [x] `object-list` parses from `.hyalo.toml` with `required-keys`, `allowed-keys`, `key-patterns`
+- [x] Lint flags: non-map item (with `- ref:` fix-it), missing required key, unknown key, pattern mismatch — each naming file, item index, key
+- [x] `hyalo types show` renders the constraint readably
+- [x] Existing `list` / `string-list` behavior unchanged
+- [x] Test matrix: valid objects pass; string item, typo key, bad pattern each fail with the right message
