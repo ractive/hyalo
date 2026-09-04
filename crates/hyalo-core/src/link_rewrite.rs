@@ -90,6 +90,26 @@ pub struct SkippedAmbiguous {
     pub candidates: Vec<String>,
 }
 
+/// A frontmatter wikilink `mv` refused to rewrite because its `[[…]]` spans a
+/// line break — a folded (`>`) or literal (`|`) block scalar, or a wrapped
+/// quoted string (iter-262, FM-2).
+///
+/// The rewriter replaces bytes inside a single YAML line so `git diff` shows
+/// only the changed target and the author's quoting style survives. A target
+/// split across lines has no single-line span to replace, and re-serializing
+/// the block to fix it would rewrite the whole file. Reporting it is the honest
+/// outcome: the user sees exactly which links they must fix by hand instead of
+/// discovering a dangling reference later.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedFrontmatterLink {
+    /// Vault-relative path of the file holding the link.
+    pub source: String,
+    /// 1-based line the link's `[[` sits on.
+    pub line: usize,
+    /// The target text, with the line break collapsed to a single space.
+    pub target: String,
+}
+
 /// Result of [`plan_mv`]: the list of rewrite plans plus any ambiguous
 /// inbound links that were skipped (NEW-3).
 pub struct MvPlanResult {
@@ -97,6 +117,9 @@ pub struct MvPlanResult {
     pub plans: Vec<RewritePlan>,
     /// Inbound links that were skipped because the stem was ambiguous.
     pub skipped_ambiguous: Vec<SkippedAmbiguous>,
+    /// Frontmatter wikilinks left untouched because their brackets span a line
+    /// break (iter-262, FM-2).
+    pub skipped_frontmatter: Vec<SkippedFrontmatterLink>,
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +192,7 @@ pub fn plan_mv(
     // Step 3: for each source file, build a RewritePlan for inbound links.
     let mut plans: HashMap<PathBuf, RewritePlan> = HashMap::new();
     let mut all_skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
+    let mut all_skipped_frontmatter: Vec<SkippedFrontmatterLink> = Vec::new();
 
     for source_rel in by_source.keys() {
         let abs_path = dir.join(source_rel);
@@ -203,6 +227,7 @@ pub fn plan_mv(
             site_prefix,
             Some(&case_index),
             allow_ambiguous,
+            &mut all_skipped_frontmatter,
         );
 
         all_skipped_ambiguous.extend(skipped);
@@ -253,6 +278,7 @@ pub fn plan_mv(
         return Ok(MvPlanResult {
             plans: plans.into_values().collect(),
             skipped_ambiguous: all_skipped_ambiguous,
+            skipped_frontmatter: all_skipped_frontmatter,
         });
     }
     let content = std::fs::read_to_string(&old_abs)
@@ -307,6 +333,7 @@ pub fn plan_mv(
     Ok(MvPlanResult {
         plans: plans.into_values().collect(),
         skipped_ambiguous: all_skipped_ambiguous,
+        skipped_frontmatter: all_skipped_frontmatter,
     })
 }
 
@@ -608,6 +635,7 @@ fn plan_inbound_rewrites(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
     allow_ambiguous: bool,
+    skipped_frontmatter: &mut Vec<SkippedFrontmatterLink>,
 ) -> (Vec<Replacement>, Vec<SkippedAmbiguous>) {
     let resolver_idx = case_index.unwrap_or(&EMPTY_CASE_INDEX);
     let resolver = LinkResolver::new(resolver_idx, site_prefix);
@@ -634,6 +662,18 @@ fn plan_inbound_rewrites(
                     case_index,
                 );
                 replacements.extend(fm_repls);
+                // FM-2 (iter-262): a `[[…]]` whose brackets straddle a line
+                // break cannot be rewritten in place — report it rather than
+                // leaving a silently dangling reference.
+                if let Some(target) =
+                    split_frontmatter_wikilink(line, rest, old_rel, old_stem, case_index)
+                {
+                    skipped_frontmatter.push(SkippedFrontmatterLink {
+                        source: source_rel.to_owned(),
+                        line: scanner.line_num(),
+                        target,
+                    });
+                }
                 continue;
             }
             LineClass::Body(body) => body,
@@ -1102,6 +1142,9 @@ pub fn plan_batch_mv(
 
         let mut all_replacements = Vec::new();
         for (old_rel, old_stem, new_rel, new_stem) in move_pairs {
+            // Batch mode has no JSON slot for line-spanning frontmatter links;
+            // they are warned about on stderr below, like ambiguous ones.
+            let mut skipped_frontmatter = Vec::new();
             let (repls, skipped) = plan_inbound_rewrites(
                 &content,
                 source_rel,
@@ -1112,7 +1155,15 @@ pub fn plan_batch_mv(
                 site_prefix,
                 Some(&case_index),
                 allow_ambiguous,
+                &mut skipped_frontmatter,
             );
+            for s in &skipped_frontmatter {
+                eprintln!(
+                    "warning: frontmatter wikilink [[{}]] in {}:{} spans a line break — not \
+                     rewritten; update it by hand",
+                    s.target, s.source, s.line
+                );
+            }
             // Batch mode doesn't surface skipped-ambiguous links in a JSON
             // envelope (unlike single-file `plan_mv`) — preserve the prior
             // stderr-only warning behavior here.
@@ -1294,6 +1345,68 @@ pub(crate) fn find_frontmatter_wikilinks(line: &str) -> Vec<FrontmatterWikilinkO
         }
     }
     occurrences
+}
+
+/// Detect a frontmatter wikilink whose `[[…]]` starts on `line` but closes on a
+/// later line, and report its target when that target names the moved file
+/// (iter-262, FM-2).
+///
+/// `rest` is the document text after `line`, as
+/// [`lines_with_rest`] hands it over. The lookahead stops at the closing `---`
+/// so a stray `[[` in frontmatter never reaches into the body.
+///
+/// Returns the reconstructed target with the line break collapsed to one space
+/// — how a YAML folded scalar would read it — or `None` when the brackets close
+/// on the same line (the ordinary, rewritable case), never close at all, or
+/// name some other file.
+fn split_frontmatter_wikilink(
+    line: &str,
+    rest: &str,
+    old_rel: &str,
+    old_stem: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
+    let open = line.rfind("[[")?;
+    let after_open = &line[open + 2..];
+    if after_open.contains("]]") {
+        return None;
+    }
+    // Reconstruct the value across the line break, stopping at the frontmatter
+    // delimiter.
+    let mut joined = after_open.trim_end().to_owned();
+    let mut closed = false;
+    for next in rest.lines() {
+        if crate::frontmatter::is_closing_delimiter(next) {
+            break;
+        }
+        let trimmed = next.trim();
+        joined.push(' ');
+        if let Some(end) = trimmed.find("]]") {
+            joined.push_str(&trimmed[..end]);
+            closed = true;
+            break;
+        }
+        joined.push_str(trimmed);
+        // A wikilink target is never long; give up rather than scanning the
+        // whole block for a `]]` that is not coming.
+        if joined.len() > 512 {
+            break;
+        }
+    }
+    if !closed {
+        return None;
+    }
+    let (target_path, _, _) = split_frontmatter_target(&joined);
+    let matches = target_path == old_stem
+        || target_path == old_rel
+        || case_index.is_some_and(|idx| {
+            let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
+            let canonical = idx
+                .lookup_unique(&t_norm)
+                .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")));
+            canonical == Some(old_rel) || canonical == Some(old_stem)
+        });
+    matches.then_some(joined)
 }
 
 /// Find and plan wikilink replacements inside a single frontmatter YAML line.
