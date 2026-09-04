@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 269 — Carry-over correctness fixes: mv split-link scan, MD034 <tag boundary, MD047 on frontmatter-only files"
 date: 2026-09-04
-status: planned
+status: in-progress
 tags:
   - iteration
   - mv

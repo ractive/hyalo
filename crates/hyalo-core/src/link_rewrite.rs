@@ -112,7 +112,7 @@ pub struct SkippedAmbiguous {
 ///
 /// Still limited to single-file [`plan_mv`]: [`plan_batch_mv`] has no channel
 /// for these reports at all (it returns bare [`RewritePlan`]s), so batch moves
-/// neither warn about split links nor did before — see DEC-283.
+/// neither warn about split links nor did before — see DEC-288.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkippedFrontmatterLink {
     /// Vault-relative path of the file holding the link.

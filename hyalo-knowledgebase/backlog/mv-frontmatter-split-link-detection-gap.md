@@ -2,7 +2,7 @@
 type: backlog
 title: mv misses a frontmatter wikilink whose file has no other backlink to the target
 date: 2026-09-04
-status: planned
+status: completed
 priority: medium
 origin: "iter-262 review (PR #305), 2026-09-04"
 ---

@@ -100,7 +100,13 @@ static DESCRIPTION_SUFFIX: &[(&str, &str)] = &[
         "MD034",
         "hyalo suppresses URLs that already sit inside link markup — a markdown link or image \
          destination, an autolink, a wikilink or a reference definition. Only a URL in plain \
-         prose is bare.",
+         prose is bare. The autolink it proposes also stops before a following HTML tag, so \
+         `https://…/x<br>` becomes `<https://…/x><br>` and never swallows the tag.",
+    ),
+    (
+        "MD047",
+        "hyalo skips this rule on a file with no body at all — a frontmatter-only note ends \
+         with the newline that closes its `---` block, so there is no line left to terminate.",
     ),
     (
         "MD042",

@@ -222,13 +222,14 @@ hyalo lint --fix iterations/iteration-101-bm25.md
 
 The bundled `MD*` rules come from `mdbook-lint`, which targets mdBook — no `#tag`
 grammar, and a line-based link scanner. On a real Obsidian vault that produced
-destructive autofixes, so four rules are narrowed. Each deviation is stated in
+destructive autofixes, so five rules are narrowed. Each deviation is stated in
 `hyalo lint-rules show <ID>`.
 
 | Rule | Narrowed to |
 |------|-------------|
 | **MD018** | A single `#` followed by a tag token — letters, digits, `_`, `-`, `/`, non-ASCII word characters, at least one non-digit — is an Obsidian tag, not a heading missing its space (DEC-271). `##Heading`, `#1`, `#!bang` and a capitalized word followed by prose (`#Heading typo`) still fire. |
-| **MD034** | A URL already inside link markup — a markdown link or image destination, an autolink, a wikilink, a reference definition — is not bare. Only prose URLs are flagged. |
+| **MD034** | A URL already inside link markup — a markdown link or image destination, an autolink, a wikilink, a reference definition — is not bare. Only prose URLs are flagged. The autolink it proposes also stops before a following HTML tag (iter-269): `https://…/x<br>` fixes to `<https://…/x><br>`, never `<https://…/x<br>>`. |
+| **MD047** | Skipped on a file with no body at all (iter-269): a frontmatter-only note ends with the newline that closes its `---` block, so there is no line left to terminate. A non-empty body genuinely missing its terminator still fires. |
 | **MD042** | An image is valid link text: `[![](img.png)](https://…)` is neither an empty link nor a missing-alt warning. A standalone `![](img.png)` still warns, and `[](url)` / `[ ](url)` still error. |
 | **MD001** | Reported, never autofixed (DEC-272): renumbering a deliberate `###### Caption` to `##` rewrites authored structure. `hyalo lint-rules list` shows `AUTOFIX no`; silence the warning with `hyalo lint-rules set MD001 --enabled false`. |
 

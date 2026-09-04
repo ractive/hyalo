@@ -1192,7 +1192,8 @@ pub(crate) enum Commands {
             AMBIGUOUS BARE WIKILINKS:\n\
             A bare [[stem]] that matches multiple vault files is skipped by default (logged to stderr and\n\
             included in the 'skipped_ambiguous' JSON field). Pass --allow-ambiguous to rewrite it anyway\n\
-            based on stem matching.\n\n\
+            based on stem matching. Reported for every same-stemmed candidate, including when none of\n\
+            them sits at the vault root.\n\n\
             SINGLE-FILE MODE:\n\
             Provide a positional FILE or --file. The destination is a .md path or an existing\n\
             directory (basename of source is appended), given either as --to <dest> or as a second\n\
@@ -1218,7 +1219,10 @@ pub(crate) enum Commands {
             existing YAML scalar is replaced, so quoting style and every other byte of the block\n\
             survive and `git diff` shows one changed target per line. A link whose `[[...]]` spans a\n\
             line break (a folded or literal block scalar) has no single-line span to replace: it is\n\
-            left alone, counted in a stderr warning, and listed under `frontmatter_links_skipped`.\n\n\
+            left alone, counted in a stderr warning, and listed under `frontmatter_links_skipped`.\n\
+            Single-file mode finds those links anywhere in the vault, including in files that hold\n\
+            no other link to the moved target — a split link is not a backlink, so the link graph\n\
+            alone would never surface it. Batch mode reports no frontmatter skips.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
