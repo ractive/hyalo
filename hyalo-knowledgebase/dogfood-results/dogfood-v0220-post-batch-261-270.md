@@ -149,7 +149,7 @@ print the exact string that will be written.
 # .hyalo.toml declares type "iteration"
 printf -- '---\ntitle: L\ntype: ["[[iteration]]"]\ndate: 2026-09-04\nstatus: planned\nbranch: iter-1/x\ntags: [a]\n---\n' > l.md
 hyalo lint --file l.md
-#   error  SCHEMA  line 1  property "type" expected string, got ["[[iteration]]"]
+# error  SCHEMA  line 1  property "type" expected string, got ["[[iteration]]"]
 ```
 
 Binding works (a variant with `status: bogus` gets the iteration-specific enum error), but the
