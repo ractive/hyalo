@@ -149,9 +149,7 @@ fn a_split_frontmatter_link_is_still_not_a_backlink() {
         .output()
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json output");
-    let count = json["results"]["backlinks"]
-        .as_array()
-        .map_or(0, Vec::len);
+    let count = json["results"]["backlinks"].as_array().map_or(0, Vec::len);
     assert_eq!(count, 0, "a split link is not a graph edge: {json}");
 }
 
@@ -258,7 +256,14 @@ fn lint_does_not_report_md047_on_a_file_hyalo_new_just_created() {
 
     hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["lint", "--file", "notes/x.md", "--fix", "--fix-rule", "MD047"])
+        .args([
+            "lint",
+            "--file",
+            "notes/x.md",
+            "--fix",
+            "--fix-rule",
+            "MD047",
+        ])
         .output()
         .unwrap();
     let after = std::fs::read_to_string(tmp.path().join("notes/x.md")).unwrap();
@@ -291,7 +296,11 @@ fn lint_does_not_report_md047_on_a_hand_written_frontmatter_only_file() {
 fn lint_still_reports_md047_on_a_body_without_a_trailing_newline() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write(&tmp, "b.md", "---\nkey: v\n---\n\nprose without a terminator");
+    write(
+        &tmp,
+        "b.md",
+        "---\nkey: v\n---\n\nprose without a terminator",
+    );
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())

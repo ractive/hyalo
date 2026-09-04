@@ -1038,7 +1038,10 @@ mod tests {
     #[test]
     fn unclosed_frontmatter_wikilink_marker_matches_the_opening_test() {
         for (yaml, want) in [
-            ("summary: >\n  points at [[Categories/\n  Books]] somehow\n", true),
+            (
+                "summary: >\n  points at [[Categories/\n  Books]] somehow\n",
+                true,
+            ),
             ("related:\n  - \"[[Books]]\"\n", false),
             ("title: plain\n", false),
             // Two links on one line: only the *last* `[[` can span the break.
@@ -1061,12 +1064,18 @@ mod tests {
     #[test]
     fn build_lists_only_files_with_a_split_frontmatter_wikilink() {
         let vault = create_vault(&[
-            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            (
+                "Categories/Books.md",
+                "---\ntags: [categories]\n---\n\n# Books\n",
+            ),
             (
                 "folded.md",
                 "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nBody\n",
             ),
-            ("closed.md", "---\nrelated:\n  - \"[[Categories/Books]]\"\n---\n\nBody\n"),
+            (
+                "closed.md",
+                "---\nrelated:\n  - \"[[Categories/Books]]\"\n---\n\nBody\n",
+            ),
             ("plain.md", "See [[Categories/Books]] here\n"),
         ]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();

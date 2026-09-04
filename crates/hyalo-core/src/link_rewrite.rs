@@ -1927,7 +1927,10 @@ mod tests {
     #[test]
     fn plan_mv_reports_a_split_frontmatter_link_in_an_ungraphed_file() {
         let vault = create_vault(&[
-            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            (
+                "Categories/Books.md",
+                "---\ntags: [categories]\n---\n\n# Books\n",
+            ),
             (
                 "References/Folded.md",
                 "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nBody with no other link.\n",
@@ -1962,7 +1965,10 @@ mod tests {
     #[test]
     fn plan_mv_reports_a_split_frontmatter_link_exactly_once() {
         let vault = create_vault(&[
-            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            (
+                "Categories/Books.md",
+                "---\ntags: [categories]\n---\n\n# Books\n",
+            ),
             (
                 "References/Folded.md",
                 "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nAlso [[Categories/Books]] inline.\n",
@@ -1989,8 +1995,14 @@ mod tests {
     #[test]
     fn plan_mv_ignores_a_split_frontmatter_link_to_another_file() {
         let vault = create_vault(&[
-            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
-            ("Categories/Films.md", "---\ntags: [categories]\n---\n\n# Films\n"),
+            (
+                "Categories/Books.md",
+                "---\ntags: [categories]\n---\n\n# Books\n",
+            ),
+            (
+                "Categories/Films.md",
+                "---\ntags: [categories]\n---\n\n# Films\n",
+            ),
             (
                 "References/Folded.md",
                 "---\nsummary: >\n  points at [[Categories/\n  Films]] somehow\n---\n\nBody.\n",
@@ -2061,7 +2073,9 @@ mod tests {
         // nothing to rewrite — the point is that `[[c]]` was not touched.
         for plan in &result.plans {
             assert!(
-                plan.replacements.iter().all(|r| !r.old_text.contains("[[c]]")),
+                plan.replacements
+                    .iter()
+                    .all(|r| !r.old_text.contains("[[c]]")),
                 "unrelated link rewritten: {:?}",
                 plan.replacements
             );
