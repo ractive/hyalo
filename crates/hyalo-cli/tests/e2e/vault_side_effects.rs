@@ -55,16 +55,6 @@ Body.
 
 /// Whether the filesystem backing `dir` folds case, determined without relying
 /// on any hyalo code path.
-fn host_is_case_insensitive(dir: &Path) -> bool {
-    let probe = dir.join("hyalo-e2e-case-check.txt");
-    fs::write(&probe, "x").expect("probe write should succeed");
-    let flipped = dir.join("HYALO-E2E-CASE-CHECK.TXT");
-    let result = flipped.exists();
-    let _ = fs::remove_file(&probe);
-    let _ = fs::remove_file(&flipped);
-    result
-}
-
 #[test]
 fn read_only_commands_do_not_touch_vault_dir() {
     let tmp = sample_vault();
@@ -117,17 +107,18 @@ fn read_only_commands_do_not_touch_vault_dir() {
     );
 }
 
-/// A read-only vault must still be queryable, and — this is the behaviour
-/// change — case-insensitive link resolution must follow the *filesystem*
-/// rather than silently switching off because no probe file could be written.
+/// A read-only vault must still be queryable, and — per DEC-267 — link
+/// resolution folds case on every platform regardless of what the underlying
+/// filesystem does, so no case probe is ever written in the first place.
 ///
-/// `index.md` links to `[[sub/Note]]` via the lowercase path `sub/note`, which
-/// only resolves when case-insensitive path lookup is on. So on a
-/// case-insensitive filesystem (macOS, Windows) nothing is broken; on a
-/// case-sensitive one (typical Linux) the link is correctly reported broken.
+/// `index.md` links to `[[sub/Note]]` via the lowercase path `sub/note`,
+/// which now resolves unconditionally: on a case-insensitive filesystem
+/// (macOS, Windows) it always resolved; on a case-sensitive one (typical
+/// Linux) DEC-267 makes it resolve too, since resolution no longer asks the
+/// filesystem.
 #[cfg(unix)]
 #[test]
-fn find_on_read_only_vault_resolves_case_per_filesystem() {
+fn find_on_read_only_vault_resolves_case_regardless_of_filesystem() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = TempDir::new().expect("tempdir creation should succeed");
@@ -152,8 +143,6 @@ title: Note
 Body.
 "),
     );
-
-    let case_insensitive_fs = host_is_case_insensitive(dir);
 
     let mut perms = fs::metadata(dir).expect("metadata").permissions();
     perms.set_mode(0o555);
@@ -181,21 +170,11 @@ Body.
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mentions_index = stdout.contains("index.md");
-
-    if case_insensitive_fs {
-        assert!(
-            !mentions_index,
-            "on a case-insensitive filesystem the read-only vault must still \
-             resolve [[sub/note]] -> sub/Note.md (case-insensitive mode ON); got: {stdout}"
-        );
-    } else {
-        assert!(
-            mentions_index,
-            "on a case-sensitive filesystem [[sub/note]] must stay broken \
-             (case-insensitive mode OFF); got: {stdout}"
-        );
-    }
+    assert!(
+        !stdout.contains("index.md"),
+        "the read-only vault must still resolve [[sub/note]] -> sub/Note.md \
+         (DEC-267: case folds on every platform); got: {stdout}"
+    );
 }
 
 #[test]
