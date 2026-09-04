@@ -2085,7 +2085,16 @@ Repeatable (AND).\n\
             `hyalo lint`, driving the agent fill-in loop. A pattern/length-constrained string\n\
             property whose default (or the generic `TBD`) would itself violate the constraint\n\
             (e.g. a `branch` property with pattern `^iter-\\d+[a-z]*/`) is OMITTED rather than\n\
-            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\n\
+            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\
+            PLACEHOLDERS (DEC-285, iteration 267): a required `string` gets `TBD`; a required\n\
+            `number`, `date`, `datetime` or `boolean` with no schema default is written as an\n\
+            EMPTY value (`rating:`), not as `0` / today / `false`. Those three would read as real\n\
+            data and lint would accept them; an empty value is a schema error naming the exact\n\
+            field, so the fill-in loop is told what is missing. A `default` declared in the\n\
+            schema (including `$today`) is always emitted verbatim.\n\
+            DRY RUN: --dry-run prints the scaffold and writes nothing (`dry_run: true`,\n\
+            `created: false`, plus the `content` it would have written). Same flag, same\n\
+            meaning as on every other writing command.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
@@ -2096,10 +2105,13 @@ Repeatable (AND).\n\
             EXAMPLES:\n\
             hyalo new --type iteration --file iterations/iter-99-example.md\n\
             hyalo new --type note --file notes/2026-05-24-standup.md\n\
-            hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft\n\n\
-            OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
-            Text mode: `created <rel-path>`.\n\n\
-            SIDE EFFECTS: Writes one new file. When `--index` or `--index-file` is set,\n\
+            hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft\n\
+            hyalo new --type iteration --file iterations/iter-99-x.md --dry-run   # preview only\n\n\
+            OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true,\n\
+            \"dry_run\": false}}`; a --dry-run adds `content` (the scaffold it would write).\n\
+            Text mode: `created <rel-path>`, or `[dry-run] would create <rel-path>` followed by\n\
+            the scaffold.\n\n\
+            SIDE EFFECTS: Writes one new file (nothing at all under --dry-run). When `--index` or `--index-file` is set,\n\
             also inserts a fresh entry into the snapshot index so subsequent `--index`\n\
             queries (find, summary, etc.) see the file without a full rebuild."
     )]
@@ -2113,6 +2125,15 @@ Repeatable (AND).\n\
         /// the vault after symlinks.
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
+        /// Print the scaffold without creating the file
+        ///
+        /// iter-267 (UX-17, DEC-285): parity with every other writing command,
+        /// not new surface — `dry_run` is already a universal key on
+        /// object-shaped mutation results (DEC-257), and `new` was the only
+        /// writer whose preview you had to get by creating the file and
+        /// deleting it again.
+        #[arg(long)]
+        dry_run: bool,
         /// When `--index` or `--index-file` is set, the snapshot index is patched in place
         /// after the file is created, so later `--index` queries see it without a full
         /// rebuild.
@@ -2895,23 +2916,27 @@ pub(crate) enum LinksAction {
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable,\n\
                                    case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
-            NOISY CANDIDATE TITLES: the run prints one advisory note on stderr when a candidate \
-            title looks like a source of over-linking. Two things trigger it: the title is an \
-            ordinary English word or a generic doc filename (\"permissions\", \"index\", \"README\"), \
-            or the title is unusually frequent — at least 25 proposed links and at least 2.5% of \
-            the run. The frequency trigger is language-independent, so non-English titles are \
-            covered too. The note names the offenders with their match counts (plus their share of \
-            the run when frequency is the reason) and the --exclude-title flags that would skip \
-            them; the prose list stops at the five noisiest and says so, but the flags cover every \
-            offender, so one paste-back is enough. It only names titles that actually produced \
-            matches, so excluding them makes the note disappear. The note never appears on stdout — \
-            the report is unchanged — and -q or --no-warn-common-titles silences it.\n\n\
+            NOISY CANDIDATE TITLES (built-in stop-list): titles that look like a source of \
+            over-linking are HELD BACK by default, not merely warned about. Two things flag a \
+            title: it is an ordinary English word, a generic doc filename or a platform/format \
+            name (\"permissions\", \"index\", \"README\", \"github\", \"markdown\"), or it is unusually \
+            frequent for this run — at least 25 proposed links and at least 2.5% of the run. The \
+            frequency trigger is language-independent, so non-English titles are covered too. \
+            The report always carries default_excluded_titles (the lowercased titles held back) \
+            and default_excluded_mentions (how many mentions that was), and one stderr note names \
+            them with their counts plus the --exclude-title flags that reproduce the exclusion \
+            explicitly; the prose list stops at the five noisiest and says so, while the flags \
+            cover every one. Only titles that actually produced matches are ever flagged.\n\
+            TURNING IT OFF: setting [links.auto] exclude_titles hands the decision to your own \
+            list — the built-in stop-list steps aside entirely — and warn_common_titles = false \
+            (or --no-warn-common-titles for one run) switches off both the exclusion and the \
+            note, restoring the pre-iteration-267 all-candidates report.\n\n\
             PERSISTING THESE: put them in the [links.auto] section of .hyalo.toml so they apply to every run:\n\
               [links.auto]\n\
               exclude_titles = [\"permissions\", \"README\"]\n\
               exclude_target_globs = [\"templates/*\"]\n\
               first_only = true\n\
-              warn_common_titles = false   # opt out of the noisy-title note\n\
+              warn_common_titles = false   # opt out of the built-in stop-list AND its note\n\
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
             config says, and --no-first-only turns it off for a single run whatever the config says. \
@@ -2971,12 +2996,14 @@ pub(crate) enum LinksAction {
         /// Matched case-insensitively, mirroring --exclude-title.
         #[arg(long, value_name = "GLOB")]
         exclude_target_glob: Vec<String>,
-        /// Do not print the advisory note naming noisy candidate titles
+        /// Switch off the built-in common-title stop-list and its advisory note
         ///
-        /// The note names common English words (e.g. "permissions", "index") and titles
-        /// that dominate the run (at least 25 matches and 2.5% of the proposed links).
+        /// By default hyalo holds back candidate titles that are common English words,
+        /// generic doc filenames or platform names (e.g. "permissions", "index",
+        /// "github"), plus any title that dominates the run (at least 25 matches and
+        /// 2.5% of the proposed links); the report names them under
+        /// default_excluded_titles. This flag proposes every candidate instead.
         ///
-        /// The note goes to stderr only and never changes the report on stdout.
         /// Persist the opt-out with `warn_common_titles = false` under
         /// [links.auto] in .hyalo.toml.
         #[arg(long)]

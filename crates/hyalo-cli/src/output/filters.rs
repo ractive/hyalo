@@ -274,6 +274,15 @@ fn is_link_info_signature(key_sig: &str) -> bool {
 /// Look up the jq filter for a given key signature.
 ///
 /// Returns `None` for unknown shapes, which will fall back to generic formatting.
+/// `hyalo new` result — the created (or previewed) file.
+///
+/// iter-267 (UX-17): before `--dry-run` existed the shape fell through to the
+/// generic `key: value` dump, which printed `created: true` / `dry_run: false`
+/// / `file: …` / `type: …` as four lines. With the scaffold body riding along
+/// in a preview, the dump became unreadable — hence a filter that prints the
+/// headline and, for a dry run, the scaffold underneath it.
+pub(super) const NEW_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] would create " else "created " end)\(.file)\(if .content then "\n\n" + .content else "" end)""#;
+
 pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
     // `LinkInfo` is matched by shape rather than by exact signature (iter-261):
     // with `kind` always present and five optional keys around it, the
@@ -282,6 +291,10 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         return Some(LINK_INFO_FILTER);
     }
     match key_sig {
+        // `hyalo new` (with and without the --dry-run `content` payload)
+        "created,dry_run,file,type" | "content,created,dry_run,file,type" => {
+            Some(NEW_RESULT_FILTER)
+        }
         // PropertyInfo
         "name,type,value" => Some(PROPERTY_INFO_FILTER),
         // PropertySummaryEntry (mixed_types is skipped when None, so two signatures)

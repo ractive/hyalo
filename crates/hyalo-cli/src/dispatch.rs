@@ -748,6 +748,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::New {
             r#type,
             file,
+            dry_run,
             index_flags: _,
         } => crate::commands::new::create_new(
             ctx.dir,
@@ -758,6 +759,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 &mut *ctx.snapshot_index,
                 ctx.index_path,
             ),
+            dry_run,
             effective_format,
         ),
         Commands::Okf { action } => {

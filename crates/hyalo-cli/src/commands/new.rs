@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::Context;
 use indexmap::IndexMap;
 
-use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default, today_iso8601};
+use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default};
 
 use anyhow::Result;
 
@@ -23,6 +23,7 @@ pub(crate) fn create_new(
     file_arg: &str,
     schema: &SchemaConfig,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
+    dry_run: bool,
     format: Format,
 ) -> Result<CommandOutcome> {
     // ------------------------------------------------------------------
@@ -98,7 +99,11 @@ pub(crate) fn create_new(
     // ------------------------------------------------------------------
     // Step 3: ensure parent directory exists (create if needed)
     // ------------------------------------------------------------------
-    if let Some(parent) = full_path.parent()
+    // A dry run must not fabricate directories either — `--dry-run` on a path
+    // under a not-yet-existing folder used to be impossible to preview without
+    // leaving the folder behind (iter-267, UX-17).
+    if !dry_run
+        && let Some(parent) = full_path.parent()
         && !parent.is_dir()
     {
         std::fs::create_dir_all(parent)
@@ -127,6 +132,47 @@ pub(crate) fn create_new(
         return Ok(CommandOutcome::UserError(
             crate::output::format_budget_error(format, &budget_err),
         ));
+    }
+
+    // Normalize to forward slashes so the snapshot's rel_path invariant holds
+    // when callers pass Windows-style backslashes via `--file`.
+    let rel_path_owned;
+    let rel_path: &str = if file_arg.contains('\\') {
+        rel_path_owned = file_arg.replace('\\', "/");
+        &rel_path_owned
+    } else {
+        file_arg
+    };
+
+    // --dry-run: everything above this point still runs (type lookup, path
+    // validation, escape refusal, the frontmatter budget check), so a preview
+    // reports the same refusals a real run would. Only the write is skipped.
+    if dry_run {
+        if full_path.exists() {
+            return Ok(CommandOutcome::UserError(format_error(
+                format,
+                "file already exists; remove it first if you mean to re-create",
+                Some(file_arg),
+                None,
+                None,
+            )));
+        }
+        let out = match format {
+            Format::Text => format!("[dry-run] would create {rel_path}\n\n{content}"),
+            Format::Json | Format::Github => {
+                let val = serde_json::json!({
+                    "type": type_name,
+                    "file": rel_path,
+                    "created": false,
+                    "dry_run": true,
+                    // The scaffold itself, so a preview does not require a
+                    // second command to see what would land on disk.
+                    "content": content,
+                });
+                format_success(Format::Json, &val)
+            }
+        };
+        return Ok(CommandOutcome::success(out));
     }
 
     let mut file = match std::fs::OpenOptions::new()
@@ -158,15 +204,6 @@ pub(crate) fn create_new(
     // ------------------------------------------------------------------
     // Step 6.5: keep the snapshot index in sync (no-op when no index loaded)
     // ------------------------------------------------------------------
-    // Normalize to forward slashes so the snapshot's rel_path invariant holds
-    // when callers pass Windows-style backslashes via `--file`.
-    let rel_path_owned;
-    let rel_path: &str = if file_arg.contains('\\') {
-        rel_path_owned = file_arg.replace('\\', "/");
-        &rel_path_owned
-    } else {
-        file_arg
-    };
     journal.add_entry(rel_path, &full_path)?;
     journal.flush()?;
 
@@ -249,20 +286,19 @@ fn synthesise_content(
         }
 
         let value = match merged.properties.get(prop_name.as_str()) {
-            Some(PropertyConstraint::Date) => {
-                PropValue::Str(default_val.unwrap_or_else(today_iso8601))
+            // Dates, numbers and booleans have no honest placeholder: today,
+            // 0 and false are all values a reader would take at face value.
+            // Without a schema default they are left empty (DEC-285) so lint
+            // reports them as un-filled.
+            Some(PropertyConstraint::Date) => default_val.map_or(PropValue::Null, PropValue::Str),
+            Some(PropertyConstraint::DateTime | PropertyConstraint::DateTimeTz) => {
+                default_val.map_or(PropValue::Null, PropValue::Str)
             }
-            Some(PropertyConstraint::DateTime) => PropValue::Str(
-                default_val.unwrap_or_else(|| format!("{}T00:00:00", today_iso8601())),
-            ),
-            Some(PropertyConstraint::DateTimeTz) => PropValue::Str(
-                default_val.unwrap_or_else(|| format!("{}T00:00:00Z", today_iso8601())),
-            ),
             Some(PropertyConstraint::Number { .. }) => match default_val {
                 Some(s) => s
                     .parse::<i64>()
                     .map_or_else(|_| PropValue::Str(s), PropValue::Int),
-                None => PropValue::Int(0),
+                None => PropValue::Null,
             },
             Some(PropertyConstraint::Boolean) => match default_val {
                 Some(s) => match s.as_str() {
@@ -270,7 +306,7 @@ fn synthesise_content(
                     "false" => PropValue::Bool(false),
                     _ => PropValue::Str(s),
                 },
-                None => PropValue::Bool(false),
+                None => PropValue::Null,
             },
             Some(PropertyConstraint::List | PropertyConstraint::StringList { .. }) => {
                 // A default for list properties is uncommon; treat unparseable
@@ -307,6 +343,9 @@ fn synthesise_content(
             }
             PropValue::EmptyList => {
                 let _ = writeln!(yaml_lines, "{k}: []");
+            }
+            PropValue::Null => {
+                let _ = writeln!(yaml_lines, "{k}:");
             }
         }
     }
@@ -374,6 +413,17 @@ enum PropValue {
     Bool(bool),
     Int(i64),
     EmptyList,
+    /// An un-filled required property: the key is emitted with no value, which
+    /// YAML reads as null.
+    ///
+    /// iter-267 (UX-17, DEC-285): scaffolding `0` for a required number,
+    /// today's date for a required date and `false` for a required boolean
+    /// made every new file look complete — `lint` accepted the fabricated
+    /// values, and nothing told the author which columns were still theirs to
+    /// fill. An empty value is a schema error ("required property must not be
+    /// empty"), so `hyalo lint` names exactly the fields the scaffold could
+    /// not know. A schema-declared `default` is still emitted verbatim.
+    Null,
 }
 
 /// Produce a YAML scalar string value. Quotes the string if needed.
