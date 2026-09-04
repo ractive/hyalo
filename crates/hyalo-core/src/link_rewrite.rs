@@ -162,18 +162,7 @@ pub fn plan_mv(
     // The build also yields a case-insensitive index of all vault paths, which
     // is used later to canonicalize link targets that differ only in casing.
     //
-    // Discovery is done here rather than inside `LinkGraph::build` so the file
-    // list can be reused by the split-frontmatter scan in step 2b without
-    // walking the vault a second time.
-    let vault_files: Vec<(PathBuf, PathBuf)> = crate::discovery::discover_files(dir)?
-        .into_iter()
-        .map(|f| {
-            let rel = f.strip_prefix(dir).unwrap_or(&f).to_path_buf();
-            (f, rel)
-        })
-        .collect();
-    let build = LinkGraph::build_from_files(&vault_files, site_prefix, None)
-        .context("building link graph")?;
+    let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
     for (path, msg) in &build.warnings {
         // Collected, not streamed (iter-265, DEC-278): `mv` used to print one
         // multi-line YAML excerpt per unparsable template before saying
@@ -186,6 +175,7 @@ pub fn plan_mv(
     }
     let graph = build.graph;
     let case_index = build.case_index;
+    let split_candidates = build.split_frontmatter_candidates;
 
     let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
     let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
@@ -298,11 +288,12 @@ pub fn plan_mv(
     // Step 3b (SCAN-1, iter-269): a frontmatter wikilink whose `[[…]]` spans a
     // line break is never extracted as a graph edge (FM-1's deliberate scope),
     // so a file whose *only* reference to the moved target is that link is not
-    // in `by_source` at all and step 3 never opens it. Sweep the rest of the
-    // vault for exactly that shape, reading no more than each file's
-    // frontmatter block.
+    // in `by_source` at all and step 3 never opens it. The graph build already
+    // saw every frontmatter block and listed the files that open an unclosed
+    // `[[`; re-read only those.
     all_skipped_frontmatter.extend(scan_split_frontmatter_links(
-        &vault_files,
+        dir,
+        &split_candidates,
         &by_source,
         old_rel,
         old_stem,
@@ -1494,24 +1485,29 @@ fn split_frontmatter_wikilink(
 /// a line break, in files the backlinks graph never pointed at (iter-269,
 /// SCAN-1).
 ///
-/// `files` is the `(absolute, vault-relative)` list the graph was built from;
+/// `candidates` is [`LinkGraphBuild::split_frontmatter_candidates`](crate::link_graph::LinkGraphBuild)
+/// — the vault-relative paths the graph build already observed to open an
+/// unclosed `[[` in their frontmatter, which is almost always none of them.
+/// Every other file provably cannot produce a report here, so it is never
+/// reopened: the sweep costs nothing on a vault without split links, which is
+/// what keeps `mv` within its perf baseline on a 6,500-file vault.
+///
 /// `already_scanned` holds the files [`plan_mv`] step 3 already walked in full
 /// (they report their own split links through [`plan_inbound_rewrites`], so
 /// re-reporting them here would duplicate every entry).
 ///
-/// Only the **frontmatter block** of each remaining file is read
+/// Only the **frontmatter block** of each candidate is read
 /// ([`read_frontmatter_raw`](crate::frontmatter::read_frontmatter_raw) stops at
-/// the closing `---` and is bounded by the frontmatter size limits), and the
-/// per-line reconstruction only runs on a block that contains a `[[` at all —
-/// on a vault with no wikilinks in frontmatter the sweep costs one small read
-/// per file and nothing else. Files whose frontmatter cannot be read or does
-/// not parse are skipped silently: the graph build already reported those, and
-/// a second warning for the same file would only add noise.
+/// the closing `---` and is bounded by the frontmatter size limits). A file
+/// whose frontmatter cannot be re-read is skipped silently: the graph build
+/// already reported the unreadable and unparsable ones, and a second warning
+/// for the same file would only add noise.
 ///
 /// Line numbers are reported against the **file**, not the block: the raw
 /// frontmatter starts on the file's second line, after the opening `---`.
 fn scan_split_frontmatter_links(
-    files: &[(PathBuf, PathBuf)],
+    dir: &Path,
+    candidates: &[PathBuf],
     already_scanned: &HashMap<PathBuf, Vec<&crate::link_graph::BacklinkEntry>>,
     old_rel: &str,
     old_stem: &str,
@@ -1519,7 +1515,7 @@ fn scan_split_frontmatter_links(
 ) -> Vec<SkippedFrontmatterLink> {
     let old_rel_norm = old_rel.replace('\\', "/");
     let mut found = Vec::new();
-    for (abs_path, rel_path) in files {
+    for rel_path in candidates {
         if already_scanned.contains_key(rel_path) {
             continue;
         }
@@ -1527,12 +1523,9 @@ fn scan_split_frontmatter_links(
         if rel_norm == old_rel_norm {
             continue;
         }
-        let Ok(Some(raw)) = crate::frontmatter::read_frontmatter_raw(abs_path) else {
+        let Ok(Some(raw)) = crate::frontmatter::read_frontmatter_raw(&dir.join(rel_path)) else {
             continue;
         };
-        if !raw.contains("[[") {
-            continue;
-        }
         for (idx, (line, rest)) in lines_with_rest(&raw).enumerate() {
             if let Some(target) =
                 split_frontmatter_wikilink(line, rest, old_rel, old_stem, Some(case_index))

@@ -4763,17 +4763,29 @@ blind spot: it only fired for a file the graph had already flagged for some
 link got neither a rewrite nor a warning — the exact silent-dangling-reference
 case FM-2 exists to close.
 
-**Mechanism: option (a), a gated secondary pass.** After step 3, `plan_mv`
-sweeps the vault files it has not already opened and reads *only* each one's
-frontmatter block (`read_frontmatter_raw`, which stops at the closing `---` and
-is bounded by the frontmatter size limits), skipping immediately unless the
-block contains `[[` at all. *Rejected: option (b), a "possible split occurrence"
-side-channel on `LinkGraph`/`FileLinks`* — it reuses work the build pass already
-does, but couples an `mv`-only concern into the shared graph type that `summary`,
-`find` and the snapshot index all deserialize, for a saving of one small read per
-file on a path that already reads every file in full to build the graph.
-Discovery is now done once in `plan_mv` and handed to `LinkGraph::build_from_files`,
-so the sweep adds no second directory walk.
+**Mechanism: option (b), a marker on the build result — chosen on measurement,
+not taste.** Option (a), the plan's simpler "sweep every file `plan_mv` has not
+already opened and read just its frontmatter block", was implemented first and
+measured on the Obsidian Hub vault (6,520 files, no split links present):
+**0.25 s → 0.36 s** median of five, both directions, interleaved. That is a 44%
+regression on a command whose whole cost is one graph build, and the sweep is
+pure waste on the overwhelmingly common vault where no file has a split link at
+all — 6,520 extra opens to find nothing.
+
+So the flag rides along with the scan that already happened. `LinkGraphVisitor`
+already receives each file's raw frontmatter text (`on_frontmatter_text`,
+iter-262), and now records whether any line of it opens a `[[` that does not
+close on that line — the exact opening test `split_frontmatter_wikilink` uses,
+so a file the marker says no to provably cannot produce a report.
+`LinkGraphBuild` carries the resulting paths as `split_frontmatter_candidates`
+and `plan_mv` re-reads only those, which on a clean vault is none.
+
+The coupling objection stands but lands softer than expected: the marker is on
+`LinkGraphBuild`, the **build result**, not on `LinkGraph`. Nothing is
+serialized into a snapshot, no query answers differently, `from_file_links`
+(the `summary` path) leaves it empty, and the fact recorded — "this
+frontmatter opens a bracket it does not close on the same line" — is a property
+of the file, not of `mv`.
 
 **NEW-3 folded into the same widening, one line lower.** An ambiguous bare
 `[[b]]` cannot be resolved during the graph build, so it is indexed under the
@@ -4793,7 +4805,10 @@ output shape — a larger change than the three carry-over fixes this iteration
 bundles, and one with no reported failure behind it. `mv --help` now states the
 asymmetry instead of leaving it to be discovered.
 
-**Where:** `crates/hyalo-core/src/link_rewrite.rs` (`plan_mv` steps 1/2/3b,
+**Where:** `crates/hyalo-core/src/link_graph.rs`
+(`LinkGraphBuild::split_frontmatter_candidates`,
+`frontmatter_opens_an_unclosed_wikilink`, the `LinkGraphVisitor` flag),
+`crates/hyalo-core/src/link_rewrite.rs` (`plan_mv` steps 2/3b,
 `scan_split_frontmatter_links`), `crates/hyalo-cli/src/cli/args.rs` (`mv` help).
 
 ## DEC-289: two lint rules narrowed at their boundaries, not suppressed (2026-09-04)
