@@ -49,7 +49,7 @@ rendering of list-of-wikilink values (UX-11, in
 
 ## Tasks
 
-### HELP-1: stale help text and result keys (BUG-25, HELP-14, UX-18)
+### HELP-1: stale help text and result keys (BUG-25, HELP-14, UX-18) [5/5]
 
 - [x] `find --help` COMMON MISTAKES: rewrite the `=~` entry to match the
       parser after iteration 264 (it is now an error) and the `title~=`
@@ -72,7 +72,7 @@ rendering of list-of-wikilink values (UX-11, in
 - [x] e2e assertions for each wording fix (grep on `-h` output, `config
       --jq '.results.hints'` non-null); changelog entry.
 
-### HINT-1: second positional and empty-state consistency (UX-3, UX-13, COH-17)
+### HINT-1: second positional and empty-state consistency (UX-3, UX-13, COH-17) [5/5]
 
 - [x] hyalo-cli `find`: when a second positional does not exist on disk,
       contains no path separator and does not end in `.md`, fail with `error:
@@ -97,7 +97,7 @@ rendering of list-of-wikilink values (UX-11, in
 - [x] Docs: `find -h` usage line changes from `[FILE]...` if the DEC below
       says so; skill file COMMON MISTAKES mirror; changelog.
 
-### TITLE-1: filename stem fallback (UX-5)
+### TITLE-1: filename stem fallback (UX-5) [3/3]
 
 - [x] DEC-283 (tentative): when a file has neither a scalar `title` property
       nor an H1, `title` is the filename stem (Obsidian behaviour). JSON adds
@@ -111,7 +111,7 @@ rendering of list-of-wikilink values (UX-11, in
 - [x] Docs: `find --help` title paragraph, `.claude/skills/hyalo/SKILL.md`
       title bullet, `.claude/CLAUDE.md`, changelog.
 
-### TEXT-1: bulk-mutation indentation and `links auto` stop-list (UX-14, UX-9)
+### TEXT-1: bulk-mutation indentation and `links auto` stop-list (UX-14, UX-9) [4/4]
 
 - [x] hyalo-cli text renderer for `set`, `remove`, `append`, `properties
       rename`, `tags rename`, batch `mv`: every file under `modified:` /
@@ -127,7 +127,7 @@ rendering of list-of-wikilink values (UX-11, in
       `links`, `Markdown` and `Dataview` matches only `Dataview`.
 - [x] Docs: `links auto --help` stop-list paragraph, skill file, changelog.
 
-### NEW-1: `hyalo new --dry-run` and honest placeholders (UX-17)
+### NEW-1: `hyalo new --dry-run` and honest placeholders (UX-17) [4/4]
 
 - [x] DEC-285 (tentative): `new` gains `--dry-run` because DEC-257 makes
       `dry_run` universal on object-shaped mutation results and every other
@@ -144,7 +144,7 @@ rendering of list-of-wikilink values (UX-11, in
 - [x] Docs: `new -h/--help`, skill file `new` bullet, `.claude/CLAUDE.md`,
       changelog.
 
-### LINT-IGNORE-1: named files vs `[lint] ignore` (UX-4 of the previous report)
+### LINT-IGNORE-1: named files vs `[lint] ignore` (UX-4 of the previous report) [3/3]
 
 - [x] DEC-284 (tentative): a file named explicitly with `--file` or via
       `--files-from` bypasses `[lint] ignore` and is linted, because naming a
@@ -159,7 +159,7 @@ rendering of list-of-wikilink values (UX-11, in
 - [x] Docs: `lint --help` ignore paragraph, the `.hyalo.toml` reference page,
       skill file, `.claude/CLAUDE.md` diff-aware lint bullet, changelog.
 
-## Acceptance criteria
+## Acceptance criteria [10/10]
 
 - [x] Obsidian Hub, cwd `../obsidian-hub`: `hyalo find dataview plugin; echo
       $?` → exit 2 and the message names `hyalo find 'dataview plugin'`;
@@ -196,6 +196,19 @@ rendering of list-of-wikilink values (UX-11, in
       DEC-285 recorded in [[decision-log]]; `.claude/skills/hyalo/SKILL.md`
       and `.claude/CLAUDE.md` updated for the title fallback, `new --dry-run`
       and the named-file lint policy.
+
+## Review notes
+
+- `/review-pr` (local-only pass on PR #310, before merge) found one
+  correctness bug not covered by the iteration's own e2e suite: the new
+  `hyalo config` `effective_format`/`format_source` fields (HELP-1/UX-18)
+  ignored the `.hyalo.toml` `format` pin when resolving the value to report —
+  `format_source` could read `"config"` while `format` itself came from
+  TTY-detection, contradicting `format_configured`. Fixed to use the same
+  precedence (`--format` flag > `--jq` > config pin > TTY detection) every
+  other command uses; regression test
+  `config_format_pin_wins_over_tty_detection_without_format_flag` added in
+  `crates/hyalo-cli/tests/e2e/hyalo_config.rs`.
 
 ## Links
 
