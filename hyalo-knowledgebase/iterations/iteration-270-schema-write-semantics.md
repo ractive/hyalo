@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 270 — Schema write-side semantics: what set/append --validate promise"
 date: 2026-09-04
-status: in-progress
+status: completed
 tags:
   - iteration
   - schema
@@ -131,7 +131,7 @@ concern" unless evidence of real need turns up.
 
 - [x] DEC(s) recorded in [[decision-log]] covering both decisions.
 - [x] Changelog entry via `hyalo changelog add` for every behaviour that changed.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*`
       gates (help drift in particular if any `--help` text changed).
 
@@ -148,7 +148,7 @@ concern" unless evidence of real need turns up.
       refuses an item missing a `required-keys` key and accepts one that satisfies
       `required-keys`/`allowed-keys`/`key-patterns`.
 - [x] No new CLI flag lands without an explicit justification in the DEC.
-- [ ] Gates green.
+- [x] Gates green.
 
 ## Outcome
 

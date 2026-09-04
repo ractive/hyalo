@@ -4899,6 +4899,12 @@ recovery paths are all short and none of them require a flag that does not
 exist: fix the section, drop `--validate` for the one write, or `--dir` a vault
 whose config is sound.
 
+**`hyalo new` needed nothing.** It is the other command that reads the schema to
+produce a write, and it already refuses: with the schema empty, `new --type X`
+exits 1 with `type 'X' not found`. The message is indirect but the outcome is
+right — no file is scaffolded from a schema that is not the vault's — so it is
+left alone rather than given a second refusal path.
+
 **No new CLI surface.** The behaviour rides entirely on the existing
 `--validate` flag and the existing `validate_on_write` key; nothing is added to
 the CLI.
