@@ -105,13 +105,25 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.
 - **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone.
-- **Link kinds (iter-261)**: every entry in `find --fields links` carries `kind` —
-  `wikilink` | `embed` (`![[…]]`) | `markdown` | `external` (any `scheme:` URI: `https:`,
-  `obsidian://`, `mailto:`, `file://`) | `attachment` (resolved to a non-`.md` vault file — an
-  image, a PDF, an Obsidian `.base`). `external` and `attachment` links are never broken: they
-  stay out of `find --broken-links`, `summary.links.broken` and HYALO006, and are not graph
-  edges for `--orphan`/`--dead-end`. Text mode prints the kind after the arrow unless it is
-  `wikilink`.
+- **Link kinds (iter-261/262)**: every entry in `find --fields links` carries `kind` —
+  `wikilink` | `embed` (`![[…]]`) | `markdown` | `frontmatter` (a `[[wikilink]]` in a YAML
+  frontmatter value) | `external` (any `scheme:` URI: `https:`, `obsidian://`, `mailto:`,
+  `file://`) | `attachment` (resolved to a non-`.md` vault file — an image, a PDF, an Obsidian
+  `.base`). `external` and `attachment` links are never broken: they stay out of
+  `find --broken-links`, `summary.links.broken` and HYALO006, and are not graph edges for
+  `--orphan`/`--dead-end`. Text mode prints the kind after the arrow unless it is `wikilink`.
+- **Frontmatter wikilinks are graph edges** (DEC-269, iter-262): a `[[wikilink]]` in **any**
+  frontmatter value — `categories: ["[[Books]]"]`, `type: "[[Author]]"`, a nested map, quoted
+  or bare — counts for `backlinks`, `find --orphan`/`--dead-end`/`--broken-links`,
+  `summary.links`, HYALO006 and the `--sort links_count|backlinks_count` keys, and `mv`
+  rewrites it in place preserving the quoting. Each entry carries `kind: "frontmatter"`, the
+  `property` it came from, and its frontmatter line. `[links] frontmatter = false` in
+  `.hyalo.toml` narrows the scan back to `related`/`depends-on`/`supersedes`/`superseded-by`;
+  `[links] frontmatter_properties = [...]` names your own list. `hyalo config` reports both
+  under `links.frontmatter` / `links.frontmatter_properties`.
+- **`set` on a list property** (DEC-270, iter-262): `set K=<scalar>` on a property that holds a
+  list replaces it — `set` means replace — and says so on stderr, with the affected files under
+  `list_collapsed` in JSON. Use `hyalo append` when the list should stay a list.
 - **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
   on every platform, not only on a case-insensitive filesystem. Opt out with
   `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the

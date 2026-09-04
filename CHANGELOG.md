@@ -309,6 +309,8 @@ and this project adheres to
 - Link targets with an explicit non-`.md` extension (`![[img.png]]`, `[[Books.base]]`) resolve against every vault file the way Obsidian does — by unique basename, by path, and relative to the source folder — and are reported as `kind: "attachment"` instead of broken.
 - `[[target\|alias]]` — the escaped alias pipe Obsidian writes inside markdown tables — now splits into target and alias, and `mv` / `links fix` keep the `\|` bytes so the table row survives the rewrite.
 - `links fix` never matches a target across an explicit extension (DEC-266), so a broken `Companies.base` is no longer offered `Company Template.md`, and no fuzzy candidate is reported at confidence 0.0.
+- `hyalo mv` now rewrites frontmatter wikilinks that name the moved file by bare stem (`categories: ["[[Books]]"]` → `Categories/Books.md`), instead of reporting `links updated: 0` and leaving the reference dangling. Quoting style and every other byte of the block are preserved; a `[[…]]` spanning a line break is left alone, warned about on stderr and listed under `frontmatter_links_skipped`.
+- A frontmatter list of wikilinks renders as `["[[Futurism]]", "[[Nonfiction]]"]` in text output instead of the unreadable `[[[Futurism]], [[Nonfiction]]]`; plain lists keep their compact unquoted form.
 
 ### Added
 
@@ -321,6 +323,10 @@ and this project adheres to
   zero-result path — no new flag, and no cost on any query that matched.
 - Every entry in `find --fields links` carries `kind`: `wikilink`, `embed`, `markdown`, `external` or `attachment`. External and attachment links never count as broken and are not graph edges for `--orphan`/`--dead-end`.
 - A broken `#anchor` that is the prefix of exactly one heading in the target file carries `suggested_fragment` with the full heading text (DEC-268) — reported, never applied automatically.
+- Frontmatter wikilinks are first-class links: a `[[wikilink]]` in any frontmatter value (`categories:`, `type:`, a nested map — quoted or bare) is now a graph edge for `backlinks`, `find --orphan`/`--dead-end`/`--broken-links`, `summary.links`, HYALO006 and the `links_count`/`backlinks_count` sort keys, reported with `kind: "frontmatter"`, the originating `property` and its frontmatter line (DEC-269).
+- `[links] frontmatter = false` in `.hyalo.toml` narrows frontmatter link scanning back to `related`/`depends-on`/`supersedes`/`superseded-by`; `hyalo config` reports the effective value under `links.frontmatter` / `links.frontmatter_properties`.
+- `hyalo mv` text output prints `files updated: N, links updated: M` under the `Moved …` line in both single-file and batch mode, dry runs included, so a rewrite that matched nothing is visible.
+- `hyalo set K=<scalar>` on a property that holds a YAML list reports the type change — a stderr note pointing at `hyalo append`, and the affected files under `list_collapsed` in JSON (DEC-270).
 
 ## [0.21.0] - 2026-08-28
 

@@ -583,10 +583,14 @@ explicit flag in most contexts. If you need to filter/reshape output, just pipe 
 
 Use `hyalo backlinks <path>` to find all files that link to a given file (reverse link
 lookup). This builds an in-memory link graph by scanning all `.md` files in the directory,
-detecting both `[[wikilinks]]` and `[markdown](links)` in body content *and* in
-list-valued frontmatter properties (default: `related`, `depends-on`, `supersedes`,
-`superseded-by` — configurable via `[links] frontmatter_properties = [...]` in `.hyalo.toml`).
-The file can be passed positionally or with `--file`.
+detecting both `[[wikilinks]]` and `[markdown](links)` in body content *and*
+`[[wikilinks]]` in **every** frontmatter value — a scalar (`type: "[[Author]]"`), a
+list (`categories: ["[[Books]]"]`), or a nested map, at any depth. Each such entry
+comes back with `kind: "frontmatter"`, the `property` it was written under, and the
+frontmatter line it sits on. Set `[links] frontmatter = false` in `.hyalo.toml` to
+narrow the scan back to the four legacy link properties (`related`, `depends-on`,
+`supersedes`, `superseded-by`), or `[links] frontmatter_properties = [...]` to name
+your own list. The file can be passed positionally or with `--file`.
 
 ```bash
 # Which files reference iteration-37?
