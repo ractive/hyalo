@@ -2,14 +2,14 @@
 type: iteration
 title: Iteration 262 — Frontmatter wikilinks as first-class links
 date: 2026-09-03
-status: planned
+status: completed
 tags:
   - iteration
   - links
   - frontmatter
   - obsidian
   - dogfooding
-branch: iter-262/frontmatter-wikilinks-first-class
+branch: iter-262/frontmatter-wikilinks
 priority: 2
 related:
   - "[[dogfood-results/dogfood-v0220-obsidian-vaults]]"
@@ -58,119 +58,182 @@ here as a result of iter-261's actual outcome.
 
 ## Tasks
 
-### FM-1: scan every frontmatter value for wikilinks (BUG-1)
+### FM-1: scan every frontmatter value for wikilinks (BUG-1) [6/6]
 
-- [ ] hyalo-core link extraction: walk the parsed frontmatter and extract
+- [x] hyalo-core link extraction: walk the parsed frontmatter and extract
       `[[target]]`, `[[target|alias]]`, `[[target#anchor]]` from every string
       scalar and every string item of a list, at any nesting depth, not only
       `related`. Each link records `line` (the frontmatter line, 1-based, as
       the body links do), `kind: "frontmatter"` (additive, complements the
       `kind` field from iteration 261) and the property key it came from.
-- [ ] Wire the new edges into the graph used by `backlinks`, `find --orphan`,
+- [x] Wire the new edges into the graph used by `backlinks`, `find --orphan`,
       `find --dead-end`, `find --broken-links`, `summary.links`, HYALO006, and
       the `--sort links_count|backlinks_count` keys. Keep body links and
       frontmatter links in one list under `--fields links`.
-- [ ] `[links] frontmatter = false` in `.hyalo.toml` restores today's
+- [x] `[links] frontmatter = false` in `.hyalo.toml` restores today's
       behaviour; `related:` still counts when the switch is off, so no vault
       regresses. `hyalo config` prints the effective value. DEC-269
       (tentative): frontmatter wikilinks are graph edges by default, with the
       config opt-out, and `related` is no longer special-cased.
-- [ ] Snapshot index: frontmatter links must be stored and served by `--index`
+- [x] Snapshot index: frontmatter links must be stored and served by `--index`
       identically to the disk path (parity test on scores and on
       `backlinks --index`).
-- [ ] Unit tests in hyalo-core: scalar, flow list, block list, nested map,
+- [x] Unit tests in hyalo-core: scalar, flow list, block list, nested map,
       quoted vs unquoted, alias, anchor, `[[x]]` inside a longer string, and a
       value that is not a link (`"[[not closed"`). e2e in
       `crates/hyalo-cli/tests/e2e`: a three-file vault where `backlinks`,
       `--orphan` and `summary` change exactly as expected, and the same run
       with `frontmatter = false`.
-- [ ] Perf: `summary` on Obsidian Hub (6520 files) must stay within noise of
+- [x] Perf: `summary` on Obsidian Hub (6520 files) must stay within noise of
       the report's 0.42 s; frontmatter is already parsed, so only the walk is
       new.
 
-### FM-2: `mv` rewrites frontmatter wikilinks (BUG-1, UX-4)
+### FM-2: `mv` rewrites frontmatter wikilinks (BUG-1, UX-4) [5/5]
 
-- [ ] hyalo-core `mv`: for each affected frontmatter link, replace the target
+- [x] hyalo-core `mv`: for each affected frontmatter link, replace the target
       text inside the existing YAML scalar, preserving the quoting style
       (`"[[Books]]"`, `'[[Books]]'`, bare `[[Books]]` in a block list) and the
       surrounding bytes. This is a text replacement on the frontmatter block,
       not a re-serialisation, so `git diff` shows only the changed target.
-- [ ] When a value cannot be rewritten safely (folded/literal block scalars,
+- [x] When a value cannot be rewritten safely (folded/literal block scalars,
       multi-line strings, a target spanning a line break), leave it alone and
       print `warning: N frontmatter wikilinks not rewritten (see --format json
       for the files)`; JSON lists them under `frontmatter_links_skipped`.
-- [ ] Text output for single and batch `mv` prints
+- [x] Text output for single and batch `mv` prints
       `files updated: N, links updated: M` under the `Moved …` line, in both
       real and `[dry-run]` mode, so a silent 0 is visible.
-- [ ] e2e: `mv Categories/Books.md Categories/Library.md` on a fixture with
+- [x] e2e: `mv Categories/Books.md Categories/Library.md` on a fixture with
       `categories: ["[[Books]]"]`, a block-list `related:`, and a scalar
       `type: "[[Books]]"` rewrites all three; a folded-scalar fixture triggers
       the warning; the text output carries both counters.
-- [ ] Docs: `mv -h/--help` output description, changelog, skill file paragraph
+- [x] Docs: `mv -h/--help` output description, changelog, skill file paragraph
       on `mv`.
 
-### FM-3: list-of-wikilink rendering in text output (UX-11)
+### FM-3: list-of-wikilink rendering in text output (UX-11) [2/2]
 
-- [ ] hyalo-cli text renderer: a list value renders as `["[[Futurism]]",
+- [x] hyalo-cli text renderer: a list value renders as `["[[Futurism]]",
       "[[Nonfiction]]"]` (JSON-like, quoted items) or one `- item` per line
       when the value contains a `[[`; choose one, apply it to `find`, `read
       --frontmatter`, `properties` and `set` echo consistently. Today `genre:
       [[[Futurism]], [[Nonfiction]]]` is unreadable.
-- [ ] Unit test on the renderer with a list of wikilinks, a list of plain
+- [x] Unit test on the renderer with a list of wikilinks, a list of plain
       strings, and a nested list; e2e snapshot on `find --file … --format
       text`.
 
-### FM-4: `set` on a list property (UX-12)
+### FM-4: `set` on a list property (UX-12) [4/4]
 
-- [ ] DEC-270 (tentative): when `set K=V` targets an existing list property
+- [x] DEC-270 (tentative): when `set K=V` targets an existing list property
       with a scalar value, either (a) write the scalar and print
       `note: K was a list in N files; use hyalo append to keep it a list`, or
       (b) preserve the list shape and write a one-element list. Recommend (a)
       because `set` means replace and Obsidian shows the type conflict either
       way; record the choice and the `--validate` interaction (a schema that
       declares `K: list` must reject the scalar).
-- [ ] Implement the choice in hyalo-cli `set`, with the note on stderr in text
+- [x] Implement the choice in hyalo-cli `set`, with the note on stderr in text
       mode and `list_collapsed: [files]` in JSON.
-- [ ] e2e: `set 'Clippings/Buy wisely.md' --property 'status=[[Draft]]'`
+- [x] e2e: `set 'Clippings/Buy wisely.md' --property 'status=[[Draft]]'`
       fixture from the report; `--dry-run` shows the same note.
-- [ ] Docs: `set --help` semantics paragraph, skill file, changelog.
+- [x] Docs: `set --help` semantics paragraph, skill file, changelog.
 
-## Acceptance criteria
+## Acceptance criteria [9/9]
 
-- [ ] kepano-obsidian, cwd `../kepano-obsidian`, clean checkout:
+- [x] kepano-obsidian, cwd `../kepano-obsidian`, clean checkout:
       `hyalo backlinks Categories/Books.md --format json --jq '.total'` → `3`
       (the files whose `categories:` holds `[[Books]]`), and each entry carries
       `kind: "frontmatter"`.
-- [ ] `../kepano-obsidian`: `hyalo summary --format json --jq
+- [x] `../kepano-obsidian`: `hyalo summary --format json --jq
       '.results.orphans'` drops from 25 to the number of files with no inbound
       body or frontmatter link (expected single digits; name the residue).
-- [ ] `../kepano-obsidian`: `hyalo mv Categories/Books.md Categories/Library.md
+- [x] `../kepano-obsidian`: `hyalo mv Categories/Books.md Categories/Library.md
       --format json --jq '{total_files_updated,total_links_updated}'` → both
       non-zero and `git diff --stat` touches exactly those files with
       one-line hunks changing `[[Books]]` to `[[Library]]` inside quotes;
       `git checkout .` afterwards. Text mode of the same command prints the
       two counters.
-- [ ] `../kepano-obsidian`: `hyalo find --file 'References/Bass on Top.md'
+- [x] `../kepano-obsidian`: `hyalo find --file 'References/Bass on Top.md'
       --format text --no-hints` renders every list-of-wikilink property without
       the `[[[` artefact.
-- [ ] `../kepano-obsidian`: with `[links]\nfrontmatter = false` appended to a
+- [x] `../kepano-obsidian`: with `[links]\nfrontmatter = false` appended to a
       scratch `.hyalo.toml`, `hyalo backlinks Categories/Books.md --count` → 0
       and `hyalo config --jq '.results.links.frontmatter'` → `false`.
-- [ ] Own KB: `hyalo summary` orphan and broken counts are recomputed; any
+- [x] Own KB: `hyalo summary` orphan and broken counts are recomputed; any
       change is explained in the changelog entry (iteration files link each
       other through `related:` and `depends-on:` today, so backlink counts
       will rise).
-- [ ] e2e suite covers FM-1 through FM-4; `cargo test --workspace -q` green.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+- [x] e2e suite covers FM-1 through FM-4; `cargo test --workspace -q` green.
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`, `hyalo lint --strict` on the KB,
       xtask help-drift check.
-- [ ] Changelog entry via `hyalo changelog add`; DEC-269 and DEC-270 recorded
+- [x] Changelog entry via `hyalo changelog add`; DEC-269 and DEC-270 recorded
       in [[decision-log]]; `.claude/skills/hyalo/SKILL.md` and
       `.claude/CLAUDE.md` mention frontmatter links and the config key.
+
+## Outcome (2026-09-04)
+
+Measured on a clean `../kepano-obsidian` checkout with the release build:
+
+- `backlinks Categories/Books.md` → **2**, not the 3 the plan predicted. The
+  third file carrying `categories: ["[[Books]]"]` is
+  `Templates/Book Template.md`, whose frontmatter (`created: {{date}}`) is not
+  valid YAML, so hyalo skips the whole file with a parse warning — as it did
+  before this iteration. Both counted entries carry `kind: "frontmatter"` and
+  `property: "categories"`. Templated frontmatter is a separate problem and is
+  not in this iteration's scope.
+- `summary --jq '.results.orphans'` → **25 → 1**. `find --orphan` lists 13
+  files (a different metric: no *inbound* link, regardless of outbound), all of
+  them genuinely unreferenced — `Readme.md`, `Categories/Journal.md`, two daily
+  notes, and nine `Templates/*.md` category-scaffold notes nothing links to.
+- `mv Categories/Books.md Categories/Library.md` → `files updated: 2, links
+  updated: 2`, with `git diff` showing exactly two one-line hunks changing
+  `- "[[Books]]"` to `- "[[Library]]"` inside the existing quotes. This needed
+  one extra fix beyond FM-1: `plan_frontmatter_wikilink_rewrites` resolved only
+  path-form and exact-stem targets, so the bare `[[Books]]` naming
+  `Categories/Books.md` matched nothing. It now falls back to the vault's stem
+  index (unambiguous stems only).
+- `find --file 'References/Bass on Top.md' --format text` renders
+  `categories: ["[[Albums]]"]` and `genre: ["[[Jazz]]"]` — no `[[[` artefact.
+- With `[links]\nfrontmatter = false`, `backlinks Categories/Books.md --count`
+  → 0 and `config --jq '.results.links.frontmatter'` → `false`.
+
+Own knowledgebase: **no change at all** — orphans 77, dead-ends 90, links
+1275/1 broken, identical with and without `frontmatter = false`. Every
+frontmatter wikilink in this vault already lives in `related:` /
+`depends-on:` / `supersedes:` / `superseded-by:`, which the old allow-list
+already scanned. Nothing to explain in the changelog beyond that.
+
+Perf: `summary` on `../obsidian-hub` (6520 files) is 0.40 s median of three
+runs — unchanged against the report's 0.42 s baseline.
+
+One collateral fix: `links fix` looked up frontmatter fix plans in the
+`line: 1` bucket, which was correct only because the old extractor had no line
+information. It now consults the plan's real line and keeps the `1` bucket as
+a fallback, so a snapshot index written by an older hyalo still applies.
+
+**PR #305 review finding (2026-09-04), fixed in the same PR:** `MvResult`
+gained a second optional array in this iteration (`frontmatter_links_skipped`,
+alongside the pre-existing `skipped_ambiguous`), and the CLI's JSON→text
+shape lookup only covered 2 of the resulting 4 key-signature combinations —
+a `mv` that hit both skip kinds in one run would have fallen back to a
+generic key:value dump and lost the "files updated: N, links updated: M"
+line FM-2 exists to guarantee. Fixed by covering all four signatures;
+regression test added at
+`crates/hyalo-cli/src/output/tests.rs::mv_result_filter_handles_every_optional_field_combination`.
+
+**PR #305 review finding (2026-09-04), carried over, not fixed here:** the
+FM-2 line-spanning-wikilink warning only fires for a file `mv` already
+scans for another reason (one with an ordinary, same-line link to the moved
+target elsewhere in its frontmatter) — a file whose *only* reference to the
+target is the split link gets neither a rewrite nor a warning, because
+`plan_mv`'s file set (`by_source`) comes from the backlinks graph, which
+never extracts a split link as an edge in the first place. See
+[[backlog/mv-frontmatter-split-link-detection-gap]] for the full analysis,
+a related pre-existing `NEW-3` gap found by the same probing, and a fix
+proposal.
 
 ## Links
 
 - [[dogfood-results/dogfood-v0220-obsidian-vaults]]
 - [[iterations/iteration-261-link-resolution-obsidian-compat]]
 - [[iterations/iteration-266-properties-tags-schema-mutations]]
+- [[backlog/mv-frontmatter-split-link-detection-gap]]
 - [[decision-log]]

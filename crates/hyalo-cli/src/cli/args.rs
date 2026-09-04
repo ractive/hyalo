@@ -1122,7 +1122,15 @@ pub(crate) enum Commands {
             hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             hyalo mv --tag archive --to archive/ --apply\n\n\
             OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, applied flag,\n\
-            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\n\
+            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\
+            Text output prints `files updated: N, links updated: M` under the `Moved ...` line in both\n\
+            modes, so a rewrite that matched nothing is visible rather than silent.\n\n\
+            FRONTMATTER LINKS: `[[wikilinks]]` written in any frontmatter value (`categories:`,\n\
+            `type:`, `related:`, a nested map) are rewritten in place — the target text inside the\n\
+            existing YAML scalar is replaced, so quoting style and every other byte of the block\n\
+            survive and `git diff` shows one changed target per line. A link whose `[[...]]` spans a\n\
+            line break (a folded or literal block scalar) has no single-line span to replace: it is\n\
+            left alone, counted in a stderr warning, and listed under `frontmatter_links_skipped`.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
@@ -1221,6 +1229,12 @@ pub(crate) enum Commands {
             enum/pattern constraint in the effective schema, or when a date-typed property (date, \
             created, ...) gets a non-date value (it will sort lexicographically). The write still \
             proceeds — lint (or --validate) remains the enforcement gate.\n\
+            LIST -> SCALAR: `set` means replace, so assigning a scalar to a property that holds a \
+            YAML list writes the scalar and changes the property's type. The files where that \
+            happened are listed under \"list_collapsed\" and named in a stderr note pointing at \
+            `hyalo append`, which adds to a list instead of replacing it. With --validate (or \
+            validate_on_write), a schema declaring the property as `list` rejects the scalar \
+            before anything is written.\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
 K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \

@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery;
 use crate::frontmatter;
-use crate::links::{Link, LinkKind, extract_links_from_text_with_original};
+use crate::links::{Link, LinkKind};
 use crate::scanner::{self, FileVisitor, ScanAction};
 
 /// A single backlink: a file that links to some target.
@@ -95,15 +95,10 @@ impl LinkGraph {
         site_prefix: Option<&str>,
         frontmatter_link_props: Option<&[String]>,
     ) -> Result<LinkGraphBuild> {
-        let fm_props: Vec<String> = frontmatter_link_props.map_or_else(
-            || {
-                DEFAULT_FRONTMATTER_LINK_PROPERTIES
-                    .iter()
-                    .map(|s| (*s).to_owned())
-                    .collect()
-            },
-            <[String]>::to_vec,
-        );
+        // iter-262: `None` now means "scan every frontmatter value", not "scan
+        // the four default properties". The default-property list is what a
+        // caller passes explicitly to opt out.
+        let fm_props: Option<Vec<String>> = frontmatter_link_props.map(<[String]>::to_vec);
 
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
@@ -721,25 +716,45 @@ fn insert_file_links(
     }
 }
 
-/// Default frontmatter properties scanned for wikilinks in the link graph.
+/// Frontmatter properties scanned for wikilinks when the vault opts out of
+/// whole-frontmatter scanning with `[links] frontmatter = false`.
+///
+/// Before iter-262 this was the *only* set hyalo ever looked at. It is kept as
+/// the opt-out target so a vault that turns the new behaviour off still has its
+/// `related:` graph, rather than losing frontmatter edges entirely.
 pub const DEFAULT_FRONTMATTER_LINK_PROPERTIES: &[&str] =
     &["related", "depends-on", "supersedes", "superseded-by"];
 
 /// Visitor that collects links with their line numbers.
-/// Also scans configured frontmatter properties for [[wikilink]] strings.
+///
+/// Also scans frontmatter for `[[wikilink]]` values — every value at any
+/// nesting depth by default (iter-262), or only a named set of top-level
+/// properties when the caller passes one.
 pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
     self_anchors: Vec<(usize, String)>,
     scratch: Vec<Link>,
     anchor_scratch: Vec<String>,
-    /// Frontmatter property names to scan for [[wikilink]] patterns.
-    frontmatter_props: Vec<String>,
+    /// Frontmatter property names to scan for `[[wikilink]]` patterns.
+    /// `None` scans **every** frontmatter value (the iter-262 default);
+    /// `Some(&[])` disables frontmatter scanning entirely.
+    frontmatter_props: Option<Vec<String>>,
+    /// Raw frontmatter text captured by
+    /// [`FileVisitor::on_frontmatter_text`], needed to report the source line
+    /// of each frontmatter link. Cleared as soon as `on_frontmatter` consumes
+    /// it, so it never outlives one file.
+    frontmatter_text: String,
+    /// 1-based file line of the first byte of [`Self::frontmatter_text`].
+    frontmatter_first_line: usize,
 }
 
 impl LinkGraphVisitor {
     /// Create a new visitor with a custom frontmatter property list.
-    pub fn with_frontmatter_props(source: PathBuf, frontmatter_props: Vec<String>) -> Self {
+    ///
+    /// `None` scans every frontmatter value; `Some(list)` restricts the scan to
+    /// those top-level properties, and `Some(&[])` skips frontmatter entirely.
+    pub fn with_frontmatter_props(source: PathBuf, frontmatter_props: Option<Vec<String>>) -> Self {
         Self {
             source,
             links: Vec::new(),
@@ -747,6 +762,8 @@ impl LinkGraphVisitor {
             scratch: Vec::new(),
             anchor_scratch: Vec::new(),
             frontmatter_props,
+            frontmatter_text: String::new(),
+            frontmatter_first_line: 2,
         }
     }
 
@@ -759,49 +776,51 @@ impl LinkGraphVisitor {
         }
     }
 
-    /// Extract wikilinks from a string value and add them to `self.links`.
-    ///
-    /// Uses line 1 as the line number for all frontmatter-derived links
-    /// (frontmatter doesn't have meaningful line numbers for link resolution).
-    fn extract_frontmatter_wikilinks(&mut self, value: &str) {
-        self.scratch.clear();
-        extract_links_from_text_with_original(value, value, &mut self.scratch);
-        for link in self.scratch.drain(..) {
-            if link.kind == crate::links::LinkKind::Wikilink && !link.external {
-                self.links.push((1, link));
-            }
-        }
+    /// Whether this visitor looks at frontmatter at all.
+    fn scans_frontmatter(&self) -> bool {
+        self.frontmatter_props
+            .as_ref()
+            .is_none_or(|props| !props.is_empty())
     }
 }
 
 impl FileVisitor for LinkGraphVisitor {
+    fn on_frontmatter_text(&mut self, yaml: &str, first_line: usize) {
+        if self.scans_frontmatter() {
+            self.frontmatter_text.clear();
+            self.frontmatter_text.push_str(yaml);
+            self.frontmatter_first_line = first_line;
+        }
+    }
+
     fn on_frontmatter(
         &mut self,
-        props: indexmap::IndexMap<String, serde_json::Value>,
+        _props: indexmap::IndexMap<String, serde_json::Value>,
     ) -> ScanAction {
-        // Collect values first to avoid a simultaneous immutable borrow of
-        // `self.frontmatter_props` and a mutable borrow from `extract_frontmatter_wikilinks`.
-        let mut values_to_scan: Vec<String> = Vec::new();
-        for prop_name in &self.frontmatter_props {
-            if let Some(value) = props.get(prop_name.as_str()) {
-                match value {
-                    serde_json::Value::String(s) => {
-                        values_to_scan.push(s.clone());
-                    }
-                    serde_json::Value::Array(arr) => {
-                        for item in arr {
-                            if let serde_json::Value::String(s) = item {
-                                values_to_scan.push(s.clone());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        if !self.scans_frontmatter() {
+            return ScanAction::Continue;
         }
-        for v in &values_to_scan {
-            self.extract_frontmatter_wikilinks(v);
-        }
+        // `frontmatter_text` is moved out so the extractor can borrow it while
+        // `self.links` is borrowed mutably; it is put straight back so the
+        // allocation is reused by the next file this visitor scans.
+        //
+        // The parsed map is deliberately unused: the scan reads the raw block
+        // so it can report source lines and still see an unquoted
+        // `related: [[Books]]`, which YAML parses into a nested sequence with
+        // the brackets gone. See `crate::frontmatter_links`.
+        //
+        // An external URI in a frontmatter value is inventoried like a body one
+        // and dropped by `insert_file_links`, the single place that decides
+        // what is a graph edge.
+        let yaml = std::mem::take(&mut self.frontmatter_text);
+        crate::frontmatter_links::extract_frontmatter_links(
+            &yaml,
+            self.frontmatter_first_line,
+            self.frontmatter_props.as_deref(),
+            &mut self.links,
+        );
+        self.frontmatter_text = yaml;
+        self.frontmatter_text.clear();
         ScanAction::Continue
     }
 
@@ -827,11 +846,11 @@ impl FileVisitor for LinkGraphVisitor {
     }
 
     fn needs_frontmatter(&self) -> bool {
-        // Only require frontmatter parsing when there is at least one property
-        // to scan. Callers that pass an empty `frontmatter_props` list get the
-        // old behavior (skip frontmatter entirely) so malformed YAML does not
+        // Only require frontmatter parsing when there is something to scan.
+        // Callers that pass an empty `frontmatter_props` list get the pre-graph
+        // behavior (skip frontmatter entirely) so malformed YAML does not
         // prevent body-link indexing.
-        !self.frontmatter_props.is_empty()
+        self.scans_frontmatter()
     }
 }
 
@@ -1648,7 +1667,7 @@ mod tests {
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect();
-                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, Some(fm_props));
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })
@@ -1825,6 +1844,7 @@ mod tests {
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 )],
             },
@@ -1877,6 +1897,7 @@ mod tests {
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 )],
             },
@@ -1959,6 +1980,7 @@ mod tests {
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 )],
             },
@@ -2006,17 +2028,47 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_non_default_prop_not_indexed_by_default() {
-        // A property not in the default list (e.g. `custom_ref`) is NOT indexed
-        // unless explicitly configured.
+    fn frontmatter_any_prop_indexed_by_default() {
+        // iter-262 (BUG-1): every frontmatter value is scanned, not just the
+        // four legacy link properties. This test asserted the opposite before.
         let vault = create_vault(&[("source.md", "---\ncustom_ref: '[[target]]'\n---\nBody\n")]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("target");
         assert_eq!(
             bl.len(),
-            0,
-            "non-default frontmatter property should not be indexed"
+            1,
+            "any frontmatter property should be indexed by default"
         );
+        assert_eq!(bl[0].link.property.as_deref(), Some("custom_ref"));
+        assert_eq!(bl[0].line, 2, "frontmatter link reports its source line");
+    }
+
+    #[test]
+    fn frontmatter_opt_out_restores_the_legacy_property_list() {
+        // `[links] frontmatter = false` reaches core as an explicit property
+        // list: `related` still counts, everything else stops counting.
+        let legacy: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let vault = create_vault(&[(
+            "source.md",
+            "---\ncustom_ref: '[[skipped]]'\nrelated: '[[kept]]'\n---\nBody\n",
+        )]);
+        let build = LinkGraph::build(vault.path(), None, Some(&legacy)).unwrap();
+        assert_eq!(build.graph.backlinks("skipped").len(), 0);
+        assert_eq!(build.graph.backlinks("kept").len(), 1);
+    }
+
+    #[test]
+    fn frontmatter_link_line_numbers_are_file_absolute() {
+        let vault = create_vault(&[(
+            "source.md",
+            "---\ntitle: A\nrelated:\n  - '[[one]]'\n  - '[[two]]'\n---\nBody\n",
+        )]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        assert_eq!(build.graph.backlinks("one")[0].line, 4);
+        assert_eq!(build.graph.backlinks("two")[0].line, 5);
     }
 
     #[test]
@@ -2282,7 +2334,7 @@ mod tests {
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect();
-                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, Some(fm_props));
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })

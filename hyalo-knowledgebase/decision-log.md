@@ -4063,3 +4063,67 @@ guess written to disk, and the fix belongs behind human eyes. The suggestion
 being visible in the report the `links fix` anchor note already points at
 ("N broken anchor(s) — see `find --broken-links`") is the whole affordance
 needed.
+
+## DEC-269: every frontmatter value is a link source, with a config opt-out (2026-09-04)
+
+**Decision:** a `[[wikilink]]` written in **any** YAML frontmatter value is a
+graph edge — a scalar (`type: "[[Author]]"`), a list item
+(`categories: ["[[Books]]"]`), a value nested in a map, quoted or bare, at any
+depth. It counts for `backlinks`, `find --orphan`/`--dead-end`/`--broken-links`,
+`summary.links`, HYALO006 and the `--sort links_count|backlinks_count` keys,
+`mv` rewrites it, and it is reported alongside body links under `--fields links`
+with `kind: "frontmatter"`, the originating `property`, and the frontmatter line
+it sits on. `related` is no longer special-cased.
+
+`[links] frontmatter = false` in `.hyalo.toml` narrows the scan back to the four
+legacy properties (`related`, `depends-on`, `supersedes`, `superseded-by`);
+`[links] frontmatter_properties = [...]` names an explicit list and wins over
+both. `hyalo config` reports the effective values under `links.frontmatter` and
+`links.frontmatter_properties`.
+
+**Why:** this is what Obsidian does, and the old four-property allow-list made
+hyalo disagree with the vault in front of it. On kepano-obsidian,
+`backlinks Categories/Books.md` was empty while `categories:` pointed at it from
+two notes, `summary` reported 25 orphans that were all linked through
+`categories:`/`type:`/`status:`, and `mv Categories/Books.md` reported
+`total_links_updated: 0` while breaking those same links. The opt-out exists
+because a vault may legitimately treat some frontmatter as metadata rather than
+references; it degrades to the old behaviour rather than to *no* frontmatter
+links, so no vault loses its `related:` graph by turning the new default off.
+
+**Implementation note — the scan reads the raw frontmatter block, not the parsed
+map.** Two things the parsed values cannot give: the source line every consumer
+reports, and an unquoted `related: [[Books]]`, which YAML parses as a sequence
+containing a sequence, brackets gone. So `frontmatter_links` walks the raw block
+line by line with the same bracket scan `mv` and `links fix` already use to
+*rewrite* frontmatter wikilinks — which is what keeps "hyalo counted this link"
+and "hyalo rewrote this link" the same set — inferring the key path from
+indentation and skipping `#` comments.
+
+**Rejected: making it opt-in.** The default would then still disagree with
+Obsidian, and the finding that motivated this was a silent `mv` corrupting
+links hyalo itself had just counted.
+
+## DEC-270: `set` on a list property writes the scalar and says so (2026-09-04)
+
+**Decision:** `hyalo set K=<scalar>` on a property that currently holds a YAML
+list replaces it with the scalar — option (a) from the plan. The files where the
+type changed are listed under `list_collapsed` in JSON and named in a stderr
+note that points at `hyalo append`. With `--validate` (or `validate_on_write`),
+a schema declaring `K: list` rejects the scalar before anything is written, so
+the enforcement path is unchanged.
+
+**Why:** `set` means replace; that is the whole contract that separates it from
+`append`, and silently preserving list shape would make `set` mean two different
+things depending on what happened to be on disk. What was actually wrong was the
+silence: Obsidian shows a property-type conflict across the vault afterwards, and
+nothing in hyalo's output said the type had changed. Reporting it costs one
+stderr line and one optional JSON key.
+
+**Rejected: (b), preserving the list shape and writing a one-element list.** It
+makes `set` behave differently on two files that differ only in prior state, and
+it gives no way to *deliberately* turn a list into a scalar.
+
+**Rejected: a `--keep-list` flag.** The project rule is no new CLI flags from
+dogfood pressure, and `hyalo append` is already the command that keeps a list a
+list.

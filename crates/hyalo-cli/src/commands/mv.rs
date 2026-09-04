@@ -10,7 +10,9 @@ use serde::Serialize;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery::{canonicalize_vault_dir, discover_files, match_globs};
 use hyalo_core::filter::{PropertyFilter, matches_frontmatter_filters};
-use hyalo_core::link_rewrite::{self, Replacement, RewritePlan, SkippedAmbiguous};
+use hyalo_core::link_rewrite::{
+    self, Replacement, RewritePlan, SkippedAmbiguous, SkippedFrontmatterLink,
+};
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -27,6 +29,11 @@ struct MvResult {
     /// Links that were skipped because the stem was ambiguous (NEW-3).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     skipped_ambiguous: Vec<SkippedAmbiguous>,
+    /// Frontmatter wikilinks left untouched because their `[[…]]` spans a line
+    /// break — a folded/literal block scalar or a wrapped string (iter-262,
+    /// FM-2). Omitted when empty, so the ordinary result shape is unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    frontmatter_links_skipped: Vec<SkippedFrontmatterLink>,
 }
 
 #[derive(Serialize, Clone)]
@@ -110,6 +117,22 @@ pub fn mv(
         .collect();
     let total_links: usize = updated_files.iter().map(|f| f.replacements.len()).sum();
 
+    // iter-262 (FM-2): a frontmatter wikilink whose brackets straddle a line
+    // break has no single-line span to rewrite. Say so on stderr in both
+    // formats — a silent skip is exactly the dangling-link failure this
+    // iteration exists to remove — and list the offenders in JSON.
+    if !mv_plan.skipped_frontmatter.is_empty() {
+        eprintln!(
+            "warning: {} frontmatter wikilink{} not rewritten (see --format json for the files)",
+            mv_plan.skipped_frontmatter.len(),
+            if mv_plan.skipped_frontmatter.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    }
+
     // NEW-3: emit stderr notes for text format (JSON envelope has skipped_ambiguous array).
     if format == Format::Text {
         for skipped in &mv_plan.skipped_ambiguous {
@@ -132,6 +155,7 @@ pub fn mv(
         total_files_updated: mv_plan.plans.len(),
         total_links_updated: total_links,
         skipped_ambiguous: mv_plan.skipped_ambiguous,
+        frontmatter_links_skipped: mv_plan.skipped_frontmatter,
     };
 
     // 6. If not dry-run, execute the move and rewrites, then update the index.

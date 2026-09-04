@@ -956,6 +956,9 @@ pub fn find(
                             path,
                             label: link.label.clone(),
                             kind,
+                            // iter-262: the frontmatter key this link was
+                            // written under, absent for a body link.
+                            property: link.property.clone(),
                             // iter-215 (dogfood UX-6): the 1-based source line,
                             // already carried by the index entry, so a
                             // `--broken-links` report points at the link
@@ -996,6 +999,7 @@ pub fn find(
                             // A same-file heading jump is a wikilink-shaped
                             // reference to this very file, never an attachment.
                             kind: LinkKindLabel::Wikilink,
+                            property: None,
                             line: *line,
                             fragment: Some(fragment.clone()),
                             broken_anchor,

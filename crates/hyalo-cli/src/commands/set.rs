@@ -36,6 +36,17 @@ pub(crate) struct SetPropertyResult {
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
+    /// Files where this `set` replaced an existing **list** value with a
+    /// scalar (iter-262, UX-12 / DEC-270).
+    ///
+    /// `set` means replace, so the scalar is written — but silently turning
+    /// `status: ["[[Draft]]"]` into `status: "[[Draft]]"` changes the property's
+    /// type under the user, and Obsidian then shows a type conflict across the
+    /// vault. Reporting the files makes the type change visible; `hyalo append`
+    /// is the command that keeps the list. Omitted when empty, so an ordinary
+    /// `set` keeps its existing shape.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) list_collapsed: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }
@@ -401,6 +412,9 @@ pub fn set(
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); parsed_props.len()];
+    // Per-property files whose existing list value was replaced by a scalar
+    // (iter-262, UX-12).
+    let mut prop_list_collapsed: Vec<Vec<String>> = vec![Vec::new(); parsed_props.len()];
     // Per-tag result accumulators: (modified, skipped)
     let mut tag_results: Vec<(Vec<String>, Vec<String>)> =
         vec![(Vec::new(), Vec::new()); tag_args.len()];
@@ -570,6 +584,10 @@ pub fn set(
             if already_same {
                 prop_results[i].1.push(rel_path.clone()); // skipped
             } else {
+                // UX-12: record a list → scalar type change before it happens.
+                if matches!(props.get(*name), Some(Value::Array(_))) && !value.is_array() {
+                    prop_list_collapsed[i].push(rel_path.clone());
+                }
                 props.insert((*name).to_owned(), value.clone());
                 prop_results[i].0.push(rel_path.clone()); // modified
                 file_changed = true;
@@ -627,6 +645,24 @@ pub fn set(
         parsed_props.iter().zip(prop_results).enumerate()
     {
         let total = modified.len() + skipped.len();
+        let list_collapsed = std::mem::take(&mut prop_list_collapsed[i]);
+        // UX-12 / DEC-270: `set` replaces, so the scalar is written — but say
+        // so, because the property's type changed and `append` is the command
+        // that would not have changed it.
+        //
+        // Unconditionally on stderr, not gated on the format: `format` here is
+        // the *serialization* format the command produces (always `Json` — the
+        // text rendering happens in the output layer), so a `Format::Text`
+        // check would never fire. stdout stays clean for JSON consumers either
+        // way, and they also get the file list under `list_collapsed`.
+        if !list_collapsed.is_empty() {
+            eprintln!(
+                "note: {name} was a list in {} file{}; `set` replaced it with a scalar — use \
+                 `hyalo append` to keep it a list",
+                list_collapsed.len(),
+                if list_collapsed.len() == 1 { "" } else { "s" }
+            );
+        }
         // Advisory note (write still proceeds; lint remains the enforcement gate):
         //   1. BUG-B: a date-typed property receiving a non-date value.
         //   2. iter-181 task 1: an enum/pattern value the schema would reject.
@@ -649,6 +685,7 @@ pub fn set(
             total,
             scanned,
             dry_run,
+            list_collapsed,
             note,
         };
         results

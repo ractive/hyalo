@@ -19,9 +19,19 @@ struct SearchConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LinksConfig {
+    /// Whether `[[wikilinks]]` written in **any** frontmatter value are graph
+    /// edges (iter-262, DEC-269). Default `true`.
+    ///
+    /// `false` restores the pre-iter-262 behaviour: only the four legacy link
+    /// properties (`related`, `depends-on`, `supersedes`, `superseded-by`) are
+    /// scanned, so a vault that relied on `categories:` being metadata rather
+    /// than links keeps its old graph instead of losing frontmatter edges
+    /// altogether.
+    #[serde(default)]
+    frontmatter: Option<bool>,
     /// Frontmatter property names whose values are scanned for `[[wikilink]]`
-    /// strings and included in the link graph. Overrides the built-in defaults
-    /// (`related`, `depends-on`, `supersedes`, `superseded-by`).
+    /// strings and included in the link graph. Narrows the scan to exactly
+    /// these properties, whatever `frontmatter` says.
     frontmatter_properties: Option<Vec<String>>,
     /// Case-insensitive link resolution mode.
     ///
@@ -50,6 +60,27 @@ struct LinksConfig {
     /// `--min-confidence` on the command line wins over this value.
     #[serde(default)]
     fuzzy_min_confidence: Option<f64>,
+}
+
+// iter-262: `[links] frontmatter` is resolved here, not in core, because
+// core speaks only in property lists.
+fn resolve_frontmatter_link_props(links: Option<&LinksConfig>) -> Option<Vec<String>> {
+    let links = links?;
+    // An explicit property list always wins: it is the narrower statement,
+    // and it is what `frontmatter = false` falls back to when set.
+    if let Some(props) = links.frontmatter_properties.clone() {
+        return Some(props);
+    }
+    if links.frontmatter == Some(false) {
+        return Some(
+            hyalo_core::link_graph::DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        );
+    }
+    // `None` means "scan every frontmatter value".
+    None
 }
 
 /// `[links] case_insensitive` setting — either the classic mode string
@@ -272,9 +303,14 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) site_prefix: Option<String>,
     /// Default stemming language for BM25 search from `[search] language` in `.hyalo.toml`.
     pub(crate) search_language: Option<String>,
-    /// Frontmatter property names scanned for `[[wikilink]]` values in the link graph.
-    /// `None` = use built-in defaults (`related`, `depends-on`, etc.).
+    /// Frontmatter property names scanned for `[[wikilink]]` values in the link
+    /// graph. `None` = scan **every** frontmatter value (iter-262 default);
+    /// `Some(list)` narrows the scan to those top-level properties.
     pub(crate) frontmatter_link_props: Option<Vec<String>>,
+    /// Effective `[links] frontmatter` — whether every frontmatter value is a
+    /// link source. Reported by `hyalo config`; the scan itself is driven by
+    /// [`Self::frontmatter_link_props`], which this value resolves into.
+    pub(crate) frontmatter_links_enabled: bool,
     /// When `true`, schema validation is applied on every `set`/`append` operation.
     /// From `validate_on_write = true` in `.hyalo.toml`.
     pub(crate) validate_on_write: bool,
@@ -389,6 +425,7 @@ impl PartialEq for ResolvedDefaults {
             && self.site_prefix == other.site_prefix
             && self.search_language == other.search_language
             && self.frontmatter_link_props == other.frontmatter_link_props
+            && self.frontmatter_links_enabled == other.frontmatter_links_enabled
             && self.validate_on_write == other.validate_on_write
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
@@ -409,6 +446,7 @@ impl ResolvedDefaults {
             site_prefix: None,
             search_language: None,
             frontmatter_link_props: None,
+            frontmatter_links_enabled: true,
             validate_on_write: false,
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
@@ -1027,7 +1065,12 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         hints: cfg.hints.unwrap_or(defaults.hints),
         site_prefix: cfg.site_prefix,
         search_language: cfg.search.and_then(|s| s.language),
-        frontmatter_link_props: cfg.links.and_then(|l| l.frontmatter_properties),
+        frontmatter_link_props: resolve_frontmatter_link_props(cfg.links.as_ref()),
+        frontmatter_links_enabled: cfg
+            .links
+            .as_ref()
+            .and_then(|l| l.frontmatter)
+            .unwrap_or(true),
         validate_on_write,
         lint_ignore: cfg
             .lint

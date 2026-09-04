@@ -52,14 +52,20 @@ pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json:
     // Properties: header then each as "    key: value"
     if map.contains_key("properties") {
         parts.push(
-            r#"if (.properties | length) > 0 then "  properties:\n\(.properties | to_entries | map("    \(.key): \(if (.value | type) == "array" then "[" + (.value | map(tostring) | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
+            format!(
+                r#"if (.properties | length) > 0 then "  properties:\n\(.properties | to_entries | map("    \(.key): \(.value | {expr})") | join("\n"))" else empty end"#,
+                expr = super::filters::PROPERTY_VALUE_EXPR
+            ),
         );
     }
 
     // Properties (typed): header then each as "    name (type): value"
     if map.contains_key("properties_typed") {
         parts.push(
-            r#"if (.properties_typed | length) > 0 then "  properties_typed:\n\(.properties_typed | map("    \(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | map(tostring) | join(", ")) + "]" else .value end)") | join("\n"))" else empty end"#.to_owned(),
+            format!(
+                r#"if (.properties_typed | length) > 0 then "  properties_typed:\n\(.properties_typed | map("    \(.name) (\(.type)): \(.value | {expr})") | join("\n"))" else empty end"#,
+                expr = super::filters::PROPERTY_VALUE_EXPR
+            ),
         );
     }
 

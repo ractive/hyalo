@@ -8,9 +8,24 @@
 // jq filter constants — one per output type
 // ---------------------------------------------------------------------------
 
+/// jq expression that renders one frontmatter value for text output, applied to
+/// the value itself (`.value | PROPERTY_VALUE_EXPR`).
+///
+/// A scalar prints bare. A list prints `[a, b]` — except when any item contains
+/// a `[[wikilink]]`, where the items are JSON-quoted instead:
+/// `["[[Futurism]]", "[[Nonfiction]]"]`.
+///
+/// iter-262 (UX-11): the unquoted form collided with the wikilink brackets and
+/// produced `genre: [[[Futurism]], [[Nonfiction]]]`, where the list's own
+/// brackets and the first link's are indistinguishable and the value reads like
+/// a nested list. Quoting only kicks in for wikilink-bearing lists so ordinary
+/// tag lists keep their compact rendering.
+pub(super) const PROPERTY_VALUE_EXPR: &str = r#"if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end"#;
+
 /// `PropertyInfo` (used by `--fields properties-typed`): `{name, type, value}`
-/// When value is an array (list type), join elements with ", " for readability.
-pub(super) const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(if (.value | type) == "array" then "[" + (.value | join(", ")) + "]" else .value end)""#;
+/// When value is an array (list type), join elements with ", " for readability
+/// — or as quoted items when they carry wikilinks (see [`PROPERTY_VALUE_EXPR`]).
+pub(super) const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(.value | if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end)""#;
 
 /// `PropertySummaryEntry`: `{count, name, type, mixed_types?}`
 ///
@@ -138,7 +153,7 @@ pub(super) const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] "
 /// `BacklinksResult`: `{file, backlinks: [...]}`
 /// Format: `N backlink(s) for "file"` with each backlink listed as `  source.md: line N`.
 /// Empty case: `No backlinks found for "file"`.
-pub(super) const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
+pub(super) const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)\(if .kind == "frontmatter" then " [frontmatter: \(.property)]" else "" end)") | join("\n"))" end"#;
 
 /// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, broken_anchors, case_mismatch_fixes, case_mismatches, failed, failed_fixes, fixable, fixes, ignored, relocation_fixes, relocations, unapplied, unapplied_fixes, unfixable, unfixable_links}`
 /// Format: summary line with fix status. Includes case-mismatch, relocation, and ambiguous counts when non-zero.
@@ -175,8 +190,23 @@ pub(super) const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\(if .brok
 pub(super) const LINKS_AUTO_FILTER: &str = r#""\(.matched) unlinked mention\(if .matched == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)\(if .matched_text == .link_target then "" else "|\(.matched_text)" end)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
-/// Format: `[dry-run] Moved <from> → <to>` with list of updated files and replacements.
-pub(super) const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)""#;
+/// Format: `[dry-run] Moved <from> → <to>`, the two counters, then the list of
+/// updated files and their replacements.
+///
+/// iter-262 (UX-4): the counters used to be JSON-only, so a `mv` that rewrote
+/// nothing looked identical in text mode to one that rewrote everything — which
+/// is how a vault full of `categories: ["[[Books]]"]` links could break in
+/// silence. They print in dry-run mode too, where they are the whole point.
+pub(super) const MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.from) → \(.to)\nfiles updated: \(.total_files_updated), links updated: \(.total_links_updated)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)\(if (.frontmatter_links_skipped // []) | length > 0 then "\nfrontmatter wikilinks not rewritten (span a line break):\n" + ((.frontmatter_links_skipped) | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n")) else "" end)""#;
+
+/// `BatchMvResult`: `{applied, dry_run, moves, totals, updated_files}` plus the
+/// optional `conflicts` / `skipped` arrays.
+///
+/// Format: the same headline-then-counters shape as [`MV_RESULT_FILTER`]
+/// (iter-262, UX-4). Batch mode had no text filter at all before, so it fell
+/// back to the generic key-value dump and its counters were buried inside a
+/// `totals:` block.
+pub(super) const BATCH_MV_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)Moved \(.totals.moves) file\(if .totals.moves == 1 then "" else "s" end)\(.moves | if length > 0 then "\n" + (map("  \(.from) → \(.to)") | join("\n")) else "" end)\nfiles updated: \(.totals.files_changed), links updated: \(.totals.replacements)\(.updated_files | if length > 0 then "\n" + (map("  \(.file): " + (.replacements | map(.old_text + " → " + .new_text) | join(", "))) | join("\n")) else "" end)\(if ((.conflicts // []) | length) > 0 then "\nconflicts: " + ((.conflicts) | join(", ")) else "" end)\(if ((.skipped // []) | length) > 0 then "\nskipped: " + ((.skipped) | join(", ")) else "" end)""#;
 
 /// `ViewsListEntry`: `{filters, name}`
 /// Format: `name  key=value key=value ...` — compact one-line summary of the view and its filters.
@@ -270,8 +300,12 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value) — with or without optional `note` field
         // (iter-216 D-1 added `skipped_count` to all three shapes.)
+        // iter-262 adds `list_collapsed`, present only when a `set` replaced a
+        // list value with a scalar — hence the two extra signatures.
         "dry_run,modified,property,scanned,skipped,skipped_count,total,value"
-        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value" => {
+        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value"
+        | "dry_run,list_collapsed,modified,property,scanned,skipped,skipped_count,total,value"
+        | "dry_run,list_collapsed,modified,note,property,scanned,skipped,skipped_count,total,value" => {
             Some(PROPERTY_VALUE_MUTATION_FILTER)
         }
         // Mutation results with property only (RemovePropertyResult without value)
@@ -295,9 +329,23 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned" => {
             Some(LINKS_AUTO_FILTER)
         }
-        // MvResult
-        "dry_run,from,to,total_files_updated,total_links_updated,updated_files" => {
+        // MvResult (`skipped_ambiguous` / `frontmatter_links_skipped` are each
+        // omitted when empty and vary independently, hence all four
+        // signatures — `skipped_ambiguous` itself has no `.skipped_ambiguous`
+        // reference in MV_RESULT_FILTER because it is already reported via a
+        // separate stderr note in text mode; see the NEW-3 handling in `mv`).
+        "dry_run,from,to,total_files_updated,total_links_updated,updated_files"
+        | "dry_run,from,frontmatter_links_skipped,to,total_files_updated,total_links_updated,updated_files"
+        | "dry_run,from,skipped_ambiguous,to,total_files_updated,total_links_updated,updated_files"
+        | "dry_run,from,frontmatter_links_skipped,skipped_ambiguous,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)
+        }
+        // BatchMvResult (`conflicts` / `skipped` are omitted when empty).
+        "applied,dry_run,moves,totals,updated_files"
+        | "applied,conflicts,dry_run,moves,totals,updated_files"
+        | "applied,dry_run,moves,skipped,totals,updated_files"
+        | "applied,conflicts,dry_run,moves,skipped,totals,updated_files" => {
+            Some(BATCH_MV_RESULT_FILTER)
         }
         // ViewsListEntry
         "filters,name" => Some(VIEWS_LIST_ENTRY_FILTER),

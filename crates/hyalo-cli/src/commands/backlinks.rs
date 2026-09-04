@@ -26,6 +26,16 @@ struct BacklinkItem {
     /// really point at" and "how did each occurrence spell it") stay
     /// answerable without re-adding the inconsistency the NEW-18 fix removed.
     written_target: String,
+    /// What this occurrence is: `wikilink` | `embed` | `markdown` |
+    /// `frontmatter` (iter-262). Attachments and external URIs never reach the
+    /// graph, so they never appear here. Always serialized — every backlink has
+    /// a kind — so a consumer can bucket frontmatter references without
+    /// re-reading the source file.
+    kind: hyalo_core::types::LinkKindLabel,
+    /// The frontmatter key this occurrence was written under, for a
+    /// `kind: "frontmatter"` entry (iter-262). Absent for a body link.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    property: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
 }
@@ -98,6 +108,10 @@ pub fn backlinks(
             line: e.line,
             target: rel.clone(),
             written_target: e.link.target.clone(),
+            // The graph only ever holds resolvable vault links, so the target
+            // path is known good and the label never comes back `attachment`.
+            kind: hyalo_core::types::LinkKindLabel::classify(&e.link, Some(&rel)),
+            property: e.link.property.clone(),
             label: e.link.label.clone(),
         })
         .collect();

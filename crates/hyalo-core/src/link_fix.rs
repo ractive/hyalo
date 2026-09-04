@@ -1362,13 +1362,16 @@ fn build_replacements_for_file(
     // for frontmatter, fences, `%%` comments, and cross-line code/HTML spans.
     let mut scanner = LineScanner::new();
 
-    // Frontmatter-derived FixPlans always carry `line: 1` (see
-    // `LinkGraphVisitor::extract_frontmatter_wikilinks`, which has no
-    // meaningful per-line info once YAML is parsed into a `Value`). Look
-    // them up once and match by `old_target` against every `[[...]]`
-    // occurrence anywhere in the frontmatter block, regardless of which
-    // physical line it sits on.
-    let frontmatter_fixes: &[(usize, &FixPlan)] = fixes_by_line.get(&1).map_or(&[], Vec::as_slice);
+    // Frontmatter-derived FixPlans carry the line their `[[...]]` sits on
+    // (iter-262). Before that they all carried `line: 1`, because the extractor
+    // read parsed YAML values and had no per-line information — and a snapshot
+    // index written by an older hyalo still holds plans in that shape. So a
+    // frontmatter line considers both buckets: its own line, and the legacy
+    // `1`. Line 1 of a file *with* frontmatter is always the opening `---`, so
+    // that bucket can hold nothing else; a file with no frontmatter never
+    // enters this branch at all.
+    let legacy_frontmatter_fixes: &[(usize, &FixPlan)] =
+        fixes_by_line.get(&1).map_or(&[], Vec::as_slice);
 
     for (line, rest) in lines_with_rest(content) {
         let class = scanner.classify(line, rest);
@@ -1378,7 +1381,9 @@ fn build_replacements_for_file(
         match class {
             LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
             LineClass::Frontmatter => {
-                if !frontmatter_fixes.is_empty() {
+                let own_fixes: &[(usize, &FixPlan)] =
+                    fixes_by_line.get(&line_num).map_or(&[], Vec::as_slice);
+                if !own_fixes.is_empty() || !legacy_frontmatter_fixes.is_empty() {
                     for occ in find_frontmatter_wikilinks(line) {
                         let Some(link) = parse_wikilink(occ.target) else {
                             continue;
@@ -1388,8 +1393,9 @@ fn build_replacements_for_file(
                         // each; fall back to an already-satisfied one so
                         // extra on-disk occurrences still get rewritten.
                         let matching = || {
-                            frontmatter_fixes
+                            own_fixes
                                 .iter()
+                                .chain(legacy_frontmatter_fixes.iter())
                                 .filter(|(_, f)| f.old_target == link.target)
                         };
                         let Some(&(fix_idx, fix)) = matching()
@@ -2036,6 +2042,7 @@ See [broken](old-name.md) here.
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 ),
                 (
@@ -2048,6 +2055,7 @@ See [broken](old-name.md) here.
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 ),
             ],
@@ -2083,6 +2091,7 @@ See [broken](old-name.md) here.
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 ),
                 // Stays inside the vault and simply misses — genuinely broken.
@@ -2096,6 +2105,7 @@ See [broken](old-name.md) here.
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 ),
             ],
@@ -2142,6 +2152,7 @@ See [broken](old-name.md) here.
                         query: None,
                         embed: false,
                         external: false,
+                        property: None,
                     },
                 )],
             ),
@@ -2158,6 +2169,7 @@ See [broken](old-name.md) here.
                             query: None,
                             embed: false,
                             external: false,
+                            property: None,
                         },
                     ),
                     (
@@ -2170,6 +2182,7 @@ See [broken](old-name.md) here.
                             query: None,
                             embed: false,
                             external: false,
+                            property: None,
                         },
                     ),
                 ],
@@ -2886,6 +2899,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["web/foo.md"],
@@ -2933,6 +2947,7 @@ See [broken](old-name.md) here.
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         let index = mock_index(
             "source.md",
@@ -2976,6 +2991,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &[],
@@ -3019,6 +3035,7 @@ See [broken](old-name.md) here.
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         let make_entry = |rel_path: &str, links: Vec<(usize, Link)>| crate::index::IndexEntry {
             rel_path: rel_path.to_string(),
@@ -3139,6 +3156,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["sub/target.md"],
@@ -3189,6 +3207,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["web/foo.md"],
@@ -3245,6 +3264,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["iteration_protocols.md"],
@@ -3302,6 +3322,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["a/bar.md"],
@@ -3379,6 +3400,7 @@ See [broken](old-name.md) here.
                     query: None,
                     embed: false,
                     external: false,
+                    property: None,
                 },
             )],
             &["web/foo.md"],

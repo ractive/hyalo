@@ -93,6 +93,14 @@ pub enum LinkKindLabel {
     /// A link that resolved to a vault file which is **not** markdown — an
     /// image, a PDF, an Obsidian `.base`. Never broken, never a graph edge.
     Attachment,
+    /// A `[[wikilink]]` written inside a YAML frontmatter value — `related:`,
+    /// `categories: ["[[Books]]"]`, `type: "[[Author]]"` (iter-262, BUG-1).
+    ///
+    /// A real graph edge like a body wikilink; the separate label exists
+    /// because the two are found in different places and a reader triaging a
+    /// link report needs to know which. The originating key is reported
+    /// alongside as `property`.
+    Frontmatter,
 }
 
 impl LinkKindLabel {
@@ -104,6 +112,14 @@ impl LinkKindLabel {
         }
         if resolved_path.is_some_and(|p| !crate::discovery::has_md_extension(p)) {
             return Self::Attachment;
+        }
+        // iter-262: a frontmatter wikilink is reported as `frontmatter` rather
+        // than `wikilink`, but a frontmatter value naming an image or a URI is
+        // still an attachment / external first — those two verdicts say the
+        // link resolves to nothing markdown, which outranks where it was
+        // written.
+        if link.is_frontmatter() {
+            return Self::Frontmatter;
         }
         if link.embed {
             return Self::Embed;
@@ -138,6 +154,12 @@ pub struct LinkInfo {
     /// written by an older hyalo.
     #[serde(default)]
     pub kind: LinkKindLabel,
+    /// The frontmatter key this link was written under, for a link with
+    /// `kind: "frontmatter"` — the dotted key path for a nested map
+    /// (`meta.source`), the plain key otherwise (iter-262). Absent for body
+    /// links, so the shape of an existing report is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
     /// 1-based source line the link was written on (iter-215, dogfood UX-6).
     ///
     /// `find --broken-links` used to list every link of a matching file with no

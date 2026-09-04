@@ -376,6 +376,7 @@ pub(crate) fn run(
                 dir,
                 site_prefix.map(str::to_owned),
                 case_index,
+                ctx.frontmatter_link_props.map(<[String]>::to_vec),
             )
         } else {
             None
