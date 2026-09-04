@@ -74,14 +74,14 @@ ambiguity probe in `plan_inbound_rewrites`).
 
 ## Acceptance criteria
 
-- [ ] A vault where a file's *only* reference to the moved target is a frontmatter wikilink
+- [x] A vault where a file's *only* reference to the moved target is a frontmatter wikilink
       spanning a line break: `mv` reports it under `frontmatter_links_skipped` (JSON) and
       prints the stderr warning (text), with no other link to the target present anywhere
       else in the vault.
-- [ ] Existing behavior unchanged: `backlinks`/`summary`/`--orphan` still do not treat a
+- [x] Existing behavior unchanged: `backlinks`/`summary`/`--orphan` still do not treat a
       split frontmatter link as a graph edge (FM-1's scope is deliberately narrower than
       FM-2's warning).
-- [ ] Perf: `mv` on Obsidian Hub (6520 files) with no split links present stays within noise
+- [x] Perf: `mv` on Obsidian Hub (6520 files) with no split links present stays within noise
       of the iter-262 baseline.
-- [ ] Decide and record whether `skipped_ambiguous` gets the same widened-scan treatment in
+- [x] Decide and record whether `skipped_ambiguous` gets the same widened-scan treatment in
       this change or a separate one.

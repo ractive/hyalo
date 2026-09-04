@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 269 — Carry-over correctness fixes: mv split-link scan, MD034 <tag boundary, MD047 on frontmatter-only files"
 date: 2026-09-04
-status: in-progress
+status: completed
 tags:
   - iteration
   - mv
@@ -66,7 +66,7 @@ this iteration must not change that).
 
 ### SCAN-1: widen `plan_mv`'s file set for split-link detection
 
-- [ ] Decide the mechanism: either (a) `plan_mv` runs a cheap secondary pass over every
+- [x] Decide the mechanism: either (a) `plan_mv` runs a cheap secondary pass over every
       vault file not already in `by_source`, gated on the frontmatter block containing an
       unclosed `[[` (skip immediately if it doesn't), reusing
       `split_frontmatter_wikilink`'s existing whitespace-collapsed substring test; or (b)
@@ -75,25 +75,25 @@ this iteration must not change that).
       Record the choice as a DEC in [[decision-log]] — (a) is simpler and scoped to `mv`;
       (b) reuses work the build pass already does but couples an `mv`-only concern into
       the shared graph.
-- [ ] Implement for single-file `mv`. Decide whether batch `mv` gets the same treatment in
+- [x] Implement for single-file `mv`. Decide whether batch `mv` gets the same treatment in
       this iteration or a follow-up — batch already accepts a higher per-call cost, but the
       widened scan multiplies by every move in the batch.
-- [ ] Fold `NEW-3`'s ambiguous-bare-link detection into the same widened scan (or record why
+- [x] Fold `NEW-3`'s ambiguous-bare-link detection into the same widened scan (or record why
       not, if the mechanisms turn out not to share the necessary plumbing).
-- [ ] Unit/e2e tests: a vault where a file's *only* reference to the moved target is a
+- [x] Unit/e2e tests: a vault where a file's *only* reference to the moved target is a
       split frontmatter wikilink — `mv` reports it under `frontmatter_links_skipped` (JSON)
       and prints the stderr warning (text). A second fixture for the `NEW-3` case: two
       same-stemmed files, both nested, a bare-link reference to the ambiguous stem, and
       `mv` of either candidate reports `skipped_ambiguous` regardless of which one moves.
-- [ ] Confirm unchanged: `backlinks`/`summary`/`--orphan` still do not treat a split
+- [x] Confirm unchanged: `backlinks`/`summary`/`--orphan` still do not treat a split
       frontmatter link as a graph edge.
 
 ### SCAN-2: perf check
 
-- [ ] Measure `mv` on Obsidian Hub (6520 files, `../obsidian-hub`) with no split links
+- [x] Measure `mv` on Obsidian Hub (6520 files, `../obsidian-hub`) with no split links
       present, before and after — must stay within noise of the iter-262 baseline
       (`summary` was 0.40 s median of 3; `mv` has no existing baseline, so establish one).
-- [ ] If the widened scan shows up in the measurement, limit it to files whose frontmatter
+- [x] If the widened scan shows up in the measurement, limit it to files whose frontmatter
       is already scanned for other reasons, or add a size/count guard with a documented
       tradeoff — do not add a new CLI flag to opt out.
 
@@ -115,25 +115,25 @@ other adjacent punctuation (e.g. `>`, `)` outside a link) so a follow-up can be 
 
 ### MD034-1: stop the bare-URL span before a following HTML tag
 
-- [ ] Confirm the repro: reduce `Themes/Retroma.md:65` to a minimal line — bare URL
+- [x] Confirm the repro: reduce `Themes/Retroma.md:65` to a minimal line — bare URL
       immediately followed by `<br` (no space) — and show
       `lint --fix --dry-run --rule MD034` proposes wrapping the `<br` into the autolink.
-- [ ] Root-cause in upstream `mdbook-lint-rulesets`' MD034 URL-boundary scan: does it stop
+- [x] Root-cause in upstream `mdbook-lint-rulesets`' MD034 URL-boundary scan: does it stop
       at whitespace/EOL only, missing `<` as a boundary? If the bug is upstream-only, the
       fix belongs in `crates/hyalo-mdlint/src/rules/obsidian.rs` as another post-filter
       (like the iteration-263 ones), narrowing the span hyalo accepts from the diagnostic.
-- [ ] Implement: MD034's proposed URL end boundary must not extend past a literal `<`
+- [x] Implement: MD034's proposed URL end boundary must not extend past a literal `<`
       that starts an HTML tag immediately following the URL, so `https://…/Retroma<br>`
       fixes to `<https://…/Retroma><br>` — or, if simpler and still correct, the fix is
       suppressed for this shape and the diagnostic still fires as a warning (iter-263's
       bias toward under-fixing over corrupting).
-- [ ] Unit tests in `rules::obsidian` for `https://a.example/<br>`,
+- [x] Unit tests in `rules::obsidian` for `https://a.example/<br>`,
       `https://a.example/<br/>`, and a bare URL immediately followed by `>` alone, plus
       the existing iteration-263 shapes as a regression guard.
-- [ ] e2e in `crates/hyalo-cli/tests/e2e`: the reduced Retroma-style fixture,
+- [x] e2e in `crates/hyalo-cli/tests/e2e`: the reduced Retroma-style fixture,
       `lint --fix --fix-rule MD034`, assert the file either keeps the `<br` outside the
       autolink or is left unchanged with the diagnostic still reported.
-- [ ] Docs: update the MD034 description suffix
+- [x] Docs: update the MD034 description suffix
       (`crates/hyalo-mdlint/src/engine.rs::DESCRIPTION_SUFFIX`) and
       `hyalo-knowledgebase/docs/schema-and-lint.md`'s Obsidian-grammar table if the fix
       changes what MD034 is documented to skip.
@@ -165,33 +165,33 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 
 ### MD047-1: don't flag a frontmatter-only file as missing a trailing newline
 
-- [ ] Confirm the repro with a minimal fixture (frontmatter-only, single trailing `\n`)
+- [x] Confirm the repro with a minimal fixture (frontmatter-only, single trailing `\n`)
       and a second fixture (frontmatter-only, NO trailing newline after the closing
       `---`) to establish the two cases MD047 needs to tell apart — "empty body after
       valid frontmatter" must not fire; a truncated frontmatter block is a HYALO005/parse
       concern, not this rule's job either way.
-- [ ] Root-cause in `crates/hyalo-mdlint/src/engine.rs`: hyalo's frontmatter-stripping
+- [x] Root-cause in `crates/hyalo-mdlint/src/engine.rs`: hyalo's frontmatter-stripping
       (handing MD047 an empty body), hyalo's CRLF-handling MD047 wrapper, or upstream
       MD047 itself? The existing "single-line body carries no terminator to sample" guard
       suggests this edge-case class has been hit before for a different shape — check
       whether the same guard should extend to a zero-line body.
-- [ ] Implement: an empty markdown body (frontmatter-only file, or a genuinely empty file)
+- [x] Implement: an empty markdown body (frontmatter-only file, or a genuinely empty file)
       must not fire MD047. Prefer skipping the rule entirely for a 0-byte body over
       fabricating a diagnosis.
-- [ ] Unit test in `crates/hyalo-mdlint/src/engine.rs` for a frontmatter-only body plus
+- [x] Unit test in `crates/hyalo-mdlint/src/engine.rs` for a frontmatter-only body plus
       the pre-existing single-line-body test near it (regression guard).
-- [ ] e2e in `crates/hyalo-cli/tests/e2e`: `hyalo new --type note --file x.md` followed
+- [x] e2e in `crates/hyalo-cli/tests/e2e`: `hyalo new --type note --file x.md` followed
       by `hyalo lint --file x.md` reports no MD047 violation.
-- [ ] Docs: `DESCRIPTION_SUFFIX` or the MD047 entry in
+- [x] Docs: `DESCRIPTION_SUFFIX` or the MD047 entry in
       `hyalo-knowledgebase/docs/schema-and-lint.md` if the fix changes what MD047 is
       documented to check.
 
 ## Shared closing tasks
 
-- [ ] One changelog entry per part via `hyalo changelog add` (three entries).
-- [ ] The SCAN-1 mechanism DEC recorded in [[decision-log]]; a DEC for MD034 or MD047 only
+- [x] One changelog entry per part via `hyalo changelog add` (three entries).
+- [x] The SCAN-1 mechanism DEC recorded in [[decision-log]]; a DEC for MD034 or MD047 only
       if the chosen scope (suppress-vs-narrow, skip-when-empty vs. narrower) is non-obvious.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*`
       gates.
 
@@ -199,42 +199,42 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 
 ### Part A
 
-- [ ] Reproduces then fixes the exact repro in
+- [x] Reproduces then fixes the exact repro in
       [[backlog/mv-frontmatter-split-link-detection-gap]]: a file whose only reference to
       the moved target is a line-spanning frontmatter wikilink gets the warning.
-- [ ] The related `NEW-3` gap (two nested same-stemmed files) is fixed or explicitly
+- [x] The related `NEW-3` gap (two nested same-stemmed files) is fixed or explicitly
       deferred with a recorded reason.
-- [ ] `backlinks`/`summary`/`--orphan`/`find --dead-end` behaviour is byte-for-byte
+- [x] `backlinks`/`summary`/`--orphan`/`find --dead-end` behaviour is byte-for-byte
       unchanged on both `../kepano-obsidian` and the own knowledgebase.
-- [ ] Perf: `mv` on `../obsidian-hub` with no split links stays within noise of a
+- [x] Perf: `mv` on `../obsidian-hub` with no split links stays within noise of a
       newly-established baseline.
 
 ### Part B
 
-- [ ] `../obsidian-hub`: `hyalo lint --fix --dry-run --rule MD034 --format json --jq
+- [x] `../obsidian-hub`: `hyalo lint --fix --dry-run --rule MD034 --format json --jq
       '[.results.fixes[] | select(.file | test("Retroma"))]'` no longer proposes a fix
       that would embed `<br` inside the autolink's angle brackets.
-- [ ] `../obsidian-hub`: after `hyalo lint --fix --fix-rule MD034` on the three
+- [x] `../obsidian-hub`: after `hyalo lint --fix --fix-rule MD034` on the three
       known-affected files, `git diff` is either empty (fix suppressed) or leaves `<br`
       intact outside the wrapped URL.
-- [ ] Every other MD034 fixture from iteration 263
+- [x] Every other MD034 fixture from iteration 263
       (`md034_ignores_urls_inside_link_destinations`,
       `md034_still_fires_on_a_bare_url_next_to_a_link`,
       `md034_ignores_urls_in_fenced_code_blocks`) still passes unchanged.
 
 ### Part C
 
-- [ ] `hyalo new --type note --file notes/x.md && hyalo lint --file notes/x.md --jq
+- [x] `hyalo new --type note --file notes/x.md && hyalo lint --file notes/x.md --jq
       '.results.violations'` → `0`, and the file's bytes are unchanged by `--fix`.
-- [ ] A hand-written frontmatter-only file (`---\nkey: v\n---\n`) does not trigger
+- [x] A hand-written frontmatter-only file (`---\nkey: v\n---\n`) does not trigger
       MD047; a file whose closing fence itself lacks a trailing newline is unaffected by
       this fix (out of scope — a different, pre-existing shape).
-- [ ] Existing MD047 fixtures (CRLF handling, single-line body, multi-fix convergence) in
+- [x] Existing MD047 fixtures (CRLF handling, single-line body, multi-fix convergence) in
       `crates/hyalo-mdlint/src/engine.rs` still pass unchanged.
 
 ### Whole iteration
 
-- [ ] Gates green; three changelog entries; DECs recorded as described above.
+- [x] Gates green; three changelog entries; DECs recorded as described above.
 
 ## Links
 
@@ -244,3 +244,90 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 - [[iterations/iteration-267-help-hints-text-polish]]
 - [[dogfood-results/dogfood-v0220-obsidian-vaults]]
 - [[decision-log]]
+
+## Outcome (2026-09-04)
+
+All three parts landed in one PR. Gates green: `cargo fmt`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo test --workspace -q` (4,600 tests, exit 0), all six
+xtask `check-*` gates, and `hyalo lint --strict` on this knowledgebase.
+
+### Part A — SCAN-1/SCAN-2
+
+**Mechanism: option (b), not the plan's preferred (a) — the measurement decided it.**
+Option (a) was implemented first exactly as written (sweep every vault file `plan_mv` had
+not already opened, read only its frontmatter block via `read_frontmatter_raw`, skip unless
+the block contains `[[`). Measured on `../obsidian-hub` (6,520 files, no split links
+present), five runs per binary, interleaved before/after twice:
+
+| Binary | `mv CONTRIBUTING.md --to … --dry-run` |
+|--------|---------------------------------------|
+| `main` (baseline, newly established) | 0.25 s |
+| option (a) | **0.36 s** (+44%) |
+| option (b) (shipped) | 0.25 s |
+
+6,520 extra opens to find nothing is pure waste on the overwhelmingly common vault, so the
+work moved onto the scan that already happens: `LinkGraphVisitor` already receives each
+file's raw frontmatter text (`on_frontmatter_text`, iter-262), so it now records whether any
+line opens a `[[` that does not close on that line — the exact opening test
+`split_frontmatter_wikilink` uses. `LinkGraphBuild` carries the paths as
+`split_frontmatter_candidates` and `plan_mv` re-reads only those. The coupling objection the
+plan raised against (b) lands softer than expected: the marker is on the **build result**,
+not on `LinkGraph`, so nothing is serialized into a snapshot, no query answers differently,
+and `from_file_links` (the `summary` path) leaves it empty. Recorded as DEC-288.
+
+**NEW-3 folded in, one line lower than expected.** No shared scan was needed: an ambiguous
+bare `[[b]]` is indexed under the *written* key `b`, which `backlinks_ci("one/b.md")` never
+probes, so `plan_mv` simply also probes the moved file's basename stem when it is nested.
+Every link that key contributes is one the graph could not resolve, so it reaches the
+unchanged ambiguity probe and nothing new is rewritten by default.
+
+**Batch `mv` deferred, deliberately.** `plan_batch_mv` returns bare `RewritePlan`s and has
+never had a `frontmatter_links_skipped` channel at all, so extending it means changing its
+return type and the batch output shape. `mv --help` now states the asymmetry.
+
+**Verified unchanged** on `../kepano-obsidian` and this knowledgebase: `summary`,
+`find --orphan`, `find --dead-end` and `backlinks` are byte-identical before/after, and an
+e2e test pins that a split frontmatter link is still not a graph edge. An `mv --dry-run` on
+kepano produces identical totals and an identical *sorted* `updated_files` set; the raw
+array order differs run-to-run in `main` too (`plans` is a `HashMap`), which is pre-existing
+and out of scope here — `frontmatter_links_skipped` itself is now sorted by (source, line).
+
+### Part B — MD034
+
+Root cause is upstream: `mdbook-lint-rulesets`' boundary scan does not treat `<` as a URL
+terminator. Fixed as a post-filter (`narrow_md034_autolink_fix` + `bare_url_len_before_html`),
+narrowing the fix's range and re-emitted text rather than suppressing it — the URL really is
+bare and really should be wrapped, just not that far. Trimming at **any** `<` rather than
+only a tag-shaped run is safe because RFC 3986 excludes `<` from the URI character set.
+Verified on the real `Themes/Retroma.md:65`, which carries three of these on one line:
+
+```text
+before: <https://github.com/emarpiee/Retroma<br>>Retroma Developer: <https://github.com/emarpiee<br>>
+after:  <https://github.com/emarpiee/Retroma><br>Retroma Developer: <https://github.com/emarpiee><br>
+```
+
+**Adjacent-punctuation follow-up, as the plan asked:** the same scan also over-measures a URL
+followed by a bare `>` (`https://a.example/> tail`), but the wrap yields
+`<https://a.example/>> tail`, which still renders as the autolink plus a literal `>` — nothing
+is corrupted, so it is left alone and pinned by `md034_leaves_a_trailing_angle_bracket_alone`.
+No `)`-outside-a-link case was found in the corpus. Nothing filed.
+
+### Part C — MD047
+
+Root cause is hyalo's own frontmatter-stripping handing MD047 a zero-byte body, not the CRLF
+wrapper and not upstream. The rule is skipped for an empty body rather than given a
+fabricated diagnosis. A non-empty body genuinely missing its terminator still fires and still
+fixes. Recorded with Part B as DEC-289.
+
+### Tests added
+
+- `crates/hyalo-core/src/link_rewrite.rs` — 5 unit tests (split link in an ungraphed file,
+  reported exactly once, ignored for another target, nested ambiguous stem either direction,
+  the stem probe disturbing nothing).
+- `crates/hyalo-core/src/link_graph.rs` — 2 unit tests (the marker matches the opening test;
+  the build lists only split-link files and the split link is still not an edge).
+- `crates/hyalo-mdlint/src/rules/obsidian.rs` — 2 unit tests for the URL boundary.
+- `crates/hyalo-mdlint/src/engine.rs` — 4 unit tests (MD034 before `<br>` / `<br/>`, the
+  trailing-`>` shape, MD047 empty vs. unterminated body).
+- `crates/hyalo-cli/tests/e2e/iteration269_carry_over_fixes.rs` — 9 e2e tests covering all
+  three parts.
