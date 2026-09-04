@@ -899,7 +899,7 @@ fn lint_fix_splits_comma_joined_tags() {
 }
 
 // ---------------------------------------------------------------------------
-// object-list tests (iteration 268 / DEC-286)
+// object-list tests (iteration 268 / DEC-287)
 // ---------------------------------------------------------------------------
 
 /// The motivating constraint from the iteration plan.
@@ -940,10 +940,7 @@ fn object_list_accepts_valid_items() {
     let violations = vc_all(
         "sources",
         &Value::Array(vec![
-            item(&[
-                ("ref", s("github:comparis/neon")),
-                ("commit", s("3c9e0f2")),
-            ]),
+            item(&[("ref", s("github:comparis/neon")), ("commit", s("3c9e0f2"))]),
             item(&[
                 ("ref", s("https://example.org/post")),
                 ("read", s("2026-09-01")),
@@ -1017,10 +1014,7 @@ fn object_list_key_pattern_mismatch_names_key_and_pattern() {
 fn object_list_non_scalar_under_pattern_key_errors() {
     let violations = vc_all(
         "sources",
-        &Value::Array(vec![item(&[(
-            "ref",
-            Value::Array(vec![s("a"), s("b")]),
-        )])]),
+        &Value::Array(vec![item(&[("ref", Value::Array(vec![s("a"), s("b")]))])]),
         &sources_constraint(),
     );
     assert_eq!(violations.len(), 1, "{violations:?}");

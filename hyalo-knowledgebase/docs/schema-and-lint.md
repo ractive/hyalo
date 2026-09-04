@@ -89,7 +89,7 @@ read = "^\\d{4}-\\d{2}-\\d{2}$"
 - Every `key-patterns` regex is compiled when `.hyalo.toml` is loaded, so a bad
   regex is a `schema/malformed` error rather than a per-file lint message (this is
   stricter than `item_pattern`, which reports an invalid regex at lint time — see
-  DEC-286).
+  DEC-287).
 - An empty list is valid. A non-list value is one error.
 
 Items are validated independently and every violation is reported. Each message

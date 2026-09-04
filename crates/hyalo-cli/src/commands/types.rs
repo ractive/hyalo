@@ -137,10 +137,13 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
             key_patterns,
         } => {
             // Key names mirror the TOML spelling so the output doubles as a
-            // template for `.hyalo.toml` (DEC-286).
+            // template for `.hyalo.toml` (DEC-287).
             let mut obj = serde_json::Map::new();
             obj.insert("type".to_owned(), Value::from("object-list"));
-            obj.insert("required-keys".to_owned(), Value::from(required_keys.clone()));
+            obj.insert(
+                "required-keys".to_owned(),
+                Value::from(required_keys.clone()),
+            );
             if let Some(allowed) = allowed_keys {
                 obj.insert("allowed-keys".to_owned(), Value::from(allowed.clone()));
             }

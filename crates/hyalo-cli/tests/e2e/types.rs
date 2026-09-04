@@ -123,7 +123,7 @@ fn types_show_existing_type() {
 }
 
 // ---------------------------------------------------------------------------
-// types show — object-list (iteration 268 / DEC-286)
+// types show — object-list (iteration 268 / DEC-287)
 // ---------------------------------------------------------------------------
 
 /// A vault whose `memory` type declares the plan's `object-list` property.
@@ -207,7 +207,10 @@ fn types_show_object_list_text_prints_key_patterns_block() {
     );
     // The nested map prints as an indented block, one key per line.
     assert!(stdout.contains("    key-patterns:"), "{stdout}");
-    assert!(stdout.contains("      commit: ^[0-9a-f]{7,40}$"), "{stdout}");
+    assert!(
+        stdout.contains("      commit: ^[0-9a-f]{7,40}$"),
+        "{stdout}"
+    );
     assert!(stdout.contains("      read: "), "{stdout}");
     assert!(stdout.contains("      ref: "), "{stdout}");
 }

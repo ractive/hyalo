@@ -109,7 +109,7 @@ pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-req
 
 /// A property value that violates a declared constraint which `--fix` has no
 /// fixer for — `object-list` shape errors and `pattern` / `item_pattern`
-/// mismatches (DEC-286). Carried so the SCHEMA group reports
+/// mismatches (DEC-287). Carried so the SCHEMA group reports
 /// `autofixable: false` instead of promising a fix that never arrives.
 pub const VIOLATION_KIND_CONSTRAINT_VIOLATION: &str = "schema/constraint-violation";
 
@@ -1170,7 +1170,7 @@ pub fn validate_constraint(
     }
 }
 
-/// Validate an `object-list` property (DEC-286).
+/// Validate an `object-list` property (DEC-287).
 ///
 /// Every item must be a YAML map; items are checked independently and every
 /// violation is reported (no first-error cut-off, matching `item_pattern`).

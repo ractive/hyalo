@@ -43,7 +43,7 @@
 /// the list to allow any extra key), and `key-patterns` maps a key to a regex
 /// applied to that key's scalar value. Every `key-patterns` regex is compiled
 /// when the config is loaded, so an invalid one fails the schema rather than
-/// being reported per file (unlike `item_pattern`, see DEC-286).
+/// being reported per file (unlike `item_pattern`, see DEC-287).
 ///
 /// A property constraint block is deserialized with `deny_unknown_fields`:
 /// any key that isn't one of the fields above (a typo, or a plausible but
@@ -537,7 +537,7 @@ pub enum PropertyConstraint {
         item_pattern: Option<String>,
     },
     /// A YAML list whose items must all be maps, with flat per-key constraints
-    /// (DEC-286). Deliberately not JSON Schema: keys are strings, values must be
+    /// (DEC-287). Deliberately not JSON Schema: keys are strings, values must be
     /// scalars when a pattern applies, and there is no nesting or per-key type.
     ObjectList {
         /// Keys that must be present in every item.
@@ -588,14 +588,14 @@ pub struct RawPropertyConstraint {
     pub minimum: Option<f64>,
     /// Inclusive maximum value for `number` properties (F3-3).
     pub maximum: Option<f64>,
-    /// Keys required in every item of an `object-list` property (DEC-286).
+    /// Keys required in every item of an `object-list` property (DEC-287).
     #[serde(rename = "required-keys")]
     pub required_keys: Option<Vec<String>>,
-    /// The complete set of keys an `object-list` item may carry (DEC-286).
+    /// The complete set of keys an `object-list` item may carry (DEC-287).
     /// Omitted means "any extra key is fine".
     #[serde(rename = "allowed-keys")]
     pub allowed_keys: Option<Vec<String>>,
-    /// Per-key regexes for an `object-list` property (DEC-286). `IndexMap`
+    /// Per-key regexes for an `object-list` property (DEC-287). `IndexMap`
     /// preserves the order the deserializer hands them over in; note that the
     /// config goes through `toml::Value` first, whose tables are sorted, so in
     /// practice the keys arrive (and are rendered) alphabetically.
@@ -649,7 +649,7 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
             ));
         }
 
-        // The object-list keys (DEC-286) apply only to `object-list` properties.
+        // The object-list keys (DEC-287) apply only to `object-list` properties.
         // Same rejection stance as the bounds above: a key on the wrong type is a
         // hard error, not a silently ignored constraint.
         if (raw.required_keys.is_some() || raw.allowed_keys.is_some() || raw.key_patterns.is_some())
@@ -805,12 +805,7 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                 for (label, key) in required_keys
                     .iter()
                     .map(|k| ("required-keys", k))
-                    .chain(
-                        allowed_keys
-                            .iter()
-                            .flatten()
-                            .map(|k| ("allowed-keys", k)),
-                    )
+                    .chain(allowed_keys.iter().flatten().map(|k| ("allowed-keys", k)))
                     .chain(key_patterns.keys().map(|k| ("key-patterns", k)))
                 {
                     if key.is_empty() {
@@ -838,11 +833,10 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                 }
 
                 // Compile every key pattern now so a bad regex fails the config
-                // instead of being reported once per linted file (DEC-286).
+                // instead of being reported once per linted file (DEC-287).
                 for (key, pat) in &key_patterns {
-                    regex::Regex::new(pat).map_err(|e| {
-                        format!("key-patterns.{key}: invalid regex: {e}")
-                    })?;
+                    regex::Regex::new(pat)
+                        .map_err(|e| format!("key-patterns.{key}: invalid regex: {e}"))?;
                 }
 
                 Ok(PropertyConstraint::ObjectList {
@@ -1388,7 +1382,7 @@ item_pattern = "^[a-z]+"
     }
 
     // ---------------------------------------------------------------------------
-    // object-list (iteration 268 / DEC-286)
+    // object-list (iteration 268 / DEC-287)
     // ---------------------------------------------------------------------------
 
     /// The motivating config from the iteration plan, parsed in full.
