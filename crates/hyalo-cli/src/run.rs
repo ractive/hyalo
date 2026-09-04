@@ -2175,6 +2175,12 @@ fn run_inner() -> Result<(), AppError> {
     let summary_kb_dir_note =
         matches!(cli.command, Commands::Summary { .. }) && format == Format::Text;
 
+    // iter-264 (BUG-22): `find`'s envelope always carries the three
+    // `--files-from` counters, zero when the flag was not used, so a consumer
+    // can read `.files_missing` without first checking how the file list was
+    // supplied. Captured before dispatch, which moves `cli.command`.
+    let find_always_reports_counters = matches!(cli.command, Commands::Find { .. });
+
     let dispatch_start = Instant::now();
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
@@ -2206,7 +2212,13 @@ fn run_inner() -> Result<(), AppError> {
     let exit_code_override = ctx.exit_code_override;
     // Prefer counters captured inside dispatch (read/backlinks/task path through
     // `resolve_inputs`); fall back to the pre-dispatch path used by other commands.
-    let final_files_from_counters = ctx.files_from_counters.take().or(files_from_counters);
+    let final_files_from_counters = ctx
+        .files_from_counters
+        .take()
+        .or(files_from_counters)
+        .or_else(|| {
+            find_always_reports_counters.then(crate::commands::files_from::FilesFromCounters::default)
+        });
 
     let pipeline = OutputPipeline {
         user_format: format,

@@ -55,6 +55,16 @@ pub const DEFAULT_FIELD_NAMES: &[&str] = &[
     "tags",
 ];
 
+/// The message every rejected `--fields` value shares: the offending name (or
+/// the empty string, for a selection that named nothing) plus the valid values
+/// and the projection rule.
+fn unknown_field_error(unknown: &str) -> String {
+    format!(
+        "unknown field {unknown:?}: valid fields are all, file, modified, size, lines, title, properties, properties-typed (JSON key: properties_typed), tags, sections (alias: outline), tasks, links, backlinks. \
+Without --fields: file, modified, size, lines, title, properties, tags. With --fields: exactly the named fields plus file (filters add what they need)."
+    )
+}
+
 impl Fields {
     /// Parse a fields selection from a list of `--fields` argument values.
     ///
@@ -90,12 +100,19 @@ impl Fields {
             title: false,
         };
 
+        // `--fields ''` and `--fields ,` reach here as a non-empty vec of empty
+        // strings. Silently treating them as "no fields named" produced a
+        // result with only `file` in it — a projection nobody asked for — so a
+        // selection that names nothing is now the same error an unknown field
+        // raises (iter-264, BUG-24).
+        let mut named_any = false;
         for item in input {
             for part in item.split(',') {
                 let part = part.trim();
                 if part.is_empty() {
                     continue;
                 }
+                named_any = true;
                 match part {
                     "all" => {
                         fields.modified = true;
@@ -119,19 +136,24 @@ impl Fields {
                     "size" => fields.size = true,
                     "lines" => fields.lines = true,
                     "properties" => fields.properties = true,
-                    "properties-typed" => fields.properties_typed = true,
+                    // The JSON key is `properties_typed` (snake_case, like
+                    // every other envelope key), so the underscore spelling is
+                    // accepted too and a printed field list round-trips back
+                    // into `--fields` (iter-264, DEC-275).
+                    "properties-typed" | "properties_typed" => fields.properties_typed = true,
                     "tags" => fields.tags = true,
                     "sections" | "outline" => fields.sections = true,
                     "tasks" => fields.tasks = true,
                     "links" => fields.links = true,
                     "backlinks" => fields.backlinks = true,
                     "title" => fields.title = true,
-                    unknown => bail!(
-                        "unknown field {unknown:?}: valid fields are all, file, modified, size, lines, title, properties, properties-typed, tags, sections (alias: outline), tasks, links, backlinks. \
-Without --fields: file, modified, size, lines, title, properties, tags. With --fields: exactly the named fields plus file (filters add what they need)."
-                    ),
+                    unknown => bail!("{}", unknown_field_error(unknown)),
                 }
             }
+        }
+
+        if !named_any {
+            bail!("{}", unknown_field_error(""));
         }
 
         Ok(fields)
