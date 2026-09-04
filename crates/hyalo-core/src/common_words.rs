@@ -14,7 +14,11 @@
 //! new crate in the tree, and small enough to read.
 //!
 //! The list holds high-frequency English words plus generic doc filenames
-//! (`readme`, `changelog`, `index`, …). Words shorter than 3 characters are
+//! (`readme`, `changelog`, `index`, …) and the platform/format names that show
+//! up as note titles in almost every vault while being prose nouns everywhere
+//! else (`github`, `markdown`, `wiki`, `template` — iter-267, UX-9). Product
+//! and domain nouns a vault genuinely links to (`Obsidian`, `Dataview`,
+//! `Canvas`) are deliberately absent. Words shorter than 3 characters are
 //! omitted because `links auto --min-length` defaults to 3 and never proposes
 //! them anyway.
 //!
@@ -136,6 +140,8 @@ static COMMON_WORDS: &[&str] = &[
     "computer",
     "concern",
     "condition",
+    "config",
+    "configuration",
     "consider",
     "contain",
     "content",
@@ -177,6 +183,7 @@ static COMMON_WORDS: &[&str] = &[
     "direction",
     "discuss",
     "display",
+    "doc",
     "document",
     "does",
     "done",
@@ -265,8 +272,11 @@ static COMMON_WORDS: &[&str] = &[
     "get",
     "getting-started",
     "girl",
+    "github",
+    "gitlab",
     "give",
     "glass",
+    "glossary",
     "goal",
     "good",
     "government",
@@ -315,6 +325,8 @@ static COMMON_WORDS: &[&str] = &[
     "industry",
     "information",
     "inside",
+    "install",
+    "installation",
     "instead",
     "interest",
     "internal",
@@ -378,6 +390,7 @@ static COMMON_WORDS: &[&str] = &[
     "management",
     "manager",
     "many",
+    "markdown",
     "market",
     "material",
     "matter",
@@ -612,6 +625,7 @@ static COMMON_WORDS: &[&str] = &[
     "service",
     "set",
     "setting",
+    "setup",
     "seven",
     "several",
     "share",
@@ -691,6 +705,7 @@ static COMMON_WORDS: &[&str] = &[
     "team",
     "technology",
     "tell",
+    "template",
     "term",
     "test",
     "text",
@@ -742,6 +757,7 @@ static COMMON_WORDS: &[&str] = &[
     "truth",
     "try",
     "turn",
+    "tutorial",
     "two",
     "type",
     "under",
@@ -787,6 +803,7 @@ static COMMON_WORDS: &[&str] = &[
     "whose",
     "why",
     "wide",
+    "wiki",
     "will",
     "win",
     "window",
