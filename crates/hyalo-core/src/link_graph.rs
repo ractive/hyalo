@@ -570,6 +570,26 @@ fn directory_index_key(
     Some(strip_md_extension(canonical).to_owned())
 }
 
+/// Whether `target` names a **vault attachment** — a file with an explicit
+/// non-`.md` extension that the index actually knows (iter-261).
+///
+/// The index membership test is what keeps a note called `Foo.v2.md`, linked as
+/// `[[Foo.v2]]`, a normal graph edge: `v2` looks like an extension, but no
+/// attachment answers to it, so the link is left alone.
+fn target_is_attachment(target: &str, case_index: &CaseInsensitiveIndex) -> bool {
+    if !crate::discovery::has_non_md_extension(target) {
+        return false;
+    }
+    let normalized = target.replace('\\', "/");
+    if case_index.contains_path(&normalized) || case_index.lookup_unique(&normalized).is_some() {
+        return true;
+    }
+    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    case_index
+        .lookup_stem(basename)
+        .is_some_and(|path| !crate::discovery::has_md_extension(path))
+}
+
 /// Normalize and insert one file's links into the shared index.
 fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
@@ -578,6 +598,19 @@ fn insert_file_links(
     case_index: &CaseInsensitiveIndex,
 ) {
     for (line, mut link) in file_links.links {
+        // iter-261 / BUG-2: an external URI (`obsidian://…`, `mailto:…`) names
+        // nothing inside the vault, so it is never a graph edge — no backlink
+        // key, no outbound edge for `--orphan` / `--dead-end`.
+        if link.external {
+            continue;
+        }
+        // iter-261 / BUG-5, BUG-6: an embed or link that resolves to an
+        // attachment (`![[img.png]]`, `[[Books.base]]`) is not an edge in the
+        // note graph — a note whose only outbound link is an image is still a
+        // dead end, and nothing ever queries `backlinks img.png`.
+        if target_is_attachment(&link.target, case_index) {
+            continue;
+        }
         // Captured before normalization, which drops it: a trailing slash is
         // what marks a target as an explicit directory reference (iter-203).
         let raw_trailing_slash = link.target.ends_with('/');
@@ -734,7 +767,7 @@ impl LinkGraphVisitor {
         self.scratch.clear();
         extract_links_from_text_with_original(value, value, &mut self.scratch);
         for link in self.scratch.drain(..) {
-            if link.kind == crate::links::LinkKind::Wikilink {
+            if link.kind == crate::links::LinkKind::Wikilink && !link.external {
                 self.links.push((1, link));
             }
         }
@@ -1790,6 +1823,8 @@ mod tests {
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 )],
             },
@@ -1840,6 +1875,8 @@ mod tests {
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 )],
             },
@@ -1920,6 +1957,8 @@ mod tests {
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 )],
             },

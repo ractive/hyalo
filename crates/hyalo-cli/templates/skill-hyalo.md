@@ -148,6 +148,7 @@ hyalo find --fields backlinks --file my-note.md       # see who links to this no
 hyalo find --orphan                                        # find orphan files (no inbound or outbound links)
 hyalo find --dead-end                                      # find dead-end files (inbound but no outbound links)
 hyalo find --broken-links                                  # find files with at least one unresolved link
+hyalo find --fields links --jq '[.results[].links[].kind]|group_by(.)|map({kind:.[0],n:length})'  # bucket links by kind
 hyalo find --fields properties,backlinks              # combine with other fields
 ```
 
@@ -382,7 +383,9 @@ What follows is only what those pages do not say — the behaviour that surprise
   whose emitted target would still not resolve is refused and reported under `unfixable`.
   Targets normalizing above the vault root count as `out_of_vault`, not `broken`.
   Destinations containing `{%`, `{{` or `${` are template expressions, counted under
-  `templated` and never rewritten.
+  `templated` and never rewritten. A target with an explicit non-`.md` extension is never
+  matched against a `.md` note (DEC-266), so a broken `Companies.base` is honestly unfixable
+  rather than rewritten into a note link, and no candidate is ever reported at confidence 0.0.
 - **`append` does not accept `--tag`.** Tags are scalar list items; use `set --tag`.
 - **`--where-property` / `--where-tag` default to all `**/*.md`** when neither `--file` nor
   `--glob` is given. Always pair a bulk mutation with `--dry-run` first.
@@ -390,6 +393,20 @@ What follows is only what those pages do not say — the behaviour that surprise
   (or `list`) action** — there is no separate command to remember.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
   `--strict` promotes missing-type and undeclared-property warnings to errors.
+- **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
+  `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
+  or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
+  `external` and `attachment` are **never broken** — they stay out of `find --broken-links`,
+  `summary.links.broken` and HYALO006, and are not graph edges for `--orphan` / `--dead-end`.
+  So bucket broken links with
+  `select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
+- **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
+  `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
+  "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
+  cosmetic `link-case-mismatch` rewrite plans.
+- **A dead `#anchor` that prefixes exactly one heading gets a `suggested_fragment`** (DEC-268):
+  `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write.
+  Reported, never applied — an ambiguous prefix suggests nothing.
 - **`config` reports a broken config rather than failing.** `results.malformed` /
   `results.parse_error` mean every other value shown is a built-in default.
 - **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.

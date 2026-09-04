@@ -265,11 +265,14 @@ fn task_toggle_updates_persisted_entry() {
 #[test]
 fn links_fix_apply_updates_persisted_graph() {
     let tmp = tempfile::tempdir().unwrap();
-    // alpha links to beta by an ambiguous/partial path so `links fix` has a
-    // rewrite to apply; here a wrong-extension link resolves to beta.md.
+    // alpha links to beta by a misspelling so `links fix` has a rewrite to
+    // apply. (It used to write `[[beta.markdown]]`; since DEC-266 in iter-261
+    // an explicit non-`.md` extension is an attachment reference and is never
+    // matched against a `.md` note, so that spelling is deliberately
+    // unfixable now — see `matcher_never_crosses_an_explicit_non_md_extension`.)
     std::fs::write(
         tmp.path().join("alpha.md"),
-        "---\ntitle: Alpha\n---\n\n# Alpha\n\nSee [[beta.markdown]].\n",
+        "---\ntitle: Alpha\n---\n\n# Alpha\n\nSee [[betaa]].\n",
     )
     .unwrap();
     std::fs::write(

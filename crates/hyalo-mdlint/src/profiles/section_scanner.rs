@@ -120,6 +120,11 @@ impl FileVisitor for SectionScanner {
         links::extract_links_from_text(cleaned, &mut line_links);
 
         for link in line_links {
+            // iter-261: a section's link list is a vault-link inventory; an
+            // external URI (now parsed rather than dropped) does not belong.
+            if link.external {
+                continue;
+            }
             let formatted = format_link_string(&link);
             self.current.links.push(formatted);
         }
@@ -212,6 +217,8 @@ mod tests {
             kind: links::LinkKind::Wikilink,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[[my-note]]");
     }
@@ -224,6 +231,8 @@ mod tests {
             kind: links::LinkKind::Wikilink,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
     }
@@ -236,6 +245,8 @@ mod tests {
             kind: links::LinkKind::Markdown,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[Example](https://example.com)");
     }
@@ -248,6 +259,8 @@ mod tests {
             kind: links::LinkKind::Markdown,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }

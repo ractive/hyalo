@@ -106,6 +106,10 @@ pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json:
 
     // Links: header then each as "    line N: \"target\" → \"path\"" or
     // "    line N: \"target\" (unresolved)".
+    // iter-261: the same shape the standalone `LINK_INFO_FILTER` renders —
+    // the link `kind` after the arrow when it is not a plain `wikilink`, no
+    // verdict at all for an `external` URI, and the DEC-268 heading
+    // suggestion when a dead fragment has exactly one prefix match.
     // Anchored links (L-21) append "#fragment" to the target and, when the
     // heading is missing, " (broken anchor)" after the path — keep in sync
     // with LINK_INFO_ANCHORED_FILTER, which renders the standalone shape.
@@ -115,7 +119,7 @@ pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json:
     // guards JSON from a pre-215 hyalo that has no `.line`.
     if map.contains_key("links") {
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else (if .out_of_vault then " (out of vault)" else " (unresolved)" end) end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 

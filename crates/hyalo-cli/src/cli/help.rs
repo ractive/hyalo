@@ -409,11 +409,15 @@ COOKBOOK:
   # Find dead-end files (have inbound links but no outbound)
   hyalo find --dead-end
 
-  # Every broken link target (--broken-links auto-includes the links field)
-  hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'
+  # Every broken link — a dead target OR a dead #anchor, external URIs and
+  # attachments excluded (--broken-links auto-includes the links field)
+  hyalo find --broken-links --jq '[.results[] | .links[] | select((.kind | IN(\"external\",\"attachment\") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))]'
 
   # Every broken link as file:line — each link carries the source line lint reports
-  hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.path == null and (.out_of_vault | not)) or .broken_anchor) | \"\\($f.file):\\(.line) \\(.target)\"'
+  hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.kind | IN(\"external\",\"attachment\") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | \"\\($f.file):\\(.line) \\(.target)\"'
+
+  # Bucket a vault's links by kind: wikilink | embed | markdown | external | attachment
+  hyalo find --fields links --limit 0 --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'
 
   # Filter by title (substring or regex)
   hyalo find --title 'meeting'

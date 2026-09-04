@@ -8,11 +8,10 @@ use super::*;
 // split: the parent imports only what it calls itself, and these are exercised
 // only from here.
 use super::filters::{
-    CONTENT_MATCH_FILTER, FIND_TASK_INFO_FILTER, LINK_INFO_ANCHORED_FILTER, LINK_INFO_PATH_FILTER,
-    LINK_INFO_TARGET_FILTER, MV_RESULT_FILTER, OUTLINE_SECTION_FILTER,
-    OUTLINE_SECTION_WITH_TASKS_FILTER, PROPERTY_INFO_FILTER, PROPERTY_MUTATION_FILTER,
-    PROPERTY_SUMMARY_ENTRY_FILTER, PROPERTY_VALUE_MUTATION_FILTER, TAG_MUTATION_FILTER,
-    TAG_SUMMARY_FILTER, TASK_COUNT_FILTER,
+    CONTENT_MATCH_FILTER, FIND_TASK_INFO_FILTER, LINK_INFO_FILTER, MV_RESULT_FILTER,
+    OUTLINE_SECTION_FILTER, OUTLINE_SECTION_WITH_TASKS_FILTER, PROPERTY_INFO_FILTER,
+    PROPERTY_MUTATION_FILTER, PROPERTY_SUMMARY_ENTRY_FILTER, PROPERTY_VALUE_MUTATION_FILTER,
+    TAG_MUTATION_FILTER, TAG_SUMMARY_FILTER, TASK_COUNT_FILTER,
 };
 use super::text::format_scalar;
 use serde_json::json;
@@ -375,7 +374,7 @@ fn tag_summary_filter() {
 #[test]
 fn link_info_target_only_filter() {
     let val = json!({"target": "broken-link"});
-    let out = jq(LINK_INFO_TARGET_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("broken-link"));
     assert!(out.contains("unresolved"));
 }
@@ -383,7 +382,7 @@ fn link_info_target_only_filter() {
 #[test]
 fn link_info_with_path_filter() {
     let val = json!({"path": "note-b.md", "target": "note-b"});
-    let out = jq(LINK_INFO_PATH_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("note-b"));
     assert!(out.contains("note-b.md"));
 }
@@ -392,7 +391,7 @@ fn link_info_with_path_filter() {
 fn link_info_anchored_resolved_filter() {
     // Target and anchor both resolve.
     let val = json!({"path": "foo.md", "target": "Foo", "fragment": "Real"});
-    let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("Foo#Real"));
     assert!(out.contains("foo.md"));
     assert!(!out.contains("broken anchor"));
@@ -405,7 +404,7 @@ fn link_info_anchored_broken_anchor_filter() {
     let val = json!({
         "path": "foo.md", "target": "Foo", "fragment": "Nope", "broken_anchor": true
     });
-    let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("Foo#Nope"));
     assert!(out.contains("foo.md"));
     assert!(out.contains("broken anchor"));
@@ -416,7 +415,7 @@ fn link_info_anchored_broken_anchor_filter() {
 fn link_info_anchored_broken_target_filter() {
     // Target unresolved: anchor check never ran, path is null.
     let val = json!({"target": "Nope", "fragment": "x"});
-    let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("Nope#x"));
     assert!(out.contains("unresolved"));
     assert!(!out.contains("broken anchor"));
@@ -427,9 +426,64 @@ fn link_info_anchored_with_label_filter() {
     let val = json!({
         "path": "foo.md", "target": "Foo", "fragment": "Real", "label": "click"
     });
-    let out = jq(LINK_INFO_ANCHORED_FILTER, &val).unwrap();
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
     assert!(out.contains("Foo#Real"));
     assert!(out.contains("[click]"));
+}
+
+#[test]
+fn link_info_external_renders_its_kind_and_no_verdict() {
+    // iter-261 / BUG-2: an external URI is neither resolved nor broken.
+    let val = json!({
+        "target": "obsidian://show-plugin?id=x", "path": null,
+        "kind": "external", "line": 24
+    });
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
+    assert!(out.contains("obsidian://show-plugin?id=x"));
+    assert!(out.contains("(external)"));
+    assert!(!out.contains("unresolved"));
+}
+
+#[test]
+fn link_info_attachment_renders_its_kind_after_the_arrow() {
+    let val = json!({
+        "target": "task-plugins-sorted.png",
+        "path": "02 Attachments/task-plugins-sorted.png",
+        "kind": "attachment", "line": 28
+    });
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
+    assert!(out.contains("→ \"02 Attachments/task-plugins-sorted.png\""));
+    assert!(out.contains("(attachment)"));
+}
+
+#[test]
+fn link_info_plain_wikilink_kind_is_not_rendered() {
+    let val = json!({"target": "note", "path": "note.md", "kind": "wikilink", "line": 3});
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
+    assert!(!out.contains("(wikilink)"));
+}
+
+#[test]
+fn link_info_renders_the_dec_268_anchor_suggestion() {
+    let val = json!({
+        "target": "decision-log", "path": "decision-log.md", "kind": "wikilink",
+        "fragment": "DEC-068", "broken_anchor": true,
+        "suggested_fragment": "DEC-068: Snapshot index format", "line": 9
+    });
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
+    assert!(out.contains("broken anchor"));
+    assert!(out.contains("did you mean \"#DEC-068: Snapshot index format\"?"));
+}
+
+#[test]
+fn link_info_out_of_vault_still_renders_its_verdict() {
+    let val = json!({
+        "target": "../../CONTRIBUTING.md", "path": null, "kind": "markdown",
+        "out_of_vault": true, "line": 5
+    });
+    let out = jq(LINK_INFO_FILTER, &val).unwrap();
+    assert!(out.contains("(out of vault)"));
+    assert!(!out.contains("unresolved"));
 }
 
 // --- outline type filters ---

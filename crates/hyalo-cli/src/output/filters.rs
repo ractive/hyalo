@@ -32,45 +32,20 @@ pub(super) const TAG_SUMMARY_ENTRY_FILTER: &str =
 // failing. `line 0` is the "unknown" rendering — no real source line is 0,
 // they are 1-based.
 
-/// `LinkInfo` — just target: `{line, target}`
-/// Format: `  line 12: "target" (unresolved)`
-pub(super) const LINK_INFO_TARGET_FILTER: &str =
-    r#""  line \(.line // 0): \"\(.target)\" (unresolved)""#;
-
-/// `LinkInfo` with path: `{line, path, target}`
-/// Format: `  line 12: "target" → "path"`
-pub(super) const LINK_INFO_PATH_FILTER: &str =
-    r#""  line \(.line // 0): \"\(.target)\" → \"\(.path)\"""#;
-
-/// `LinkInfo` with label: `{label, line, target}`
-/// Format: `  line 12: "target" (unresolved) [label]`
-pub(super) const LINK_INFO_LABEL_FILTER: &str =
-    r#""  line \(.line // 0): \"\(.target)\" (unresolved) [\(.label)]""#;
-
-/// `LinkInfo` with path and label: `{label, line, path, target}`
-/// Format: `  line 12: "target" → "path" [label]`
-pub(super) const LINK_INFO_FULL_FILTER: &str =
-    r#""  line \(.line // 0): \"\(.target)\" → \"\(.path)\" [\(.label)]""#;
-
-/// `LinkInfo` carrying a `#fragment` (L-21, iter-190).
+/// Every `LinkInfo` shape from iter-261 on — one filter, not a key-signature
+/// family.
 ///
-/// Unified filter for every anchored-link shape (with/without `path`, `label`,
-/// and `broken_anchor`). Missing optional keys read as `null` in jq, so a
-/// single filter covers all six fragment-bearing key signatures:
-/// - `"target"` and `"path"` render as before, with the `#fragment` appended;
-/// - `broken_anchor == true` marks the anchor as `(broken anchor)` after the
-///   (resolved) path, so it reads distinctly from a broken TARGET
-///   `(unresolved)`;
-/// - a `[label]` suffix is appended when present.
-pub(super) const LINK_INFO_ANCHORED_FILTER: &str = r#""  line \(.line // 0): \"\(.target)#\(.fragment)\"\(if .path then " → \"\(.path)\"\(if .broken_anchor then " (broken anchor)" else "" end)" else " (unresolved)" end)\(if .label then " [\(.label)]" else "" end)""#;
-
-/// `LinkInfo` whose target resolves above the vault root (iter-193).
-///
-/// One filter for every out-of-vault shape: `path` is always absent, while
-/// `fragment` and `label` are optional and read as `null` when missing.
-/// Renders `(out of vault)` rather than `(unresolved)` so a target that is
-/// merely out of scope never reads as a broken link.
-pub(super) const LINK_INFO_OUT_OF_VAULT_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\" (out of vault)\(if .label then " [\(.label)]" else "" end)""##;
+/// `kind` (UX-6) is always present, and `suggested_fragment` (DEC-268) is a
+/// sixth optional key, so enumerating signatures would have meant 48 arms that
+/// all render the same line. Missing optional keys read as `null` in jq, so a
+/// single filter covers them all:
+/// - `"target"`, plus `#fragment` when the link carried one;
+/// - `→ "path"` when it resolved;
+/// - ` (kind)` for anything that is not a plain `wikilink`;
+/// - `(broken anchor)` / `(unresolved)` / `(out of vault)` verdicts — an
+///   `external` link gets none of them, because it names nothing to resolve;
+/// - the DEC-268 heading suggestion, then a `[label]` suffix.
+pub(super) const LINK_INFO_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)\(if .label then " [\(.label)]" else "" end)""##;
 
 /// `TaskCount`: `{done, total}`
 pub(super) const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
@@ -222,10 +197,47 @@ pub(super) fn key_signature(map: &serde_json::Map<String, serde_json::Value>) ->
     keys.join(",")
 }
 
+/// Whether a sorted key signature describes a [`LinkInfo`].
+///
+/// `target` is the one key every `LinkInfo` has had since the shape existed;
+/// everything else — `kind`, `line`, `path`, `label`, `fragment`,
+/// `broken_anchor`, `out_of_vault`, `suggested_fragment` — is either optional
+/// or was added later, and a `LinkInfo` read back from an older snapshot may
+/// be missing any of them. So the test is "contains `target`, and every key is
+/// one this shape declares", which keeps pre-iter-261 fixtures rendering while
+/// still refusing any other object that happens to carry a `target`.
+fn is_link_info_signature(key_sig: &str) -> bool {
+    const LINK_INFO_KEYS: [&str; 9] = [
+        "broken_anchor",
+        "fragment",
+        "kind",
+        "label",
+        "line",
+        "out_of_vault",
+        "path",
+        "suggested_fragment",
+        "target",
+    ];
+    let mut has_target = false;
+    for key in key_sig.split(',') {
+        if !LINK_INFO_KEYS.contains(&key) {
+            return false;
+        }
+        has_target |= key == "target";
+    }
+    has_target
+}
+
 /// Look up the jq filter for a given key signature.
 ///
 /// Returns `None` for unknown shapes, which will fall back to generic formatting.
 pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
+    // `LinkInfo` is matched by shape rather than by exact signature (iter-261):
+    // with `kind` always present and five optional keys around it, the
+    // signature family would be 48 arms rendering one identical line.
+    if is_link_info_signature(key_sig) {
+        return Some(LINK_INFO_FILTER);
+    }
     match key_sig {
         // PropertyInfo
         "name,type,value" => Some(PROPERTY_INFO_FILTER),
@@ -235,40 +247,6 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         "tags,total" => Some(TAG_SUMMARY_FILTER),
         // TagSummaryEntry
         "count,name" => Some(TAG_SUMMARY_ENTRY_FILTER),
-        // LinkInfo variants (optional path and label → 4 combos).
-        // iter-215 added the always-present `line`; the pre-215 signatures stay
-        // listed so a `LinkInfo` deserialized from an older snapshot or a
-        // hand-written fixture still renders (the filters fall back to
-        // `line 0`) rather than dropping to generic key/value formatting.
-        "line,target" | "target" => Some(LINK_INFO_TARGET_FILTER),
-        "line,path,target" | "path,target" => Some(LINK_INFO_PATH_FILTER),
-        "label,line,target" | "label,target" => Some(LINK_INFO_LABEL_FILTER),
-        "label,line,path,target" | "label,path,target" => Some(LINK_INFO_FULL_FILTER),
-        // LinkInfo carrying a `#fragment` (L-21): fragment is present, plus any
-        // combination of optional path/label, and broken_anchor only when true
-        // (which implies path+fragment). One unified filter handles them all.
-        "fragment,line,target"
-        | "fragment,line,path,target"
-        | "fragment,label,line,target"
-        | "fragment,label,line,path,target"
-        | "broken_anchor,fragment,line,path,target"
-        | "broken_anchor,fragment,label,line,path,target"
-        | "fragment,target"
-        | "fragment,path,target"
-        | "fragment,label,target"
-        | "fragment,label,path,target"
-        | "broken_anchor,fragment,path,target"
-        | "broken_anchor,fragment,label,path,target" => Some(LINK_INFO_ANCHORED_FILTER),
-        // LinkInfo whose target escapes the vault root (iter-193). `path` is
-        // never present; `fragment` / `label` are optional.
-        "line,out_of_vault,target"
-        | "label,line,out_of_vault,target"
-        | "fragment,line,out_of_vault,target"
-        | "fragment,label,line,out_of_vault,target"
-        | "out_of_vault,target"
-        | "label,out_of_vault,target"
-        | "fragment,out_of_vault,target"
-        | "fragment,label,out_of_vault,target" => Some(LINK_INFO_OUT_OF_VAULT_FILTER),
         // TaskCount
         "done,total" => Some(TASK_COUNT_FILTER),
         // OutlineSection (with and without tasks)

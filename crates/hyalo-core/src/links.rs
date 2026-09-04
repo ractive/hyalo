@@ -81,6 +81,26 @@ pub struct Link {
     /// the written query bytes survive every rewrite untouched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    /// `true` when the link was written as an embed — `![[target]]`.
+    ///
+    /// iter-261 (UX-6): an embed is still a `Wikilink` for every resolution
+    /// purpose, but the reported link `kind` distinguishes it so a caller can
+    /// bucket `![[img.png]]` apart from `[[note]]` without re-reading the file.
+    /// Skipped from JSON when `false`, and defaulted on load, so an index
+    /// written by an older hyalo keeps deserializing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub embed: bool,
+    /// `true` when the target carries a URI scheme (`https:`, `obsidian://`,
+    /// `mailto:`, `file://`, `zotero:`) and therefore names something outside
+    /// the vault.
+    ///
+    /// iter-261 (BUG-2): such a link is inventoried so `--fields links` can
+    /// report it with `kind: "external"`, but it is never resolved, never
+    /// counted broken, never a graph edge and never rewritten. `target` holds
+    /// the URI verbatim — no fragment or query split — so the reported text
+    /// matches the source byte for byte.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external: bool,
 }
 
 /// The kind of link syntax used in the source text.
@@ -189,8 +209,11 @@ fn extract_links_and_anchors(
             && bytes[i + 1] == b'['
             && bytes[i + 2] == b'['
             && !is_escaped(bytes, i)
-            && let Some((link, end)) = try_parse_wikilink_at(cleaned, i + 1)
+            && let Some((mut link, end)) = try_parse_wikilink_at(cleaned, i + 1)
         {
+            // iter-261 (UX-6): `![[…]]` is an embed. Resolution is identical to
+            // a plain wikilink; only the reported `kind` differs.
+            link.embed = true;
             out.push(link);
             i = end;
             continue;
@@ -505,6 +528,7 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
         {
             // Extend full_start back to the `!`
             span.full_start = i;
+            span.link.embed = true;
             out.push(span);
             i = end;
             continue;
@@ -554,8 +578,13 @@ fn try_parse_wikilink_span_at(text: &str, start: usize) -> Option<(LinkSpan, usi
     }
 
     // Determine where the target text ends within `inner`.
-    // target ends at `|` (alias) or `#` (fragment), whichever comes first.
-    let target_end_in_inner = [inner.find('|'), inner.find('#')]
+    // The target ends at the alias pipe or at `#` (fragment), whichever comes
+    // first. `split_wikilink_alias` owns the pipe half so a table-escaped
+    // `\|` leaves its backslash *outside* the rewritable span (BUG-7): a
+    // rewrite splices only the target bytes and the `\|alias` tail survives
+    // byte-for-byte, keeping the markdown table row valid.
+    let (alias_target_end, _) = split_wikilink_alias(inner);
+    let target_end_in_inner = [Some(alias_target_end), inner.find('#')]
         .into_iter()
         .flatten()
         .min()
@@ -669,20 +698,62 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     Some((link, end_pos))
 }
 
+/// Split a wikilink's inner text at the alias pipe.
+///
+/// Returns `(target_end, alias_start)` as byte offsets into `inner`:
+/// `inner[..target_end]` is the target text as written (fragment included) and
+/// `inner[alias_start..]` is the alias, when there is one.
+///
+/// iter-261 / BUG-7: Obsidian escapes the alias pipe as `\|` when a wikilink is
+/// written inside a markdown table, because a bare `|` would end the table
+/// cell. `[[obsidian-advanced-uri\|Advanced URI Plugin]]` therefore has to
+/// yield the target `obsidian-advanced-uri`, not `obsidian-advanced-uri\`.
+/// The backslash is excluded from the target span, so a rewrite that splices a
+/// new target in keeps the `\|` bytes — and the table row — intact.
+///
+/// A trailing backslash that is *not* followed by a pipe is dropped from the
+/// target too: no vault path ends in one, and Obsidian ignores it.
+pub(crate) fn split_wikilink_alias(inner: &str) -> (usize, Option<usize>) {
+    let (mut target_end, alias_start) = match inner.find('|') {
+        Some(pipe_pos) => {
+            let escaped = pipe_pos > 0 && inner.as_bytes()[pipe_pos - 1] == b'\\';
+            let target_end = if escaped { pipe_pos - 1 } else { pipe_pos };
+            (target_end, Some(pipe_pos + 1))
+        }
+        None => (inner.len(), None),
+    };
+    while target_end > 0 && inner.as_bytes()[target_end - 1] == b'\\' {
+        target_end -= 1;
+    }
+    (target_end, alias_start)
+}
+
 /// Parse the inner content of a wikilink (between [[ and ]]).
-/// Handles: target, target|label, target#heading, target#^block-id
+/// Handles: target, target|label, target\|label, target#heading, target#^block-id
 #[must_use]
 pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
     if inner.is_empty() {
         return None;
     }
 
-    // Split on pipe for label text
-    let (target_part, label) = if let Some(pipe_pos) = inner.find('|') {
-        (&inner[..pipe_pos], Some(inner[pipe_pos + 1..].to_string()))
-    } else {
-        (inner, None)
-    };
+    // Split on the alias pipe (escaped `\|` included — see BUG-7).
+    let (target_end, alias_start) = split_wikilink_alias(inner);
+    let target_part = &inner[..target_end];
+    let label = alias_start.map(|start| inner[start..].to_string());
+
+    // A `scheme:` target inside `[[…]]` is a URI, not a vault path: keep it
+    // verbatim (no fragment split, no `.md` strip) and flag it external.
+    if is_external_target(target_part) {
+        return Some(Link {
+            target: target_part.to_string(),
+            label,
+            kind: LinkKind::Wikilink,
+            fragment: None,
+            query: None,
+            embed: false,
+            external: true,
+        });
+    }
 
     // Split the fragment (heading/block ref) off the target. The fragment is
     // carried on the Link (L-21) without the leading `#`.
@@ -707,6 +778,8 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         // Wikilinks are vault paths, not URLs — they never carry a query
         // string, and a literal `?` in a note name stays part of the target.
         query: None,
+        embed: false,
+        external: false,
     })
 }
 
@@ -760,14 +833,28 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
     let dest = parse_destination(rest_after_paren)?;
     let target_raw = dest.target_raw;
 
-    // Skip external links
-    if is_external(target_raw) {
-        return None;
-    }
-
     // Skip empty targets
     if target_raw.is_empty() {
         return None;
+    }
+
+    // iter-261 / BUG-2: an external destination is *inventoried*, not dropped.
+    // It keeps the URI verbatim — splitting the `?query` off truncated
+    // `obsidian://show-plugin?id=x` to `obsidian://show-plugin` in every
+    // report — and is flagged so no consumer tries to resolve it.
+    if is_external(target_raw) {
+        return Some((
+            Link {
+                target: target_raw.to_owned(),
+                label: (!label_text.is_empty()).then(|| label_text.to_owned()),
+                kind: LinkKind::Markdown,
+                fragment: None,
+                query: None,
+                embed: false,
+                external: true,
+            },
+            paren_start + dest.end,
+        ));
     }
 
     let link = parse_markdown_link(label_text, target_raw)?;
@@ -811,22 +898,55 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
         kind: LinkKind::Markdown,
         fragment,
         query,
+        embed: false,
+        external: false,
     })
 }
 
-/// Check if a target is an external link (http, https, mailto).
+/// Check if a target names something outside the vault, i.e. it starts with a
+/// URI scheme.
 ///
-/// L-20: compares scheme prefixes with `eq_ignore_ascii_case` on borrowed
-/// slices instead of allocating a lowercased copy of the whole target for
-/// every candidate.
-fn is_external(target: &str) -> bool {
-    fn has_prefix_ci(target: &str, prefix: &str) -> bool {
-        target.len() >= prefix.len()
-            && target.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+/// iter-261 / BUG-2: this used to accept only `http://`, `https://` and
+/// `mailto:`, so an Obsidian vault's `obsidian://show-plugin?id=x`,
+/// `file:///x` or `zotero://select/...` destinations were parsed as vault
+/// paths and reported broken — 2897 of them on the Obsidian Hub vault alone.
+/// The rule is now the RFC 3986 grammar for a scheme:
+///
+/// ```text
+/// scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
+/// ```
+///
+/// with one deliberate deviation: a **single-letter** scheme is rejected, so a
+/// Windows drive letter (`C:\notes\x.md`, `c:/notes/x.md`) stays a path. RFC
+/// 3986 does allow one-letter schemes, but none is registered and every real
+/// one-letter `x:` in a vault is a drive letter.
+#[must_use]
+pub fn is_external_target(target: &str) -> bool {
+    let bytes = target.as_bytes();
+    let Some(&first) = bytes.first() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
     }
-    has_prefix_ci(target, "http://")
-        || has_prefix_ci(target, "https://")
-        || has_prefix_ci(target, "mailto:")
+    let mut i = 1;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b':' {
+            // Single-letter scheme → Windows drive letter, not a URI.
+            return i >= 2;
+        }
+        if !(b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+            return false;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Internal alias kept for the parser's own call sites.
+fn is_external(target: &str) -> bool {
+    is_external_target(target)
 }
 
 // ---------------------------------------------------------------------------
@@ -2172,12 +2292,19 @@ mod tests {
     }
 
     #[test]
-    fn external_markdown_links_skipped() {
+    fn external_markdown_links_are_inventoried_and_flagged() {
+        // iter-261 / BUG-2: an external destination used to be dropped at parse
+        // time. It is now kept — verbatim — and flagged, so `--fields links`
+        // can report `kind: "external"` while every resolver skips it.
         let text = "[Google](https://google.com) and [[internal]]";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "internal");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "https://google.com");
+        assert!(links[0].external);
+        assert_eq!(links[0].label.as_deref(), Some("Google"));
+        assert_eq!(links[1].target, "internal");
+        assert!(!links[1].external);
     }
 
     #[test]
@@ -2673,5 +2800,159 @@ mod tests {
             spans[0].link.label.as_deref(),
             Some(r"Contains \[test\] brackets")
         );
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / BUG-2 — external URI schemes
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn any_uri_scheme_is_external() {
+        for target in [
+            "https://a.example",
+            "HTTP://a.example",
+            "obsidian://show-plugin?id=x",
+            "mailto:a@b.example",
+            "file:///x",
+            "zotero://select/items/1",
+            "tel:+41000",
+            "x-custom.scheme+v1://y",
+        ] {
+            assert!(is_external_target(target), "{target} should be external");
+        }
+    }
+
+    #[test]
+    fn paths_and_drive_letters_are_not_external() {
+        for target in [
+            "notes/a.md",
+            "a.md#Section: two",
+            "./a.md",
+            "../out.md",
+            "",
+            "1scheme://x",
+            // A single-letter scheme is a Windows drive letter, not a URI.
+            r"C:\notes\x.md",
+            "c:/notes/x.md",
+        ] {
+            assert!(!is_external_target(target), "{target} must not be external");
+        }
+    }
+
+    #[test]
+    fn external_target_keeps_its_query_string_verbatim() {
+        // Before iter-261 the `?` split truncated this to
+        // `obsidian://show-plugin`, which is what every report printed.
+        let mut links = Vec::new();
+        extract_links_from_text("[Install](obsidian://show-plugin?id=dataview)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian://show-plugin?id=dataview");
+        assert!(links[0].external);
+        assert!(links[0].query.is_none());
+        assert!(links[0].fragment.is_none());
+    }
+
+    #[test]
+    fn mailto_and_file_destinations_are_external_links() {
+        let mut links = Vec::new();
+        extract_links_from_text("[m](mailto:a@b.example) [f](file:///x)", &mut links);
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|l| l.external));
+        assert_eq!(links[0].target, "mailto:a@b.example");
+        assert_eq!(links[1].target, "file:///x");
+    }
+
+    #[test]
+    fn drive_letter_destination_stays_a_vault_link() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[x](C:\notes\x.md)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].external, "a drive letter is not a URI scheme");
+    }
+
+    #[test]
+    fn external_wikilink_is_flagged_and_kept_whole() {
+        let mut links = Vec::new();
+        extract_links_from_text("[[obsidian://open?vault=v|Open]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian://open?vault=v");
+        assert!(links[0].external);
+        assert_eq!(links[0].label.as_deref(), Some("Open"));
+    }
+
+    #[test]
+    fn external_markdown_link_produces_no_rewritable_span() {
+        // The *span* extractor still drops external destinations, so `mv` and
+        // `links fix` can never splice a new target into a URI.
+        assert!(extract_link_spans("[x](obsidian://show-plugin?id=y)").is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / BUG-7 — table-escaped alias pipe
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn escaped_alias_pipe_splits_target_and_alias() {
+        let mut links = Vec::new();
+        extract_links_from_text(
+            r"[[obsidian-advanced-uri\|Advanced URI Plugin]]",
+            &mut links,
+        );
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "obsidian-advanced-uri");
+        assert_eq!(links[0].label.as_deref(), Some("Advanced URI Plugin"));
+    }
+
+    #[test]
+    fn escaped_alias_pipe_with_fragment_and_embed() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[[a#h\|b]] and ![[img.png\|200]]", &mut links);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "a");
+        assert_eq!(links[0].fragment.as_deref(), Some("h"));
+        assert_eq!(links[0].label.as_deref(), Some("b"));
+        assert_eq!(links[1].target, "img.png");
+        assert_eq!(links[1].label.as_deref(), Some("200"));
+        assert!(links[1].embed);
+    }
+
+    #[test]
+    fn unescaped_alias_pipe_is_unchanged() {
+        let mut links = Vec::new();
+        extract_links_from_text("[[a|b]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "a");
+        assert_eq!(links[0].label.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn lone_trailing_backslash_is_never_part_of_the_target() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"[[note\]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "note");
+    }
+
+    #[test]
+    fn escaped_pipe_leaves_its_backslash_outside_the_rewritable_span() {
+        let line = r"| [[note\|Alias]] |";
+        let spans = extract_link_spans(line);
+        assert_eq!(spans.len(), 1);
+        // The span covers `note` only, so splicing a new target keeps `\|Alias`
+        // — and therefore the table row — byte-for-byte intact.
+        assert_eq!(&line[spans[0].target_start..spans[0].target_end], "note");
+    }
+
+    // -----------------------------------------------------------------
+    // iter-261 / UX-6 — embed flag
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn embeds_are_flagged_plain_wikilinks_are_not() {
+        let mut links = Vec::new();
+        extract_links_from_text("![[img.png]] and [[note]]", &mut links);
+        assert_eq!(links.len(), 2);
+        assert!(links[0].embed);
+        assert!(!links[1].embed);
     }
 }

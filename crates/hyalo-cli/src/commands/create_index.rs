@@ -98,13 +98,20 @@ pub fn create_index(
     // Build the BM25 inverted index from tokenized entries (if any have tokens).
     let bm25_index = Bm25InvertedIndex::build_from_entries(build.index.entries());
 
+    // iter-261 (BUG-5, BUG-6): record the vault's attachments alongside the
+    // notes so an `--index` run resolves `![[img.png]]` and `[[Books.base]]`
+    // exactly as a disk run does. A failed walk degrades to "no attachments",
+    // which is the pre-iter-261 behaviour, not an error.
+    let attachments = discovery::discover_attachments(dir).unwrap_or_default();
+
     // Save the snapshot (with the persisted BM25 index when available).
-    SnapshotIndex::save(
+    SnapshotIndex::save_with_attachments(
         &build.index,
         &index_path,
         &vault_dir_str,
         site_prefix,
         bm25_index.as_ref(),
+        &attachments,
     )?;
 
     // Check for stale indexes in the same directory.

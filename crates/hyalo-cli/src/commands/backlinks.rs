@@ -169,7 +169,7 @@ pub(crate) fn run(
                     dir,
                     effective_format,
                     resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
-                    mode_enabled(ctx.case_insensitive_mode, dir),
+                    hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
                 ),
                 IndexResolution::Outcome(outcome) => Ok(outcome),
             }

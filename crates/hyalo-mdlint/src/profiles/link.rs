@@ -120,8 +120,13 @@ pub fn check_broken_links(
 
     let mut findings = Vec::new();
     for (line, link) in collector.links {
-        // Fragment-only and external links never reach here (they are dropped at
-        // parse time), so every collected link is a real file reference.
+        // iter-261 / BUG-2: an external URI (`obsidian://`, `mailto:`, `http`)
+        // is inventoried by the parser but names nothing in the vault, so it is
+        // never a broken link. Fragment-only links are still dropped at parse
+        // time, so every remaining link is a real file reference.
+        if link.external {
+            continue;
+        }
         let resolved = discovery::resolve_link_from_source(
             &ctx.canonical_dir,
             rel_path,

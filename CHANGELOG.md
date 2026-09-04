@@ -174,6 +174,7 @@ and this project adheres to
   and the missing-final-newline fix inserts the file's own terminator instead
   of a hard-coded LF. Where a file's endings are mixed, the terminator of the
   line immediately before EOF wins.
+- Link resolution folds ASCII case on every platform, not only on a case-insensitive filesystem (DEC-267). `links fix --case-insensitive` no longer changes what resolves; it only suppresses the cosmetic case-mismatch rewrite plans.
 
 ### Removed
 
@@ -304,6 +305,10 @@ and this project adheres to
   that was rendering as `[`crate::list_commands::LIST_COMMANDS`]` on ~15 pages
   is now an ordinary code comment.
 - `hyalo-cli` crates.io publish (v0.21.0) failed at the tarball verify step because the pi integration files were embedded via `include_str!` reaching outside the crate into the top-level `pi-package/` directory, which `cargo package` cannot see. The four files are now vendored inside `crates/hyalo-cli/templates/pi/`, kept in sync with `pi-package/` by a new `check-pi-package-sync` CI gate (`just sync-pi-package` to fix drift).
+- Any `scheme:` target (`obsidian://`, `mailto:`, `file://`, `zotero:`) is now an external link, not a broken one — a Windows drive letter (`C:\x`) still is not. External links are inventoried with `kind: "external"` and their URI kept verbatim, query string included.
+- Link targets with an explicit non-`.md` extension (`![[img.png]]`, `[[Books.base]]`) resolve against every vault file the way Obsidian does — by unique basename, by path, and relative to the source folder — and are reported as `kind: "attachment"` instead of broken.
+- `[[target\|alias]]` — the escaped alias pipe Obsidian writes inside markdown tables — now splits into target and alias, and `mv` / `links fix` keep the `\|` bytes so the table row survives the rewrite.
+- `links fix` never matches a target across an explicit extension (DEC-266), so a broken `Companies.base` is no longer offered `Company Template.md`, and no fuzzy candidate is reported at confidence 0.0.
 
 ### Added
 
@@ -314,6 +319,8 @@ and this project adheres to
   is emitted only after a bounded probe (512 files / 8 MiB, first match wins)
   confirmed the suggested command returns something, and only on the
   zero-result path — no new flag, and no cost on any query that matched.
+- Every entry in `find --fields links` carries `kind`: `wikilink`, `embed`, `markdown`, `external` or `attachment`. External and attachment links never count as broken and are not graph edges for `--orphan`/`--dead-end`.
+- A broken `#anchor` that is the prefix of exactly one heading in the target file carries `suggested_fragment` with the full heading text (DEC-268) — reported, never applied automatically.
 
 ## [0.21.0] - 2026-08-28
 

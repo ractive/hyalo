@@ -401,6 +401,12 @@ pub fn detect_broken_links_from_index(
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
+            // iter-261 / BUG-2: an external URI is not a vault link at all —
+            // it is neither counted nor classified, so it can never land in
+            // `unfixable` (2895 of them did on the Obsidian Hub vault).
+            if link.external {
+                continue;
+            }
             total_links += 1;
 
             let (resolved_target, resolution) = classify_link_from_source(
@@ -699,6 +705,9 @@ impl LinkMatcher {
     pub(crate) fn find_match(&self, written_target: &str, source: &str) -> Option<MatchResult> {
         // Minimum score difference to avoid ambiguous fuzzy matches.
         const TIE_DELTA: f64 = 0.01;
+        /// Composite confidence a fuzzy candidate must *exceed* to be reported
+        /// at all (iter-261 / UX-8). Zero means "nothing in common".
+        const MIN_REPORTABLE_CONFIDENCE: f64 = 0.0;
 
         // A site-absolute target (`/docs/a/b.md`) names a path from the site
         // root; the index is keyed by vault-relative paths, so strip the
@@ -711,6 +720,19 @@ impl LinkMatcher {
         } else {
             written_target
         };
+
+        // iter-261 / BUG-5 (DEC-266): never match across an explicit
+        // extension. A broken `Companies.base` or `task-plugins-sorted.png` may
+        // only be matched against a file with that same extension — and the
+        // candidate set here is the vault's `.md` notes — so it has no
+        // candidate at all and stays honestly unfixable. Before this,
+        // `links fix` offered `Companies.base → Templates/Company Template.md`
+        // (0.45) and `Posts.base → Categories/Posts.md` (0.60), i.e.
+        // `--apply-fuzzy --min-confidence 0.5` would have rewritten a Bases
+        // embed into a note link.
+        if crate::discovery::has_non_md_extension(raw_target) {
+            return None;
+        }
 
         let target_filename = raw_target.rsplit('/').next().unwrap_or(raw_target);
         let target_stem = target_filename
@@ -884,6 +906,15 @@ impl LinkMatcher {
         // Every surviving candidate already cleared `--threshold` on the stem
         // gate above, so there is no second floor to apply here.
         let best_idx = best_idx?;
+
+        // iter-261 / UX-8: a composite confidence of zero means the scorer
+        // found *nothing* in common beyond a raw stem-similarity fluke —
+        // `[[lithou]]` was listed against `lighthousedino.md` at confidence
+        // 0.0. A candidate nobody would ever apply is noise, not a suggestion,
+        // so it is not reported at all.
+        if best_score <= MIN_REPORTABLE_CONFIDENCE {
+            return None;
+        }
 
         // If a real runner-up is within TIE_DELTA of the winner the match is
         // ambiguous — decline rather than guessing. When there is no second
@@ -1662,6 +1693,44 @@ mod tests {
         assert!(result.confidence >= 0.7);
     }
 
+    // --- iter-261: fuzzy never crosses an extension, and never reports 0.0 ---
+
+    #[test]
+    fn matcher_never_crosses_an_explicit_non_md_extension() {
+        // BUG-5 / DEC-266: a `.base` target may only match a `.base` file. The
+        // candidate set is the vault's notes, so there is no match at all —
+        // `Companies.base → Templates/Company Template.md` is gone.
+        let matcher = LinkMatcher::new(
+            make_files(&["Templates/Company Template.md", "Categories/Posts.md"]),
+            0.5,
+        );
+        assert!(matcher.find_match("Companies.base", "__test__").is_none());
+        assert!(matcher.find_match("Posts.base", "__test__").is_none());
+        assert!(
+            matcher
+                .find_match("task-plugins-sorted.png", "__test__")
+                .is_none()
+        );
+        // A bare stem and an explicit `.md` still match normally.
+        assert!(matcher.find_match("Posts", "__test__").is_some());
+        assert!(matcher.find_match("Posts.md", "__test__").is_some());
+    }
+
+    #[test]
+    fn matcher_drops_zero_confidence_candidates() {
+        // UX-8: `[[lithou]]` was listed against `lighthousedino.md` at
+        // confidence 0.0 — a candidate nobody would ever apply.
+        let matcher = LinkMatcher::new(make_files(&["lighthousedino.md"]), 0.6);
+        match matcher.find_match("lithou", "__test__") {
+            None => {}
+            Some(r) => assert!(
+                r.confidence > 0.0,
+                "no candidate may be reported at confidence {}",
+                r.confidence
+            ),
+        }
+    }
+
     #[test]
     fn matcher_no_match() {
         let matcher = LinkMatcher::new(make_files(&["completely-unrelated.md"]), 0.95);
@@ -1965,6 +2034,8 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 ),
                 (
@@ -1975,6 +2046,8 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 ),
             ],
@@ -2008,6 +2081,8 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Markdown,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 ),
                 // Stays inside the vault and simply misses — genuinely broken.
@@ -2019,6 +2094,8 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Markdown,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 ),
             ],
@@ -2063,6 +2140,8 @@ See [broken](old-name.md) here.
                         kind: LinkKind::Wikilink,
                         fragment: None,
                         query: None,
+                        embed: false,
+                        external: false,
                     },
                 )],
             ),
@@ -2077,6 +2156,8 @@ See [broken](old-name.md) here.
                             kind: LinkKind::Wikilink,
                             fragment: None,
                             query: None,
+                            embed: false,
+                            external: false,
                         },
                     ),
                     (
@@ -2087,6 +2168,8 @@ See [broken](old-name.md) here.
                             kind: LinkKind::Wikilink,
                             fragment: None,
                             query: None,
+                            embed: false,
+                            external: false,
                         },
                     ),
                 ],
@@ -2801,6 +2884,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["web/foo.md"],
@@ -2846,6 +2931,8 @@ See [broken](old-name.md) here.
             kind: LinkKind::Markdown,
             fragment: None,
             query: None,
+            embed: false,
+            external: false,
         };
         let index = mock_index(
             "source.md",
@@ -2887,6 +2974,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Markdown,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &[],
@@ -2928,6 +3017,8 @@ See [broken](old-name.md) here.
             kind: LinkKind::Markdown,
             fragment: Some(fragment.to_string()),
             query: None,
+            embed: false,
+            external: false,
         };
         let make_entry = |rel_path: &str, links: Vec<(usize, Link)>| crate::index::IndexEntry {
             rel_path: rel_path.to_string(),
@@ -3046,6 +3137,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Markdown,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["sub/target.md"],
@@ -3094,6 +3187,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["web/foo.md"],
@@ -3148,6 +3243,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["iteration_protocols.md"],
@@ -3203,6 +3300,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Markdown,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["a/bar.md"],
@@ -3278,6 +3377,8 @@ See [broken](old-name.md) here.
                     kind: LinkKind::Wikilink,
                     fragment: None,
                     query: None,
+                    embed: false,
+                    external: false,
                 },
             )],
             &["web/foo.md"],
