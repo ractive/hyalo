@@ -16,6 +16,10 @@
 //! - [`link_text_is_image`] — MD042 (`no-empty-links`) collects only `Text`
 //!   and `Code` children, so a link whose text is an image reads as empty
 //!   (BUG-9, 55 hits).
+//! - [`bare_url_len_before_html`] — MD034's end-of-URL boundary scan does not
+//!   stop at a `<`, so a bare URL written immediately before an HTML tag
+//!   (`…/Retroma<br>`) gets the tag wrapped *inside* the autolink
+//!   (iteration 269, three occurrences on the Obsidian Hub vault).
 //!
 //! Everything here works on the *body* text with the same 1-based line
 //! numbering the upstream rules use, so a diagnostic can be checked without
@@ -128,6 +132,32 @@ pub fn url_is_inside_link_markup(line: &str, column: usize) -> bool {
     link_markup_spans(line)
         .into_iter()
         .any(|(start, end)| start < offset && offset < end)
+}
+
+/// Where a bare URL really ends, when the span MD034 measured for it ran past
+/// a `<` and swallowed the HTML tag that follows the URL (iteration 269).
+///
+/// `url` is the text MD034 proposes to wrap in angle brackets. Returns the byte
+/// length the URL should have been given, or `None` when the span is already
+/// correct (no `<` inside it) or when trimming would leave nothing at all.
+///
+/// Trimming at **any** `<` rather than only at a tag-shaped `</?[A-Za-z]…` run
+/// is deliberate and safe: RFC 3986 excludes `<` from the URI character set
+/// outright (it has to be percent-encoded as `%3C`), so a `<` inside a span
+/// that claims to be a bare URL is always the start of the adjacent markup, not
+/// part of the address. On the Obsidian Hub corpus the shape is
+/// `https://github.com/emarpiee/Retroma<br>` (three occurrences), where the
+/// un-narrowed fix emits `<https://github.com/emarpiee/Retroma<br>>` — the
+/// `<br` ends up inside the autolink and the markup is corrupted.
+///
+/// Known, deliberately untouched neighbour case: a URL followed directly by a
+/// bare `>` (`https://a.example/> tail`) is also over-measured, but wrapping it
+/// yields `<https://a.example/>> tail`, which still renders as the autolink
+/// plus a literal `>`, so nothing is corrupted and the fix is left alone.
+#[must_use]
+pub fn bare_url_len_before_html(url: &str) -> Option<usize> {
+    let cut = url.find('<')?;
+    (cut > 0).then_some(cut)
 }
 
 /// Byte spans of the link markup on `line`: markdown links and images
@@ -355,6 +385,35 @@ mod tests {
         assert!(link_text_is_image(line, 2));
         // A standalone image keeps its empty-alt warning.
         assert!(!link_text_is_image("![](img.png)", 1));
+    }
+
+    #[test]
+    fn a_bare_url_ends_before_a_following_html_tag() {
+        for (url, want) in [
+            ("https://github.com/emarpiee/Retroma<br>", Some(35)),
+            ("https://a.example/<br/>", Some(18)),
+            ("https://a.example/<span class=\"x\">", Some(18)),
+        ] {
+            assert_eq!(bare_url_len_before_html(url), want, "on {url:?}");
+            if let Some(cut) = want {
+                assert_eq!(&url[..cut], url.split('<').next().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn a_bare_url_without_a_following_tag_is_left_alone() {
+        for url in [
+            "https://a.example/",
+            "https://a.example/path?q=1&r=2",
+            // A trailing `>` is over-measured too, but wrapping it still
+            // renders correctly — see the doc comment.
+            "https://a.example/>",
+            // Nothing before the `<`: no URL would be left to wrap.
+            "<br>",
+        ] {
+            assert_eq!(bare_url_len_before_html(url), None, "on {url:?}");
+        }
     }
 
     #[test]

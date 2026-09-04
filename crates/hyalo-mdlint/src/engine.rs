@@ -785,6 +785,16 @@ impl HyaloLintEngine {
                     if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
                         continue;
                     }
+                    // Iteration 269, Part C: a frontmatter-only file (`---\n…\n---\n`)
+                    // hands this engine an **empty** body, and MD047 reads
+                    // "no bytes" as "no trailing newline" and reports a file
+                    // that plainly ends in one. There is no line to terminate,
+                    // so the honest answer is that the rule has nothing to
+                    // check — same reasoning as the single-line-body case the
+                    // CRLF tests below cover, one shape further down.
+                    if *rule_id == "MD047" && body_content.is_empty() {
+                        continue;
+                    }
                     // BUG-3 (dogfood v0.22.0): a line-leading `#todo` is an
                     // Obsidian tag, not a malformed heading. MD018's autofix
                     // would rewrite it to `# todo` — silent content
@@ -839,6 +849,18 @@ impl HyaloLintEngine {
                         })
                     {
                         continue;
+                    }
+                    // Iteration 269, Part B: MD034's end-of-URL boundary scan
+                    // does not stop at a `<`, so a bare URL written directly
+                    // before an HTML tag has the tag pulled inside the
+                    // autolink. Narrow the fix's span rather than dropping the
+                    // diagnostic — the URL really is bare and really should be
+                    // wrapped, just not that far.
+                    let mut fix = fix;
+                    if *rule_id == "MD034"
+                        && let Some(f) = fix.as_mut()
+                    {
+                        narrow_md034_autolink_fix(f);
                     }
                     // UX-10 (dogfood v0.22.0) / DEC-272: MD001 keeps
                     // *reporting* a skipped heading level but is no longer
@@ -1046,6 +1068,40 @@ fn convert_fix(v: &mdbook_lint_core::Violation, content: &str) -> Option<DiagFix
         end,
         replacement: fix.replacement.clone().unwrap_or_default(),
     })
+}
+
+/// Pull an MD034 autolink fix back to the real end of the URL when its span
+/// swallowed a following HTML tag (iteration 269, Part B).
+///
+/// MD034's fix replaces the flagged URL with `<url>`. When the span ran past a
+/// `<` — see [`crate::rules::obsidian::bare_url_len_before_html`] for why that
+/// is always a mistake — both the range's end and the re-emitted text are
+/// shortened, so `…/Retroma<br>` fixes to `<…/Retroma><br>` instead of
+/// `<…/Retroma<br>>`.
+///
+/// A no-op for every other shape: the fix is only touched when its replacement
+/// is exactly `<` + the replaced bytes + `>`, which is the one form MD034
+/// emits. Anything else (an upstream change of fix shape, a fix already
+/// narrowed) is left alone rather than rewritten on a guess.
+fn narrow_md034_autolink_fix(fix: &mut DiagFix) {
+    let narrowed = {
+        let Some(inner) = fix
+            .replacement
+            .strip_prefix('<')
+            .and_then(|s| s.strip_suffix('>'))
+        else {
+            return;
+        };
+        if fix.end.saturating_sub(fix.start) != inner.len() {
+            return;
+        }
+        let Some(cut) = crate::rules::obsidian::bare_url_len_before_html(inner) else {
+            return;
+        };
+        (fix.start + cut, format!("<{}>", &inner[..cut]))
+    };
+    fix.end = narrowed.0;
+    fix.replacement = narrowed.1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1932,6 +1988,94 @@ mod tests {
             .find(|d| d.rule_id == "MD001")
             .expect("MD001 must still warn about the skipped level");
         assert!(d.fix.is_none(), "MD001 must not carry an autofix: {d:?}");
+    }
+
+    /// Iteration 269, Part B: `…/Retroma<br>` on `Themes/Retroma.md:65` of the
+    /// Obsidian Hub vault. The un-narrowed fix wrapped the `<br` inside the
+    /// autolink and broke the markup.
+    #[test]
+    fn md034_stops_the_autolink_before_a_following_html_tag() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        for (body, want) in [
+            (
+                "See https://github.com/emarpiee/Retroma<br>\n",
+                "See <https://github.com/emarpiee/Retroma><br>\n",
+            ),
+            (
+                "See https://a.example/<br/>\n",
+                "See <https://a.example/><br/>\n",
+            ),
+        ] {
+            let diagnostics = engine
+                .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+                .unwrap();
+            let d = diagnostics
+                .iter()
+                .find(|d| d.rule_id == "MD034")
+                .expect("the URL is still bare and still reported");
+            let fix = d.fix.as_ref().expect("MD034 keeps its fix");
+            assert_eq!(apply(body, fix), want, "on {body:?}");
+        }
+    }
+
+    /// A bare URL followed by a lone `>` is over-measured the same way, but
+    /// wrapping it still renders as the autolink plus a literal `>`, so the fix
+    /// is deliberately left as upstream emits it. Pinned so a later change to
+    /// the narrowing has to notice this shape.
+    #[test]
+    fn md034_leaves_a_trailing_angle_bracket_alone() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "See https://a.example/> tail\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD034")
+            .expect("the URL is bare");
+        let fix = d.fix.as_ref().expect("MD034 keeps its fix");
+        let fixed = apply(body, fix);
+        assert!(
+            fixed.starts_with("See <https://a.example/>"),
+            "the autolink must close right after the URL: {fixed:?}"
+        );
+        assert!(fixed.ends_with(" tail\n"), "the tail survives: {fixed:?}");
+    }
+
+    /// Iteration 269, Part C: a frontmatter-only file hands the engine an empty
+    /// body. MD047 used to call that "missing a trailing newline".
+    #[test]
+    fn md047_does_not_fire_on_an_empty_body() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let diagnostics = engine
+            .lint_body("", "test.md", None, false, &config, &["MD047".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().all(|d| d.rule_id != "MD047"),
+            "an empty body has no line to terminate: {diagnostics:?}"
+        );
+    }
+
+    /// The regression guard for the shape one step up from the empty body: a
+    /// non-empty body genuinely missing its terminator must still be flagged
+    /// and fixed.
+    #[test]
+    fn md047_still_fires_on_a_body_without_a_terminator() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "text";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD047".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD047")
+            .expect("MD047 must still fire on a real missing newline");
+        let fix = d.fix.as_ref().expect("MD047 fix should not be dropped");
+        assert_eq!(apply(body, fix), "text\n");
     }
 
     #[test]
