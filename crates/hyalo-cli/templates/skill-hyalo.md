@@ -572,7 +572,22 @@ type = "string"
 pattern = "^iter-\\d+/"
 ```
 
-Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `datetime` (naive YYYY-MM-DDThh:mm:ss, no offset), `datetime-tz` (timezone-aware RFC 3339: YYYY-MM-DDThh:mm:ss plus `Z` or `±hh:mm`, e.g. `2026-05-28T22:44:47+00:00`), `number`, `boolean`, `list`, `string-list` (optional `item_pattern` regex), `enum` (with `values`). `datetime` and `datetime-tz` are disjoint — a naive value never satisfies `datetime-tz` and vice-versa.
+Property types: `string` (optional `pattern` regex), `date` (YYYY-MM-DD), `datetime` (naive YYYY-MM-DDThh:mm:ss, no offset), `datetime-tz` (timezone-aware RFC 3339: YYYY-MM-DDThh:mm:ss plus `Z` or `±hh:mm`, e.g. `2026-05-28T22:44:47+00:00`), `number`, `boolean`, `list`, `string-list` (optional `item_pattern` regex), `object-list` (list of maps; see below), `enum` (with `values`). `datetime` and `datetime-tz` are disjoint — a naive value never satisfies `datetime-tz` and vice-versa.
+
+**`object-list`** describes a list whose items must all be YAML maps, with three flat per-key keys: `required-keys` (present in every item), `allowed-keys` (the complete key set; omit to allow extras), and a `key-patterns` table mapping key → regex applied to that key's scalar value:
+
+```toml
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit", "version", "updated", "read"]
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^(github|jira|slack|decision):|^https?://"
+commit = "^[0-9a-f]{7,40}$"
+```
+
+Lint reports every violating item independently, naming the 0-based item index and the key (`property "sources" item 1: unknown key "rev" (allowed: ...)`); a leftover plain-string item gets a `did you mean \`- ref: <value>\`?` fix-it hint, because `find --property sources.ref=…` skips scalar items and would otherwise never report it. Every `key-patterns` regex is compiled when `.hyalo.toml` loads, so a bad regex is a `schema/malformed` error, not a per-file message. `object-list` is **config-only**: `types set --property-type` rejects it (as it does `string-list`) and `--fix` has no fixer, so its violations report `autofixable: false`.
 
 Reserved-file exemption: `[schema] exempt = ["**/index.md", "**/log.md"]` binds matching files to no schema (they skip missing-`type`, required-property, and undeclared-property checks). Globs are vault-relative and cross-platform.
 

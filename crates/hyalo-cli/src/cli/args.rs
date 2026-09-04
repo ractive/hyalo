@@ -1809,11 +1809,16 @@ Repeatable (AND).\n\
             FRONTMATTER PASS: schema violations from `[schema.default]` / `[schema.types.*]`.\n\
             - error: missing required property, wrong type, invalid enum value, pattern mismatch,\n\
                       `item_pattern` violation on `string-list` items, missing `required-sections`,\n\
+                      `object-list` shape violation (item is not a map, missing or unknown key,\n\
+                      `key-patterns` mismatch),\n\
                       empty value on a required property (see REQUIRED EMPTINESS below)\n\
             - warn:  no 'type' property, property not declared in schema\n\
             When no `[schema]` section exists, this pass exits 0 with zero violations.\n\
-            Schema extensions `item_pattern` (per-item regex on `string-list` properties) and\n\
-            `required-sections` (required body outline on type schemas) are validated here.\n\n\
+            Schema extensions `item_pattern` (per-item regex on `string-list` properties),\n\
+            `object-list` (`required-keys` / `allowed-keys` / `key-patterns` on a list of maps)\n\
+            and `required-sections` (required body outline on type schemas) are validated here.\n\
+            Constraint violations report `autofixable: false`: `--fix` has no fixer for a\n\
+            `pattern`, `item_pattern` or `object-list` mismatch.\n\n\
             EXEMPT FILES: `[schema] exempt = [\"**/index.md\", \"**/log.md\"]` lists vault-relative\n\
             globs for reserved files that are bound to no schema — they skip the missing-`type`\n\
             warning, required-property checks, and undeclared-property warnings (useful for OKF\n\
@@ -2646,6 +2651,8 @@ pub(crate) enum TypesAction {
     #[command(
         long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, property constraints, and required_sections.\n\
             When declared, `item_pattern` is included in the constraint for `string-list` properties,\n\
+            an `object-list` property carries `required-keys`, `allowed-keys` (omitted when any key\n\
+            is allowed) and `key-patterns` (a key -> regex block, omitted when empty),\n\
             and `required_sections` lists the declared required body sections.\n\
             SIDE EFFECTS: None (read-only)."
     )]
@@ -2665,7 +2672,7 @@ pub(crate) enum TypesAction {
     },
     /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            TYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\n            A --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset). `string-list` and `object-list` carry constraints and are configured in `.hyalo.toml` only; see `hyalo types show`.\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            TYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\n            A --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update
