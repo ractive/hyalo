@@ -974,15 +974,6 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
     if let Commands::Config { raw } = &mut cli.command {
         let raw = *raw;
-        // Determine output format (respect --format if given; otherwise default to Text
-        // since this command is read-only introspection, not a pipeline command).
-        let format = cli.format.unwrap_or_else(|| {
-            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                crate::output::Format::Text
-            } else {
-                crate::output::Format::Json
-            }
-        });
         // Report exactly what the rest of the CLI would use, by going through
         // the shared `--dir` resolution rather than a second, divergent one
         // (iter-201, H-4). `config` is the command users reach for to *check*
@@ -992,6 +983,37 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
+        // Determine output format with the SAME precedence every other
+        // command uses: --format flag > --jq (forces JSON) > `.hyalo.toml`
+        // format pin > TTY detection.
+        //
+        // iter-267 (UX-18) made this the `format`/`format_source` the report
+        // itself carries — the answer to "what will hyalo do here?" — so it
+        // must match what a real pipeline command run in this same directory
+        // would resolve to. Stopping at `cli.format.unwrap_or_else(TTY)` (the
+        // pre-267 behaviour) skipped the config-file pin entirely: a vault
+        // pinning `format = "text"` reported `format: "json"` under a piped
+        // invocation, while `format_source` said "config" — self-contradictory,
+        // and wrong for the one command whose job is this answer.
+        let format = if let Some(f) = cli.format {
+            f
+        } else if cli.jq.is_some() {
+            crate::output::Format::Json
+        } else if let Some(fmt_str) = effective.config.format.as_deref() {
+            crate::output::Format::from_str_opt(fmt_str).unwrap_or_else(|| {
+                // Malformed value; `report.malformed`/`parse_error` already
+                // surfaces this — fall back to TTY detection here too.
+                if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                    crate::output::Format::Text
+                } else {
+                    crate::output::Format::Json
+                }
+            })
+        } else if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            crate::output::Format::Text
+        } else {
+            crate::output::Format::Json
+        };
         // UX-3 (dogfood pre3): every other command relies on this stderr
         // warning as the only signal that its config is unusable, but
         // `hyalo config` itself already leads its own report body with the
