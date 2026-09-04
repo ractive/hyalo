@@ -315,8 +315,10 @@ pub(super) fn lint_one_file_extended(
 
     // HYALO004 — datetime-format: schema-declared datetime properties must
     // hold `YYYY-MM-DDThh:mm:ss` values.
-    let doc_type_for_dt: Option<&str> = properties.get("type").and_then(|v| v.as_str());
-    let effective_schema_for_dt: TypeSchema = match doc_type_for_dt {
+    let doc_type_for_dt: Option<String> = properties
+        .get("type")
+        .and_then(hyalo_core::schema::normalize_type_value);
+    let effective_schema_for_dt: TypeSchema = match doc_type_for_dt.as_deref() {
         Some(t) => schema.merged_schema_for_type(t),
         None => schema.default_schema().clone(),
     };
@@ -368,8 +370,7 @@ pub(super) fn lint_one_file_extended(
     // FRONTMATTER003, in which case we want to validate against that.
     let mut post_fix_doc_type: Option<String> = properties
         .get("type")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+        .and_then(hyalo_core::schema::normalize_type_value);
     if matches!(fix, FixMode::Apply | FixMode::DryRun) {
         let fix_all_rules = fix_rules.is_empty();
         let should_fix_frontmatter = fix_all_rules
@@ -465,8 +466,7 @@ pub(super) fn lint_one_file_extended(
             // Update post_fix_doc_type from the (possibly-inferred) mutable properties.
             post_fix_doc_type = mutable
                 .get("type")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
+                .and_then(hyalo_core::schema::normalize_type_value);
         }
     }
 
