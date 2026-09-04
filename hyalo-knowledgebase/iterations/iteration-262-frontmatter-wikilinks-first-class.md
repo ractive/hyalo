@@ -58,7 +58,7 @@ here as a result of iter-261's actual outcome.
 
 ## Tasks
 
-### FM-1: scan every frontmatter value for wikilinks (BUG-1)
+### FM-1: scan every frontmatter value for wikilinks (BUG-1) [6/6]
 
 - [x] hyalo-core link extraction: walk the parsed frontmatter and extract
       `[[target]]`, `[[target|alias]]`, `[[target#anchor]]` from every string
@@ -88,7 +88,7 @@ here as a result of iter-261's actual outcome.
       the report's 0.42 s; frontmatter is already parsed, so only the walk is
       new.
 
-### FM-2: `mv` rewrites frontmatter wikilinks (BUG-1, UX-4)
+### FM-2: `mv` rewrites frontmatter wikilinks (BUG-1, UX-4) [5/5]
 
 - [x] hyalo-core `mv`: for each affected frontmatter link, replace the target
       text inside the existing YAML scalar, preserving the quoting style
@@ -109,7 +109,7 @@ here as a result of iter-261's actual outcome.
 - [x] Docs: `mv -h/--help` output description, changelog, skill file paragraph
       on `mv`.
 
-### FM-3: list-of-wikilink rendering in text output (UX-11)
+### FM-3: list-of-wikilink rendering in text output (UX-11) [2/2]
 
 - [x] hyalo-cli text renderer: a list value renders as `["[[Futurism]]",
       "[[Nonfiction]]"]` (JSON-like, quoted items) or one `- item` per line
@@ -120,7 +120,7 @@ here as a result of iter-261's actual outcome.
       strings, and a nested list; e2e snapshot on `find --file … --format
       text`.
 
-### FM-4: `set` on a list property (UX-12)
+### FM-4: `set` on a list property (UX-12) [4/4]
 
 - [x] DEC-270 (tentative): when `set K=V` targets an existing list property
       with a scalar value, either (a) write the scalar and print
@@ -135,7 +135,7 @@ here as a result of iter-261's actual outcome.
       fixture from the report; `--dry-run` shows the same note.
 - [x] Docs: `set --help` semantics paragraph, skill file, changelog.
 
-## Acceptance criteria
+## Acceptance criteria [9/9]
 
 - [x] kepano-obsidian, cwd `../kepano-obsidian`, clean checkout:
       `hyalo backlinks Categories/Books.md --format json --jq '.total'` → `3`
@@ -209,9 +209,31 @@ One collateral fix: `links fix` looked up frontmatter fix plans in the
 information. It now consults the plan's real line and keeps the `1` bucket as
 a fallback, so a snapshot index written by an older hyalo still applies.
 
+**PR #305 review finding (2026-09-04), fixed in the same PR:** `MvResult`
+gained a second optional array in this iteration (`frontmatter_links_skipped`,
+alongside the pre-existing `skipped_ambiguous`), and the CLI's JSON→text
+shape lookup only covered 2 of the resulting 4 key-signature combinations —
+a `mv` that hit both skip kinds in one run would have fallen back to a
+generic key:value dump and lost the "files updated: N, links updated: M"
+line FM-2 exists to guarantee. Fixed by covering all four signatures;
+regression test added at
+`crates/hyalo-cli/src/output/tests.rs::mv_result_filter_handles_every_optional_field_combination`.
+
+**PR #305 review finding (2026-09-04), carried over, not fixed here:** the
+FM-2 line-spanning-wikilink warning only fires for a file `mv` already
+scans for another reason (one with an ordinary, same-line link to the moved
+target elsewhere in its frontmatter) — a file whose *only* reference to the
+target is the split link gets neither a rewrite nor a warning, because
+`plan_mv`'s file set (`by_source`) comes from the backlinks graph, which
+never extracts a split link as an edge in the first place. See
+[[backlog/mv-frontmatter-split-link-detection-gap]] for the full analysis,
+a related pre-existing `NEW-3` gap found by the same probing, and a fix
+proposal.
+
 ## Links
 
 - [[dogfood-results/dogfood-v0220-obsidian-vaults]]
 - [[iterations/iteration-261-link-resolution-obsidian-compat]]
 - [[iterations/iteration-266-properties-tags-schema-mutations]]
+- [[backlog/mv-frontmatter-split-link-detection-gap]]
 - [[decision-log]]

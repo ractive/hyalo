@@ -100,6 +100,20 @@ pub struct SkippedAmbiguous {
 /// the block to fix it would rewrite the whole file. Reporting it is the honest
 /// outcome: the user sees exactly which links they must fix by hand instead of
 /// discovering a dangling reference later.
+///
+/// **Known coverage gap** (tracked for a follow-up iteration): this only fires
+/// for a file `mv` already visits for another reason — one with at least one
+/// *other*, same-line link to the moved target, found through the normal
+/// backlinks graph (`by_source` in [`plan_mv`] is built from
+/// [`crate::link_graph::LinkGraph::backlinks_ci`], and [`extract_frontmatter_links`](crate::frontmatter_links::extract_frontmatter_links)
+/// never extracts a split link as a graph edge in the first place). A file
+/// whose *only* reference to the moved target is the line-spanning wikilink is
+/// never scanned by `plan_inbound_rewrites` at all, so it gets neither a
+/// rewrite nor this warning — exactly the silent-dangling-reference case FM-2
+/// otherwise closes. Fixing it needs `plan_mv` to scan such files independent
+/// of the backlinks graph (or the graph to surface split occurrences as a
+/// weaker "maybe" edge), which is a distinct, larger change from what this
+/// struct addresses today.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkippedFrontmatterLink {
     /// Vault-relative path of the file holding the link.

@@ -329,10 +329,15 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned" => {
             Some(LINKS_AUTO_FILTER)
         }
-        // MvResult (`skipped_ambiguous` / `frontmatter_links_skipped` are
-        // omitted when empty, hence the extra signatures).
+        // MvResult (`skipped_ambiguous` / `frontmatter_links_skipped` are each
+        // omitted when empty and vary independently, hence all four
+        // signatures — `skipped_ambiguous` itself has no `.skipped_ambiguous`
+        // reference in MV_RESULT_FILTER because it is already reported via a
+        // separate stderr note in text mode; see the NEW-3 handling in `mv`).
         "dry_run,from,to,total_files_updated,total_links_updated,updated_files"
-        | "dry_run,from,frontmatter_links_skipped,to,total_files_updated,total_links_updated,updated_files" => {
+        | "dry_run,from,frontmatter_links_skipped,to,total_files_updated,total_links_updated,updated_files"
+        | "dry_run,from,skipped_ambiguous,to,total_files_updated,total_links_updated,updated_files"
+        | "dry_run,from,frontmatter_links_skipped,skipped_ambiguous,to,total_files_updated,total_links_updated,updated_files" => {
             Some(MV_RESULT_FILTER)
         }
         // BatchMvResult (`conflicts` / `skipped` are omitted when empty).

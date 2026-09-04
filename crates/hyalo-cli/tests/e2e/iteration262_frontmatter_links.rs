@@ -387,6 +387,17 @@ fn mv_warns_about_a_frontmatter_wikilink_spanning_a_line_break() {
     assert_eq!(skipped[0]["source"], "References/Folded.md", "{json}");
 }
 
+// A `mv` run can independently populate `skipped_ambiguous` (NEW-3, an
+// unrelated ambiguous bare link elsewhere in the vault) and
+// `frontmatter_links_skipped` (FM-2, this test) in the same result — see
+// `crates/hyalo-cli/src/output/tests.rs::mv_result_filter_handles_every_optional_field_combination`
+// for the `lookup_filter` coverage that keeps the text rendering intact
+// across all four combinations. Constructing that combination through a real
+// ambiguous-stem vault here would also exercise a separate, pre-existing
+// NEW-3 gap in which candidate a graph-detected ambiguity attributes to
+// (unrelated to this iteration), so the shape-level coverage lives as a
+// direct unit test on the filter instead.
+
 // ---------------------------------------------------------------------------
 // FM-3 — list-of-wikilink rendering
 // ---------------------------------------------------------------------------

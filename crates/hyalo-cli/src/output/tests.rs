@@ -1167,6 +1167,86 @@ fn mv_result_filter_applied() {
 }
 
 #[test]
+fn mv_result_filter_handles_every_optional_field_combination() {
+    // `MvResult` carries two independent optional arrays —
+    // `skipped_ambiguous` (NEW-3) and `frontmatter_links_skipped` (iter-262,
+    // FM-2) — each omitted from JSON when empty (`skip_serializing_if =
+    // "Vec::is_empty"`). `lookup_filter`'s key-signature match must cover all
+    // four presence combinations, or a `mv` run that hits two independent
+    // skip conditions at once falls back to the generic key:value dump and
+    // loses the curated "files updated: N, links updated: M" line FM-2 exists
+    // to guarantee is always visible in text output.
+    let base = json!({
+        "dry_run": false,
+        "from": "a.md",
+        "to": "b.md",
+        "total_files_updated": 0,
+        "total_links_updated": 0,
+        "updated_files": [],
+    });
+    let with_ambiguous = json!({
+        "dry_run": false,
+        "from": "a.md",
+        "to": "b.md",
+        "total_files_updated": 0,
+        "total_links_updated": 0,
+        "updated_files": [],
+        "skipped_ambiguous": [
+            {"source": "linker.md", "target": "a", "line": 1, "candidates": ["a.md", "sub/a.md"]}
+        ],
+    });
+    let with_frontmatter = json!({
+        "dry_run": false,
+        "from": "a.md",
+        "to": "b.md",
+        "total_files_updated": 0,
+        "total_links_updated": 0,
+        "updated_files": [],
+        "frontmatter_links_skipped": [
+            {"source": "note.md", "line": 3, "target": "a"}
+        ],
+    });
+    let with_both = json!({
+        "dry_run": false,
+        "from": "a.md",
+        "to": "b.md",
+        "total_files_updated": 0,
+        "total_links_updated": 0,
+        "updated_files": [],
+        "skipped_ambiguous": [
+            {"source": "linker.md", "target": "a", "line": 1, "candidates": ["a.md", "sub/a.md"]}
+        ],
+        "frontmatter_links_skipped": [
+            {"source": "note.md", "line": 3, "target": "a"}
+        ],
+    });
+
+    for val in [&base, &with_ambiguous, &with_frontmatter, &with_both] {
+        let sig = {
+            let map = val.as_object().unwrap();
+            let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            keys.join(",")
+        };
+        assert!(
+            lookup_filter(&sig).is_some(),
+            "lookup_filter has no entry for MvResult signature {sig:?}"
+        );
+        let formatted = fmt(val);
+        assert!(
+            formatted.contains("files updated: 0, links updated: 0"),
+            "signature {sig:?} lost its counters, fell back to generic dump: {formatted:?}"
+        );
+        // The generic fallback renders `total_files_updated: 0` verbatim —
+        // its absence confirms MV_RESULT_FILTER actually matched.
+        assert!(
+            !formatted.contains("total_files_updated"),
+            "signature {sig:?} rendered via the generic fallback: {formatted:?}"
+        );
+    }
+}
+
+#[test]
 fn format_value_as_text_array_of_typed_objects() {
     let val = json!([
         {"path": "a.md", "tags": ["rust"]},
