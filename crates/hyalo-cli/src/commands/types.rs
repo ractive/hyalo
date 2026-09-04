@@ -131,6 +131,30 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
                 serde_json::json!({"type": "string-list"})
             }
         }
+        PropertyConstraint::ObjectList {
+            required_keys,
+            allowed_keys,
+            key_patterns,
+        } => {
+            // Key names mirror the TOML spelling so the output doubles as a
+            // template for `.hyalo.toml` (DEC-286).
+            let mut obj = serde_json::Map::new();
+            obj.insert("type".to_owned(), Value::from("object-list"));
+            obj.insert("required-keys".to_owned(), Value::from(required_keys.clone()));
+            if let Some(allowed) = allowed_keys {
+                obj.insert("allowed-keys".to_owned(), Value::from(allowed.clone()));
+            }
+            if !key_patterns.is_empty() {
+                // `IndexMap` preserves config-file order; serde_json's map sorts
+                // keys, which is what the text renderer prints.
+                let patterns: serde_json::Map<String, Value> = key_patterns
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
+                    .collect();
+                obj.insert("key-patterns".to_owned(), Value::Object(patterns));
+            }
+            Value::Object(obj)
+        }
     }
 }
 

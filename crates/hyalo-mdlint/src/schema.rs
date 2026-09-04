@@ -107,6 +107,12 @@ pub const VIOLATION_KIND_SCHEMA_MALFORMED: &str = "schema/malformed";
 /// violation so its group is reported `autofixable: false` instead of `true`.
 pub const VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT: &str = "schema/missing-required-no-default";
 
+/// A property value that violates a declared constraint which `--fix` has no
+/// fixer for — `object-list` shape errors and `pattern` / `item_pattern`
+/// mismatches (DEC-286). Carried so the SCHEMA group reports
+/// `autofixable: false` instead of promising a fix that never arrives.
+pub const VIOLATION_KIND_CONSTRAINT_VIOLATION: &str = "schema/constraint-violation";
+
 /// Stable rule id for a file whose frontmatter cannot be parsed (invalid YAML,
 /// duplicate keys, oversized scalar). Emitted as an error-severity lint
 /// violation so a corrupt file becomes a loud CI failure instead of silently
@@ -923,7 +929,7 @@ pub fn validate_constraint(
                         if !re.is_match(s) {
                             return vec![Violation {
                                 severity: Severity::Error,
-                                kind: None,
+                                kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
                                 message: format!(
                                     "property \"{name}\" value {s:?} does not match pattern {pat:?}"
                                 ),
@@ -933,7 +939,7 @@ pub fn validate_constraint(
                     Err(e) => {
                         return vec![Violation {
                             severity: Severity::Error,
-                            kind: None,
+                            kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
                             message: format!("property \"{name}\": invalid pattern {pat:?}: {e}"),
                         }];
                     }
@@ -1115,7 +1121,7 @@ pub fn validate_constraint(
                 Err(e) => {
                     return vec![Violation {
                         severity: Severity::Error,
-                        kind: None,
+                        kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
                         message: format!("property \"{name}\": invalid item_pattern {pat:?}: {e}"),
                     }];
                 }
@@ -1140,7 +1146,7 @@ pub fn validate_constraint(
                     } else {
                         Some(Violation {
                             severity: Severity::Error,
-                            kind: None,
+                            kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
                             message: format!(
                                 "property \"{name}\" item {i}: value {s:?} does not match pattern {pat:?}"
                             ),
@@ -1149,6 +1155,163 @@ pub fn validate_constraint(
                 })
                 .collect()
         }
+        PropertyConstraint::ObjectList {
+            required_keys,
+            allowed_keys,
+            key_patterns,
+        } => validate_object_list(
+            name,
+            value,
+            required_keys,
+            allowed_keys.as_deref(),
+            key_patterns,
+            regex_cache,
+        ),
+    }
+}
+
+/// Validate an `object-list` property (DEC-286).
+///
+/// Every item must be a YAML map; items are checked independently and every
+/// violation is reported (no first-error cut-off, matching `item_pattern`).
+/// Message prefixes mirror the `string-list` arm — `property "x" item N: …` —
+/// so `lint --format github` annotations stay uniform.
+fn validate_object_list(
+    name: &str,
+    value: &Value,
+    required_keys: &[String],
+    allowed_keys: Option<&[String]>,
+    key_patterns: &IndexMap<String, String>,
+    regex_cache: &mut HashMap<String, Result<Regex, String>>,
+) -> Vec<Violation> {
+    let Value::Array(items) = value else {
+        return vec![Violation {
+            severity: Severity::Error,
+            kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+            message: format!("property \"{name}\" expected a list of maps, got {value}"),
+        }];
+    };
+
+    let mut out = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        let Value::Object(map) = item else {
+            // A leftover plain-string item is the dangerous case: `resolve_path`
+            // skips scalars, so `find --property <name>.<key>=…` silently drops
+            // the item. Carry the fix-it text so the repair is mechanical.
+            let hint = if let Value::String(s) = item {
+                let key = required_keys
+                    .first()
+                    .map_or("key", std::string::String::as_str);
+                format!("; did you mean `- {key}: {s}`?")
+            } else {
+                String::new()
+            };
+            out.push(Violation {
+                severity: Severity::Error,
+                kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                message: format!(
+                    "property \"{name}\" item {i}: must be a map, not {}{hint}",
+                    value_type_name(item)
+                ),
+            });
+            continue;
+        };
+
+        for key in required_keys {
+            if !map.contains_key(key) {
+                out.push(Violation {
+                    severity: Severity::Error,
+                    kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                    message: format!(
+                        "property \"{name}\" item {i}: missing required key \"{key}\""
+                    ),
+                });
+            }
+        }
+
+        if let Some(allowed) = allowed_keys {
+            for key in map.keys() {
+                if !allowed.iter().any(|a| a == key) {
+                    out.push(Violation {
+                        severity: Severity::Error,
+                        kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                        message: format!(
+                            "property \"{name}\" item {i}: unknown key \"{key}\" (allowed: {})",
+                            allowed.join(", ")
+                        ),
+                    });
+                }
+            }
+        }
+
+        for (key, pat) in key_patterns {
+            let Some(key_value) = map.get(key) else {
+                // Pattern keys are optional unless also in `required-keys`.
+                continue;
+            };
+            let Some(text) = scalar_as_text(key_value) else {
+                out.push(Violation {
+                    severity: Severity::Error,
+                    kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                    message: format!(
+                        "property \"{name}\" item {i}: key \"{key}\" must be a scalar, got {}",
+                        value_type_name(key_value)
+                    ),
+                });
+                continue;
+            };
+            // Compile (or look up) the regex once per pattern per call. Config
+            // load already rejected uncompilable patterns, so the `Err` arm is
+            // only reachable for a constraint built directly in code.
+            let entry = regex_cache
+                .entry(pat.clone())
+                .or_insert_with(|| Regex::new(pat).map_err(|e| e.to_string()));
+            match entry {
+                Err(e) => out.push(Violation {
+                    severity: Severity::Error,
+                    kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                    message: format!(
+                        "property \"{name}\": invalid key-pattern for \"{key}\" {pat:?}: {e}"
+                    ),
+                }),
+                Ok(re) => {
+                    if !re.is_match(&text) {
+                        out.push(Violation {
+                            severity: Severity::Error,
+                            kind: Some(VIOLATION_KIND_CONSTRAINT_VIOLATION),
+                            message: format!(
+                                "property \"{name}\" item {i}: key \"{key}\" value {text:?} does not match pattern {pat:?}"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Render a scalar `Value` as the text a `key-patterns` regex is matched
+/// against. Numbers, bools and (YAML-parsed) dates arrive as their JSON text;
+/// arrays, objects and null are not scalars and yield `None`.
+fn scalar_as_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// Human-readable YAML-ish type name for a value, used in object-list messages.
+fn value_type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "a bool",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "a list",
+        Value::Object(_) => "a map",
     }
 }
 

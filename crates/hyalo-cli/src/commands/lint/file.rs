@@ -15,9 +15,9 @@ use hyalo_core::scanner;
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
 use hyalo_mdlint::schema::{
     FixAction, FixMode, RULE_ID_BROKEN_LINK, RULE_ID_FRONTMATTER_PARSE_ERROR, Severity,
-    VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT, VIOLATION_KIND_MISSING_TYPE,
-    VIOLATION_KIND_UNDECLARED_PROPERTY, Violation, apply_fixes, terse_root_cause,
-    validate_properties, validate_required_sections,
+    VIOLATION_KIND_CONSTRAINT_VIOLATION, VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT,
+    VIOLATION_KIND_MISSING_TYPE, VIOLATION_KIND_UNDECLARED_PROPERTY, Violation, apply_fixes,
+    terse_root_cause, validate_properties, validate_required_sections,
 };
 use std::borrow::Cow;
 use std::path::Path;
@@ -249,11 +249,22 @@ pub(super) fn lint_one_file_extended(
                 Severity::Error => "error",
                 Severity::Warn => "warn",
             };
-            // A missing/empty required property with no declared default cannot
-            // be synthesized by `--fix` (mapl BUG-3): tag it not-autofixable so
-            // the SCHEMA group reports `autofixable: false` unless some other
-            // SCHEMA violation in the file is fixable.
-            let autofixable = Some(v.kind != Some(VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT));
+            // Some SCHEMA violations have no fixer at all, so reporting them
+            // `autofixable: true` promises a fix `--fix` never applies:
+            // - a missing/empty required property with no declared default
+            //   cannot be synthesized (mapl BUG-3);
+            // - a constraint violation (object-list shape, `pattern` /
+            //   `item_pattern` mismatch) has no fixer either (DEC-286).
+            // Tag both not-autofixable so the SCHEMA group reports
+            // `autofixable: false` unless some other SCHEMA violation in the
+            // file really is fixable.
+            let autofixable = Some(!matches!(
+                v.kind,
+                Some(
+                    VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT
+                        | VIOLATION_KIND_CONSTRAINT_VIOLATION
+                )
+            ));
             violations_by_rule
                 .entry("SCHEMA".to_owned())
                 .or_default()

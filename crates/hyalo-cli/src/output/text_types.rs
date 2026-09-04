@@ -87,6 +87,25 @@ pub(super) fn format_type_show_text(map: &serde_json::Map<String, serde_json::Va
                 });
                 for key in keys {
                     if let Some(v) = obj.get(key) {
+                        // A nested object (object-list's `key-patterns`) prints
+                        // as an indented block; everything else keeps the
+                        // generic one-line key/value dump.
+                        if let serde_json::Value::Object(nested) = v {
+                            let _ = write!(s, "\n    {key}:");
+                            let mut nested_keys: Vec<&str> =
+                                nested.keys().map(String::as_str).collect();
+                            nested_keys.sort_unstable();
+                            for nk in nested_keys {
+                                if let Some(nv) = nested.get(nk) {
+                                    let display = match nv {
+                                        serde_json::Value::String(sv) => sv.clone(),
+                                        other => other.to_string(),
+                                    };
+                                    let _ = write!(s, "\n      {nk}: {display}");
+                                }
+                            }
+                            continue;
+                        }
                         let display = match v {
                             serde_json::Value::Array(arr) => arr
                                 .iter()
