@@ -601,6 +601,44 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
 /// rejected; a dotted key with no colliding map is unchanged (still a
 /// literal flat key) — nested-path support itself is out of scope.
 #[must_use]
+/// Refuse a write that asked for schema validation while `[schema]` could not
+/// be loaded (DEC-289).
+///
+/// `--validate` (and `[schema] validate_on_write`) promise that a value the
+/// schema forbids is rejected before anything is written. When
+/// `SchemaConfig::try_from` fails, the run falls back to an *empty* schema,
+/// which forbids nothing — so the promise silently becomes vacuous exactly
+/// when a user leaned on it. Refusing keeps `--validate`'s guarantee honest;
+/// a plain `set`/`append` makes no such promise and still writes, with the
+/// unsuppressible warning the config loader already printed.
+///
+/// Returns `None` when validation was not requested, or when the schema loaded
+/// fine — in both cases the write proceeds.
+pub(crate) fn reject_write_with_unloadable_schema(
+    do_validate: bool,
+    schema_invalid: Option<&str>,
+    format: Format,
+) -> Option<CommandOutcome> {
+    if !do_validate {
+        return None;
+    }
+    let diagnostic = schema_invalid?;
+    let out = crate::output::format_error(
+        format,
+        &format!(
+            "refusing to validate against an unusable [schema]: {diagnostic}; \
+             the schema could not be loaded, so --validate would reject nothing"
+        ),
+        None,
+        Some(
+            "Fix the [schema] section in .hyalo.toml (`hyalo lint` reports it as \
+             schema/malformed), or rerun without --validate to write unvalidated.",
+        ),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 pub fn reject_dotted_property_collision(
     name: &str,
     props: &indexmap::IndexMap<String, serde_json::Value>,
