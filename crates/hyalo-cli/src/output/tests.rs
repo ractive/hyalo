@@ -156,7 +156,7 @@ fn format_json_error() {
 #[test]
 fn format_text_error() {
     let out = format_error(Format::Text, "file not found", Some("foo"), None, None);
-    assert!(out.contains("Error: file not found"));
+    assert!(out.contains("error: file not found"));
     assert!(out.contains("path: foo"));
 }
 

@@ -1889,7 +1889,8 @@ Repeatable (AND).\n\
             GITHUB ANNOTATIONS: --format github (lint-only) emits one GitHub Actions workflow\n\
             command per violation — `::error file=<path>,line=<line>,title=<RULE_ID>::<message>`\n\
             (warnings use `::warning`) — so findings render as inline annotations on the PR diff,\n\
-            followed by a one-line `N errors, M warnings in K files` summary. Annotations are\n\
+            followed by a one-line `N errors, M warnings in K of T files checked` summary, whose\n\
+            denominator is the same `files_checked` count --format text prints. Annotations are\n\
             never truncated (the display caps are lifted for github so every finding lands on\n\
             the PR). Under `--fix --dry-run`, would-be-fixed violations are emitted as `::notice`\n\
             with a `[fixable]` title prefix and the summary becomes `N fixable, M remaining`, so\n\

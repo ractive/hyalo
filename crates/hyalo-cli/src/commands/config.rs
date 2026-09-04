@@ -54,8 +54,21 @@ pub(crate) struct ConfigReport {
     pub dir: PathBuf,
     /// `true` when a `--dir` override replaced the config's `dir` value.
     pub dir_overridden: bool,
-    /// Resolved output format (from config or `None`).
+    /// Output format pinned by `.hyalo.toml` (`format = "text"`), or `None`
+    /// when the file says nothing.
     pub format: Option<String>,
+    /// The format this invocation actually resolved to — `"text"` or `"json"`.
+    ///
+    /// iter-267 (UX-18): [`Self::format`] alone reported `(none)` on a vault
+    /// with no pinned format, so the one command whose job is to answer "what
+    /// will hyalo do here?" said nothing about the output shape every other
+    /// command was about to use. Modelled on `site_prefix` (iter-203): report
+    /// the effective value plus where it came from.
+    pub effective_format: String,
+    /// Where [`Self::effective_format`] came from: `"flag"` (`--format` on
+    /// this command line), `"config"` (`.hyalo.toml`), or `"auto"` (TTY
+    /// detection — text on a terminal, json when piped).
+    pub format_source: &'static str,
     /// Whether hints are enabled.
     pub hints: bool,
     /// The **effective** site prefix — what site-absolute links like `/foo`
@@ -150,6 +163,8 @@ pub(crate) fn collect_config_report(
     dir_overridden: bool,
     cli_site_prefix: Option<&str>,
     raw: bool,
+    effective_format: crate::output::Format,
+    format_from_flag: bool,
 ) -> anyhow::Result<ConfigReport> {
     let crate::config::EffectiveConfig {
         config: resolved,
@@ -162,6 +177,15 @@ pub(crate) fn collect_config_report(
     // shared resolver rather than reading the raw config value (iter-203).
     let (site_prefix, site_prefix_source) =
         crate::config::resolve_site_prefix(cli_site_prefix, resolved.site_prefix.as_deref(), &dir);
+
+    // Provenance of the format actually in effect (iter-267, UX-18).
+    let format_source = if format_from_flag {
+        "flag"
+    } else if resolved.format.is_some() {
+        "config"
+    } else {
+        "auto"
+    };
 
     let raw_contents = match (raw, &config_path) {
         (true, Some(path)) => Some(
@@ -180,6 +204,8 @@ pub(crate) fn collect_config_report(
         dir,
         dir_overridden,
         format: resolved.format,
+        effective_format: effective_format.to_string(),
+        format_source,
         hints: resolved.hints,
         site_prefix,
         site_prefix_source,
@@ -284,7 +310,17 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "cwd": report.cwd.display().to_string(),
             "dir": report.dir.display().to_string(),
             "dir_overridden": report.dir_overridden,
-            "format": report.format,
+            // `format` is the format this run resolved to (iter-267, UX-18):
+            // always a string, never null, with `format_source` naming where
+            // it came from. `format_configured` keeps the raw `.hyalo.toml`
+            // value (null when the file pins nothing) for consumers that need
+            // to know whether the file said anything at all.
+            "format": report.effective_format,
+            "format_source": report.format_source,
+            "format_configured": report.format,
+            // `hints` is the effective boolean; `hints_enabled` is its
+            // longstanding alias, kept so existing `--jq` filters keep working.
+            "hints": report.hints,
             "hints_enabled": report.hints,
             "site_prefix": report.site_prefix,
             "site_prefix_source": report.site_prefix_source.as_str(),
@@ -369,7 +405,11 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         .as_ref()
         .map_or_else(|| "(none)".to_owned(), |p| p.display().to_string());
 
-    let format_str = report.format.as_deref().unwrap_or("(none)");
+    let format_str = match report.format_source {
+        "auto" => format!("{} (auto: TTY detection)", report.effective_format),
+        "flag" => format!("{} (--format)", report.effective_format),
+        _ => format!("{} (.hyalo.toml)", report.effective_format),
+    };
     // Always say where the prefix came from: `(none)` alone hid the fact that
     // an auto-derived prefix was deciding what `/foo` means (iter-203, UX-4).
     let mut site_prefix_str = format!(

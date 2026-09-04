@@ -520,7 +520,7 @@ pub fn run() {
                 AppError::Internal(err) => {
                     let s = err.to_string();
                     if !s.is_empty() {
-                        eprintln!("Error: {err}");
+                        eprintln!("error: {err}");
                     }
                     2
                 }
@@ -980,6 +980,8 @@ fn run_inner() -> Result<(), AppError> {
             dir_override.is_some(),
             cli.site_prefix.as_deref(),
             raw,
+            format,
+            cli.format.is_some(),
         )
         .map_err(AppError::Internal)?;
 

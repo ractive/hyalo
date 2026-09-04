@@ -449,7 +449,10 @@ pub fn format_error(
             serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
         }
         Format::Text => {
-            let mut msg = format!("Error: {error}");
+            // iter-267 (UX-18): lowercase `error:`, matching clap's own parse
+            // errors and the Rust CLI convention. The two prefixes used to
+            // disagree inside a single session's scrollback.
+            let mut msg = format!("error: {error}");
             if let Some(p) = path {
                 let _ = write!(msg, "\n  path: {p}");
             }
@@ -494,7 +497,7 @@ pub fn format_budget_error(
         }
         Format::Text => {
             format!(
-                "Error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {} (limit {})\n  would_be_lines: {} (limit {})",
+                "error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {} (limit {})\n  would_be_lines: {} (limit {})",
                 safe_file, e.would_be_bytes, e.limit_bytes, e.would_be_lines, e.limit_lines
             )
         }

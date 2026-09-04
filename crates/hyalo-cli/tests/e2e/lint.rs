@@ -1927,7 +1927,7 @@ fn lint_github_clean_vault_summary_only_exit_zero() {
     );
     assert_eq!(
         stdout.trim(),
-        "0 errors, 0 warnings in 0 files",
+        "0 errors, 0 warnings in 0 of 1 file checked",
         "expected summary-only output"
     );
 }

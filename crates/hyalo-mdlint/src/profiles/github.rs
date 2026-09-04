@@ -15,7 +15,7 @@
 //! followed by a single plain-text summary line so the job log stays readable:
 //!
 //! ```text
-//! N errors, M warnings in K files
+//! N errors, M warnings in K of T files checked
 //! ```
 //!
 //! [workflow command]: https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
@@ -315,12 +315,21 @@ pub fn render(payload: &serde_json::Value, path_prefix: &str) -> String {
         );
     }
 
+    // iter-267 (UX-18): the summary used to name only the files WITH findings,
+    // so a clean run and a run that linted nothing at all both printed
+    // "0 errors, 0 warnings in 0 files" — the one line in the job log that
+    // could have caught a mis-scoped CI invocation said nothing about scope.
+    // `files_checked` is the same denominator `--format text` prints.
+    let files_checked = payload
+        .get("files_checked")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
     let _ = write!(
         out,
-        "{errors} {}, {warnings} {} in {files_with_issues} {}",
+        "{errors} {}, {warnings} {} in {files_with_issues} of {files_checked} {} checked",
         plural(errors, "error", "errors"),
         plural(warnings, "warning", "warnings"),
-        plural(files_with_issues, "file", "files"),
+        plural(files_checked, "file", "files"),
     );
 
     out
@@ -502,7 +511,8 @@ mod tests {
             ],
             "errors": 1,
             "warnings": 1,
-            "files_with_violations": 1
+            "files_with_violations": 1,
+            "files_checked": 1
         });
         let out = render(&payload, "kb");
         let lines: Vec<&str> = out.lines().collect();
@@ -516,7 +526,7 @@ mod tests {
             lines[1],
             "::error file=kb/notes/a.md,line=3,title=HYALO001::missing required property \"title\""
         );
-        assert_eq!(lines[2], "1 error, 1 warning in 1 file");
+        assert_eq!(lines[2], "1 error, 1 warning in 1 of 1 file checked");
     }
 
     #[test]
@@ -525,10 +535,13 @@ mod tests {
             "files": [],
             "errors": 0,
             "warnings": 0,
-            "files_with_violations": 0
+            "files_with_violations": 0,
+            "files_checked": 4
         });
         let out = render(&payload, "");
-        assert_eq!(out, "0 errors, 0 warnings in 0 files");
+        // iter-267: the denominator distinguishes "linted 4, all clean" from
+        // "linted nothing".
+        assert_eq!(out, "0 errors, 0 warnings in 0 of 4 files checked");
     }
 
     #[test]
@@ -616,7 +629,8 @@ mod tests {
             ],
             "errors": 0,
             "warnings": 1,
-            "files_with_violations": 1
+            "files_with_violations": 1,
+            "files_checked": 1
         });
         let out = render(&payload, "");
         let lines: Vec<&str> = out.lines().collect();
@@ -624,7 +638,7 @@ mod tests {
             lines[0],
             "::warning file=notes/a.md,line=5,title=MD013::Line length is 90 characters, expected no more than 80"
         );
-        assert_eq!(lines[1], "0 errors, 1 warning in 1 file");
+        assert_eq!(lines[1], "0 errors, 1 warning in 1 of 1 file checked");
     }
 
     /// A fix-mode payload with zero remaining violations (everything fixed)
@@ -644,10 +658,11 @@ mod tests {
             ],
             "errors": 0,
             "warnings": 0,
-            "files_with_violations": 0
+            "files_with_violations": 0,
+            "files_checked": 1
         });
         let out = render(&payload, "");
-        assert_eq!(out, "0 errors, 0 warnings in 0 files");
+        assert_eq!(out, "0 errors, 0 warnings in 0 of 1 file checked");
     }
 
     /// Raw control bytes (e.g. an ANSI escape sequence smuggled in via file
@@ -748,7 +763,8 @@ mod tests {
                 }],
                 "errors": 0,
                 "warnings": warns,
-                "files_with_violations": 1
+                "files_with_violations": 1,
+                "files_checked": 1
             })
         };
         // Exactly at the cap: no notice.
@@ -769,7 +785,7 @@ mod tests {
             "got: {notice}"
         );
         // The summary line still reports the true totals.
-        assert!(out.contains("0 errors, 15 warnings in 1 file"));
+        assert!(out.contains("0 errors, 15 warnings in 1 of 1 file checked"));
     }
 
     /// When both errors and warnings exceed the cap, the notice names both.
