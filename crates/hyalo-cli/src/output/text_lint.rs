@@ -404,6 +404,7 @@ pub(super) fn format_lint_fix_output_text(
                 })
                 .unwrap_or_default();
             if let Some(conflicts) = file_entry.get("conflicts").and_then(|c| c.as_array()) {
+                let mut shown = 0usize;
                 for conflict in conflicts {
                     let rule = conflict
                         .get("rule")
@@ -416,7 +417,33 @@ pub(super) fn format_lint_fix_output_text(
                         .get("reason")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
-                    let _ = writeln!(s, "  conflict  {rule}  {reason}");
+                    // The line is what turns `conflicts 2` into something a
+                    // reader can act on (iteration 263, dogfood UX-16). A
+                    // conflict without one still prints, just without the
+                    // position.
+                    let line = conflict
+                        .get("line")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    if line > 0 {
+                        let _ = writeln!(s, "  conflict  {rule}  line {line}: {reason}");
+                    } else {
+                        let _ = writeln!(s, "  conflict  {rule}  {reason}");
+                    }
+                    shown += 1;
+                }
+                // `conflicts_total` counts what the file really had; the
+                // array itself is capped unless `--detailed` was passed.
+                let total = file_entry
+                    .get("conflicts_total")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(conflicts.len(), |t| usize::try_from(t).unwrap_or(usize::MAX));
+                if shown > 0 && total > conflicts.len() {
+                    let _ = writeln!(
+                        s,
+                        "  … and {} more (use --detailed)",
+                        total - conflicts.len()
+                    );
                 }
             }
         }

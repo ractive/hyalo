@@ -510,7 +510,7 @@ pub(super) fn lint_one_file_extended(
         .map(str::to_owned);
 
     // Track per-diagnostic outcomes for the new fix-mode JSON shape.
-    let mut body_fix_outcomes: Vec<(String, FixOutcome)> = Vec::new();
+    let mut body_fix_outcomes: Vec<(String, usize, FixOutcome)> = Vec::new();
     // Diagnostics that were fixed, accumulated across every pass below
     // (each carries its own line/column, valid against the body revision it
     // was found in — fine for display, since only `fixed`-derived counts
@@ -561,20 +561,28 @@ pub(super) fn lint_one_file_extended(
                 std::collections::HashSet::new();
             for (slot, &orig_idx) in fixable_indices.iter().enumerate() {
                 let rule_id = current_diagnostics[orig_idx].rule_id.clone();
+                // The diagnostic's own line travels with the outcome so a
+                // conflict can be explained as `<rule> line <n>` instead of
+                // the bare `conflicts N` the text output used to print
+                // (dogfood v0.22.0 UX-16).
+                let line = current_diagnostics[orig_idx].line;
                 match &outcomes[slot] {
                     FixOutcome::Applied => {
                         applied_this_pass.insert(orig_idx);
-                        body_fix_outcomes.push((rule_id, FixOutcome::Applied));
+                        body_fix_outcomes.push((rule_id, line, FixOutcome::Applied));
                     }
                     FixOutcome::Conflict { blocking_rule } => {
                         body_fix_outcomes.push((
                             rule_id,
+                            line,
                             FixOutcome::Conflict {
                                 blocking_rule: blocking_rule.clone(),
                             },
                         ));
                     }
-                    FixOutcome::NoFix => body_fix_outcomes.push((rule_id, FixOutcome::NoFix)),
+                    FixOutcome::NoFix => {
+                        body_fix_outcomes.push((rule_id, line, FixOutcome::NoFix));
+                    }
                 }
             }
 
@@ -972,7 +980,7 @@ pub(super) fn lint_one_file_extended(
     // PR #254) — otherwise fix-mode's totals (`fix_mode_file_totals`) would
     // count a change that was never persisted.
     if body_write_failed {
-        for (_, outcome) in &mut body_fix_outcomes {
+        for (_, _, outcome) in &mut body_fix_outcomes {
             if matches!(outcome, FixOutcome::Applied) {
                 *outcome = FixOutcome::NoFix;
             }
