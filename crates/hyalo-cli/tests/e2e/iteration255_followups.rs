@@ -287,12 +287,28 @@ fn invalid_utf8_wording_is_shared_by_read_and_find() {
     );
 
     // `find <text>` (the default full-text path) drops the file and says so
-    // in exactly the same words.
-    let find = run(&tmp, &["find", "needle"]);
+    // in exactly the same words. Since iter-265 (DEC-278) that per-file
+    // diagnostic is collected rather than streamed, so ask for it explicitly —
+    // the point of this test is that the two surfaces share one sentence, not
+    // where the sentence is printed.
+    let find = hyalo(&tmp)
+        .env("RUST_LOG", "hyalo=debug")
+        .args(["find", "needle"])
+        .output()
+        .unwrap();
+    assert!(find.status.success());
     let find_err = String::from_utf8_lossy(&find.stderr);
     assert!(
         find_err.contains(&format!("skipping bad.md: {UTF8_SENTENCE}")),
         "find skip warning drifted: {find_err}"
+    );
+
+    // Without that opt-in, the run says the same thing in one collapsed line.
+    let quiet_find = run(&tmp, &["find", "needle"]);
+    let quiet_err = String::from_utf8_lossy(&quiet_find.stderr);
+    assert!(
+        quiet_err.contains("skipped 1 unreadable file"),
+        "the collapsed line must still account for it: {quiet_err}"
     );
 }
 

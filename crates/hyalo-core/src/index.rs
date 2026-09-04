@@ -173,6 +173,14 @@ pub struct ScannedIndexBuild {
     pub warnings: Vec<IndexWarning>,
 }
 
+/// Why an invalid-UTF-8 file is reported by `create-index` (iter-265, BUG-14).
+///
+/// It is still indexed as a note — its frontmatter, tags, links and headings
+/// are all readable — but it is excluded from the BM25 corpus so `--index`
+/// scores match the disk scan's, which drops the file outright.
+pub const INVALID_UTF8_INDEX_MESSAGE: &str = "invalid UTF-8 — indexed as a note but excluded from full-text search, \
+     matching the disk scan (`find -e` still matches it lossily)";
+
 impl ScannedIndex {
     /// Build an index by scanning a list of files from disk.
     ///
@@ -216,6 +224,17 @@ impl ScannedIndex {
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok((entry, file_links)) => {
+                    // A BM25 build that produced no tokens for a file means the
+                    // file was not valid UTF-8 (iter-265, BUG-14) — it stays in
+                    // the index as a note but out of the search corpus, exactly
+                    // as the disk scan has it. Report it so `create-index`
+                    // `warnings` accounts for the difference.
+                    if options.bm25_tokenize && entry.bm25_tokens.is_none() {
+                        warnings.push(IndexWarning {
+                            rel_path: entry.rel_path.clone(),
+                            message: INVALID_UTF8_INDEX_MESSAGE.to_owned(),
+                        });
+                    }
                     entries.push(entry);
                     if let Some(fl) = file_links {
                         file_links_vec.push(fl);
@@ -1319,6 +1338,29 @@ impl SnapshotIndex {
         let mut entries = entries;
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
+        // `[scan] exclude` (iter-265) is applied on load, not only on the disk
+        // walk, so `--index` and off-disk runs agree on which files exist. A
+        // snapshot built before the exclusion was configured — or by a version
+        // that predates it — therefore needs no rebuild to be correct. The
+        // excluded sources are dropped from the link graph too, so a note that
+        // only an excluded template links to is still an orphan.
+        let mut graph = graph;
+        if crate::discovery::scan_exclude().is_some() {
+            let mut removed = 0usize;
+            entries.retain(|e| {
+                if crate::discovery::is_scan_excluded(&e.rel_path) {
+                    graph.remove_source(&e.rel_path);
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            if removed > 0 {
+                crate::discovery::note_scan_excluded(removed);
+            }
+        }
+
         let path_index: HashMap<String, usize> = entries
             .iter()
             .enumerate()
@@ -1327,7 +1369,6 @@ impl SnapshotIndex {
         // The graph's lowercased companion map is `#[serde(skip)]`, so a
         // freshly-deserialized graph has an empty one — rebuild it from
         // the restored index keys so `backlinks_ci` works off snapshots.
-        let mut graph = graph;
         graph.rebuild_lower_index();
         Some(Self {
             entries,
@@ -1829,6 +1870,48 @@ pub fn files_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<S
     stale
 }
 
+/// Bring one named file's index entry up to date with disk, if it drifted.
+///
+/// UX-7 (iter-265, DEC-280): the stale-index policy is "refresh what you are
+/// about to touch or return, and warn only when you cannot". This is the
+/// per-file half — one `stat`, and a re-scan only when the recorded mtime is
+/// behind the file's. Used by `--index` reads that named their targets, so
+/// `find --index --file just-appended.md` reports the file as it is now rather
+/// than as the snapshot remembers it.
+///
+/// Returns `true` when the entry is now known-current: either it was already
+/// current, or the re-scan succeeded. Returns `false` when the caller must fall
+/// back to warning — the file is not in the index at all (so there is nothing
+/// to refresh in place), it could not be stat'ed, or the re-scan failed.
+pub fn refresh_if_changed_on_disk(index: &mut SnapshotIndex, dir: &Path, rel: &str) -> bool {
+    let Some(entry) = index.get(rel) else {
+        return false;
+    };
+    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
+        return false;
+    };
+    let full = dir.join(rel);
+    let Ok(meta) = std::fs::metadata(&full) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+        return false;
+    };
+    // Size is compared too: a same-second edit that changes the length is
+    // invisible to an mtime-only check, and appending is exactly that case.
+    if disk.as_secs() <= indexed.saturating_add(STALENESS_TOLERANCE_SECS)
+        && meta.len() == entry.size
+    {
+        return true;
+    }
+    index
+        .refresh_entry_and_links_at(&full, rel)
+        .unwrap_or(false)
+}
+
 /// Files present under `dir` (per [`crate::discovery::discover_files`]) but
 /// absent from `index` — files created outside hyalo after the last
 /// `create-index`.
@@ -2076,7 +2159,14 @@ pub(crate) fn scan_one_file(
     // Populate BM25 pre-tokenized data during index creation.
     // The body text was accumulated by `BodyCollector` during the scan pass above —
     // no second file read is needed.
-    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize {
+    // BUG-14 (iter-265): a file whose bytes are not valid UTF-8 is dropped
+    // entirely by the disk full-text path (`find <term>` reads it with
+    // `read_to_string`), so an index that tokenized its lossy U+FFFD form
+    // counted an extra document and a wrong average length — every BM25 score
+    // in the vault came out different under `--index` than off disk. Keep it
+    // out of the corpus here and let `ScannedIndex::build` report it.
+    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize && stats.valid_utf8
+    {
         let body = body_collector.into_body();
 
         // Resolve title: frontmatter property > first H1 heading.

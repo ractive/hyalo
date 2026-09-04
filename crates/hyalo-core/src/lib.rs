@@ -48,7 +48,7 @@ pub mod schema;
 pub mod tasks;
 pub mod types;
 pub(crate) mod util;
-pub(crate) mod warn;
+pub mod warn;
 
 // ---------------------------------------------------------------------------
 // Facade re-exports (ARCH-5, iter-225)

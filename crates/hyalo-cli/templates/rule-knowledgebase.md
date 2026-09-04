@@ -46,13 +46,33 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **`--dir` is a vault, not a config**: `--dir <configured-vault>` keeps `.hyalo.toml` in effect
   (the flag is just redundant); `--dir <other-tree>` switches to that tree's own `.hyalo.toml` — or
   built-in defaults — and says so on stderr. A `.hyalo.toml` that fails to parse blocks every
-  mutating command with exit 1 (reads continue on defaults, with a `-q`-proof warning).
+  mutating command **and every gate command** (`lint`, `find --strict`, `views run`) with
+  exit 1; other reads continue on defaults, with a `-q`-proof warning.
 - **A project-local `dir` must stay at-or-below the config directory**: an absolute `dir` or one
   whose `..` components net above where `.hyalo.toml` lives refuses *every* command (reads
   included) with a `-q`-proof error naming the file and value — `hyalo config` still reports it
   (`dir_out_of_bounds`) rather than being refused. Pass `--dir` explicitly if that wider scope is
   genuinely intended; an in-bounds relative `dir`, including a bounded `sub/../kb` round-trip, is
   unaffected.
+- **`[scan] exclude` is the vault-wide exclusion knob** (DEC-277, iter-265):
+  `[scan] exclude = ["Templates/**"]` in `.hyalo.toml` drops matching files at discovery, so
+  every command — `find`, `summary`, `tags`, `properties`, `lint`, `links *`, `mv`,
+  `backlinks`, `create-index`, `views`, `types`, `okf`, `madr` — and every `--index` read
+  sees the same vault. The narrower per-feature lists (`[lint] ignore`, `[okf] ignore`,
+  `[schema] exempt`) still apply within what survives. An explicitly named excluded file
+  (`--file Templates/x.md`) is **refused**, naming the glob, rather than silently skipped.
+  `hyalo config` reports the effective list as `results.scan.exclude`.
+- **Unusable files are summarised, not spelled out** (DEC-278, iter-265): a file whose YAML
+  frontmatter will not parse is skipped and counted, and the run ends with one stderr line —
+  `warning: skipped N files with unparsable frontmatter (run hyalo lint --rule HYALO005 for
+  details)`. `-q` silences it; `[scan] verbose_skips = true` or `RUST_LOG=hyalo=debug` restores
+  the per-file YAML excerpts. `summary` accounts for them: `Files: 75 (28 skipped, 0 excluded)`
+  in text, `results.files.skipped` / `results.files.excluded` in JSON, with per-directory
+  attribution under `results.files.directories[].skipped`.
+- **A broken `.hyalo.toml` fails a gate** (DEC-279, iter-265): `lint`, `find --strict` and
+  `views run` exit 1 when the config does not parse, because a caller acts on their exit code
+  and a verdict computed without the config's `[lint] ignore` and schemas is not the vault's.
+  Every other read still answers, with the `-q`-proof warning.
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
   `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`

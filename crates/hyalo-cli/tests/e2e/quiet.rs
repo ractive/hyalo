@@ -172,11 +172,17 @@ fn no_dedup_summary_for_unique_warnings() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // Each bad file emits a unique warning (different filename in message).
+    // iter-265 (DEC-278): the three per-file warnings are now one summary line
+    // that carries the count, so "three distinct problems were reported" is
+    // checked through the number rather than through three separate lines.
     assert_eq!(
-        stderr.matches("warning: skipping").count(),
-        3,
-        "expected 3 distinct warnings, got:\n{stderr}"
+        stderr.matches("unparsable frontmatter").count(),
+        1,
+        "the skips must collapse to one line, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("skipped 3 files with unparsable frontmatter"),
+        "all three bad files must be counted, got:\n{stderr}"
     );
     // No suppression summary for distinct messages.
     assert!(

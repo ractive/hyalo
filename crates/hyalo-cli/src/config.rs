@@ -168,6 +168,22 @@ struct ScanConfig {
     /// Honored by every command that discovers vault files.
     #[serde(default)]
     include: Vec<String>,
+    /// Vault-relative globs whose files are invisible to **every** command
+    /// (iter-265, DEC-277) — hyalo's analogue of Obsidian's "Excluded files".
+    /// Applied at file discovery, so `find`, `summary`, `tags`, `properties`,
+    /// `lint`, `links *`, `mv`, `backlinks`, `create-index`, `views`, `types`,
+    /// `okf` and `madr` all agree on the file set. Narrower per-feature lists
+    /// (`[lint] ignore`, `[okf] ignore`, `[schema] exempt`) keep working within
+    /// what survives this one. An explicitly named excluded `--file` is
+    /// refused, never silently dropped.
+    #[serde(default)]
+    exclude: Vec<String>,
+    /// When `true`, per-file skip diagnostics (the multi-line YAML parse
+    /// excerpts) are streamed to stderr as they happen instead of being
+    /// collapsed into one end-of-run summary line (iter-265, DEC-278).
+    /// `RUST_LOG=hyalo=debug` has the same effect for a single run.
+    #[serde(default)]
+    verbose_skips: bool,
 }
 
 /// OKF generator configuration from `[okf]` in `.hyalo.toml`.
@@ -322,6 +338,12 @@ pub(crate) struct ResolvedDefaults {
     /// dot-paths. From `[scan] include`. Installed process-wide at startup so
     /// every command's file discovery honors it.
     pub(crate) scan_include: Vec<String>,
+    /// Vault-relative globs whose files no command sees. From `[scan] exclude`
+    /// (iter-265). Installed process-wide at startup alongside `scan_include`.
+    pub(crate) scan_exclude: Vec<String>,
+    /// From `[scan] verbose_skips` — stream per-file skip diagnostics instead
+    /// of collapsing them into one summary line.
+    pub(crate) scan_verbose_skips: bool,
     /// Raw `[changelog] path` value (config-dir-relative), if set. `None` means
     /// the default `CHANGELOG.md` in the vault dir. Resolution/validation into
     /// an absolute path happens in `run.rs` (needs `config_dir`).
@@ -451,6 +473,8 @@ impl ResolvedDefaults {
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
             scan_include: Vec::new(),
+            scan_exclude: Vec::new(),
+            scan_verbose_skips: false,
             changelog_path: None,
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
@@ -1078,7 +1102,17 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .map(|l| l.ignore.clone())
             .unwrap_or_default(),
         okf_ignore: cfg.okf.map(|o| o.ignore).unwrap_or_default(),
-        scan_include: cfg.scan.map(|s| s.include).unwrap_or_default(),
+        scan_include: cfg
+            .scan
+            .as_ref()
+            .map(|s| s.include.clone())
+            .unwrap_or_default(),
+        scan_exclude: cfg
+            .scan
+            .as_ref()
+            .map(|s| s.exclude.clone())
+            .unwrap_or_default(),
+        scan_verbose_skips: cfg.scan.as_ref().is_some_and(|s| s.verbose_skips),
         changelog_path: cfg.changelog.and_then(|c| c.path),
         pi_session_summary: cfg
             .pi

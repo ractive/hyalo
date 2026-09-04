@@ -958,15 +958,12 @@ title: Good
     let content = fs::read_to_string(tmp.path().join("good.md")).unwrap();
     assert!(content.contains("status: done"), "content:\n{content}");
 
-    // Warning emitted for the bad file.
+    // The bad file is reported — as the collapsed end-of-run summary since
+    // iter-265 (DEC-278), rather than a multi-line YAML excerpt inline.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
-    );
-    assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
 }
 
@@ -1649,7 +1646,10 @@ fn set_single_named_unparseable_file_exits_1() {
 }
 
 /// A *batch* run genuinely continues past the bad file, so there the
-/// `warning: skipping …` spelling is still the honest one.
+/// `warning:` prefix is still the honest one — carried, since iter-265
+/// (DEC-278), by the collapsed end-of-run summary rather than a per-file line.
+/// The distinction this pins is unchanged: a batch warns and exits 0 where a
+/// single named file errors and exits 1.
 #[test]
 fn batch_run_keeps_the_warning_prefix_for_a_skipped_file() {
     let tmp = setup_unparseable_vault();
@@ -1667,8 +1667,12 @@ fn batch_run_keeps_the_warning_prefix_for_a_skipped_file() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("warning: skipping bad.md"),
+        stderr.contains("warning: skipped 1 file with unparsable frontmatter"),
         "a continued run still warns: {stderr}"
+    );
+    assert!(
+        !stderr.contains("error: bad.md"),
+        "a batch run must not use the fatal spelling: {stderr}"
     );
 }
 

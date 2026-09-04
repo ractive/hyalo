@@ -24,6 +24,133 @@ use crate::util::levenshtein;
 /// `.git/**` is always hard-excluded regardless of the include list.
 static SCAN_INCLUDE: OnceLock<Option<ScanInclude>> = OnceLock::new();
 
+/// Process-global set of `[scan] exclude` globs (iter-265, DEC-277).
+///
+/// Obsidian's "Excluded files" has no analogue in hyalo: the only exclusion
+/// knobs were per-feature (`[lint] ignore`, `[okf] ignore`, `[schema] exempt`),
+/// so a vault of Templater templates had to be excluded once per command that
+/// grew a knob. `[scan] exclude = ["Templates/**"]` is applied here, at file
+/// discovery, which makes matching files invisible to *every* command — `find`,
+/// `summary`, `tags`, `properties`, `lint`, `links *`, `mv`'s link graph,
+/// `backlinks`, `create-index`, `views`, `types`, `okf`, `madr`.
+///
+/// Precedence: exclusion is the widest knob and wins over the narrower
+/// per-feature lists — a file excluded here is never seen, so `[lint] ignore`
+/// and friends only ever narrow further within what the walk returned. An
+/// explicitly named target (`--file`, `--files-from`) is *refused* rather than
+/// silently dropped, so a script never mistakes "excluded" for "clean".
+static SCAN_EXCLUDE: OnceLock<Option<ScanExclude>> = OnceLock::new();
+
+/// Compiled `[scan] exclude` configuration.
+#[derive(Clone)]
+pub struct ScanExclude {
+    /// Glob set matched against vault-relative, forward-slash paths.
+    set: GlobSet,
+    /// The original patterns, in order, so a refusal can name the glob that
+    /// matched rather than just saying "excluded".
+    patterns: Vec<String>,
+}
+
+impl ScanExclude {
+    /// Whether the vault-relative path `rel` is excluded, and by which pattern.
+    #[must_use]
+    pub fn matching_glob(&self, rel: &str) -> Option<&str> {
+        let hit = self.set.matches(rel);
+        hit.first()
+            .and_then(|&i| self.patterns.get(i))
+            .map(String::as_str)
+    }
+
+    /// Whether the vault-relative path `rel` is excluded.
+    #[must_use]
+    pub fn is_excluded(&self, rel: &str) -> bool {
+        self.set.is_match(rel)
+    }
+}
+
+/// Install the `[scan] exclude` glob set for this process.
+///
+/// Same contract as [`set_scan_include`]: idempotent-once, and invalid globs
+/// are returned as `(pattern, message)` pairs rather than disabling the rest.
+///
+/// # Errors
+/// Never returns `Err`.
+pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
+    let mut errors = Vec::new();
+    let compiled = if patterns.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        let mut kept = Vec::new();
+        for pat in patterns {
+            // `literal_separator(true)`: `*` and `?` do not cross a `/`,
+            // matching how `[lint] ignore` and `--glob` already behave, so
+            // `*.md` excludes only top-level files and `Templates/**` is
+            // needed (and sufficient — `**` still crosses separators) to drop
+            // a whole subtree, the way Obsidian's excluded folders work.
+            match GlobBuilder::new(pat).literal_separator(true).build() {
+                Ok(g) => {
+                    builder.add(g);
+                    kept.push(pat.clone());
+                }
+                Err(e) => errors.push((pat.clone(), e.to_string())),
+            }
+        }
+        builder.build().ok().map(|set| ScanExclude {
+            set,
+            patterns: kept,
+        })
+    };
+    let _ = SCAN_EXCLUDE.set(compiled);
+    errors
+}
+
+/// The installed `[scan] exclude` set, if this process has one.
+#[must_use]
+pub fn scan_exclude() -> Option<&'static ScanExclude> {
+    match SCAN_EXCLUDE.get() {
+        Some(Some(exc)) => Some(exc),
+        _ => None,
+    }
+}
+
+/// Whether the vault-relative path `rel` is dropped by `[scan] exclude`.
+#[must_use]
+pub fn is_scan_excluded(rel: &str) -> bool {
+    scan_exclude().is_some_and(|exc| exc.is_excluded(rel))
+}
+
+/// The `[scan] exclude` glob that drops `rel`, if any.
+#[must_use]
+pub fn scan_exclude_glob(rel: &str) -> Option<&'static str> {
+    scan_exclude().and_then(|exc| exc.matching_glob(rel))
+}
+
+/// How many files the last completed vault walk dropped because of
+/// `[scan] exclude`, for `summary`'s `results.files.excluded`.
+static EXCLUDED_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Files dropped by `[scan] exclude` during this process's walks.
+#[must_use]
+pub fn scan_excluded_count() -> usize {
+    EXCLUDED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Record that a walk (or an index load) dropped `dropped` files.
+///
+/// `fetch_max` rather than `fetch_add`: one CLI run walks the vault several
+/// times (count, collect, hint) and loads the index once, and the figure that
+/// `summary` reports is "how many files this vault lost", not "how many drops
+/// happened".
+pub fn note_scan_excluded(dropped: usize) {
+    EXCLUDED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Reset the excluded counter. **Tests only.**
+pub fn reset_scan_excluded_count() {
+    EXCLUDED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Compiled `[scan] include` configuration.
 #[derive(Clone)]
 struct ScanInclude {
@@ -335,6 +462,18 @@ fn discover_files_with_include_ext(
     let mut kept: Vec<PathBuf> = kept.into_iter().map(|(p, _)| p).collect();
     kept.sort();
 
+    // `[scan] exclude` is applied last, on the deduplicated result, so a file
+    // reachable under two spellings is excluded once and the counter below
+    // matches the number of *files* the vault lost, not directory entries.
+    if let Some(exc) = scan_exclude() {
+        let before = kept.len();
+        kept.retain(|p| !exc.is_excluded(&relative_path(dir, p)));
+        let dropped = before - kept.len();
+        if dropped > 0 {
+            note_scan_excluded(dropped);
+        }
+    }
+
     Ok(kept)
 }
 
@@ -597,6 +736,17 @@ pub fn resolve_file_ci(
             // Do not claim "outside vault" — the path simply could not be resolved.
             return Err(FileResolveError::NotFound { path: normalized });
         }
+    }
+
+    // The file exists and is inside the vault, but `[scan] exclude` says no
+    // command should see it (iter-265, DEC-277). Refuse loudly: reporting the
+    // glob is the only way the caller learns why a file they can see on disk
+    // is invisible to hyalo.
+    if let Some(glob) = scan_exclude_glob(&normalized) {
+        return Err(FileResolveError::ScanExcluded {
+            path: normalized,
+            glob: glob.to_owned(),
+        });
     }
 
     Ok((full, normalized))
@@ -1065,6 +1215,16 @@ pub enum FileResolveError {
     ParentTraversal {
         path: String,
     },
+    /// The path resolves to a real vault file that `[scan] exclude` drops
+    /// (iter-265, DEC-277). An explicitly named target is *refused* rather
+    /// than silently skipped: a script that asked for one specific file and
+    /// got a clean exit 0 would read "excluded" as "nothing wrong here".
+    ScanExcluded {
+        path: String,
+        /// The `[scan] exclude` glob that matched, so the message says which
+        /// line of `.hyalo.toml` to change.
+        glob: String,
+    },
     InvalidPath {
         path: String,
         reason: &'static str,
@@ -1106,6 +1266,13 @@ impl std::fmt::Display for FileResolveError {
                      vault-relative without '..' components, even when the target \
                      is inside the vault — use the vault-relative form instead, \
                      e.g. \"broken.md\" or \"sub/broken.md\", not \"../broken.md\")"
+                )
+            }
+            Self::ScanExcluded { path, glob } => {
+                write!(
+                    f,
+                    "file is excluded by [scan] exclude = [\"{glob}\"]: {path} \
+                     (remove the glob from .hyalo.toml, or narrow it, to operate on this file)"
                 )
             }
             Self::InvalidPath { path, reason } => {
@@ -1914,6 +2081,74 @@ pub fn resolve_target(
 mod tests {
     use super::*;
     use std::fs;
+
+    // --- iter-265: `[scan] exclude` glob matching ---
+
+    /// Compile a `[scan] exclude` set without touching the process-global
+    /// `OnceLock` (which only one test per process could ever set).
+    fn compiled_exclude(patterns: &[&str]) -> ScanExclude {
+        let mut builder = GlobSetBuilder::new();
+        let mut kept = Vec::new();
+        for pat in patterns {
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .unwrap(),
+            );
+            kept.push((*pat).to_owned());
+        }
+        ScanExclude {
+            set: builder.build().unwrap(),
+            patterns: kept,
+        }
+    }
+
+    #[test]
+    fn scan_exclude_matches_a_subtree_but_not_its_siblings() {
+        let exc = compiled_exclude(&["Templates/**"]);
+        assert!(exc.is_excluded("Templates/album.md"));
+        assert!(exc.is_excluded("Templates/nested/book.md"));
+        assert!(!exc.is_excluded("Templates.md"));
+        assert!(!exc.is_excluded("Notes/Templates.md"));
+        assert!(!exc.is_excluded("a.md"));
+    }
+
+    #[test]
+    fn scan_exclude_names_the_glob_that_matched() {
+        let exc = compiled_exclude(&["Templates/**", "archive/*.md"]);
+        assert_eq!(exc.matching_glob("archive/old.md"), Some("archive/*.md"));
+        assert_eq!(exc.matching_glob("Templates/x.md"), Some("Templates/**"));
+        assert_eq!(exc.matching_glob("keep.md"), None);
+    }
+
+    #[test]
+    fn scan_exclude_respects_the_path_separator() {
+        // `*.md` must not reach into a subdirectory — the separator is literal,
+        // matching how `[lint] ignore` and `--glob` already behave.
+        let exc = compiled_exclude(&["*.md"]);
+        assert!(exc.is_excluded("top.md"));
+        assert!(!exc.is_excluded("sub/nested.md"));
+    }
+
+    #[test]
+    fn set_scan_exclude_reports_invalid_globs_without_dropping_the_rest() {
+        // An unclosed character class is the classic typo. `set_scan_exclude`
+        // itself writes a `OnceLock`, so exercise the compile step the way the
+        // function does rather than calling it (a second call would be a no-op
+        // in a process where another test already set it).
+        let mut errors = Vec::new();
+        let mut ok = 0;
+        for pat in ["Templates/**", "[unclosed"] {
+            match GlobBuilder::new(pat).literal_separator(true).build() {
+                Ok(_) => ok += 1,
+                Err(e) => errors.push((pat, e.to_string())),
+            }
+        }
+        assert_eq!(ok, 1);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "[unclosed");
+    }
 
     // --- L-23: percent-decoding ---
 

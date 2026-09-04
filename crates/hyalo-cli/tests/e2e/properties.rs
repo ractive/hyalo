@@ -389,13 +389,17 @@ status: draft
     assert!(names.contains(&"status"), "missing 'status' in {names:?}");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // iter-265 (DEC-278): the run still continues and still says so, but the
+    // per-file YAML excerpt is collected and collapsed into one summary line.
+    // `iteration265_scan_exclude_and_skips.rs` pins that `[scan] verbose_skips`
+    // brings the naming back.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
     assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("HYALO005"),
+        "the summary must point at the command that names the file; got: {stderr}"
     );
 }
 

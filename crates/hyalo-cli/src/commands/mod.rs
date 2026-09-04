@@ -243,7 +243,14 @@ pub(crate) fn report_unparseable_skip(
     if globs.is_empty() && files.len() == 1 {
         crate::warn::error(format!("{rel}: {detail}"));
     } else {
-        crate::warn::warn(format!("skipping {rel}: {detail}"));
+        // A batch run continues, so the diagnostic is collected and collapsed
+        // into the end-of-run summary line (iter-265, DEC-278) rather than
+        // streamed per file.
+        hyalo_core::warn::record_skip(
+            rel,
+            detail.to_string(),
+            hyalo_core::warn::SkipKind::Frontmatter,
+        );
     }
 }
 
@@ -323,6 +330,9 @@ pub fn collect_files(
                         ..
                     } => {
                         format!("file resolves outside vault boundary: {path} -> {target}")
+                    }
+                    FileResolveError::ScanExcluded { glob, .. } => {
+                        format!("skipping {path}: excluded by [scan] exclude = [\"{glob}\"]")
                     }
                     FileResolveError::OutsideVault { .. } => {
                         format!("file resolves outside vault boundary: {path}")
@@ -501,8 +511,19 @@ pub fn build_scanned_index(
 
     let build = ScannedIndex::build(&files, site_prefix, options)?;
 
+    // Same distinction `create_index` makes: a warning is the BUG-14
+    // invalid-UTF-8 notice (`Other`) or an unparsable-frontmatter skip
+    // (`Frontmatter`) depending on which one produced it. `options.bm25_tokenize`
+    // is `false` at every current call site of this function, so the UTF-8
+    // message never actually appears here today — but tagging it correctly
+    // costs nothing and keeps this in sync if that changes.
     for w in &build.warnings {
-        crate::warn::warn(format!("skipping {}: {}", w.rel_path, w.message));
+        let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
+            hyalo_core::warn::SkipKind::Other
+        } else {
+            hyalo_core::warn::SkipKind::Frontmatter
+        };
+        hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
     }
 
     Ok(ScannedIndexOutcome::Index(build))
@@ -694,6 +715,18 @@ pub fn resolve_error_to_outcome(
                 "path is a directory, not a file",
                 Some(&path),
                 Some(&hint),
+                None,
+            ))
+        }
+        FileResolveError::ScanExcluded { path, glob } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                &format!("file is excluded by [scan] exclude = [\"{glob}\"]"),
+                Some(&path),
+                Some(
+                    "remove or narrow that glob in .hyalo.toml to let hyalo see this file; \
+                     run `hyalo config` to see the effective exclusion list",
+                ),
                 None,
             ))
         }

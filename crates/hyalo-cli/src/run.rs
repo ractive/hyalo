@@ -1087,14 +1087,25 @@ fn run_inner() -> Result<(), AppError> {
     // `-q`-proof), but a command that *writes* must not — it would edit files
     // the user did not configure hyalo to touch, using rules they did not
     // write. Refuse with the parse diagnostic and exit 1 (iter-201, M-2).
+    //
+    // BUG-19 (iter-265, DEC-279) widens the same refusal to commands whose
+    // *exit code is a gate* — `lint`, `find --strict`, `views run`. Those are
+    // reads, but a caller acts on their verdict, and a verdict computed without
+    // `[lint] ignore` or the schemas is not the verdict the vault asked for.
+    // Warning and exiting 0 turned a broken config into a green CI build.
     if let Some(diagnostic) = config.malformed.as_deref()
-        && cli.command.writes()
+        && (cli.command.writes() || cli.command.gates())
     {
+        let kind = if cli.command.writes() {
+            "a mutating command"
+        } else {
+            "a command whose exit code is a gate"
+        };
         let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
         return Err(AppError::User(crate::output::format_error(
             fmt,
             &format!(
-                "refusing to run a mutating command with an unusable .hyalo.toml \
+                "refusing to run {kind} with an unusable .hyalo.toml \
                  ({}/.hyalo.toml): {diagnostic}",
                 config.config_dir.display()
             ),
@@ -1125,6 +1136,18 @@ fn run_inner() -> Result<(), AppError> {
             crate::warn::warn(format!("invalid [scan] include glob {pat:?}: {msg}"));
         }
     }
+
+    // Install `[scan] exclude` (iter-265, DEC-277) the same way, so every
+    // command's discovery — and every `--index` load — drops the same files.
+    for (pat, msg) in hyalo_core::discovery::set_scan_exclude(&config.scan_exclude) {
+        crate::warn::warn(format!("invalid [scan] exclude glob {pat:?}: {msg}"));
+    }
+
+    // DEC-278: per-file skip diagnostics are collected, not streamed, unless
+    // the vault asks for them or `RUST_LOG` is turned up for this one run.
+    hyalo_core::warn::set_verbose_skips(
+        config.scan_verbose_skips || hyalo_core::warn::rust_log_wants_debug(),
+    );
 
     // Note when --dir is redundant: the user passed the dir .hyalo.toml already
     // resolves to. The config still applies (iter-201) — the flag is simply
@@ -1934,7 +1957,25 @@ fn run_inner() -> Result<(), AppError> {
                     // default — the probe is a heuristic, and turning a
                     // heuristic into a hard refusal would make every indexed
                     // query hostage to filesystem mtime granularity.
-                    if stale {
+                    //
+                    // UX-7 (iter-265, DEC-280): when the run *named* its files,
+                    // do better than the heuristic. One `stat` per named target
+                    // is cheap and exact, so refresh those entries in memory and
+                    // stay quiet — `find --index --file just-appended.md` now
+                    // reports the file's current size and line count instead of
+                    // a snapshot from before the append. The warning survives
+                    // for whole-vault queries, where refreshing everything would
+                    // re-introduce the cost iteration 260 removed.
+                    let mut idx = idx;
+                    let targets = cli.command.explicit_file_targets();
+                    let refreshed_all_targets = if targets.is_empty() {
+                        false
+                    } else {
+                        targets.iter().all(|rel| {
+                            hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
+                        })
+                    };
+                    if stale && !refreshed_all_targets {
                         crate::warn::warn(
                             "index older than vault; results may be stale — re-run create-index",
                         );

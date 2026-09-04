@@ -380,6 +380,17 @@ hyalo read my-note.md --frontmatter                # include YAML frontmatter
 Start with `hyalo summary` to orient yourself in a new directory (text output is the
 default in interactive terminals).
 
+`Files:` counts the notes hyalo could actually read. When some could not be, the line reads
+`Files: 75 (28 skipped, 0 excluded)` — `skipped` are files whose YAML frontmatter would not
+parse (see them with `hyalo lint --rule HYALO005`), `excluded` are files dropped by
+`[scan] exclude`. Both are in JSON as `results.files.skipped` / `results.files.excluded`, with
+per-directory attribution under `results.files.directories[].skipped`.
+
+Every scanning command reports unusable files as **one** stderr line
+(`warning: skipped N files with unparsable frontmatter …`) rather than one YAML excerpt per
+file. `-q` silences it; `[scan] verbose_skips = true` or `RUST_LOG=hyalo=debug` brings the full
+per-file diagnostics back.
+
 ## Available commands — read the CLI's own help first
 
 `hyalo -h` lists every command grouped by intent (read / write / config), one line each,
@@ -547,7 +558,22 @@ that would fail lint. Enable globally via `[schema] validate_on_write = true` in
 
 **Ignore known-bad files:** add `[lint] ignore = ["legacy/known-bad.md", "vendor/**/*.md"]`
 to `.hyalo.toml` to skip listed files during `hyalo lint` (plain strings match literally;
-glob meta-characters use `--glob` semantics). Read-only commands still warn on parse errors.
+glob meta-characters use `--glob` semantics). Read-only commands still count them among the
+files they skipped.
+
+**Exclude a tree from the whole tool:** `[lint] ignore` narrows one command. `[scan] exclude =
+["Templates/**"]` is the vault-wide knob — hyalo's analogue of Obsidian's "Excluded files".
+Matching files are dropped at discovery, so `find`, `summary`, `tags`, `properties`, `lint`,
+`links *`, `mv`, `backlinks`, `create-index`, `views`, `types`, `okf` and `madr` all see the
+same vault, and `--index` reads drop them too (no rebuild needed after changing the list).
+Naming an excluded file explicitly (`--file Templates/x.md`) is **refused** with the matching
+glob, never silently skipped. `hyalo config` reports the effective list under
+`results.scan.exclude`.
+
+**A broken `.hyalo.toml` fails a gate:** `lint`, `find --strict` and `views run` exit 1 when the
+config does not parse, because their exit code is a verdict and a verdict computed without the
+config's `[lint] ignore` and schemas is not the one the vault asked for. Other reads still
+answer, with a warning `-q` cannot suppress.
 
 `hyalo lint --count` returns just the number of files with violations.
 

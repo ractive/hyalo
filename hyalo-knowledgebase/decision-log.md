@@ -4297,3 +4297,123 @@ contract beats matching the number written in the plan.
 
 **Where:** `crates/hyalo-core/src/filter/parse.rs`,
 `crates/hyalo-core/src/filter/fields.rs`.
+
+## DEC-277: `[scan] exclude` is the one vault-wide exclusion knob (2026-09-04)
+
+**Decision:** a new `exclude` key in the existing `[scan]` section of
+`.hyalo.toml` holds vault-relative globs whose files are dropped **at file
+discovery**, which makes them invisible to every command without threading a
+list through each one: `find`, `summary`, `tags`, `properties`, `lint`,
+`links *`, `mv`'s link graph, `backlinks`, `create-index`, `views`, `types`,
+`okf` and `madr`. It is hyalo's analogue of Obsidian's "Excluded files"; the
+dogfood run on kepano-obsidian had no way to say "ignore `Templates/`" once
+and be done, because the only knobs were per-feature (`[lint] ignore`,
+`[okf] ignore`, `[schema] exempt`).
+
+**Precedence.** Exclusion is the widest knob and runs first: a file it drops is
+never seen, so the narrower per-feature lists only ever refine what survived.
+They are kept, not folded in — `[lint] ignore` legitimately means "still part
+of the vault, just not linted", which is a different claim.
+
+**An explicitly named excluded file is refused, not skipped.** `--file
+Templates/x.md` exits 1 with the matching glob quoted, rather than exiting 0
+with an empty result. A script that asked for one specific file and got a
+clean exit would read "excluded" as "nothing wrong here" — the same reasoning
+iteration 204 used for `L-2` (naming one unparsable file is an error, not a
+warning). Rejected: silently dropping it, and a `--force`-style override (the
+project rule bars new CLI flags grown from dogfood pressure; editing the glob
+is the intended escape).
+
+**The exclusion also applies to `--index` reads**, filtered when the snapshot
+loads rather than when it is built. Turning the knob therefore takes effect
+immediately, with no `create-index` rebuild, and an index built by an older
+version stays correct. Excluded sources are also dropped from the loaded link
+graph, so a note only an excluded template linked to is still an orphan.
+
+**Where:** `crates/hyalo-core/src/discovery.rs` (`set_scan_exclude`, applied in
+the walker and in `resolve_file_ci`), `crates/hyalo-core/src/index.rs`
+(`load_inner`), `crates/hyalo-cli/src/config.rs`, `crates/hyalo-cli/src/run.rs`.
+
+## DEC-278: per-file skip diagnostics are collected, not streamed (2026-09-04)
+
+**Decision:** a file a scan cannot use is recorded in a process-global
+collector (`hyalo_core::warn::record_skip`) instead of being printed where it
+was found. At the end of the run, stderr carries one line —
+`warning: skipped N files with unparsable frontmatter (run hyalo lint --rule
+HYALO005 for details)` — plus a second line of the same shape for files that
+were unreadable for other reasons (invalid UTF-8, I/O). `-q` silences both.
+
+The trigger: on kepano-obsidian, 28 Templater templates with `{{date}}` in
+their frontmatter made `summary`, `find`, `tags`, `properties`, `lint`, `mv`
+and `views` each print **251 stderr lines** of multi-line `serde_yaml`
+excerpts. Nothing was wrong with any individual message; there were simply 28
+of them, on every command, ahead of the answer the user actually ran.
+
+**The detail is relocated, not removed.** `[scan] verbose_skips = true` in
+`.hyalo.toml`, or `RUST_LOG=hyalo=debug` for one run, restores the per-file
+excerpts verbatim. Rejected: a `--verbose` flag (project rule: no new CLI
+surface from dogfood pressure — the existing `-q`, `RUST_LOG` and a config key
+already cover the three audiences).
+
+**`lint` keeps reporting each file individually** as `HYALO005`. Listing bad
+frontmatter is what `lint` is for; the summary line is what points at it.
+
+**Where:** `crates/hyalo-core/src/warn.rs`, `crates/hyalo-cli/src/warn.rs`
+(`flush_skipped_files`, called from the existing `flush_summary`), and the
+former `eprintln!`/`warn` call sites in `find`, `properties`, `tags`,
+`link_rewrite`, `create_index`, `journal` and `commands::mod`.
+
+## DEC-279: a malformed `.hyalo.toml` fails a gate, not just a write (2026-09-04)
+
+**Decision:** the config-trust refusal from iteration 201 (DEC: a `.hyalo.toml`
+that does not parse blocks mutating commands, reads continue on defaults with a
+`-q`-proof warning) is widened to commands whose **exit code is a gate**:
+`lint` in any form, `find --strict`, and `views run`. Those exit 1 with the
+parse diagnostic. Every other read keeps warn-and-continue.
+
+The reasoning is the same one that justified blocking writes, applied to a
+different kind of damage. A broken config silently drops `[lint] ignore`, the
+schemas and the saved views; `hyalo lint` then checked files the vault excluded,
+validated against schemas it no longer had, and still exited 0. That is a green
+CI build whose verdict was computed from rules nobody wrote — worse than a red
+one, because nothing surfaces it. A command that answers *yes or no* has no way
+to caveat its answer; a command that returns *data* does, and its warning is
+already unsuppressible.
+
+**"Gate" is defined by the exit code, not by read-vs-write.** `find` without
+`--strict` is a report and keeps answering; `find --broken-links --strict` is
+the documented CI gate and refuses. Rejected: making every read fail (it would
+make a broken config unrecoverable without `--dir`), and leaving `lint` alone
+with a louder warning (CI does not read stderr).
+
+**Where:** `crates/hyalo-cli/src/mutation.rs` (`Commands::gates`),
+`crates/hyalo-cli/src/run.rs`.
+
+## DEC-280: `--index` refreshes what it was asked for, and warns only otherwise (2026-09-04)
+
+**Decision:** one policy for stale-index handling, replacing three. A `--index`
+run that **names** its files (`--file`, or a positional path, without `--glob`)
+stat-refreshes exactly those entries — one `stat` each, re-scanning only when
+mtime or size moved — and stays silent. A run that names nothing keeps the
+existing whole-vault mtime heuristic and its
+`index older than vault; results may be stale` warning.
+
+Before this, `find --index` warned from a directory-mtime probe, `links auto
+--index` did a per-file refresh, and `set --index` warned about staleness it
+then fixed itself. The gap that mattered: `find --index --file just-appended.md`
+answered from the snapshot, reporting the file's pre-append size and line count
+while merely *warning* that something might be stale — a silently wrong answer
+about a file the user had named.
+
+**Rejected: an implicit full-vault refresh on every `--index` read.** That is
+exactly the cost iteration 260 removed (396 ms → 151 ms on MDN), and it would
+be paid by every query to fix a case that only arises for named targets.
+Per-file stat is O(targets), not O(vault).
+
+**Warn-but-serve stays the default** for unnamed runs: the directory-mtime probe
+is a heuristic, and turning a heuristic into a refusal would make every indexed
+query hostage to filesystem mtime granularity (iteration 247, S-2).
+
+**Where:** `crates/hyalo-core/src/index.rs` (`refresh_if_changed_on_disk`),
+`crates/hyalo-cli/src/mutation.rs` (`Commands::explicit_file_targets`),
+`crates/hyalo-cli/src/run.rs`.

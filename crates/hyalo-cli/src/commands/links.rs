@@ -1805,7 +1805,24 @@ pub(crate) fn run(
                 missing_index_files[0]
             ));
             for rel in &missing_index_files {
-                journal.add_entry_with_links(&dir.join(rel), rel)?;
+                // BUG-8 (iter-265): one unparsable file used to abort the whole
+                // `links auto --index` run with exit 2, while the identical
+                // disk scan skipped it and carried on. The refresh path now
+                // shares the disk scan's skip-and-warn behaviour, so the two
+                // agree on both the result and the exit code; the file is
+                // counted in the end-of-run skip summary (DEC-278). A genuine
+                // I/O failure still propagates.
+                match journal.add_entry_with_links(&dir.join(rel), rel) {
+                    Ok(()) => {}
+                    Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
+                        hyalo_core::warn::record_skip(
+                            rel.as_str(),
+                            e.to_string(),
+                            hyalo_core::warn::SkipKind::Frontmatter,
+                        );
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         // Persist the refreshed entries only when this run already writes

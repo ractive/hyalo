@@ -180,6 +180,9 @@ and this project adheres to
 - find: every --sort key now orders ascending and --reverse inverts it; 'backlinks_count' and 'links_count' no longer sort descending, so '--sort backlinks_count --reverse' is 'most linked first' (BEHAVIOUR CHANGE, DEC-273). 'score' still ranks best-match-first. Files whose sort property is missing or null always sort last, in both directions.
 - find --property ordering comparisons (>, >=, <, <=) are typed: numeric when both sides parse as numbers, by date when both are ISO dates, textual only between plain strings; a value of any other kind never matches, so 'last>=2023-09-01' no longer matches the string '[[2022-04]]' (DEC-274).
 - find --files-from returns the same 'results' array as --file: the files_missing, files_skipped_non_md and files_skipped_outside_vault counters moved from inside 'results' to top-level envelope keys, present on every find (zero when --files-from was unused), and results is no longer promoted to {files: [...]} (SHAPE CHANGE; same for lint, task and read --files-from).
+- Per-file YAML parse diagnostics are collapsed into one end-of-run stderr line naming the count and `hyalo lint --rule HYALO005` (DEC-278); `-q` silences it and `[scan] verbose_skips`/`RUST_LOG=hyalo=debug` restores the detail
+- A malformed `.hyalo.toml` now exits 1 for gate commands (`lint`, `find --strict`, `views run`) as well as writes (DEC-279); plain reads keep answering with the `-q`-proof warning
+- A `--index` read that names its files stat-refreshes just those entries instead of warning that the whole index is stale (DEC-280)
 
 ### Removed
 
@@ -319,6 +322,8 @@ and this project adheres to
 - A frontmatter list of wikilinks renders as `["[[Futurism]]", "[[Nonfiction]]"]` in text output instead of the unreadable `[[[Futurism]], [[Nonfiction]]]`; plain lists keep their compact unquoted form.
 - lint: MD018 no longer rewrites an Obsidian tag line (`#todo`) into a heading; MD034 no longer wraps a URL that is already a link destination; MD042 accepts an image as link text (`[![](img.png)](https://…)`) (DEC-271)
 - find --filenames-only no longer emits a trailing blank line, so 'find --filenames-only | wc -l' equals 'find --count' (also fixes 'views run --filenames-only').
+- `links auto --index` no longer aborts when its refresh pass meets a file with unparsable frontmatter; it skips and counts it like the disk scan (BUG-8)
+- `create-index` keeps invalid-UTF-8 files out of the BM25 corpus, so `--index` scores match the disk scan's exactly, and reports them under `warnings` (BUG-14)
 
 ### Added
 
@@ -337,6 +342,8 @@ and this project adheres to
 - `hyalo set K=<scalar>` on a property that holds a YAML list reports the type change — a stderr note pointing at `hyalo append`, and the affected files under `list_collapsed` in JSON (DEC-270).
 - find --property value syntax: 'K=null' / 'K!=null' match a property present with (or without) a YAML null, and 'K=[]' / 'K!=[]' an empty list (DEC-274). A list containing a null does not match 'K=null'.
 - find --fields accepts 'properties_typed' as well as 'properties-typed'; the JSON key stays the snake_case 'properties_typed' (DEC-275).
+- `[scan] exclude` in `.hyalo.toml` hides matching files from every command and every `--index` read (DEC-277); `hyalo config` reports it under `results.scan.exclude`
+- `summary` reports `results.files.skipped` and `results.files.excluded` (text: `Files: 75 (28 skipped, 0 excluded)`), with per-directory skipped counts
 
 ## [0.21.0] - 2026-08-28
 
