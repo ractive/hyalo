@@ -61,6 +61,54 @@ static DEFAULT_ON: &[&str] = &[
     "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006", "HYALO007",
 ];
 
+/// Stock rules whose upstream autofix hyalo **refuses to offer**, however the
+/// upstream `Rule::can_fix()` answers.
+///
+/// A rule lands here when its fix is not a mechanical correction but a
+/// rewrite of authored content — applying it silently changes meaning, and
+/// the by-hand correction is trivial. The diagnostic is still reported (and
+/// still counted by `lint`), it just carries no `fix`, so `lint --fix` never
+/// touches it and `lint-rules list` shows `AUTOFIX no`.
+///
+/// - `MD001` (heading-increment, DEC-272, dogfood v0.22.0 UX-10): the fix
+///   renumbers the heading — `###### Caption` under an `## H2` becomes
+///   `### Caption`. On the Obsidian Hub vault that proposed 17 rewrites of
+///   deliberate small-caption headings. `lint-rules set MD001 --enabled false`
+///   remains the per-vault opt-out for the warning itself.
+static NON_AUTOFIXABLE: &[&str] = &["MD001"];
+
+/// Extra sentences appended to a stock rule's upstream description so
+/// `hyalo lint-rules show <id>` documents hyalo's deviation from it.
+///
+/// Kept as a suffix rather than a replacement: the upstream one-liner stays
+/// the primary description, and a version bump that rewords it does not
+/// silently drop hyalo's note.
+static DESCRIPTION_SUFFIX: &[(&str, &str)] = &[
+    (
+        "MD001",
+        "Reported but not autofixed by hyalo: renumbering a heading rewrites authored structure \
+         (a deliberate `######` caption would become `##`). Fix by hand, or turn the warning off \
+         with `hyalo lint-rules set MD001 --enabled false`.",
+    ),
+    (
+        "MD018",
+        "Obsidian tag lines are exempt in hyalo: a single `#` followed by a tag token (letters, \
+         digits, `_`, `-`, `/`, non-ASCII word characters, at least one non-digit) is a tag, not \
+         a malformed heading. `##Heading`, `#1` and `#!bang` still fire.",
+    ),
+    (
+        "MD034",
+        "hyalo suppresses URLs that already sit inside link markup — a markdown link or image \
+         destination, an autolink, a wikilink or a reference definition. Only a URL in plain \
+         prose is bare.",
+    ),
+    (
+        "MD042",
+        "hyalo does not treat an image as empty link text: the badge idiom \
+         `[![alt](img.png)](https://…)` is deliberate markup. `[](url)` and `[ ](url)` still fire.",
+    ),
+];
+
 // ---------------------------------------------------------------------------
 // HYALO rule provider
 // ---------------------------------------------------------------------------
@@ -103,14 +151,22 @@ impl HyaloLintEngine {
                     .registry()
                     .get_rule(id)
                     .map_or(("unknown", ""), |r| (r.name(), r.description()));
-                let autofixable = inner
-                    .registry()
-                    .get_rule(id)
-                    .is_some_and(mdbook_lint_core::rule::Rule::can_fix);
+                let autofixable = !NON_AUTOFIXABLE.contains(id)
+                    && inner
+                        .registry()
+                        .get_rule(id)
+                        .is_some_and(mdbook_lint_core::rule::Rule::can_fix);
+                let description = DESCRIPTION_SUFFIX
+                    .iter()
+                    .find(|(rule, _)| rule == id)
+                    .map_or_else(
+                        || description.to_owned(),
+                        |(_, extra)| format!("{description}. {extra}"),
+                    );
                 RuleCatalogEntry {
                     id: id.to_string(),
                     name: name.to_owned(),
-                    description: description.to_owned(),
+                    description,
                     default_severity: sev,
                     default_enabled: enabled,
                     autofixable,
@@ -729,6 +785,21 @@ impl HyaloLintEngine {
                     if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
                         continue;
                     }
+                    // BUG-3 (dogfood v0.22.0): a line-leading `#todo` is an
+                    // Obsidian tag, not a malformed heading. MD018's autofix
+                    // would rewrite it to `# todo` — silent content
+                    // corruption on any vault that uses tags. See
+                    // `rules::obsidian` and DEC-271.
+                    if *rule_id == "MD018"
+                        && v.line
+                            .checked_sub(1)
+                            .and_then(|i| doc.lines.get(i))
+                            .is_some_and(|line| {
+                                crate::rules::obsidian::is_obsidian_tag_line(line)
+                            })
+                    {
+                        continue;
+                    }
                     let fix = convert_fix(&v, body_content);
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
@@ -748,6 +819,39 @@ impl HyaloLintEngine {
                             .map_or(v.column, |line| byte_col_to_scalar_col(line, v.column))
                     } else {
                         v.column
+                    };
+                    // BUG-9 (dogfood v0.22.0): both of these need the
+                    // *scalar* column, so they run after the conversion
+                    // above. MD034 wraps a URL that is already a link
+                    // destination in angle brackets (its own `[`-skipping
+                    // scan cannot see the nested brackets of the badge idiom
+                    // `[![](img)](url)`), and MD042 calls a link whose text
+                    // is an image "empty".
+                    let line_text = v.line.checked_sub(1).and_then(|i| doc.lines.get(i));
+                    if *rule_id == "MD034"
+                        && line_text.is_some_and(|line| {
+                            crate::rules::obsidian::url_is_inside_link_markup(line, column)
+                        })
+                    {
+                        continue;
+                    }
+                    if *rule_id == "MD042"
+                        && line_text.is_some_and(|line| {
+                            crate::rules::obsidian::link_text_is_image(line, column)
+                        })
+                    {
+                        continue;
+                    }
+                    // UX-10 (dogfood v0.22.0) / DEC-272: MD001 keeps
+                    // *reporting* a skipped heading level but is no longer
+                    // autofixable — rewriting a deliberate `######` caption
+                    // to `##` changes what the author meant, and the manual
+                    // fix is a one-character edit. `RuleCatalogEntry` reports
+                    // `autofixable: false` to match (see `NON_AUTOFIXABLE`).
+                    let fix = if NON_AUTOFIXABLE.contains(rule_id) {
+                        None
+                    } else {
+                        fix
                     };
                     diagnostics.push(Diagnostic {
                         rule_id: rule_id.to_string(),
