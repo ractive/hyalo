@@ -149,6 +149,20 @@ pub(super) fn hints_for_find(
         // likely fix — then fall through to the generic zero-result hints
         // (did-you-mean, observed values, drop the most selective filter).
         let mut hints: Vec<Hint> = Vec::new();
+        // iter-267 (UX-3, reverse direction): the PATTERN was an existing
+        // `.md` path, so this was a body search for that literal text. Leading
+        // with it here matters more than on the non-empty path — searching for
+        // a filename usually finds nothing, and `file not found` is not what
+        // came back to explain it.
+        if let Some(path) = &ctx.pattern_names_a_file {
+            hints.push(Hint::new(
+                format!(
+                    "'{path}' is a file in this vault — target it instead of searching for its \
+                     name"
+                ),
+                build_command_no_glob(ctx, &["find", "--file", path]),
+            ));
+        }
         // Skip if the query already contains quotes (phrase search) — splitting on
         // whitespace would produce malformed tokens like `"exact` and `phrase"`.
         if let Some(pat) = &ctx.body_pattern {

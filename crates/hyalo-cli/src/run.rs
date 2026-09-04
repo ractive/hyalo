@@ -549,7 +549,11 @@ fn looks_like_unquoted_query_word(token: &str, dir: &std::path::Path) -> bool {
     if token.is_empty()
         || token.contains('/')
         || token.contains('\\')
-        || token.ends_with(".md")
+        // Case-insensitive, matching `discovery`'s own markdown test — a
+        // `NOTE.MD` target is a path, not a stray query word.
+        || std::path::Path::new(token)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         || token.starts_with('-')
     {
         return false;
@@ -1974,7 +1978,9 @@ fn run_inner() -> Result<(), AppError> {
         // existing `.md` path is a body search for that literal text. Record
         // it so `find`'s hints can offer `--file`.
         if let Some(pat) = ctx.body_pattern.as_deref()
-            && pat.ends_with(".md")
+            && std::path::Path::new(pat)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
             && dir.join(pat).is_file()
         {
             ctx.pattern_names_a_file = Some(pat.to_owned());
