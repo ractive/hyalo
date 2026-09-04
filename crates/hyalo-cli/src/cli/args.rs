@@ -1884,8 +1884,16 @@ Repeatable (AND).\n\
             SKIP VISIBILITY: with `--files-from`, dropped input paths (missing / non-markdown)\n\
             are reported as a `note:` line (--format text, on stderr) or a `::notice::` (--format\n\
             github), matching the `files_missing`/`files_skipped_*` counters in the JSON envelope.\n\
-            An explicitly named `--file` excluded by `[lint] ignore` also prints a notice rather\n\
-            than silently reporting `0 files checked`.\n\n\
+            NAMED FILES vs [lint] ignore (DEC-284, iteration 267): a path named explicitly —\n\
+            positionally, with `--file`, or through `--files-from` — is linted even when\n\
+            `[lint] ignore` matches it. Naming a file is a stronger signal than a glob written\n\
+            once in .hyalo.toml, and the previous behaviour (drop it, then warn that it was\n\
+            dropped) left no way to lint an ignored file at all. `--glob` and the bare vault\n\
+            sweep keep honouring the ignore list, and a `--glob` whose matches are ENTIRELY\n\
+            ignored still says so. CI implication: `git diff --name-only | hyalo lint\n\
+            --files-from -` now lints changed files that the ignore list covers — the right\n\
+            behaviour for a diff gate. To have the ignore list applied to a set of paths, select\n\
+            them with `--glob` instead of naming them.\n\n\
             GITHUB ANNOTATIONS: --format github (lint-only) emits one GitHub Actions workflow\n\
             command per violation — `::error file=<path>,line=<line>,title=<RULE_ID>::<message>`\n\
             (warnings use `::warning`) — so findings render as inline annotations on the PR diff,\n\
