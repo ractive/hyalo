@@ -2078,6 +2078,69 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // --- iter-265: `[scan] exclude` glob matching ---
+
+    /// Compile a `[scan] exclude` set without touching the process-global
+    /// `OnceLock` (which only one test per process could ever set).
+    fn compiled_exclude(patterns: &[&str]) -> ScanExclude {
+        let mut builder = GlobSetBuilder::new();
+        let mut kept = Vec::new();
+        for pat in patterns {
+            builder.add(GlobBuilder::new(pat).literal_separator(true).build().unwrap());
+            kept.push((*pat).to_owned());
+        }
+        ScanExclude {
+            set: builder.build().unwrap(),
+            patterns: kept,
+        }
+    }
+
+    #[test]
+    fn scan_exclude_matches_a_subtree_but_not_its_siblings() {
+        let exc = compiled_exclude(&["Templates/**"]);
+        assert!(exc.is_excluded("Templates/album.md"));
+        assert!(exc.is_excluded("Templates/nested/book.md"));
+        assert!(!exc.is_excluded("Templates.md"));
+        assert!(!exc.is_excluded("Notes/Templates.md"));
+        assert!(!exc.is_excluded("a.md"));
+    }
+
+    #[test]
+    fn scan_exclude_names_the_glob_that_matched() {
+        let exc = compiled_exclude(&["Templates/**", "archive/*.md"]);
+        assert_eq!(exc.matching_glob("archive/old.md"), Some("archive/*.md"));
+        assert_eq!(exc.matching_glob("Templates/x.md"), Some("Templates/**"));
+        assert_eq!(exc.matching_glob("keep.md"), None);
+    }
+
+    #[test]
+    fn scan_exclude_respects_the_path_separator() {
+        // `*.md` must not reach into a subdirectory — the separator is literal,
+        // matching how `[lint] ignore` and `--glob` already behave.
+        let exc = compiled_exclude(&["*.md"]);
+        assert!(exc.is_excluded("top.md"));
+        assert!(!exc.is_excluded("sub/nested.md"));
+    }
+
+    #[test]
+    fn set_scan_exclude_reports_invalid_globs_without_dropping_the_rest() {
+        // An unclosed character class is the classic typo. `set_scan_exclude`
+        // itself writes a `OnceLock`, so exercise the compile step the way the
+        // function does rather than calling it (a second call would be a no-op
+        // in a process where another test already set it).
+        let mut errors = Vec::new();
+        let mut ok = 0;
+        for pat in ["Templates/**", "[unclosed"] {
+            match GlobBuilder::new(pat).literal_separator(true).build() {
+                Ok(_) => ok += 1,
+                Err(e) => errors.push((pat, e.to_string())),
+            }
+        }
+        assert_eq!(ok, 1);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, "[unclosed");
+    }
+
     // --- L-23: percent-decoding ---
 
     #[test]

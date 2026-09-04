@@ -255,7 +255,9 @@ fn explicitly_named_excluded_file_is_refused_naming_the_glob() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "an excluded target must fail");
-    let val: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // A user error is written to stderr, where a script reading stdout for
+    // results will not mistake it for one.
+    let val: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     let error = val["error"].as_str().unwrap();
     assert!(error.contains("[scan] exclude"), "got: {error}");
     assert!(error.contains("Templates/**"), "must name the glob: {error}");
