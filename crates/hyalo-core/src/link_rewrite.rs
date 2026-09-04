@@ -1403,7 +1403,12 @@ fn split_frontmatter_wikilink(
             let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
             let canonical = idx
                 .lookup_unique(&t_norm)
-                .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")));
+                .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
+                .or_else(|| {
+                    (!t_norm.contains('/')).then(|| {
+                        idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
+                    })?
+                });
             canonical == Some(old_rel) || canonical == Some(old_stem)
         });
     matches.then_some(joined)
@@ -1439,10 +1444,23 @@ fn plan_frontmatter_wikilink_rewrites(
             true
         } else if let Some(idx) = case_index {
             let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
-            let canonical = idx.lookup_unique(&t_norm).or_else(|| {
-                let with_md = format!("{t_norm}.md");
-                idx.lookup_unique(&with_md)
-            });
+            let canonical = idx
+                .lookup_unique(&t_norm)
+                .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
+                // iter-262: a bare stem naming a file in a subdirectory
+                // (`categories: ["[[Books]]"]` → `Categories/Books.md`) is how
+                // Obsidian writes nearly every frontmatter link. The path
+                // lookups above never match it — `books.md` is not a vault path
+                // — so `mv Categories/Books.md` used to report
+                // `links updated: 0` and leave the reference dangling. Only an
+                // unambiguous stem resolves; `lookup_stem` returns `None` when
+                // two files share a basename, and guessing there would rewrite
+                // the wrong link.
+                .or_else(|| {
+                    (!t_norm.contains('/')).then(|| {
+                        idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
+                    })?
+                });
             canonical == Some(old_rel) || canonical == Some(old_stem)
         } else {
             false
