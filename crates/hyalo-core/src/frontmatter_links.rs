@@ -55,10 +55,12 @@ fn key_colon(line: &str) -> Option<usize> {
             b'"' if !in_single => in_double = !in_double,
             b'[' | b'{' if !in_single && !in_double => depth += 1,
             b']' | b'}' if !in_single && !in_double => depth -= 1,
-            b':' if !in_single && !in_double && depth <= 0 => {
-                if i + 1 == bytes.len() || bytes[i + 1] == b' ' {
-                    return Some(i);
-                }
+            b':' if !in_single
+                && !in_double
+                && depth <= 0
+                && (i + 1 == bytes.len() || bytes[i + 1] == b' ') =>
+            {
+                return Some(i);
             }
             _ => {}
         }
@@ -192,9 +194,9 @@ pub fn extract_frontmatter_links(
             if span.kind != LinkKind::Wikilink {
                 continue;
             }
-            let mut link = span.link;
-            link.property = Some(key.clone());
-            out.push((first_line + offset, link));
+            let mut found = span.link;
+            found.property = Some(key.clone());
+            out.push((first_line + offset, found));
         }
     }
 }

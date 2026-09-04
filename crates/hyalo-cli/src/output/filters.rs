@@ -25,8 +25,7 @@ pub(super) const PROPERTY_VALUE_EXPR: &str = r#"if type == "array" then (if any(
 /// `PropertyInfo` (used by `--fields properties-typed`): `{name, type, value}`
 /// When value is an array (list type), join elements with ", " for readability
 /// — or as quoted items when they carry wikilinks (see [`PROPERTY_VALUE_EXPR`]).
-pub(super) const PROPERTY_INFO_FILTER: &str =
-    r#""\(.name) (\(.type)): \(.value | if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end)""#;
+pub(super) const PROPERTY_INFO_FILTER: &str = r#""\(.name) (\(.type)): \(.value | if type == "array" then (if any(.[] | tostring; contains("[[")) then "[" + (map(tostring | tojson) | join(", ")) + "]" else "[" + (map(tostring) | join(", ")) + "]" end) else . end)""#;
 
 /// `PropertySummaryEntry`: `{count, name, type, mixed_types?}`
 ///

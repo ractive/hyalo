@@ -62,6 +62,27 @@ struct LinksConfig {
     fuzzy_min_confidence: Option<f64>,
 }
 
+// iter-262: `[links] frontmatter` is resolved here, not in core, because
+// core speaks only in property lists.
+fn resolve_frontmatter_link_props(links: Option<&LinksConfig>) -> Option<Vec<String>> {
+    let links = links?;
+    // An explicit property list always wins: it is the narrower statement,
+    // and it is what `frontmatter = false` falls back to when set.
+    if let Some(props) = links.frontmatter_properties.clone() {
+        return Some(props);
+    }
+    if links.frontmatter == Some(false) {
+        return Some(
+            hyalo_core::link_graph::DEFAULT_FRONTMATTER_LINK_PROPERTIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        );
+    }
+    // `None` means "scan every frontmatter value".
+    None
+}
+
 /// `[links] case_insensitive` setting — either the classic mode string
 /// (`"auto"` / `"true"` / `"false"`) or the `[links.case_insensitive]`
 /// sub-table form (UX-6, iter-244).
@@ -997,27 +1018,6 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             (CaseInsensitiveMode::Auto, false)
         }
     };
-
-    // iter-262: `[links] frontmatter` is resolved here, not in core, because
-    // core speaks only in property lists.
-    fn resolve_frontmatter_link_props(links: Option<&LinksConfig>) -> Option<Vec<String>> {
-        let links = links?;
-        // An explicit property list always wins: it is the narrower statement,
-        // and it is what `frontmatter = false` falls back to when set.
-        if let Some(props) = links.frontmatter_properties.clone() {
-            return Some(props);
-        }
-        if links.frontmatter == Some(false) {
-            return Some(
-                hyalo_core::link_graph::DEFAULT_FRONTMATTER_LINK_PROPERTIES
-                    .iter()
-                    .map(|s| (*s).to_owned())
-                    .collect(),
-            );
-        }
-        // `None` means "scan every frontmatter value".
-        None
-    }
 
     // `[links] fuzzy_min_confidence` (iter-212) — an out-of-range value is a
     // config error the user should see, not a silent clamp, so warn and ignore.

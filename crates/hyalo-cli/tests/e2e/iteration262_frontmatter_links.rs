@@ -78,7 +78,11 @@ fn vault() -> TempDir {
         "References/The Machine Stops.md",
         "---\ncategories: [\"[[Books]]\"]\n---\n\nSee [[Categories/Books]] for the shelf.\n",
     );
-    write(&tmp, "People/Kevin Kelly.md", "---\ntags: []\n---\n\n# KK\n");
+    write(
+        &tmp,
+        "People/Kevin Kelly.md",
+        "---\ntags: []\n---\n\n# KK\n",
+    );
     tmp
 }
 
@@ -112,10 +116,8 @@ fn backlinks_counts_frontmatter_links_from_any_property() {
         "{json}"
     );
     // The body link is still a plain wikilink and carries no property.
-    let body: Vec<&serde_json::Value> = entries
-        .iter()
-        .filter(|e| e["kind"] == "wikilink")
-        .collect();
+    let body: Vec<&serde_json::Value> =
+        entries.iter().filter(|e| e["kind"] == "wikilink").collect();
     assert_eq!(body.len(), 1, "{json}");
     assert!(body[0]["property"].is_null(), "{json}");
 }
@@ -178,7 +180,11 @@ fn a_note_linked_only_from_frontmatter_is_not_an_orphan() {
 #[test]
 fn broken_frontmatter_wikilink_is_reported_by_hyalo006() {
     let tmp = TempDir::new().unwrap();
-    write(&tmp, "note.md", "---\ncategories: \"[[Nope]]\"\n---\n\nBody\n");
+    write(
+        &tmp,
+        "note.md",
+        "---\ncategories: \"[[Nope]]\"\n---\n\nBody\n",
+    );
     let output = hyalo(&tmp)
         .args(["lint", "--rule", "HYALO006", "--format", "json"])
         .output()
@@ -293,8 +299,7 @@ fn mv_rewrites_frontmatter_wikilinks_preserving_quotes() {
     assert!(typed.contains("type: \"[[Library]]\""), "{typed}");
     assert!(typed.contains("- '[[Library]]'"), "{typed}");
 
-    let flow =
-        std::fs::read_to_string(tmp.path().join("References/The Machine Stops.md")).unwrap();
+    let flow = std::fs::read_to_string(tmp.path().join("References/The Machine Stops.md")).unwrap();
     assert!(flow.contains("categories: [\"[[Library]]\"]"), "{flow}");
 
     let block = std::fs::read_to_string(tmp.path().join("References/Out of Control.md")).unwrap();
@@ -416,7 +421,10 @@ fn properties_typed_text_output_quotes_wikilink_list_items() {
         &tmp,
         &["find", "--file", "album.md", "--fields", "properties-typed"],
     );
-    assert!(stdout.contains(r#"genre (list): ["[[Futurism]]"]"#), "{stdout}");
+    assert!(
+        stdout.contains(r#"genre (list): ["[[Futurism]]"]"#),
+        "{stdout}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -443,8 +451,7 @@ fn set_reports_a_list_property_collapsed_to_a_scalar() {
         ],
     );
     assert!(
-        stderr.contains("status was a list in 1 file")
-            && stderr.contains("hyalo append"),
+        stderr.contains("status was a list in 1 file") && stderr.contains("hyalo append"),
         "expected the list-collapse note, got: {stderr}"
     );
 

@@ -1411,9 +1411,8 @@ fn split_frontmatter_wikilink(
                 .lookup_unique(&t_norm)
                 .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
                 .or_else(|| {
-                    (!t_norm.contains('/')).then(|| {
-                        idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
-                    })?
+                    (!t_norm.contains('/'))
+                        .then(|| idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm)))?
                 });
             canonical == Some(old_rel) || canonical == Some(old_stem)
         });
@@ -1463,9 +1462,8 @@ fn plan_frontmatter_wikilink_rewrites(
                 // two files share a basename, and guessing there would rewrite
                 // the wrong link.
                 .or_else(|| {
-                    (!t_norm.contains('/')).then(|| {
-                        idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
-                    })?
+                    (!t_norm.contains('/'))
+                        .then(|| idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm)))?
                 });
             canonical == Some(old_rel) || canonical == Some(old_stem)
         } else {

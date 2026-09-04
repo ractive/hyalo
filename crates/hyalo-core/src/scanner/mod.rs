@@ -306,7 +306,8 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
 
-    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(first_line) {
+    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(first_line)
+    {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         let mut yaml = if any_needs_fm {
@@ -498,8 +499,9 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
-    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(&first_trimmed)
-    {
+    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(
+        &first_trimmed,
+    ) {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         // Read past frontmatter lines, optionally collecting YAML content

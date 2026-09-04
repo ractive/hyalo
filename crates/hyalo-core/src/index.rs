@@ -17,9 +17,7 @@ use crate::bm25::{Bm25InvertedIndex, resolve_language, tokenize};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
-use crate::link_graph::{
-    FileLinks, LinkGraph, LinkGraphVisitor,
-};
+use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
 use crate::links::Link;
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
@@ -196,7 +194,8 @@ impl ScannedIndex {
         let default_language = options.default_language;
         // iter-262: `None` means "scan every frontmatter value"; an explicit
         // list is the opt-out that narrows the scan back to named properties.
-        let fm_link_props: Option<Vec<String>> = options.frontmatter_link_props.map(<[String]>::to_vec);
+        let fm_link_props: Option<Vec<String>> =
+            options.frontmatter_link_props.map(<[String]>::to_vec);
         let scan = |(full_path, rel_path): &(std::path::PathBuf, String)| {
             scan_one_file(
                 full_path,
