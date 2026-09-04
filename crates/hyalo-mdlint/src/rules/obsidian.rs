@@ -230,24 +230,37 @@ fn matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-/// Whether the link starting at `column` (1-based, Unicode-scalar) on `line`
-/// has an image for its link text — `[![alt](img)](url)` or `[![[img]]](url)`.
+/// Whether the MD042 diagnostic reported at `column` (1-based,
+/// Unicode-scalar) on `line` is really the badge idiom
+/// `[![alt](img)](url)` — an image used as a link's text.
 ///
-/// MD042 calls such a link empty because it only concatenates `Text`/`Code`
-/// descendants. The badge idiom is deliberate markup, not a broken link, so
-/// the diagnostic is suppressed; a genuinely empty `[](url)` or `[ ](url)`
-/// still fires because neither starts its label with an image.
+/// MD042 emits *two* diagnostics for that one construct, and both are
+/// suppressed here:
+///
+/// - on the enclosing **link**, "Found empty link", because the rule only
+///   concatenates `Text`/`Code` descendants and so never sees the image;
+/// - on the **image**, "Found image with empty alt text", because in this
+///   position the alt text would duplicate the link it wraps — the link, not
+///   the image, is what a reader follows.
+///
+/// A standalone `![](img.png)` still gets the alt-text warning, and a
+/// genuinely empty `[](url)` or `[ ](url)` still gets the empty-link error:
+/// neither has an image at the start of a link label.
 #[must_use]
 pub fn link_text_is_image(line: &str, column: usize) -> bool {
     let Some(offset) = scalar_col_to_byte_offset(line, column) else {
         return false;
     };
-    let rest = &line[offset..];
-    let Some(label) = rest.strip_prefix('[') else {
-        return false;
-    };
-    // Covers both `![alt](img)` and the Obsidian embed `![[img]]`.
-    label.trim_start().starts_with("![")
+    // The link diagnostic points at the `[` opening the label. Covers both
+    // `![alt](img)` and the Obsidian embed `![[img]]`.
+    if let Some(label) = line[offset..].strip_prefix('[')
+        && label.trim_start().starts_with("![")
+    {
+        return true;
+    }
+    // The image diagnostic points at the `!`; it is link text exactly when a
+    // link label opens immediately before it.
+    line[offset..].starts_with("![") && line[..offset].ends_with('[')
 }
 
 /// 1-based Unicode-scalar column → byte offset within `line`.
@@ -334,6 +347,10 @@ mod tests {
         assert!(!link_text_is_image("[](https://example.com/)", 1));
         assert!(!link_text_is_image("[ ](https://example.com/)", 1));
         assert!(link_text_is_image("prefix [![alt](i.png)](u)", 8));
+        // The image half of the same construct (column of the `!`).
+        assert!(link_text_is_image(line, 2));
+        // A standalone image keeps its empty-alt warning.
+        assert!(!link_text_is_image("![](img.png)", 1));
     }
 
     #[test]

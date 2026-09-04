@@ -48,10 +48,70 @@ fn fix_output(fixed_rule: Option<&str>, conflict_rule: &str) -> String {
             "file": "a.md",
             "fixed_groups": fixed_groups,
             "remaining_groups": [],
-            "conflicts": [{"rule": conflict_rule, "reason": "range overlap with MD009"}],
+            "conflicts": [{"rule": conflict_rule, "line": 12, "reason": "range overlap with MD009"}],
+            "conflicts_total": 1,
         }],
     });
     format_lint_fix_output_text(value.as_object().expect("object"))
+}
+
+/// Fix-mode output with `n` conflicts listed out of `total` — the shape the
+/// engine emits once the per-file display cap kicks in.
+fn fix_output_with_conflicts(n: usize, total: usize) -> String {
+    let conflicts: Vec<serde_json::Value> = (0..n)
+        .map(|i| json!({"rule": "MD013", "line": i + 1, "reason": "range overlap with MD009"}))
+        .collect();
+    let value = json!({
+        "dry_run": true,
+        "files_checked": 1,
+        "total_fixed": 0,
+        "total_remaining": 0,
+        "total_conflicts": total,
+        "files": [{
+            "file": "a.md",
+            "fixed_groups": [],
+            "remaining_groups": [],
+            "conflicts": conflicts,
+            "conflicts_total": total,
+        }],
+    });
+    format_lint_fix_output_text(value.as_object().expect("object"))
+}
+
+// -----------------------------------------------------------------------
+// iter-263 UX-16 — `conflicts N` is explained, one line per conflict
+// -----------------------------------------------------------------------
+
+#[test]
+fn fix_text_explains_each_conflict_with_its_line() {
+    let out = fix_output(None, "MD047");
+    assert!(
+        out.contains("conflict  MD047  line 12: range overlap with MD009"),
+        "a conflict must name the line and the blocking rule: {out}"
+    );
+}
+
+#[test]
+fn fix_text_caps_the_conflict_listing_and_points_at_detailed() {
+    let out = fix_output_with_conflicts(20, 57);
+    assert_eq!(
+        out.matches("conflict  MD013").count(),
+        20,
+        "only the capped listing is printed: {out}"
+    );
+    assert!(
+        out.contains("… and 37 more (use --detailed)"),
+        "the remainder must be counted and the escape hatch named: {out}"
+    );
+}
+
+#[test]
+fn fix_text_omits_the_more_line_when_nothing_was_capped() {
+    let out = fix_output_with_conflicts(3, 3);
+    assert!(
+        !out.contains("more (use --detailed)"),
+        "an uncapped listing must not claim there is more: {out}"
+    );
 }
 
 #[test]
