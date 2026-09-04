@@ -514,16 +514,26 @@ mod tests {
 
     #[test]
     fn parse_regex_eq_tilde_bare_is_rejected() {
-        let err = parse_property_filter("status=~compl").unwrap_err().to_string();
+        let err = parse_property_filter("status=~compl")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("=~"), "{err}");
-        assert!(err.contains("~="), "message must name the right operator: {err}");
+        assert!(
+            err.contains("~="),
+            "message must name the right operator: {err}"
+        );
     }
 
     #[test]
     fn parse_regex_eq_tilde_delimited_is_rejected() {
-        let err = parse_property_filter(r"title=~/iter/").unwrap_err().to_string();
+        let err = parse_property_filter(r"title=~/iter/")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unknown operator"), "{err}");
-        assert!(err.contains("title~=/iter/"), "message must show the fix: {err}");
+        assert!(
+            err.contains("title~=/iter/"),
+            "message must show the fix: {err}"
+        );
     }
 
     #[test]

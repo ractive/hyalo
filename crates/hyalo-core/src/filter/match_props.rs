@@ -108,10 +108,10 @@ impl PropertyFilter {
                     FilterOp::IsNull => return value.is_null(),
                     FilterOp::NotNull => return !value.is_null(),
                     FilterOp::IsEmptyList => {
-                        return value.as_array().is_some_and(|a| a.is_empty());
+                        return value.as_array().is_some_and(Vec::is_empty);
                     }
                     FilterOp::NotEmptyList => {
-                        return !value.as_array().is_some_and(|a| a.is_empty());
+                        return !value.as_array().is_some_and(Vec::is_empty);
                     }
                     _ => {}
                 }
@@ -391,8 +391,11 @@ fn classify_value(yaml: &Value) -> Option<CmpKind<'_>> {
 fn yaml_cmp(yaml: &Value, filter: &str) -> Option<std::cmp::Ordering> {
     match (classify_value(yaml)?, classify_str(filter)) {
         (CmpKind::Num(a), CmpKind::Num(b)) => a.partial_cmp(&b),
-        (CmpKind::Date(a), CmpKind::Date(b)) => Some(a.cmp(b)),
-        (CmpKind::Text(a), CmpKind::Text(b)) => Some(a.cmp(b)),
+        // Dates compare on their `YYYY-MM-DD` prefix, which is exactly a
+        // string comparison — same arm body, different reason.
+        (CmpKind::Date(a), CmpKind::Date(b)) | (CmpKind::Text(a), CmpKind::Text(b)) => {
+            Some(a.cmp(b))
+        }
         _ => None,
     }
 }

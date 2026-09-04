@@ -13,7 +13,11 @@ use super::build::extract_title;
 /// reversed run is still deterministic and reads in path order within a tie
 /// (iter-264, DEC-273).
 fn dir(ordering: Ordering, reverse: bool) -> Ordering {
-    if reverse { ordering.reverse() } else { ordering }
+    if reverse {
+        ordering.reverse()
+    } else {
+        ordering
+    }
 }
 
 /// Compare two optional property values with missing/null pinned last in both
@@ -113,8 +117,11 @@ pub(super) fn presort_index_entries(
 ) {
     match sort.unwrap_or(&SortField::File) {
         SortField::File => entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path)),
-        SortField::Modified => entries
-            .sort_by(|a, b| a.modified.cmp(&b.modified).then_with(|| a.rel_path.cmp(&b.rel_path))),
+        SortField::Modified => entries.sort_by(|a, b| {
+            a.modified
+                .cmp(&b.modified)
+                .then_with(|| a.rel_path.cmp(&b.rel_path))
+        }),
         SortField::BacklinksCount => {
             // Ascending by backlink count — matches apply_sort (DEC-273).
             entries.sort_by(|a, b| {

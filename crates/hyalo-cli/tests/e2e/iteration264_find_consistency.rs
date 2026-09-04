@@ -152,7 +152,14 @@ fn sort_property_keeps_missing_values_last_in_both_directions() {
 
     let asc = find_json(
         tmp.path(),
-        &["--sort", "property:rating", "--limit", "0", "--fields", "properties"],
+        &[
+            "--sort",
+            "property:rating",
+            "--limit",
+            "0",
+            "--fields",
+            "properties",
+        ],
     );
     let asc_ratings: Vec<&serde_json::Value> = asc["results"]
         .as_array()
@@ -407,7 +414,10 @@ fn filenames_only_emits_exactly_one_newline_per_path() {
         .args(["find", "--limit", "0", "--count"])
         .output()
         .unwrap();
-    let expected: usize = String::from_utf8_lossy(&count.stdout).trim().parse().unwrap();
+    let expected: usize = String::from_utf8_lossy(&count.stdout)
+        .trim()
+        .parse()
+        .unwrap();
 
     assert_eq!(
         line_count, expected,

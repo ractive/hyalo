@@ -4185,3 +4185,115 @@ warning too, and the warning is the useful half.
 **Rejected: a `--no-fix-rule` flag or an autofix allowlist in config.** No new
 CLI surface from dogfood pressure; `--fix-rule` already restricts a run to named
 rules, which covers the opposite need.
+
+## DEC-273: one sort direction for every `find --sort` key (2026-09-04)
+
+**Decision:** every `--sort` key orders **ascending** and `--reverse` inverts
+it. `backlinks_count` and `links_count`, which used to sort descending, now
+follow the rule, so `--sort backlinks_count --reverse` means "most linked
+first" exactly as `--sort modified --reverse` means "newest first". `score` is
+the one documented exception: it ranks best-match-first (descending relevance),
+because "best first" is the only useful default for a relevance ranking, and
+`--reverse score` is allowed and documented as "weakest match first".
+`--reverse` is applied inside the comparator rather than by reversing the
+sorted vector, so the `file` tiebreak stays ascending in both directions.
+
+**Why:** `--reverse` meant the opposite thing depending on the key, with
+nothing in `-h` or `--help` saying so. On the Obsidian Hub vault
+`--sort backlinks_count --reverse --limit 3` returned 1-backlink files (and a
+text-mode result whose `backlinks:` field was empty, because a file with no
+backlinks prints none) while the bare sort returned the 2190-backlink hub — the
+inverse of every other key. The two descending keys were almost certainly
+copied from `score`'s comparator.
+
+**Behaviour change.** A script that relied on `--sort backlinks_count` or
+`--sort links_count` returning the most-linked file first must add `--reverse`;
+one that passed `--reverse` to those keys must drop it. Flagged in the
+changelog under Changed.
+
+**Where:** `crates/hyalo-cli/src/commands/find/sort.rs` (`apply_sort` gained a
+`reverse` parameter; `presort_index_entries` matches its ascending order), and
+the `results.reverse()` call in `commands/find/mod.rs` is gone.
+
+## DEC-274: null, empty-list and typed comparisons in `--property` (2026-09-04)
+
+**Decision:** four value shapes and one comparison rule, all on the existing
+`--property` flag (no new CLI surface):
+
+- `K=null` matches a property **present** with a YAML null (`~`, `null`, or an
+  empty value); `K!=null` matches present and non-null. A list *containing* a
+  null (`aliases: [null]`) matches neither — the value's own type is tested, so
+  `K=null` and `--fields properties-typed` (`type: "null"`) always agree.
+- `K=[]` matches a present, empty list; `K!=[]` a present, non-empty one.
+- The existing bare `K` / `!K` keep meaning present / absent.
+- `<`, `<=`, `>`, `>=` classify both sides independently and compare only when
+  the kinds agree: numeric when both parse as finite numbers (so `rating>=6`
+  matches `rating: "7"`), by ISO date prefix when both parse as dates, textual
+  only when both are plain strings. A value of any other kind (bool, null,
+  list, map, or a string of the wrong kind) never matches.
+- `--sort property:K` puts missing and null values last regardless of
+  `--reverse`.
+
+**Why:** `hyalo properties` reported `aliases: 2 null` on the Obsidian Hub
+vault with no filter able to name those two files. And the old comparison fell
+back to a lexicographic string compare across types, so `last>=2023-09-01`
+matched the string `"[[2022-04]]"` and any date-shaped filter silently returned
+wikilinks. Comparing text against a date is never what the caller meant, so the
+right answer is "no match", not "an arbitrary total order".
+
+**Rejected: a `--null` / `--empty` flag pair.** No new CLI flags from dogfood
+pressure; the value slot of `--property` already reads as a value language.
+
+**Where:** `crates/hyalo-core/src/filter/parse.rs` (four new `FilterOp`
+variants), `filter/match_props.rs` (`CmpKind` classification in `yaml_cmp`),
+`crates/hyalo-cli/src/commands/find/sort.rs` (`compare_nulls_last`).
+
+## DEC-275: the typed-properties JSON key stays `properties_typed` (2026-09-04)
+
+**Decision:** keep the snake_case JSON key `properties_typed` — every other
+envelope key is snake_case — and accept **both** `--fields properties-typed`
+and `--fields properties_typed` on the flag, so a printed field list round-trips
+back into `--fields`. The mapping is stated in `find --help`'s RESULT SHAPE
+section and in the `--fields` help.
+
+**Why:** the flag value and the JSON key disagreed, so
+`--jq '.results[0]["properties-typed"]'` returned null with no diagnostic.
+Renaming the key would break every existing consumer and make one envelope key
+kebab-case; accepting the second spelling costs one match arm.
+
+**Where:** `crates/hyalo-core/src/filter/fields.rs`.
+
+## DEC-276: `=~` is not an operator; empty patterns and empty `--fields` are errors (2026-09-04)
+
+**Decision:** three rejections, all exit 1 (the exit code every other bad
+argument in this CLI uses; exit 2 stays reserved for internal/system errors):
+
+- `--property 'K=~/pat/'` → `unknown operator '=~' … use '~=' for a regex match
+  (e.g. 'K~=/pat/')`. `=~` was never implemented as an operator; it "worked"
+  only because `=` split first and `~/pat/` was then compared as a literal
+  value — which is also why `--property 'aliases=~'` matched 5623 files on the
+  Obsidian Hub vault: `~` is YAML null. When both spellings appear, whichever
+  comes first wins, so `K~=a=~b` is still a regex whose pattern contains `=~`,
+  and `K!=~foo` still compares against the literal `~foo`.
+- `--property 'K~=//'`, `'K~=//i'` and `'K~='` → `empty regex in property
+  filter …`. An empty pattern matches every value; bare `K` is the way to test
+  presence.
+- `--fields ''` and `--fields ,` → the same message the unknown-field path
+  produces, listing the valid values. Silently yielding a `{file}`-only
+  projection was a result nobody asked for.
+
+The same parser backs `--where-property` on `set`/`remove`/`append` and
+`--property` on `mv`, so all four get the identical errors.
+
+**Breaking.** Anyone who relied on the `=~` accident must switch to `~=`, which
+the help has always called the right spelling — and whose COMMON MISTAKES entry
+contradicted the parser until now.
+
+**Deviation from the iteration plan:** the plan's acceptance criteria asked for
+exit code 2. Exit 2 is this CLI's internal-error code (iter-181); every
+invalid-argument rejection — unknown field, unknown sort key, empty filter name
+— exits 1, and these three belong to that class. Following the established
+contract beats matching the number written in the plan.
+
+**Where:** `crates/hyalo-core/src/filter/parse.rs`,
+`crates/hyalo-core/src/filter/fields.rs`.

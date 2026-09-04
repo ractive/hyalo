@@ -135,18 +135,8 @@ fn find_files_from_empty_input_exits_zero() {
     assert_eq!(envelope["total"].as_u64().unwrap(), 0);
     // files_from counters must be present and all zero (under .results)
     assert_eq!(envelope["files_missing"].as_u64().unwrap(), 0);
-    assert_eq!(
-        envelope["files_skipped_non_md"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        envelope["files_skipped_outside_vault"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
+    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 0);
+    assert_eq!(envelope["files_skipped_outside_vault"].as_u64().unwrap(), 0);
 }
 
 #[test]
@@ -178,18 +168,8 @@ fn find_files_from_mixed_counters() {
         "only alpha.md should match"
     );
     assert_eq!(envelope["files_missing"].as_u64().unwrap(), 1);
-    assert_eq!(
-        envelope["files_skipped_non_md"]
-            .as_u64()
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        envelope["files_skipped_outside_vault"]
-            .as_u64()
-            .unwrap(),
-        1
-    );
+    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 1);
+    assert_eq!(envelope["files_skipped_outside_vault"].as_u64().unwrap(), 1);
 }
 
 #[test]
@@ -230,12 +210,7 @@ fn find_files_from_non_md_skipped() {
     assert!(out.status.success());
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(envelope["total"].as_u64().unwrap(), 1);
-    assert_eq!(
-        envelope["files_skipped_non_md"]
-            .as_u64()
-            .unwrap(),
-        1
-    );
+    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,12 +237,7 @@ fn lint_files_from_single_file_happy_path() {
 
     let envelope: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(envelope["files_missing"].as_u64().unwrap(), 0);
-    assert_eq!(
-        envelope["files_skipped_non_md"]
-            .as_u64()
-            .unwrap(),
-        0
-    );
+    assert_eq!(envelope["files_skipped_non_md"].as_u64().unwrap(), 0);
 }
 
 #[test]

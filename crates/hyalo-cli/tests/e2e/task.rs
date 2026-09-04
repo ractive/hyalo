@@ -1130,9 +1130,7 @@ fn task_toggle_files_from_list_file() {
     // toggled tasks; the `files_*` counters live on the envelope.
     // iter-264: `results` stays a bare array under --files-from; the counters
     // are top-level envelope keys.
-    let files = json["results"]
-        .as_array()
-        .expect("expected results array");
+    let files = json["results"].as_array().expect("expected results array");
     assert!(files.len() >= 2, "expected tasks from both files");
     assert_eq!(json["files_missing"], 0);
 
@@ -1179,9 +1177,7 @@ fn task_toggle_files_from_stdin() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("expected JSON output");
     // iter-264: `results` stays a bare array under --files-from; the counters
     // are top-level envelope keys.
-    let files = json["results"]
-        .as_array()
-        .expect("expected results array");
+    let files = json["results"].as_array().expect("expected results array");
     // Section "Tasks" has Task A and Task B.
     assert_eq!(files.len(), 2, "expected 2 tasks in Tasks section");
 
@@ -1221,9 +1217,7 @@ fn task_set_files_from_list_file() {
 
     // iter-264: `results` stays a bare array under --files-from; the counters
     // are top-level envelope keys.
-    let files = json["results"]
-        .as_array()
-        .expect("expected results array");
+    let files = json["results"].as_array().expect("expected results array");
     assert!(files.len() >= 2, "expected tasks from both files");
 
     // All tasks should be marked done.

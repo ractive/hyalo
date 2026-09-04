@@ -2224,7 +2224,8 @@ fn run_inner() -> Result<(), AppError> {
         .take()
         .or(files_from_counters)
         .or_else(|| {
-            find_always_reports_counters.then(crate::commands::files_from::FilesFromCounters::default)
+            find_always_reports_counters
+                .then(crate::commands::files_from::FilesFromCounters::default)
         });
 
     let pipeline = OutputPipeline {

@@ -2669,8 +2669,16 @@ fn find_sort_links_count_auto_includes_links() {
     // counted field comes back regardless — an auto-include, like
     // --broken-links → links, which has always overridden --fields.
     let tmp = setup_link_vault();
-    let (status, json, stderr) =
-        find_typed(&tmp, &["--sort", "links_count", "--reverse", "--fields", "properties"]);
+    let (status, json, stderr) = find_typed(
+        &tmp,
+        &[
+            "--sort",
+            "links_count",
+            "--reverse",
+            "--fields",
+            "properties",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
