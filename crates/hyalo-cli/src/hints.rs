@@ -171,6 +171,14 @@ pub struct HintContext {
     /// on a vault that had been indexed minutes earlier — telling the reader
     /// to rebuild what they already had instead of to pass `--index`.
     pub snapshot_on_disk: bool,
+    /// Vault-relative path the `find` PATTERN itself names, when the pattern
+    /// is a `.md` path that exists in the vault.
+    ///
+    /// iter-267 (UX-3, reverse direction): `hyalo find notes/todo.md` is a
+    /// body search for the literal text `notes/todo.md`, which is almost never
+    /// what the caller meant. The results are not wrong, so this is a hint,
+    /// not an error — `--file` is one line away.
+    pub pattern_names_a_file: Option<String>,
     // Find context
     pub fields: Vec<String>,
     pub sort: Option<String>,
@@ -270,6 +278,7 @@ impl HintContext {
             quiet: false,
             has_index: false,
             snapshot_on_disk: false,
+            pattern_names_a_file: None,
             fields: vec![],
             sort: None,
             has_limit: false,

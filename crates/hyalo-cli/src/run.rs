@@ -536,6 +536,27 @@ pub fn run() {
     }
 }
 
+/// Does `token` look like a word from an unquoted multi-word `find` query
+/// rather than a file target? (iter-267, UX-3)
+///
+/// Three guards keep a real path out of this branch: a path separator, an
+/// explicit `.md` extension, and existence on disk (either as given or with
+/// `.md` appended, which is the spelling `read`/`lint` already suggest). What
+/// is left — a bare word naming nothing in the vault — is a quoting accident
+/// in every realistic invocation, so it earns the quoting message instead of
+/// `file not found`.
+fn looks_like_unquoted_query_word(token: &str, dir: &std::path::Path) -> bool {
+    if token.is_empty()
+        || token.contains('/')
+        || token.contains('\\')
+        || token.ends_with(".md")
+        || token.starts_with('-')
+    {
+        return false;
+    }
+    !dir.join(token).exists() && !dir.join(format!("{token}.md")).exists()
+}
+
 /// `-h` layout for the top-level command (iteration 251).
 ///
 /// Clap has one template per `Command`, so the grouped command list lives in
@@ -1948,8 +1969,16 @@ fn run_inner() -> Result<(), AppError> {
         // told to *use* the snapshot, not to build another one. Only probed
         // when no index was requested, so the common `--index` path pays
         // nothing for the stat.
-        ctx.snapshot_on_disk =
-            index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
+        ctx.snapshot_on_disk = index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
+        // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
+        // existing `.md` path is a body search for that literal text. Record
+        // it so `find`'s hints can offer `--file`.
+        if let Some(pat) = ctx.body_pattern.as_deref()
+            && pat.ends_with(".md")
+            && dir.join(pat).is_file()
+        {
+            ctx.pattern_names_a_file = Some(pat.to_owned());
+        }
         // Preserve the active index into derived `find` hints so they query the
         // same snapshot rather than silently rescanning the vault (BUG-7
         // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
@@ -2103,6 +2132,33 @@ fn run_inner() -> Result<(), AppError> {
                 )));
             }
         }
+    }
+
+    // iter-267 (UX-3): `hyalo find dataview plugin` is an unquoted two-word
+    // body search, not a query plus a file target — but clap hands the second
+    // word to FILE and the run died with a bare `file not found: plugin`,
+    // which describes the symptom and hides the cause. Catch the argv shape
+    // before dispatch and name the quoted command that does what was meant.
+    if let Commands::Find {
+        pattern: Some(pattern),
+        file_positional,
+        ..
+    } = &cli.command
+        && let Some(bad) = file_positional
+            .iter()
+            .find(|t| looks_like_unquoted_query_word(t, &dir))
+    {
+        let quoted: String = std::iter::once(pattern.as_str())
+            .chain(file_positional.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "error: '{bad}' is not a file; did you mean hyalo find '{quoted}'?\n\n\
+             tip: the FIRST positional is the body-search PATTERN; every later one is a FILE \
+             target, so an unquoted multi-word query is read as a query plus file names. \
+             Quote the whole phrase.\n"
+        );
+        return Err(AppError::Exit(2));
     }
 
     // Propagate the configured frontmatter-link property list into the loaded

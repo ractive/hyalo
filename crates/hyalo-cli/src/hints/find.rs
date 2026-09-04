@@ -178,6 +178,18 @@ pub(super) fn hints_for_find(
     let result_count = results.len();
     let is_single = result_count == 1;
 
+    // iter-267 (UX-3, reverse direction): the PATTERN was itself an existing
+    // `.md` path, so this ran as a body search for that literal text. The
+    // results are legitimate, so this leads rather than replacing them.
+    if let Some(path) = &ctx.pattern_names_a_file {
+        hints.push(Hint::new(
+            format!(
+                "'{path}' is a file in this vault — target it instead of searching for its name"
+            ),
+            build_command_no_glob(ctx, &["find", "--file", path]),
+        ));
+    }
+
     // --- Single-result hints ---
     if let Some(first_file) = results[0].get("file").and_then(|f| f.as_str()) {
         hints.push(Hint::new(
