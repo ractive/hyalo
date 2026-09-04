@@ -165,16 +165,26 @@ mod tests {
         );
     }
 
+    /// `dir = "."` names the directory the user is already standing in, so the
+    /// banner states the fact and stops — the "don't `cd` into it" half of the
+    /// separate-subdirectory message is nonsense here (iter-267, UX-18).
     #[test]
     fn cwd_has_config_with_default_dir() {
-        // dir = "." (or absent) — banner should still mention "."
         let tmp = make_temp();
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
 
         let result = cwd_help_banner_for(tmp.path()).expect("expected Some banner");
         assert!(
-            result.contains("runs against `.`"),
-            "expected info banner mentioning '.', got: {result}"
+            result.contains("runs against this directory"),
+            "expected the this-directory banner, got: {result}"
+        );
+        assert!(
+            result.contains("`dir = \".\"` in ./.hyalo.toml"),
+            "expected the config source, got: {result}"
+        );
+        assert!(
+            !result.contains("cd"),
+            "no cd advice for a vault that IS the cwd, got: {result}"
         );
     }
 

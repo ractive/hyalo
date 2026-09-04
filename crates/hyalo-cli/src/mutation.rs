@@ -195,6 +195,31 @@ impl Commands {
                 selection.file_positional.as_slice(),
                 &selection.glob,
             ),
+            // iter-267 (UX-13): the bulk-mutation family names its targets
+            // too, and it does not merely *read* them — it rewrites each
+            // entry in the snapshot through `MutationJournal`. Warning that
+            // the index may be stale, on the run that is about to refresh the
+            // very entries it names, was the least useful place the heuristic
+            // could fire: a `set --index` no-op printed a warning about
+            // staleness it had already repaired.
+            Self::Set {
+                file_positional,
+                file,
+                glob,
+                ..
+            }
+            | Self::Remove {
+                file_positional,
+                file,
+                glob,
+                ..
+            }
+            | Self::Append {
+                file_positional,
+                file,
+                glob,
+                ..
+            } => named(file, file_positional, glob),
             _ => Vec::new(),
         }
     }

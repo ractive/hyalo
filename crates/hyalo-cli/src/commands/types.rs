@@ -1342,7 +1342,7 @@ mod tests {
         .unwrap();
 
         // Now remove it — should succeed and update the same file.
-        let outcome = remove_type(dir, "note", Format::Json).unwrap();
+        let outcome = remove_type(dir, "note", &SchemaConfig::default(), Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
         let toml_path = dir.join(".hyalo.toml");
@@ -1360,7 +1360,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // schema is a string instead of a table — should error, not panic
         std::fs::write(tmp.path().join(".hyalo.toml"), "schema = \"not-a-table\"\n").unwrap();
-        let result = remove_type(tmp.path(), "iteration", Format::Json);
+        let result = remove_type(
+            tmp.path(),
+            "iteration",
+            &SchemaConfig::default(),
+            Format::Json,
+        );
         // Should succeed with UserError or Err, but NOT panic
         match result {
             Ok(CommandOutcome::UserError(msg)) => {

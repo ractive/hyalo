@@ -32,20 +32,67 @@ pub(super) fn promoted_title_string(value: &serde_json::Value) -> Option<String>
     }
 }
 
-/// Extract the title value for `--fields title`.
+/// Where a promoted title came from — reported as `title_source` in JSON.
 ///
-/// Priority:
+/// iteration 267 (DEC-283): with the filename fallback in place, `title` is
+/// effectively always present, so a consumer can no longer tell an authored
+/// title from a derived one by checking for `null`. This says which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TitleSource {
+    /// A promotable scalar `title` in the frontmatter.
+    Property,
+    /// The document's first H1 heading.
+    H1,
+    /// The filename with its `.md` extension removed (Obsidian's behaviour).
+    Filename,
+}
+
+impl TitleSource {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Property => "property",
+            Self::H1 => "h1",
+            Self::Filename => "filename",
+        }
+    }
+}
+
+/// The filename stem of a vault-relative path: the last path segment with a
+/// trailing `.md` removed. `None` when there is nothing left to promote.
+///
+/// Deliberately hand-rolled rather than `Path::file_stem`, which splits on the
+/// LAST dot and would turn `2026-09-03.notes.md` into `2026-09-03.notes` but
+/// `v0.22.0.md` into `v0.22` — the extension is what we strip, not "everything
+/// after the final dot".
+fn filename_stem(rel_path: &str) -> Option<&str> {
+    let name = rel_path
+        .rsplit_once(['/', '\\'])
+        .map_or(rel_path, |(_, name)| name);
+    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let trimmed = stem.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Extract the title value for `--fields title`, with its provenance.
+///
+/// Priority (DEC-283, iteration 267):
 /// 1. `title` frontmatter property, when it is a promotable scalar (see
 ///    [`promoted_title_string`])
 /// 2. First H1 heading in the document outline
-/// 3. `serde_json::Value::Null` if neither found
-pub(super) fn extract_title(
+/// 3. The filename stem — what Obsidian shows in its file list and what a
+///    reader sees in the sidebar. Before iteration 267 this step did not
+///    exist, so a vault whose notes carry neither a `title` property nor an
+///    H1 (the common Obsidian case) printed `title: (none)` for every file
+///    and sorted them all into one indistinguishable `null` bucket.
+/// 4. `serde_json::Value::Null` only when even the stem is empty.
+pub(super) fn extract_title_with_source(
     props: &indexmap::IndexMap<String, serde_json::Value>,
     outline_sections: Option<&[OutlineSection]>,
-) -> serde_json::Value {
+    rel_path: &str,
+) -> (serde_json::Value, Option<TitleSource>) {
     // 1. Frontmatter title property
     if let Some(s) = props.get("title").and_then(promoted_title_string) {
-        return serde_json::Value::String(s);
+        return (serde_json::Value::String(s), Some(TitleSource::Property));
     }
     // 2. First H1 heading from outline
     if let Some(sections) = outline_sections {
@@ -53,11 +100,31 @@ pub(super) fn extract_title(
             if sec.level == 1
                 && let Some(ref heading) = sec.heading
             {
-                return serde_json::Value::String(heading.clone());
+                return (
+                    serde_json::Value::String(heading.clone()),
+                    Some(TitleSource::H1),
+                );
             }
         }
     }
-    serde_json::Value::Null
+    // 3. Filename stem
+    if let Some(stem) = filename_stem(rel_path) {
+        return (
+            serde_json::Value::String(stem.to_owned()),
+            Some(TitleSource::Filename),
+        );
+    }
+    (serde_json::Value::Null, None)
+}
+
+/// [`extract_title_with_source`] without the provenance, for the filter and
+/// sort paths that only compare values.
+pub(super) fn extract_title(
+    props: &indexmap::IndexMap<String, serde_json::Value>,
+    outline_sections: Option<&[OutlineSection]>,
+    rel_path: &str,
+) -> serde_json::Value {
+    extract_title_with_source(props, outline_sections, rel_path).0
 }
 
 /// Pre-compiled title filter — avoids per-file regex compilation and repeated

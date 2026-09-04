@@ -143,8 +143,8 @@ pub(super) fn presort_index_entries(
         }
         SortField::Title => {
             entries.sort_by(|a, b| {
-                let a_val = extract_title(&a.properties, Some(&a.sections));
-                let b_val = extract_title(&b.properties, Some(&b.sections));
+                let a_val = extract_title(&a.properties, Some(&a.sections), &a.rel_path);
+                let b_val = extract_title(&b.properties, Some(&b.sections), &b.rel_path);
                 compare_nulls_last(Some(&a_val), Some(&b_val), false)
                     .then_with(|| a.rel_path.cmp(&b.rel_path))
             });

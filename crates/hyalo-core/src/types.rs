@@ -472,6 +472,14 @@ pub struct FileObject {
     /// - `Some(Value::Null)`: title requested but not found
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<serde_json::Value>,
+    /// Where [`Self::title`] came from: `"property"` (a scalar frontmatter
+    /// `title`), `"h1"` (the first H1 heading) or `"filename"` (the filename
+    /// stem — Obsidian's own fallback, added in iteration 267 / DEC-283).
+    ///
+    /// Present exactly when `title` is; `None` when the title field was not
+    /// requested, or when even the filename stem was empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
