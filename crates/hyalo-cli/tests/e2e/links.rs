@@ -4886,9 +4886,10 @@ fn links_auto_stop_list_changes_the_report_only_structurally() {
         "the stop-list must actually remove proposals: {held_matched} vs {every_matched}"
     );
     assert_eq!(
-        held_matched + held["results"]["default_excluded_mentions"]
-            .as_u64()
-            .expect("default_excluded_mentions"),
+        held_matched
+            + held["results"]["default_excluded_mentions"]
+                .as_u64()
+                .expect("default_excluded_mentions"),
         every_matched,
         "held-back mentions plus proposals must account for every candidate"
     );

@@ -208,10 +208,26 @@ fn config_json_output_with_config() {
         "vault",
         "expected dir 'vault'; got: {json}"
     );
+    // iter-267 (UX-18): `format` is the format this run RESOLVED to (here
+    // `--format json`, since the assertion needs JSON to read); the config's
+    // own value moved to `format_configured`, with `format_source` naming
+    // which won. Before this, `format` reported the file value and said
+    // nothing about what the CLI would actually do — `null` on every vault
+    // that pins nothing.
     assert_eq!(
         results["format"].as_str().unwrap(),
+        "json",
+        "expected the effective format; got: {json}"
+    );
+    assert_eq!(
+        results["format_configured"].as_str().unwrap(),
         "text",
         "expected format 'text' from config; got: {json}"
+    );
+    assert_eq!(
+        results["format_source"].as_str().unwrap(),
+        "flag",
+        "an explicit --format wins over the config; got: {json}"
     );
     // config_path should be a non-null string
     assert!(

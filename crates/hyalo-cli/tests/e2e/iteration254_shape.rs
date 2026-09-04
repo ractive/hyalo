@@ -11,6 +11,11 @@
 //!   reachable in `properties` and `HYALO007` reports it.
 //! - **COH-4.** The root `--help` JSON cookbook's key lists are asserted against
 //!   the live output, so they cannot drift again.
+//!
+//! iter-267 (DEC-283) adds one companion key: `title_source` rides along with
+//! `title` wherever `title` is present, and is never selectable on its own —
+//! so an exact projection naming `title` yields `{file, title, title_source}`
+//! and one that does not name it yields neither.
 
 use super::common::{hyalo_no_hints, write_md};
 use std::path::Path;
@@ -78,7 +83,8 @@ fn no_fields_flag_returns_the_seven_default_keys() {
             "properties",
             "size",
             "tags",
-            "title"
+            "title",
+            "title_source"
         ]
     );
 }
@@ -87,7 +93,10 @@ fn no_fields_flag_returns_the_seven_default_keys() {
 fn an_explicit_fields_selection_is_exact() {
     let tmp = vault();
     for (args, expected) in [
-        (vec!["--fields", "title"], vec!["file", "title"]),
+        (
+            vec!["--fields", "title"],
+            vec!["file", "title", "title_source"],
+        ),
         (
             vec!["--fields", "size,lines"],
             vec!["file", "lines", "size"],
@@ -117,14 +126,14 @@ fn a_filter_adds_its_field_on_top_of_an_exact_projection() {
                 "Goal"
             ]
         ),
-        vec!["file", "sections", "title"]
+        vec!["file", "sections", "title", "title_source"]
     );
     assert_eq!(
         first_item_keys(
             tmp.path(),
             &["find", "--limit", "1", "--fields", "title", "--task", "any"]
         ),
-        vec!["file", "tasks", "title"]
+        vec!["file", "tasks", "title", "title_source"]
     );
 }
 
@@ -146,6 +155,7 @@ fn fields_all_still_returns_everything() {
             "tags",
             "tasks",
             "title",
+            "title_source",
         ]
     );
 }
@@ -185,11 +195,11 @@ fn a_view_pinning_fields_behaves_like_an_explicit_fields() {
 
     assert_eq!(
         first_item_keys(tmp.path(), &["find", "--view", "titles", "--limit", "1"]),
-        vec!["file", "title"]
+        vec!["file", "title", "title_source"]
     );
     assert_eq!(
         first_item_keys(tmp.path(), &["views", "run", "titles", "--limit", "1"]),
-        vec!["file", "title"]
+        vec!["file", "title", "title_source"]
     );
     // A CLI --fields replaces the pin rather than adding to it.
     assert_eq!(

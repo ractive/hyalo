@@ -2968,22 +2968,56 @@ fn find_title_from_h1_when_no_frontmatter_property() {
     );
 }
 
+/// DEC-283 (iter-267): with neither a frontmatter `title` nor an H1, the
+/// title is the FILENAME STEM — Obsidian's own fallback — and
+/// `title_source` says so. Supersedes DEC-255's explicit null, which sorted
+/// every such file into one indistinguishable bucket and printed
+/// `title: (none)` across a whole Obsidian vault.
+///
+/// Kept on raw `serde_json::Value`: `FileObject`'s derived `Deserialize`
+/// collapses an absent and a null `title` to the same `None`, so only Value
+/// indexing can assert the wire format.
 #[test]
-fn find_title_null_when_neither_found() {
-    // Kept on raw serde_json::Value: FileObject's derived Deserialize can't
-    // distinguish `"title": null` (requested, not found) from an omitted
-    // `title` key — both collapse to `title: None` — so only Value indexing
-    // can assert the wire format actually emits an explicit null here.
+fn find_title_falls_back_to_the_filename_stem() {
     let tmp = setup_title_vault();
     let (status, json, stderr) = find_json(&tmp, &["--file", "no_title.md", "--fields", "title"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = unwrap_results(&json);
     assert_eq!(arr.len(), 1);
     let obj = &arr[0];
-    assert!(
-        obj.as_object().unwrap().contains_key("title") && obj["title"].is_null(),
-        "title should be an explicit null when neither frontmatter nor H1 found: {obj}"
+    assert_eq!(
+        obj["title"].as_str(),
+        Some("no_title"),
+        "title should be the filename stem: {obj}"
     );
+    assert_eq!(
+        obj["title_source"].as_str(),
+        Some("filename"),
+        "the provenance must mark it as derived, not authored: {obj}"
+    );
+}
+
+/// `title_source` distinguishes the three sources, so a consumer can tell an
+/// authored title from a derived one now that `title` is effectively always
+/// present (DEC-283).
+#[test]
+fn find_title_source_names_the_provenance() {
+    let tmp = setup_title_vault();
+    for (file, expected_source) in [
+        ("with_fm_title.md", "property"),
+        ("with_h1_title.md", "h1"),
+        ("no_title.md", "filename"),
+    ] {
+        let (status, json, stderr) = find_json(&tmp, &["--file", file, "--fields", "title"]);
+        assert!(status.success(), "stderr: {stderr}");
+        let arr = unwrap_results(&json);
+        assert_eq!(
+            arr[0]["title_source"].as_str(),
+            Some(expected_source),
+            "{file} should report title_source {expected_source}: {}",
+            arr[0]
+        );
+    }
 }
 
 #[test]

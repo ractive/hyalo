@@ -2039,7 +2039,8 @@ fn run_inner() -> Result<(), AppError> {
                             hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
                         })
                     };
-                    if stale && !refreshed_all_targets {
+                    if stale && !refreshed_all_targets && !cli.command.write_repairs_named_targets()
+                    {
                         crate::warn::warn(
                             "index older than vault; results may be stale — re-run create-index",
                         );
