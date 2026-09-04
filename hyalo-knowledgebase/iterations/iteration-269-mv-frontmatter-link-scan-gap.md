@@ -12,7 +12,7 @@ tags:
 branch: iter-269/mv-frontmatter-link-scan-gap
 priority: 9
 related:
-  - "[[backlog/mv-frontmatter-split-link-detection-gap]]"
+  - "[[backlog/done/mv-frontmatter-split-link-detection-gap]]"
   - "[[iterations/iteration-262-frontmatter-wikilinks-first-class]]"
   - "[[iterations/iteration-263-lint-autofix-obsidian-safety]]"
   - "[[iterations/iteration-267-help-hints-text-polish]]"
@@ -52,7 +52,7 @@ set (`by_source`, in `crates/hyalo-core/src/link_rewrite.rs`) comes from
 edge in the first place. So a file whose *only* reference to the moved target is the
 folded/wrapped link gets neither a rewrite nor a warning — exactly the
 silent-dangling-reference failure mode FM-2 exists to close. Full repro and analysis in
-[[backlog/mv-frontmatter-split-link-detection-gap]].
+[[backlog/done/mv-frontmatter-split-link-detection-gap]].
 
 The same probing found a related, pre-existing gap in `NEW-3`'s ambiguous-bare-link
 detection (`skipped_ambiguous`): two files sharing a stem where *neither* sits at the
@@ -200,7 +200,7 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 ### Part A
 
 - [x] Reproduces then fixes the exact repro in
-      [[backlog/mv-frontmatter-split-link-detection-gap]]: a file whose only reference to
+      [[backlog/done/mv-frontmatter-split-link-detection-gap]]: a file whose only reference to
       the moved target is a line-spanning frontmatter wikilink gets the warning.
 - [x] The related `NEW-3` gap (two nested same-stemmed files) is fixed or explicitly
       deferred with a recorded reason.
@@ -238,7 +238,8 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 
 ## Links
 
-- [[backlog/mv-frontmatter-split-link-detection-gap]]
+- [[backlog/done/mv-frontmatter-split-link-detection-gap]]
+- [[backlog/mv-batch-frontmatter-link-scan-gap]] — batch `mv` carry-over filed here
 - [[iterations/iteration-262-frontmatter-wikilinks-first-class]]
 - [[iterations/iteration-263-lint-autofix-obsidian-safety]]
 - [[iterations/iteration-267-help-hints-text-polish]]
@@ -283,7 +284,8 @@ unchanged ambiguity probe and nothing new is rewritten by default.
 
 **Batch `mv` deferred, deliberately.** `plan_batch_mv` returns bare `RewritePlan`s and has
 never had a `frontmatter_links_skipped` channel at all, so extending it means changing its
-return type and the batch output shape. `mv --help` now states the asymmetry.
+return type and the batch output shape. `mv --help` now states the asymmetry. Filed as
+[[backlog/mv-batch-frontmatter-link-scan-gap]] rather than left implicit.
 
 **Verified unchanged** on `../kepano-obsidian` and this knowledgebase: `summary`,
 `find --orphan`, `find --dead-end` and `backlinks` are byte-identical before/after, and an
