@@ -8,7 +8,7 @@ use anyhow::Context as _;
 
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
-    read_frontmatter, rename_frontmatter_key_within, skip_frontmatter, write_frontmatter,
+    read_frontmatter, read_frontmatter_raw, rename_frontmatter_key_within, skip_frontmatter, write_frontmatter,
     write_frontmatter_within,
 };
 pub(crate) use parse::{friendly_parse_error, is_closing_delimiter, is_opening_delimiter};

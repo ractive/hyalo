@@ -461,6 +461,48 @@ pub fn write_frontmatter_within(
     write_frontmatter_impl(Some(vault_root), path, &WriteOp::Props(props)).map(|_| ())
 }
 
+/// Read a file's frontmatter as **raw text**, exactly as it sits on disk
+/// (iter-266 OUT-1).
+///
+/// Returns the bytes between the `---` delimiters — delimiters excluded, the
+/// file's own line endings, quoting, comments and indentation preserved. This
+/// is what a read path should show: re-serializing a parsed map through the
+/// YAML writer changes indentation and quote style on a command that changed
+/// nothing.
+///
+/// `Ok(None)` when the file has no frontmatter block, when the block is empty,
+/// or when its bytes are not valid UTF-8 (the caller then falls back to its
+/// parsed-map rendering). A block whose framing is malformed — an unclosed
+/// `---` — is an `Err`, the same parse error [`read_frontmatter`] reports.
+pub fn read_frontmatter_raw(path: &Path) -> Result<Option<String>> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let span = find_body_offset(&mut file)?;
+    if span.body_offset == 0 {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(0))
+        .with_context(|| format!("failed to seek in {}", path.display()))?;
+    // `find_body_offset` enforces MAX_FRONTMATTER_BYTES/LINES before returning
+    // an offset, so this allocation is bounded.
+    #[allow(clippy::cast_possible_truncation)]
+    let mut fm_bytes = vec![0u8; span.body_offset as usize];
+    file.read_exact(&mut fm_bytes)
+        .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
+    let Ok(fm_str) = std::str::from_utf8(&fm_bytes) else {
+        return Ok(None);
+    };
+    let opening_prefix = format!(
+        "{}---{}",
+        if span.has_bom { BOM } else { "" },
+        span.line_ending.as_str()
+    );
+    let after_open = fm_str.strip_prefix(opening_prefix.as_str()).unwrap_or(fm_str);
+    Ok(strip_closing_delimiter(after_open)
+        .filter(|yaml| !yaml.is_empty())
+        .map(ToOwned::to_owned))
+}
+
 /// Rename one top-level frontmatter key **in place**, preserving its position
 /// in the block and the exact bytes of its value (iter-266 PROP-1).
 ///

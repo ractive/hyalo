@@ -146,7 +146,10 @@ pub fn summary(
 
     let mut total_files: usize = 0;
     let mut dir_counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut property_counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // name -> (inferred type -> file count). Keyed by name (iter-266 OUT-1) so
+    // a mixed-type property is ONE row with a breakdown, and the reported
+    // property count is the number of distinct names.
+    let mut property_counts: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     // string_prop_values: for inconsistency detection — property_name -> (value -> count)
     // Only tracks text-typed string properties (not date/datetime/number/checkbox/list).
     let mut string_prop_values: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
@@ -176,7 +179,9 @@ pub fn summary(
         {
             let prop_type = infer_type(value).to_owned();
             *property_counts
-                .entry((name.clone(), prop_type.clone()))
+                .entry(name.clone())
+                .or_default()
+                .entry(prop_type.clone())
                 .or_insert(0) += 1;
             // Track string (text) values for rare-value inconsistency detection.
             // Cap at 50 distinct values per property (same as disk-scan path).
@@ -296,19 +301,15 @@ pub fn summary(
         directories,
     };
 
-    // Build properties summary (no mixed-type collapse for the summary view —
-    // it intentionally lists each (name, type) pair separately so the reader
-    // can see the distribution at a glance).
-    let mut properties: Vec<PropertySummaryEntry> = property_counts
-        .into_iter()
-        .map(|((name, prop_type), count)| PropertySummaryEntry {
-            name,
-            prop_type,
-            count,
-            mixed_types: None,
-        })
-        .collect();
-    properties.sort_by(|a, b| a.name.cmp(&b.name).then(a.prop_type.cmp(&b.prop_type)));
+    // Build properties summary. iter-266 OUT-1 (BUG-16): one row per property
+    // NAME — a property that appears with several types collapses to `mixed`
+    // with the breakdown, exactly as `properties summary` reports it. Listing
+    // each (name, type) pair separately made `published` look like two
+    // properties and inflated the headline count (13 for 7 names on Obsidian
+    // Hub).
+    let mut properties: Vec<PropertySummaryEntry> =
+        crate::commands::properties::collapse_property_types(property_counts);
+    properties.sort_by(|a, b| a.name.cmp(&b.name));
 
     // Build tag summary
     let mut tags_vec: Vec<TagSummaryEntry> = tag_counts
