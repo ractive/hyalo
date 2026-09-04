@@ -374,8 +374,13 @@ Use `hyalo read` to extract file content without opening the full file:
 hyalo read my-note.md                              # full body (no frontmatter)
 hyalo read my-note.md --section "Tasks"            # extract one section
 hyalo read my-note.md --lines 1:20                 # line range (1-based)
-hyalo read my-note.md --frontmatter                # include YAML frontmatter
+hyalo read my-note.md --frontmatter                # include YAML frontmatter (verbatim)
 ```
+
+`--frontmatter` echoes the block's **own bytes** between its `---` fences — indentation,
+quote style and comments exactly as on disk. Nothing is re-serialized on a read path. In JSON
+the parsed map stays under `.results.frontmatter` and the raw text sits beside it as
+`.results.frontmatter_raw` (`null` for a file with no frontmatter block).
 
 Start with `hyalo summary` to orient yourself in a new directory (text output is the
 default in interactive terminals).
@@ -428,7 +433,16 @@ What follows is only what those pages do not say — the behaviour that surprise
 - **`--where-property` / `--where-tag` default to all `**/*.md`** when neither `--file` nor
   `--glob` is given. Always pair a bulk mutation with `--dry-run` first.
 - **Bare `properties` / `tags` / `types` / `views` / `lint-rules` run their `summary`
-  (or `list`) action** — there is no separate command to remember.
+  (or `list`) action** — there is no separate command to remember. `--index` is accepted on
+  the bare form as well as on the subcommand (`hyalo properties --index` ==
+  `hyalo properties summary --index`).
+- **`properties rename` renames the key in place** — it keeps its position in the block and
+  the value's exact source text (quoting, spacing, comments, list indentation), and an empty
+  `rating:` becomes an empty `score:`, never `score: null`.
+- **`tags rename` on a parent moves the whole subtree** (Obsidian semantics): `--from music
+  --to audio` also renames `music/genres`, works when only children exist, and never matches
+  `musical` (the match needs a `/` boundary). `results.renamed_tags` lists every tag it
+  actually touched with its file count.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
   `--strict` promotes missing-type and undeclared-property warnings to errors.
 - **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
@@ -593,7 +607,9 @@ hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.m
 hyalo types set iteration --required branch --dry-run  # preview without writing
 ```
 
-`types set` is an upsert — it auto-creates the type if it doesn't exist. When adding `--required` fields, string property constraints are auto-created for fields without an explicit constraint.
+`types set` is an upsert — it auto-creates the type if it doesn't exist. When adding `--required` fields, a property constraint is auto-created for fields without an explicit one; its **type is inferred from the values the vault already holds** for that key on files of this type (`string` when there are none), so declaring a list-valued property required does not instantly make every file violate it.
+
+**How a file binds to a type** (DEC-281): `type:` may be a plain string, a `[[Wikilink]]` (bare or quoted; an alias or a path resolves to the note name), or a **one-element list** of either — the shape Obsidian's property editor writes for a link-typed property. `type: ["[[Authors]]"]`, `type: "[[Authors]]"` and `type: Authors` all bind to `Authors`. A multi-element list names no type and `lint` reports it.
 
 When `--default` is used, hyalo applies the default to all vault files of that type missing that property.
 
@@ -713,7 +729,8 @@ hyalo create-index
 # Step 3: Use --index on ALL subsequent commands (defaults to .hyalo-index in vault dir)
 hyalo find --property status=in-progress --index
 hyalo summary --index
-hyalo tags summary --index
+hyalo tags --index          # also `tags summary --index`
+hyalo properties --index    # also `properties summary --index`
 hyalo backlinks some-note.md --index
 
 # Mutations also work with --index — they patch the index after each write

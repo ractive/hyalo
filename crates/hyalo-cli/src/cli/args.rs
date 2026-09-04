@@ -99,8 +99,10 @@ pub(crate) struct IndexFlags {
     // answer different questions and are deliberately maintained apart.
     /// Use the `.hyalo-index` snapshot in the vault dir
     ///
-    /// Read-only commands (find, summary, tags summary, properties summary,
-    /// backlinks) skip the disk scan entirely when the index is present.
+    /// Read-only commands (find, summary, tags, properties, backlinks) skip
+    /// the disk scan entirely when the index is present. On `tags` and
+    /// `properties` the flag is accepted on the bare command as well as on
+    /// the `summary`/`rename` subcommand (iter-266).
     ///
     /// Mutation commands (set, remove, append, task, mv, tags rename,
     /// properties rename, links fix) still read/write individual files on disk
@@ -976,6 +978,12 @@ pub(crate) enum Commands {
         #[arg(short, long, value_name = "RANGE")]
         lines: Option<String>,
         /// Include the YAML frontmatter in output
+        ///
+        /// Text output echoes the block's own bytes between its `---` fences —
+        /// indentation, quote style and comments exactly as on disk; no YAML is
+        /// re-serialized on a read path. JSON keeps the parsed map under
+        /// `frontmatter` and adds the raw text as `frontmatter_raw` (null for a
+        /// file with no frontmatter block).
         #[arg(long)]
         frontmatter: bool,
         #[command(flatten)]
@@ -1070,6 +1078,10 @@ pub(crate) enum Commands {
             `files_with_violations` \u{2014} the same key `lint` uses for that quantity.\n\
             Drill down with: hyalo find --orphan, --dead-end, --broken-links, --property status=X, \
             or --broken-links --strict to fail CI on any finding.\n\
+            PROPERTIES: one entry per property NAME. A property that appears with more than one\n\
+            type across the vault reads `type: \"mixed\"` with a `mixed_types` breakdown\n\
+            ('published (103: 79 datetime, 24 date)' in text), so the property count is the\n\
+            number of distinct names and matches `hyalo properties --count`.\n\
             SCOPE: Scans all .md files under --dir unless narrowed with --glob.\n\
             SIDE EFFECTS: None (read-only).\n\
             USE WHEN: You need a quick overview of a vault's metadata landscape.\n\
@@ -2608,7 +2620,7 @@ pub(crate) enum TypesAction {
     },
     /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset).\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            TYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\n            A --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update
@@ -3136,7 +3148,10 @@ pub(crate) enum PropertiesAction {
     /// Rename a property key across all matched files
     #[command(
         long_about = "Rename a frontmatter property key across matched files.\n\n\
-        Preserves the value and type. Skips files where the target key already exists (conflict).\n\
+        Renames the key IN PLACE: it keeps its position in the block and its\n\
+        value's exact source text — quoting, spacing, comments, block-list\n\
+        indentation, and an empty value stays empty rather than becoming\n\
+        `null`. Skips files where the target key already exists (conflict).\n\
         SIDE EFFECTS: Modifies matched files on disk."
     )]
     Rename {
@@ -3183,7 +3198,14 @@ pub(crate) enum TagsAction {
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
-        Atomic per-file: if the new tag already exists on a file, only the old tag is removed.\n\
+        NESTED TAGS: renaming a parent renames its whole subtree (Obsidian\n\
+        semantics) — `--from music --to audio` also moves `music/genres` to\n\
+        `audio/genres`, and works even when the bare `music` tag appears\n\
+        nowhere. The match lands on a `/` boundary, so `music` never matches\n\
+        `musical`. Every tag actually renamed is listed in the text output and\n\
+        under `renamed_tags` in JSON.\n\
+        Atomic per-file: if the new tag already exists on a file, the renamed\n\
+        duplicate is dropped rather than written twice.\n\
         SIDE EFFECTS: Modifies matched files on disk.")]
     Rename {
         /// Existing tag to rename

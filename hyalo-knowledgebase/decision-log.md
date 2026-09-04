@@ -4417,3 +4417,90 @@ query hostage to filesystem mtime granularity (iteration 247, S-2).
 **Where:** `crates/hyalo-core/src/index.rs` (`refresh_if_changed_on_disk`),
 `crates/hyalo-cli/src/mutation.rs` (`Commands::explicit_file_targets`),
 `crates/hyalo-cli/src/run.rs`.
+
+## DEC-281: a `type:` may be a string, a `[[Wikilink]]`, or a one-element list of either (2026-09-04)
+
+**Decision:** schema type binding normalises the frontmatter `type:` value
+before looking up `[schema.types.*]`. Three shapes bind:
+
+- a plain string — `type: Author`
+- a `[[Wikilink]]`, bare or quoted — `type: "[[Author]]"` → `Author`; an alias
+  (`[[Author|writer]]`), an anchor and a directory prefix (`[[People/Author]]`)
+  all resolve to the note name, the way a wikilink itself resolves
+- a **one-element** list of either — `type: ["[[Author]]"]`, the shape
+  Obsidian's own property editor writes for a link-typed property
+
+A multi-element list, a map, a number or a bool names no type: it binds
+nothing and `lint` reports it, now with a message that names the shapes that
+work rather than the bare `expected string, got […]`.
+
+The dogfood run on kepano-obsidian is the whole case. 15 of its notes write
+`type: ["[[Authors]]"]`. `hyalo types set Authors --required categories`
+reported success, wrote the schema, and then applied to nothing — `lint`
+validated every one of those files against the default schema, and
+`set --property rating=high --validate` accepted a value the schema forbade.
+The command said yes and the vault behaved as if it had said no, which is worse
+than refusing outright.
+
+**Rejected: a `--match` flag or a per-type `match` config key.** The value
+already names the type; needing a second declaration to say "and I mean it"
+is CLI surface bought to work around a parser. If per-type *path* matching is
+ever wanted, that is `[schema.types.X] match`, a config key, not a flag
+(project rule: no new CLI flags from dogfood pressure).
+
+**Rejected: binding a multi-element list to its first element.** `type: [a, b]`
+is a genuine ambiguity — silently picking `a` would validate a file against a
+schema its author did not choose. Reporting it is the honest answer.
+
+**`types set '[[Authors]]'` is still an invalid type name.** Normalisation is a
+*read* rule for what a vault already contains, not licence to write link syntax
+into `.hyalo.toml`.
+
+**Also decided: `types set --required K` infers the property type it
+auto-declares.** `types set` has always auto-added a constraint for a required
+field that has none, hardcoded to `type = "string"`. On a vault where `K` holds
+lists that constraint is violated by every file the moment it is written — the
+command creates the errors it then reports. The type is now inferred from the
+values the vault already holds for `K` on files of this type (most common
+inferred type wins; `string` when the vault has none), which is the same
+information `hyalo properties` already surfaces.
+
+**Where:** `crates/hyalo-core/src/schema.rs` (`normalize_type_value`),
+`crates/hyalo-mdlint/src/schema.rs`, `crates/hyalo-cli/src/commands/types.rs`
+(`infer_property_type_from_vault`), `set.rs`, `append.rs`, `lint/file.rs`.
+
+## DEC-282: renaming a parent tag renames its whole subtree (2026-09-04)
+
+**Decision:** `hyalo tags rename --from music --to audio` renames the tag
+`music` **and** every nested `music/…` tag, matching Obsidian's own rename.
+The match must land on a `/` boundary, so `music` never matches `musical`. The
+parent need not itself occur: a vault holding only `music/genres` is renamed
+rather than reported as `modified: (empty)`. JSON reports every tag actually
+renamed under `renamed_tags: [{from, to, files}]` and the text output lists
+them, so the expansion is never invisible.
+
+Before this, the rename compared whole tags for equality. On kepano-obsidian
+`tags rename --from music --to audio` printed `0 modified` while `music/genres`
+sat in the vault — a no-op that looked like a successful run, and the shape a
+user hits first, because a bare parent tag is precisely the tag one wants to
+rename.
+
+**Rejected: renaming only the exact tag and leaving children behind.** That
+splits a hierarchy in half (`audio` beside `music/genres`) and is what Obsidian
+users would call a bug in either direction; there is no reading of "rename the
+`music` tag" that means "and orphan its children".
+
+**Collision handling extends the existing per-file rule.** If a renamed tag
+would duplicate one the file already carries, the duplicate is dropped rather
+than written twice — the same "if the new tag already exists, only the old one
+is removed" behaviour, now applied per renamed tag instead of once per file.
+Only a duplicate the rename itself created is collapsed; a pre-existing
+duplicate pair is left alone.
+
+**Scope: frontmatter `tags:` only.** hyalo does not rewrite inline `#music`
+body tags today, and this iteration does not add that — the rename is exactly
+as wide as the data hyalo already owns.
+
+**Where:** `crates/hyalo-cli/src/commands/tags.rs` (`tags_rename`,
+`rename_nested_tag`), `crates/hyalo-cli/src/output/filters.rs`
+(`TAG_RENAME_FILTER`).

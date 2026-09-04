@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 266 — properties/tags/schema: in-place rename, parent tags, --index parity"
 date: 2026-09-03
-status: planned
+status: in-progress
 tags:
   - iteration
   - properties
