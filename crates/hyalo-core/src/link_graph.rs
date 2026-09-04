@@ -795,7 +795,7 @@ impl FileVisitor for LinkGraphVisitor {
 
     fn on_frontmatter(
         &mut self,
-        props: indexmap::IndexMap<String, serde_json::Value>,
+        _props: indexmap::IndexMap<String, serde_json::Value>,
     ) -> ScanAction {
         if !self.scans_frontmatter() {
             return ScanAction::Continue;
@@ -803,17 +803,22 @@ impl FileVisitor for LinkGraphVisitor {
         // `frontmatter_text` is moved out so the extractor can borrow it while
         // `self.links` is borrowed mutably; it is put straight back so the
         // allocation is reused by the next file this visitor scans.
+        //
+        // The parsed map is deliberately unused: the scan reads the raw block
+        // so it can report source lines and still see an unquoted
+        // `related: [[Books]]`, which YAML parses into a nested sequence with
+        // the brackets gone. See `crate::frontmatter_links`.
+        //
+        // An external URI in a frontmatter value is inventoried like a body one
+        // and dropped by `insert_file_links`, the single place that decides
+        // what is a graph edge.
         let yaml = std::mem::take(&mut self.frontmatter_text);
         crate::frontmatter_links::extract_frontmatter_links(
             &yaml,
             self.frontmatter_first_line,
-            &props,
             self.frontmatter_props.as_deref(),
             &mut self.links,
         );
-        // An external URI in a frontmatter value is inventoried like a body
-        // one and dropped by `insert_file_links`, which is the single place
-        // that decides what is a graph edge.
         self.frontmatter_text = yaml;
         self.frontmatter_text.clear();
         ScanAction::Continue
@@ -1662,7 +1667,7 @@ mod tests {
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect();
-                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, Some(fm_props));
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })
@@ -2023,17 +2028,47 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_non_default_prop_not_indexed_by_default() {
-        // A property not in the default list (e.g. `custom_ref`) is NOT indexed
-        // unless explicitly configured.
+    fn frontmatter_any_prop_indexed_by_default() {
+        // iter-262 (BUG-1): every frontmatter value is scanned, not just the
+        // four legacy link properties. This test asserted the opposite before.
         let vault = create_vault(&[("source.md", "---\ncustom_ref: '[[target]]'\n---\nBody\n")]);
         let build = LinkGraph::build(vault.path(), None, None).unwrap();
         let bl = build.graph.backlinks("target");
         assert_eq!(
             bl.len(),
-            0,
-            "non-default frontmatter property should not be indexed"
+            1,
+            "any frontmatter property should be indexed by default"
         );
+        assert_eq!(bl[0].link.property.as_deref(), Some("custom_ref"));
+        assert_eq!(bl[0].line, 2, "frontmatter link reports its source line");
+    }
+
+    #[test]
+    fn frontmatter_opt_out_restores_the_legacy_property_list() {
+        // `[links] frontmatter = false` reaches core as an explicit property
+        // list: `related` still counts, everything else stops counting.
+        let legacy: Vec<String> = DEFAULT_FRONTMATTER_LINK_PROPERTIES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        let vault = create_vault(&[(
+            "source.md",
+            "---\ncustom_ref: '[[skipped]]'\nrelated: '[[kept]]'\n---\nBody\n",
+        )]);
+        let build = LinkGraph::build(vault.path(), None, Some(&legacy)).unwrap();
+        assert_eq!(build.graph.backlinks("skipped").len(), 0);
+        assert_eq!(build.graph.backlinks("kept").len(), 1);
+    }
+
+    #[test]
+    fn frontmatter_link_line_numbers_are_file_absolute() {
+        let vault = create_vault(&[(
+            "source.md",
+            "---\ntitle: A\nrelated:\n  - '[[one]]'\n  - '[[two]]'\n---\nBody\n",
+        )]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        assert_eq!(build.graph.backlinks("one")[0].line, 4);
+        assert_eq!(build.graph.backlinks("two")[0].line, 5);
     }
 
     #[test]
@@ -2299,7 +2334,7 @@ mod tests {
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect();
-                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, fm_props);
+                let mut visitor = LinkGraphVisitor::with_frontmatter_props(rel, Some(fm_props));
                 crate::scanner::scan_file_multi(full_path, &mut [&mut visitor]).unwrap();
                 visitor.into_file_links()
             })

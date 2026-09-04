@@ -69,6 +69,14 @@ pub(crate) struct ConfigReport {
     pub site_prefix_source: crate::config::SitePrefixSource,
     /// Vault-relative exempt globs from `[schema] exempt` (files bound to no schema).
     pub exempt: Vec<String>,
+    /// Effective `[links] frontmatter` (iter-262): whether a `[[wikilink]]` in
+    /// **any** frontmatter value is a graph edge. `false` means only the four
+    /// legacy link properties are scanned.
+    pub frontmatter_links: bool,
+    /// Effective `[links] frontmatter_properties` — the explicit property
+    /// allow-list, when one is configured. `None` means whatever
+    /// [`Self::frontmatter_links`] implies.
+    pub frontmatter_link_properties: Option<Vec<String>>,
     /// Effective `[links.auto]` settings (iter-195a).
     pub links_auto: LinksAutoReport,
     /// Effective confidence floor for `links fix --apply-fuzzy` (iter-212):
@@ -161,6 +169,8 @@ pub(crate) fn collect_config_report(
         site_prefix,
         site_prefix_source,
         exempt: resolved.schema.exempt.patterns().to_vec(),
+        frontmatter_links: resolved.frontmatter_links_enabled,
+        frontmatter_link_properties: resolved.frontmatter_link_props.clone(),
         links_auto: LinksAutoReport {
             exclude_titles: resolved.auto_link_exclude_titles,
             exclude_target_globs: resolved.auto_link_exclude_target_globs,
@@ -259,6 +269,13 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "site_prefix": report.site_prefix,
             "site_prefix_source": report.site_prefix_source.as_str(),
             "exempt": report.exempt,
+            // Effective `[links]` link-graph settings (iter-262). `frontmatter`
+            // is always a boolean; `frontmatter_properties` is `null` unless an
+            // explicit allow-list narrows the scan.
+            "links": {
+                "frontmatter": report.frontmatter_links,
+                "frontmatter_properties": report.frontmatter_link_properties,
+            },
             // Effective `[links.auto]` baseline for `hyalo links auto`
             // (iter-195a). Always present, empty lists / false when unset, so
             // consumers never have to distinguish "absent" from "off".
@@ -400,10 +417,16 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
 
     let mut out = format!(
         "{dir_out_of_bounds_str}{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
+        fm_links = report.frontmatter_links,
+        fm_link_props = report
+            .frontmatter_link_properties
+            .as_deref()
+            .map_or_else(|| "(none)".to_owned(), list_or_none),
         auto_titles = list_or_none(&report.links_auto.exclude_titles),
         auto_globs = list_or_none(&report.links_auto.exclude_target_globs),
         auto_first_only = report.links_auto.first_only,

@@ -3,100 +3,152 @@
 //! Obsidian treats every `[[wikilink]]` in a frontmatter value as a graph edge,
 //! wherever it appears: `related:`, `categories: ["[[Books]]"]`,
 //! `type: "[[Author]]"`, a nested map, a block list. hyalo used to scan a fixed
-//! four-property allow-list ([`DEFAULT_FRONTMATTER_LINK_PROPERTIES`]), so on a
-//! real Obsidian vault `backlinks Categories/Books.md` came back empty while
-//! three files pointed at it through `categories:`.
+//! four-property allow-list ([`DEFAULT_FRONTMATTER_LINK_PROPERTIES`]) and read
+//! the *parsed* value, so on a real Obsidian vault `backlinks
+//! Categories/Books.md` came back empty while three files pointed at it through
+//! `categories:`.
 //!
 //! [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`]: crate::link_graph::DEFAULT_FRONTMATTER_LINK_PROPERTIES
 //!
-//! # Why both the parsed map and the raw text
+//! # Why the raw block and not the parsed map
 //!
-//! The **parsed** frontmatter says what is actually a string value — so
-//! `"[[not closed"` yields nothing, a `# comment` yields nothing, and a value
-//! nested three maps deep is found without a YAML re-implementation here. The
-//! **raw** frontmatter text says which *line* each occurrence sits on, which
-//! the parsed map cannot tell (serde hands over values, not spans). Matching
-//! the two up is a forward scan: link occurrences come out of the parsed map in
-//! document order, so their raw `[[…]]` byte sequences appear in the raw block
-//! in that same order.
+//! Reading parsed values cannot see two things that matter here.
 //!
-//! A value whose raw bytes differ from its parsed bytes (an escaped or folded
-//! scalar) simply fails the scan and falls back to the first frontmatter
-//! content line — the link is still an edge, only its reported line is
-//! approximate.
-
-use indexmap::IndexMap;
-use serde_json::Value;
+//! * **Line numbers.** serde hands over values, not spans, and every consumer
+//!   of a link — `backlinks`, `find --fields links`, HYALO006 — reports the
+//!   1-based source line.
+//! * **Unquoted wikilinks.** `related: [[Books]]` is not a string to YAML: it
+//!   parses as a sequence containing a sequence containing `Books`, so the
+//!   brackets are gone by the time a value walk sees it, and the link
+//!   disappears.
+//!
+//! So the scan is line-oriented over the raw block, the same deliberately
+//! simple bracket scan `mv` and `links fix` already use to *rewrite*
+//! frontmatter wikilinks ([`crate::link_rewrite`]) — which is what keeps
+//! "hyalo counted this link" and "hyalo rewrote this link" the same set. Keys
+//! are inferred from indentation, which is enough to attribute a link to the
+//! property it was written under and to honour a property allow-list.
 
 use crate::links::{Link, LinkKind, extract_link_spans_with_original};
 
-/// A frontmatter value string paired with the dotted key path it lives under.
-struct KeyedValue<'a> {
+/// One entry of the key stack: the indentation column a key was written at and
+/// the key itself.
+struct KeyFrame {
+    indent: usize,
     key: String,
-    value: &'a str,
 }
 
-/// Collect every string scalar in `props` — at any nesting depth, inside lists
-/// and maps alike — paired with the dotted key path it was found under.
+/// Byte offset of the first `:` that terminates a YAML key on `line`, if any.
 ///
-/// `only` restricts the walk to the named **top-level** properties (the legacy
-/// `[links] frontmatter_properties` behaviour); `None` walks everything.
-fn collect_string_values<'a>(
-    props: &'a IndexMap<String, Value>,
-    only: Option<&[String]>,
-) -> Vec<KeyedValue<'a>> {
-    let mut out = Vec::new();
-    for (key, value) in props {
-        if let Some(allowed) = only
-            && !allowed.iter().any(|p| p == key)
-        {
-            continue;
+/// A key colon is one at bracket depth zero, outside quotes, followed by a
+/// space or the end of the line — so `url: https://x` sees the first colon and
+/// `- "[[a:b]]"` sees none.
+fn key_colon(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut depth = 0i32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            b'[' | b'{' if !in_single && !in_double => depth += 1,
+            b']' | b'}' if !in_single && !in_double => depth -= 1,
+            b':' if !in_single && !in_double && depth <= 0 => {
+                if i + 1 == bytes.len() || bytes[i + 1] == b' ' {
+                    return Some(i);
+                }
+            }
+            _ => {}
         }
-        walk_value(key, value, &mut out);
+        i += 1;
+    }
+    None
+}
+
+/// Drop a trailing `# comment` from a YAML line.
+///
+/// Only a `#` at bracket depth zero, outside quotes, and at the start of the
+/// line or preceded by whitespace starts a comment — which is what keeps a
+/// wikilink anchor (`[[note#heading]]`) and a tag value (`status: #wip`) out of
+/// the way.
+fn strip_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            b'[' | b'{' if !in_single && !in_double => depth += 1,
+            b']' | b'}' if !in_single && !in_double => depth -= 1,
+            b'#' if !in_single && !in_double && depth <= 0 => {
+                let preceded_by_space = i == 0 || bytes[i - 1].is_ascii_whitespace();
+                if preceded_by_space {
+                    return &line[..i];
+                }
+            }
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Update the key stack for one frontmatter line and return the dotted key path
+/// that any value on that line belongs to.
+///
+/// Returns `None` for a line that carries no value context at all (a blank line
+/// before the first key).
+fn key_for_line(stack: &mut Vec<KeyFrame>, line: &str) -> Option<String> {
+    let indent = line.len() - line.trim_start().len();
+    let mut trimmed = line.trim_start();
+    let mut effective_indent = indent;
+
+    // A `- ` list item does not introduce a key of its own; its content sits
+    // two columns further in and may itself open a map (`- name: "[[X]]"`).
+    while let Some(rest) = trimmed.strip_prefix("- ") {
+        effective_indent += trimmed.len() - rest.len();
+        trimmed = rest;
+    }
+    if trimmed == "-" {
+        return stack.last().map(|_| dotted(stack));
+    }
+
+    if let Some(colon) = key_colon(trimmed) {
+        let key = trimmed[..colon].trim().trim_matches(['"', '\'']).to_owned();
+        if !key.is_empty() {
+            while stack.last().is_some_and(|f| f.indent >= effective_indent) {
+                stack.pop();
+            }
+            stack.push(KeyFrame {
+                indent: effective_indent,
+                key,
+            });
+            return Some(dotted(stack));
+        }
+    }
+
+    // A continuation line — a block-scalar body, a wrapped flow sequence, a
+    // bare list item — stays under whatever key is currently open.
+    if stack.is_empty() {
+        None
+    } else {
+        Some(dotted(stack))
+    }
+}
+
+/// Join the key stack into a dotted path (`meta.source`).
+fn dotted(stack: &[KeyFrame]) -> String {
+    let mut out = String::new();
+    for frame in stack {
+        if !out.is_empty() {
+            out.push('.');
+        }
+        out.push_str(&frame.key);
     }
     out
-}
-
-/// Recurse into one frontmatter value, appending every string scalar found.
-///
-/// A list keeps its parent's key (`tags[0]` and `tags[1]` are both `tags`);
-/// a nested map extends the path with a dot, because there the sub-key is what
-/// identifies the value.
-fn walk_value<'a>(key: &str, value: &'a Value, out: &mut Vec<KeyedValue<'a>>) {
-    match value {
-        Value::String(s) => out.push(KeyedValue {
-            key: key.to_owned(),
-            value: s,
-        }),
-        Value::Array(items) => {
-            for item in items {
-                walk_value(key, item, out);
-            }
-        }
-        Value::Object(map) => {
-            for (sub, sub_value) in map {
-                walk_value(&format!("{key}.{sub}"), sub_value, out);
-            }
-        }
-        // Numbers, booleans and nulls can never carry `[[`.
-        _ => {}
-    }
-}
-
-/// Byte offsets of every line start in `text`, for offset → line lookups.
-fn line_starts(text: &str) -> Vec<usize> {
-    let mut starts = vec![0usize];
-    starts.extend(memchr::memchr_iter(b'\n', text.as_bytes()).map(|pos| pos + 1));
-    starts
-}
-
-/// 1-based line index within `text` for byte offset `at`, given precomputed
-/// [`line_starts`].
-fn line_of(starts: &[usize], at: usize) -> usize {
-    match starts.binary_search(&at) {
-        Ok(i) => i + 1,
-        Err(i) => i,
-    }
 }
 
 /// Extract every `[[wikilink]]` written in a file's frontmatter.
@@ -105,62 +157,44 @@ fn line_of(starts: &[usize], at: usize) -> usize {
 ///   delimiters), exactly as the scanner accumulated it.
 /// * `first_line` — the 1-based file line the first byte of `yaml` sits on
 ///   (always `2` for a file that opens with `---`).
-/// * `props` — the parsed frontmatter map for the same block.
-/// * `only` — restrict the walk to these top-level keys, or `None` for every
-///   value (the iter-262 default).
+/// * `only` — restrict the scan to these top-level properties, or `None` to
+///   scan every value (the iter-262 default). `Some(&[])` scans nothing.
 ///
-/// Appends `(file_line, link)` pairs to `out`, each link carrying
-/// [`Link::property`] set to the key path it came from. External URIs
-/// (`[[obsidian://…]]`) are inventoried like body links; markdown-syntax links
-/// inside frontmatter are **not** collected — Obsidian does not treat them as
-/// edges either.
+/// Appends `(file_line, link)` pairs to `out` in document order, each link
+/// carrying [`Link::property`] set to the dotted key path it was written under.
+/// Markdown-syntax links inside frontmatter are **not** collected — Obsidian
+/// does not treat them as edges either.
 pub fn extract_frontmatter_links(
     yaml: &str,
     first_line: usize,
-    props: &IndexMap<String, Value>,
     only: Option<&[String]>,
     out: &mut Vec<(usize, Link)>,
 ) {
-    if props.is_empty() || !yaml.contains("[[") {
+    if only.is_some_and(<[String]>::is_empty) || !yaml.contains("[[") {
         return;
     }
-    let values = collect_string_values(props, only);
-    if values.is_empty() {
-        return;
-    }
-
-    let starts = line_starts(yaml);
-    // Forward cursor into the raw block: occurrences are matched in document
-    // order, so a repeated `[[Books]]` on two different lines maps to two
-    // different lines rather than both to the first.
-    let mut cursor = 0usize;
-
-    for kv in values {
-        if !kv.value.contains("[[") {
+    let mut stack: Vec<KeyFrame> = Vec::new();
+    for (offset, raw_line) in yaml.lines().enumerate() {
+        let line = strip_comment(raw_line);
+        let Some(key) = key_for_line(&mut stack, line) else {
+            continue;
+        };
+        if !line.contains("[[") {
             continue;
         }
-        for span in extract_link_spans_with_original(kv.value, kv.value) {
+        if let Some(allowed) = only {
+            let top = key.split('.').next().unwrap_or(&key);
+            if !allowed.iter().any(|p| p == top) {
+                continue;
+            }
+        }
+        for span in extract_link_spans_with_original(line, line) {
             if span.kind != LinkKind::Wikilink {
                 continue;
             }
-            let raw = &kv.value[span.full_start..span.full_end];
-            let at = yaml[cursor..]
-                .find(raw)
-                .map(|p| cursor + p)
-                .or_else(|| yaml.find(raw));
-            let line = match at {
-                Some(offset) => {
-                    cursor = offset + raw.len();
-                    first_line + line_of(&starts, offset) - 1
-                }
-                // The parsed value does not appear verbatim in the raw block
-                // (an escaped or folded scalar). The edge is real; only the
-                // line is approximate.
-                None => first_line,
-            };
             let mut link = span.link;
-            link.property = Some(kv.key.clone());
-            out.push((line, link));
+            link.property = Some(key.clone());
+            out.push((first_line + offset, link));
         }
     }
 }
@@ -169,15 +203,9 @@ pub fn extract_frontmatter_links(
 mod tests {
     use super::*;
 
-    fn parse(yaml: &str) -> IndexMap<String, Value> {
-        serde_saphyr::from_str_with_options(yaml, crate::frontmatter::hyalo_options())
-            .expect("test frontmatter parses")
-    }
-
     fn links(yaml: &str, only: Option<&[String]>) -> Vec<(usize, Link)> {
-        let props = parse(yaml);
         let mut out = Vec::new();
-        extract_frontmatter_links(yaml, 2, &props, only, &mut out);
+        extract_frontmatter_links(yaml, 2, only, &mut out);
         out
     }
 
@@ -189,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_value_is_a_link() {
+    fn quoted_scalar_value_is_a_link() {
         assert_eq!(
             targets("type: \"[[Books]]\"\n"),
             vec![(2, "type".to_owned(), "Books".to_owned())]
@@ -198,11 +226,12 @@ mod tests {
 
     #[test]
     fn unquoted_scalar_is_a_link() {
-        // Bare `[[x]]` parses as a YAML flow sequence of a flow sequence, so
-        // the value is a list-of-list of strings — still walked to the leaves.
-        let got = targets("related: [[Books]]\n");
-        assert_eq!(got.len(), 1, "expected one link, got {got:?}");
-        assert_eq!(got[0].2, "Books");
+        // YAML parses a bare `[[Books]]` as a nested flow sequence, so a walk
+        // over parsed values never sees the brackets. The raw scan does.
+        assert_eq!(
+            targets("related: [[Books]]\n"),
+            vec![(2, "related".to_owned(), "Books".to_owned())]
+        );
     }
 
     #[test]
@@ -218,7 +247,7 @@ mod tests {
 
     #[test]
     fn block_list_items_carry_their_own_lines() {
-        let yaml = "title: A\nrelated:\n  - \"[[One]]\"\n  - \"[[Two]]\"\n";
+        let yaml = "title: A\nrelated:\n  - \"[[One]]\"\n  - [[Two]]\n";
         assert_eq!(
             targets(yaml),
             vec![
@@ -238,6 +267,27 @@ mod tests {
     }
 
     #[test]
+    fn list_of_maps_extends_the_key_path() {
+        let yaml = "authors:\n  - name: \"[[Kepano]]\"\n";
+        assert_eq!(
+            targets(yaml),
+            vec![(3, "authors.name".to_owned(), "Kepano".to_owned())]
+        );
+    }
+
+    #[test]
+    fn sibling_key_after_a_nested_map_pops_the_stack() {
+        let yaml = "meta:\n  source: \"[[A]]\"\nrelated: \"[[B]]\"\n";
+        assert_eq!(
+            targets(yaml),
+            vec![
+                (3, "meta.source".to_owned(), "A".to_owned()),
+                (4, "related".to_owned(), "B".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn alias_and_anchor_are_parsed() {
         let got = links("related: \"[[Notes/Log#DEC-1|the log]]\"\n", None);
         assert_eq!(got.len(), 1);
@@ -245,6 +295,7 @@ mod tests {
         assert_eq!(got[0].1.fragment.as_deref(), Some("DEC-1"));
         assert_eq!(got[0].1.label.as_deref(), Some("the log"));
         assert_eq!(got[0].1.property.as_deref(), Some("related"));
+        assert!(got[0].1.is_frontmatter());
     }
 
     #[test]
@@ -266,7 +317,24 @@ mod tests {
     }
 
     #[test]
-    fn only_restricts_to_named_properties() {
+    fn comments_are_not_scanned() {
+        assert!(targets("# see [[Ghost]]\ntitle: A\n").is_empty());
+        assert!(targets("title: A  # see [[Ghost]]\n").is_empty());
+    }
+
+    #[test]
+    fn anchor_hash_is_not_a_comment() {
+        assert_eq!(
+            targets("related: \"[[Log#DEC-1]]\"\n")
+                .into_iter()
+                .map(|(_, _, t)| t)
+                .collect::<Vec<_>>(),
+            vec!["Log".to_owned()]
+        );
+    }
+
+    #[test]
+    fn only_restricts_to_named_top_level_properties() {
         let yaml = "related: \"[[One]]\"\ncategories: \"[[Two]]\"\n";
         let only = vec!["related".to_owned()];
         let got: Vec<String> = links(yaml, Some(&only))
@@ -277,6 +345,32 @@ mod tests {
     }
 
     #[test]
+    fn empty_allow_list_scans_nothing() {
+        assert!(links("related: \"[[One]]\"\n", Some(&[])).is_empty());
+    }
+
+    #[test]
+    fn block_scalar_body_stays_under_its_key() {
+        let yaml = "summary: |\n  mentions [[Books]]\n";
+        assert_eq!(
+            targets(yaml),
+            vec![(3, "summary".to_owned(), "Books".to_owned())]
+        );
+    }
+
+    #[test]
+    fn wrapped_flow_sequence_stays_under_its_key() {
+        let yaml = "categories: [\n  \"[[A]]\",\n  \"[[B]]\",\n]\n";
+        assert_eq!(
+            targets(yaml),
+            vec![
+                (3, "categories".to_owned(), "A".to_owned()),
+                (4, "categories".to_owned(), "B".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn repeated_target_maps_to_distinct_lines() {
         let yaml = "related:\n  - \"[[Same]]\"\n  - \"[[Same]]\"\n";
         let lines: Vec<usize> = links(yaml, None).into_iter().map(|(l, _)| l).collect();
@@ -284,11 +378,16 @@ mod tests {
     }
 
     #[test]
-    fn deeply_nested_lists_are_walked() {
-        let yaml = "matrix:\n  - - \"[[Deep]]\"\n";
+    fn markdown_links_in_frontmatter_are_not_collected() {
+        assert!(targets("source: \"[label](other.md)\"\n").is_empty());
+    }
+
+    #[test]
+    fn a_url_value_is_not_mistaken_for_a_key_break() {
+        let yaml = "url: https://example.com\nrelated: \"[[A]]\"\n";
         assert_eq!(
             targets(yaml),
-            vec![(3, "matrix".to_owned(), "Deep".to_owned())]
+            vec![(3, "related".to_owned(), "A".to_owned())]
         );
     }
 }

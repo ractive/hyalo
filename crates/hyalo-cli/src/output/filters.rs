@@ -138,7 +138,7 @@ pub(super) const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] "
 /// `BacklinksResult`: `{file, backlinks: [...]}`
 /// Format: `N backlink(s) for "file"` with each backlink listed as `  source.md: line N`.
 /// Empty case: `No backlinks found for "file"`.
-pub(super) const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)") | join("\n"))" end"#;
+pub(super) const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 0 then "No backlinks found for \"\(.file)\"" else "\(.backlinks | length) \(if (.backlinks | length) == 1 then "backlink" else "backlinks" end) for \"\(.file)\"\n\(.backlinks | map("  \(.source): line \(.line)\(if .kind == "frontmatter" then " [frontmatter: \(.property)]" else "" end)") | join("\n"))" end"#;
 
 /// `LinksFix result`: `{ambiguous, ambiguous_links, applied, applied_fixes, broken, broken_anchors, case_mismatch_fixes, case_mismatches, failed, failed_fixes, fixable, fixes, ignored, relocation_fixes, relocations, unapplied, unapplied_fixes, unfixable, unfixable_links}`
 /// Format: summary line with fix status. Includes case-mismatch, relocation, and ambiguous counts when non-zero.

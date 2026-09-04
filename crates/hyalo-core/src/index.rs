@@ -2474,7 +2474,7 @@ Plain prose ends here.
         let full = tmp.path().join(rel);
         fs::write(&full, content).unwrap();
 
-        let (entry, _) = scan_one_file(&full, rel, true, true, None, &[]).unwrap();
+        let (entry, _) = scan_one_file(&full, rel, true, true, None, None).unwrap();
         let indexed = entry.bm25_tokens.clone().unwrap();
 
         let title = entry
