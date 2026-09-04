@@ -48,7 +48,7 @@ fixed, 2 partially, 1 never scheduled, **0 regressed**. The Hub's broken-link co
 parity is byte-identical on all nine MDN commands including BM25 scores, and no command is more
 than 1.5× its baseline.
 
-The new round found **27 bugs (5 HIGH, 10 MEDIUM, 12 LOW)** and 25 UX issues. Four of the five
+The new round found **28 bugs (6 HIGH, 10 MEDIUM, 12 LOW)** and 25 UX issues. Five of the six
 HIGH ones can silently corrupt a vault with exit 0, and none of them is in code the batch touched:
 they are older gaps the batch's new testbeds and the adversarial pass exposed. Zero panics in
 roughly 150 hostile invocations with `RUST_BACKTRACE=1`, including truncated, zeroed and
@@ -149,7 +149,7 @@ print the exact string that will be written.
 # .hyalo.toml declares type "iteration"
 printf -- '---\ntitle: L\ntype: ["[[iteration]]"]\ndate: 2026-09-04\nstatus: planned\nbranch: iter-1/x\ntags: [a]\n---\n' > l.md
 hyalo lint --file l.md
-# error  SCHEMA  line 1  property "type" expected string, got ["[[iteration]]"]
+#   error  SCHEMA  line 1  property "type" expected string, got ["[[iteration]]"]
 ```
 
 Binding works (a variant with `status: bogus` gets the iteration-specific enum error), but the
@@ -157,6 +157,20 @@ implicit `type: string` constraint every declared type carries then rejects the 
 `type: "[[iteration]]"` lints clean, and kepano is clean only because it has no `.hyalo.toml`
 schema. DEC-281's motivating case, Obsidian's property editor writing `type: ["[[Authors]]"]`,
 errors on every file the moment a schema is declared. `types set --help` promises the opposite.
+
+### BUG-28: MD019 fires and autofixes inside fenced and indented code blocks (HIGH)
+
+````text
+printf -- '---\ntitle: d\n---\n\n# T\n\n```text\n#   three\n```\n\n~~~sh\n#   tilde\n~~~\n\n    #   indented\n' > d.md
+hyalo lint --file d.md --rule MD019     # 3 violations, all autofixable
+hyalo lint --fix --file d.md            # fixed 3: every `#   x` becomes `# x` inside the code
+````
+
+Found the hard way: `lint --fix` on this report rewrote a shell-comment line inside the BUG-5
+repro block. MD018, MD023 and MD026 respect code blocks in the same file; MD019 does not, on
+backtick fences, tilde fences and four-space indented blocks alike. Pre-existing (the Sept 1
+binary behaves the same), so iteration 263's fence-awareness work never reached this rule. Same
+corruption class as BUG-3: any corpus with shell samples whose comments align columns gets edited.
 
 ### BUG-6: Frontmatter `aliases:` are not link targets, so alias links are broken and `--apply-fuzzy` would rewrite them to the wrong note (MEDIUM)
 
@@ -564,7 +578,9 @@ DEC-286 preview pass in `links auto`.
 1. **Write safety** (BUG-1, BUG-2, BUG-13): content-hash or lock around read-modify-rename;
    column-0 closing fence plus an emitter guard; reject empty rename targets. Three fixes in
    `hyalo-core`, one PR.
-2. **Autofix and link-rewrite corruption** (BUG-3, BUG-4, BUG-7): MD031 on unterminated fences;
+2. **Autofix and link-rewrite corruption** (BUG-3, BUG-28, BUG-4, BUG-7): MD031 on unterminated
+   fences and MD019 inside code blocks, plus an audit of every autofixable rule against a
+   fenced-block fixture;
    `site_prefix` case-mismatch rewrites keep the incoming form and the dry-run shows the written
    string; the ambiguity guard covers frontmatter links.
 3. **Resolution completeness** (BUG-5, BUG-6, BUG-8, BUG-15, BUG-16, BUG-21): list-typed `type:`
