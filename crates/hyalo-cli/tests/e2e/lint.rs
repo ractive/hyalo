@@ -882,13 +882,11 @@ commit = "["
         "the TOML parses; it is the schema that is invalid"
     );
 
-    // `set --validate` against a malformed `[schema]` proceeds, with a
-    // `-q`-proof stderr warning naming the error. DEC-279 (iter-265) scoped the
-    // broken-config *gate* to `lint`, `find --strict` and `views run`; a write
-    // is not in that set, and a `[schema]` that fails `TryFrom` (as opposed to
-    // a `.hyalo.toml` that fails to parse at all) does not block mutations.
-    // The consequence is that `--validate` is vacuous here — pinned rather than
-    // changed, because gating writes on it is a decision of its own (DEC-287).
+    // DEC-290: `set --validate` against an unloadable `[schema]` now refuses.
+    // The schema fell back to empty, so validating against it would reject
+    // nothing — the flag's promise, not the command's kind, is what makes this
+    // a gate (DEC-279 widened the broken-*config* gate by exit code; this one
+    // is scoped by what `--validate` claims).
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["set", "a.md", "-p", "title=B", "--validate"])
@@ -896,15 +894,42 @@ commit = "["
         .unwrap();
     assert_eq!(
         output.status.code().unwrap(),
+        1,
+        "--validate against an unusable [schema] must refuse, not write unvalidated"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to validate against an unusable [schema]")
+            && stderr.contains("key-patterns.commit"),
+        "the refusal must name the schema error, got:\n{stderr}"
+    );
+    // Nothing was written: the file still carries its original title.
+    let body = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(
+        body.contains("title: A"),
+        "the refused write must not have touched the file, got:\n{body}"
+    );
+
+    // The same write without `--validate` promises nothing and still proceeds,
+    // with the `-q`-proof warning the config loader prints.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "a.md", "-p", "title=B"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
         0,
-        "a malformed [schema] warns but does not block a write today"
+        "a plain write claims no validation and is unaffected by DEC-290"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("invalid [schema] in .hyalo.toml")
             && stderr.contains("key-patterns.commit"),
-        "the write must at least be loudly warned about, got:\n{stderr}"
+        "the unvalidated write must still be loudly warned about, got:\n{stderr}"
     );
+    let body = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(body.contains("title: B"), "got:\n{body}");
 }
 
 // ---------------------------------------------------------------------------

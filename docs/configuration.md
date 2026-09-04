@@ -85,6 +85,26 @@ An unknown key or a type error anywhere in the file — including inside
 `hyalo init` and `hyalo deinit` are never blocked — they are how a broken config
 gets repaired.
 
+### When only `[schema]` cannot be loaded
+
+A `[schema]` section can be valid TOML and still be rejected — an uncompilable
+regex, `min-length` on a `number` property, `values` outside an `enum`. The file
+itself parses, so `dir`, `[lint] ignore` and the saved views all still apply;
+only the schema is gone, replaced by an empty one. hyalo then:
+
+- prints the `invalid [schema] in .hyalo.toml: …` diagnostic, again `--quiet`-proof;
+- reports it as a `schema/malformed` violation from `hyalo lint`, so a
+  `lint --strict` gate fails rather than passing against no schema at all;
+- **refuses `set` / `append` when validation was requested** — `--validate`, or
+  `[schema] validate_on_write = true` — with exit code 1, writing nothing,
+  because validating against an empty schema rejects nothing and the flag's
+  guarantee would be silently vacuous. `--dry-run` refuses too: it is the same
+  claim without the write;
+- leaves everything else alone. A `set`/`append` without `--validate` promises no
+  validation and still writes (warned), and every other command — `mv`,
+  `remove`, `task toggle`, all reads — is unaffected, so a vault mid-schema-edit
+  stays usable.
+
 ## Case-insensitive link resolution
 
 `[links] case_insensitive` controls whether a link whose target differs only in

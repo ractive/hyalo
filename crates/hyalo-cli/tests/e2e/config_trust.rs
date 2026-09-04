@@ -834,3 +834,194 @@ fn dir_to_a_healthy_vault_drops_the_malformed_cwd_warning() {
         "the switch itself is still announced: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// iter-270 / DEC-290 — a write that *promised* validation refuses when
+// `[schema]` cannot be loaded
+// ---------------------------------------------------------------------------
+//
+// This is the narrower sibling of the M-2 gate above. There the whole
+// `.hyalo.toml` failed to parse, so every setting was gone and every mutation
+// refused. Here the TOML parses fine — `dir`, `[lint] ignore` and the views all
+// apply — and only `SchemaConfig::try_from` fails, leaving an *empty* schema
+// behind. A plain write is unaffected by that; a `--validate` write is not,
+// because validating against an empty schema rejects nothing.
+
+/// A vault whose `.hyalo.toml` parses as TOML but whose `[schema]` is rejected:
+/// `min-length` is only valid on `string` properties, so `TryFrom` fails while
+/// the file itself is perfectly well-formed.
+fn build_unloadable_schema_project(tmp: &TempDir) {
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        md!(r#"
+dir = "."
+
+[schema.types.note.properties.rating]
+type = "number"
+min-length = 3
+"#),
+    )
+    .unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: note\ntags: [one]\n---\n\nBody.\n",
+    );
+}
+
+#[test]
+fn set_validate_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "a.md", "-p", "status=draft", "--validate"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "--validate must not silently degrade to validating against nothing"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to validate against an unusable [schema]"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("min-length"),
+        "the refusal must carry the schema diagnostic: {stderr}"
+    );
+    let body = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(!body.contains("status"), "nothing may be written: {body}");
+}
+
+#[test]
+fn append_validate_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["append", "a.md", "-p", "tags=two", "--validate"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1, "append gates like set");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing to validate against an unusable [schema]"),
+        "{stderr}"
+    );
+    let body = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(!body.contains("two"), "nothing may be appended: {body}");
+}
+
+/// `--dry-run` is still a validation request: reporting "would write" from a
+/// schema that rejects nothing is the same false assurance, minus the write.
+#[test]
+fn set_validate_dry_run_refuses_too() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "set",
+            "a.md",
+            "-p",
+            "status=draft",
+            "--validate",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 1);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("refusing to validate against an unusable [schema]")
+    );
+}
+
+/// `[schema] validate_on_write = true` is the same promise made once in the
+/// config instead of per invocation, so a bare `set` refuses under it.
+#[test]
+fn validate_on_write_refuses_when_the_schema_could_not_be_loaded() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        md!(r#"
+dir = "."
+
+[schema]
+validate_on_write = true
+
+[schema.types.note.properties.rating]
+type = "number"
+min-length = 3
+"#),
+    )
+    .unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: note\n---\n\nBody.\n",
+    );
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "a.md", "-p", "status=draft"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        1,
+        "a vault that opted into validate_on_write asked for the same guarantee"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("refusing to validate against an unusable [schema]")
+    );
+}
+
+/// The blast radius stops at the two commands that promise validation: a write
+/// that claims nothing still writes, and every read still answers. Widening the
+/// refusal further would make a vault mid-schema-edit unusable.
+#[test]
+fn an_unloadable_schema_leaves_plain_writes_and_reads_alone() {
+    let tmp = TempDir::new().unwrap();
+    build_unloadable_schema_project(&tmp);
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["set", "a.md", "-p", "status=draft"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0, "a plain write proceeds");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid [schema] in .hyalo.toml"),
+        "and is still loudly warned about: {stderr}"
+    );
+    let body = fs::read_to_string(tmp.path().join("a.md")).unwrap();
+    assert!(body.contains("status: draft"), "{body}");
+
+    // `mv`, `task toggle` and friends never claimed schema validation either —
+    // check one of them plus a read to pin that the gate is not command-wide.
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["remove", "a.md", "-p", "status"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        0,
+        "a mutation with no --validate flag at all is untouched"
+    );
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["find", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code().unwrap(), 0, "reads still answer");
+}

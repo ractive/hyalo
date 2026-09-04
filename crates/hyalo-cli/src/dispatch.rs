@@ -163,6 +163,11 @@ pub(crate) struct CommandContext<'a> {
     pub frontmatter_link_props: Option<&'a [String]>,
     /// Parsed schema configuration from `[schema.*]` sections in `.hyalo.toml`.
     pub schema: &'a SchemaConfig,
+    /// The diagnostic when `[schema]` existed but could not be loaded, so
+    /// [`Self::schema`] above is the empty fallback rather than the vault's
+    /// (DEC-290). `set`/`append` refuse when validation was asked for and this
+    /// is `Some`; everything else keeps running on the fallback.
+    pub schema_invalid: Option<&'a str>,
     /// When `true`, schema validation runs on every `set`/`append` operation even
     /// without `--validate`. Comes from `validate_on_write = true` in `.hyalo.toml`.
     pub validate_on_write: bool,

@@ -4843,3 +4843,133 @@ non-empty body genuinely missing its terminator still fires and still fixes.
 (`bare_url_len_before_html`), `crates/hyalo-mdlint/src/engine.rs`
 (`narrow_md034_autolink_fix`, the MD047 empty-body guard, `DESCRIPTION_SUFFIX`),
 `hyalo-knowledgebase/docs/schema-and-lint.md` (Obsidian-grammar table).
+
+## DEC-290: `--validate` refuses when the schema it names cannot be loaded (2026-09-04)
+
+**Decision:** `set --validate` / `append --validate` — and a bare `set`/`append`
+under `[schema] validate_on_write = true` — exit 1 and write nothing when a
+`[schema]` section exists but fails `SchemaConfig::try_from`. `--dry-run` under
+`--validate` refuses too. Every other command is unchanged: a `set`/`append`
+*without* `--validate` still writes with the `-q`-proof
+`invalid [schema] in .hyalo.toml: …` warning, and `mv`, `remove`,
+`task toggle`, `links auto --apply` and all reads keep working on the empty
+fallback schema.
+
+This resolves DEC-287's "belongs to its own decision" note.
+
+**The gate is scoped by the promise, not by the command.** DEC-279 defined its
+gate by exit code — a command whose answer is *yes or no* cannot caveat that
+answer, so `lint`, `find --strict` and `views run` refuse on a config that does
+not parse. The same reasoning applied one level down picks out `--validate`
+rather than "every write": the flag's entire content is "reject a value the
+schema forbids before writing it". When `try_from` fails the run falls back to
+an **empty** schema, which forbids nothing, so `--validate` returned 0 having
+checked precisely nothing — the same vacuous-green failure DEC-279 was written
+to stop, in the one place a user reaches for when they specifically do not
+trust the value they are writing. A plain `set` makes no such claim and is not
+lying when it writes.
+
+**Rejected: gating every write on a broken `[schema]`.** That was the plan's
+option 1 read literally, and it is materially different from the DEC-279 case
+it looks like. A `.hyalo.toml` that does not parse loses `dir` itself — the
+mutation would touch a tree the user never configured, which is why *every*
+mutation refuses there. A rejected `[schema]` loses only the schema: `dir`,
+`[lint] ignore` and the views are all intact, so `hyalo mv` still moves the
+right file and `task toggle` still ticks the right box. Refusing those would
+make a vault unusable for unrelated work while its schema is half-edited, and
+`hyalo set` is one of the tools used to *do* that editing.
+
+**Rejected: the plan's option 2 (keep writing, surface `schema_invalid: true`
+in the result JSON).** It fixes detectability for a scripted caller while
+leaving the default — a human at a terminal typing `--validate` — exactly as
+wrong as before, and it asks every caller to add a check to get the guarantee
+the flag already advertised. A result field is the right shape for information
+the command *chose* not to act on; here there is a correct action available.
+
+**Blast radius, checked rather than assumed.** Every `SchemaConfig::try_from`
+rejection is a *config authoring* error, not a data error: mutually exclusive
+`pattern`/`item_pattern`, `values` off an `enum`, `min-length`/`max-length` off
+a `string` (or inverted), `minimum`/`maximum` off a `number`, the
+`required-keys`/`allowed-keys`/`key-patterns` trio off an `object-list`, an
+`allowed-keys` list that omits a name used elsewhere, an empty key name, an
+uncompilable `pattern`/`item_pattern`/`key-patterns` regex, and an unknown type
+name. None of them can be reached by editing a *note*: the vault always gets
+into this state by editing `.hyalo.toml`, and gets out the same way. The
+recovery paths are all short and none of them require a flag that does not
+exist: fix the section, drop `--validate` for the one write, or `--dir` a vault
+whose config is sound.
+
+**`hyalo new` needed nothing.** It is the other command that reads the schema to
+produce a write, and it already refuses: with the schema empty, `new --type X`
+exits 1 with `type 'X' not found`. The message is indirect but the outcome is
+right — no file is scaffolded from a schema that is not the vault's — so it is
+left alone rather than given a second refusal path.
+
+**No new CLI surface.** The behaviour rides entirely on the existing
+`--validate` flag and the existing `validate_on_write` key; nothing is added to
+the CLI.
+
+**Where:** `crates/hyalo-cli/src/config.rs` (`parse_schema_from_toml` now
+returns the diagnostic alongside the fallback schema;
+`ResolvedDefaults::schema_invalid`), `crates/hyalo-cli/src/run.rs`,
+`crates/hyalo-cli/src/dispatch.rs` (`CommandContext::schema_invalid`),
+`crates/hyalo-cli/src/commands/mod.rs`
+(`reject_write_with_unloadable_schema`), `crates/hyalo-cli/src/commands/set.rs`,
+`crates/hyalo-cli/src/commands/append.rs`,
+`crates/hyalo-cli/tests/e2e/config_trust.rs`,
+`crates/hyalo-cli/tests/e2e/lint.rs`
+(`lint_reports_schema_malformed_for_an_invalid_key_pattern_regex` re-pinned from
+the vacuous write to the refusal).
+
+## DEC-291: authoring `object-list` items stays an editor concern (2026-09-04)
+
+**Decision:** `hyalo set` / `hyalo append` gain **no** syntax for writing a map
+item into an `object-list` property. DEC-287's sketch
+(`set --property 'sources[]=ref=…'`) is closed as won't-do, not deferred; no
+backlog item is filed. Validation of object-list values on write is unchanged
+and already works through the shared validator.
+
+**No demand was found.** The plan made this conditional on evidence, and the
+search came up empty: `object-list` appears in zero `.hyalo.toml` files across
+this repo's own vault and both dogfooding testbeds (`../obsidian-hub`,
+`../kepano-obsidian`), and no object-list property has been hand-edited in a
+dogfooded vault since iteration 268 landed. The one real user — the
+mapl-memory `sources:` migration that motivated the type — did the migration in
+an editor and said so in its own request: *"`hyalo set --property` support for
+appending object items is a separate concern; the type only needs lint +
+`types show` output."* The feature request that produced `object-list` explicitly
+did not ask for this.
+
+**The symmetry argument fails on inspection.** The plan asked whether `find`'s
+dot-path reads (`--property sources.ref=…`) could be reused for writes. They
+cannot, and the reason is already settled in the code: `--property` on the write
+side sets a *literal top-level key*, and `reject_dotted_property_collision`
+exists precisely to refuse `set --property a.b=v` when `a` is a mapping, with a
+hint saying hyalo does not support dotted paths for nested writes. Reads and
+writes are not symmetric here because a read *addresses an existing value* while
+a write must also say **which item** — the third one, the one whose `ref`
+matches, or a new one — and that selector has no expression in the read syntax.
+Reusing the syntax would either contradict an existing documented refusal or
+silently pick an item for the user.
+
+**The bespoke syntax is worse than the editor it replaces.** A flat
+`sources[]=ref=…,commit=…` packs a second key/value mini-language into the value
+half of a `K=V` argument that already infers types from `V`, and inherits its
+own quoting problem: `key-patterns` regexes in the motivating example match
+values containing `:`, `/` and `-`, and any item value containing a `,` or `=`
+needs escaping rules that `set` has never had. That is a real parser and a real
+error-message surface, added against the standing no-new-CLI-surface bar
+(DEC-287, and the rule that already killed `--iteration` and `--strict-index`),
+for a shape one `$EDITOR` invocation writes correctly the first time.
+
+**What the user is left with is the half that catches mistakes.** `hyalo new`
+scaffolds the property as `[]`, the editor writes the items, and `hyalo lint`
+plus `set/append --validate` enforce `required-keys` / `allowed-keys` /
+`key-patterns` afterwards — including the plain-string item that would otherwise
+vanish from every `sources.ref=` query. Authoring was never the risky step;
+drift was, and drift is covered. If a vault later shows repeated scripted
+authoring of object items, this can be revisited with that evidence in hand —
+which is exactly what it lacked here.
+
+**Where:** no code. `hyalo-knowledgebase/docs/schema-and-lint.md` states the
+outcome where it previously said "not supported" without saying why.

@@ -2103,6 +2103,9 @@ fn run_inner() -> Result<(), AppError> {
     let config_language_owned = config.search_language.clone();
     let config_default_limit = config.default_limit;
     let mut schema = config.schema;
+    // DEC-290: `[schema]` was present but unloadable, so `schema` above is the
+    // empty fallback. `set`/`append` refuse when validation was requested.
+    let schema_invalid = config.schema_invalid;
     let frontmatter_link_props_owned = config.frontmatter_link_props;
     let mut validate_on_write = config.validate_on_write;
     let lint_ignore = config.lint_ignore;
@@ -2296,6 +2299,7 @@ fn run_inner() -> Result<(), AppError> {
         config_language: config_language_owned.as_deref(),
         frontmatter_link_props: frontmatter_link_props_owned.as_deref(),
         schema: &schema,
+        schema_invalid: schema_invalid.as_deref(),
         validate_on_write,
         lint_ignore: &lint_ignore,
         okf_ignore: &okf_ignore,

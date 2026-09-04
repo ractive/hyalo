@@ -352,6 +352,17 @@ pub(crate) struct ResolvedDefaults {
     pub(crate) md_lint: hyalo_mdlint::LintConfig,
     /// Parsed schema configuration from `[schema.*]` sections.
     pub(crate) schema: SchemaConfig,
+    /// The diagnostic when a `[schema]` section **existed** but could not be
+    /// turned into a [`SchemaConfig`] (DEC-290), `None` otherwise.
+    ///
+    /// Distinct from [`Self::malformed`]: the `.hyalo.toml` parsed fine as
+    /// TOML, so `dir`, `[lint] ignore` and the views are all intact — only the
+    /// schema is gone, and [`Self::schema`] above is the empty fallback rather
+    /// than what the user wrote. Reads and plain writes continue on that
+    /// fallback (the stderr warning is `-q`-proof); a write that *promised*
+    /// validation (`--validate`, or `[schema] validate_on_write`) must refuse
+    /// instead, because validating against an empty schema rejects nothing.
+    pub(crate) schema_invalid: Option<String>,
     /// Default output limit for list commands.
     /// `None` = use hardcoded default (50).
     /// `Some(0)` = unlimited.
@@ -478,6 +489,7 @@ impl ResolvedDefaults {
             changelog_path: None,
             md_lint: hyalo_mdlint::LintConfig::default(),
             schema: SchemaConfig::default(),
+            schema_invalid: None,
             default_limit: None,
             pi_session_summary: false,
             case_insensitive_mode: CaseInsensitiveMode::Auto,
@@ -1028,7 +1040,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
     let validate_on_write = schema_validate_on_write
         .or(cfg.validate_on_write)
         .unwrap_or(false);
-    let schema = parse_schema_from_toml(cfg.schema.as_ref());
+    let (schema, schema_invalid) = parse_schema_from_toml(cfg.schema.as_ref());
 
     // Parse [links] fields — borrow before moving.
     let (case_insensitive_mode, case_insensitive_resolve) = match parse_case_insensitive_setting(
@@ -1121,6 +1133,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .unwrap_or(false),
         md_lint: parse_md_lint_config(cfg.lint.as_ref()),
         schema,
+        schema_invalid,
         default_limit: cfg.default_limit,
         case_insensitive_mode,
         case_insensitive_resolve,
@@ -1169,7 +1182,8 @@ pub(crate) fn try_parse_schema_from_toml(
     Ok(Some(cfg))
 }
 
-/// Parse a `SchemaConfig` from the raw `[schema]` TOML value.
+/// Parse a `SchemaConfig` from the raw `[schema]` TOML value, returning the
+/// schema plus the diagnostic when it could not be loaded.
 ///
 /// On malformed schema TOML (or invalid field combinations like `pattern` on a
 /// non-string property), emits a warning and returns an empty schema (no
@@ -1179,7 +1193,12 @@ pub(crate) fn try_parse_schema_from_toml(
 /// round finding 2) via `try_parse_schema_from_toml` + `validate_schema_config`,
 /// since a stderr warning alone let `lint --strict` exit 0 on a vault whose
 /// schema validation was silently disabled.
-fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
+///
+/// The returned diagnostic is what makes DEC-290 possible: the empty schema is
+/// a fine basis for a read or a plain write, but a caller that asked for
+/// validation needs to know the schema it is validating against is not the
+/// vault's.
+fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<String>) {
     match try_parse_schema_from_toml(raw) {
         Ok(Some(cfg)) => {
             // A `[[schema.bind]]` whose target names an undeclared type binds
@@ -1191,12 +1210,12 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> SchemaConfig {
                     unknown.join(", ")
                 ));
             }
-            cfg
+            (cfg, None)
         }
-        Ok(None) => SchemaConfig::default(),
+        Ok(None) => (SchemaConfig::default(), None),
         Err(e) => {
-            crate::warn::warn(e);
-            SchemaConfig::default()
+            crate::warn::warn(&e);
+            (SchemaConfig::default(), Some(e))
         }
     }
 }
@@ -1313,7 +1332,10 @@ pub(crate) fn overlay_profile(
     let validate_on_write = schema_validate_on_write
         .or(cfg.validate_on_write)
         .unwrap_or(false);
-    let schema = parse_schema_from_toml(cfg.schema.as_ref());
+    // A `--profile` overlay only ever feeds `lint`, which reports an unloadable
+    // schema as a `schema/malformed` violation of its own, so the diagnostic is
+    // not carried on this path.
+    let (schema, _schema_invalid) = parse_schema_from_toml(cfg.schema.as_ref());
     let md_lint = parse_md_lint_config(cfg.lint.as_ref());
     let lint_strict = cfg.lint.as_ref().is_some_and(|l| l.strict);
     // The fragment contributes its name to `[lint] profiles`; ensure the

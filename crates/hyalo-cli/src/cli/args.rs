@@ -1328,6 +1328,11 @@ pub(crate) enum Commands {
             `hyalo append`, which adds to a list instead of replacing it. With --validate (or \
             validate_on_write), a schema declaring the property as `list` rejects the scalar \
             before anything is written.\n\
+            UNUSABLE SCHEMA: when [schema] is present but could not be loaded (an uncompilable \
+            regex, a key on the wrong property type), --validate and validate_on_write REFUSE \
+            with exit 1 and write nothing — the schema fell back to empty, so validating \
+            against it would reject nothing. Fix [schema] (hyalo lint reports it as \
+            schema/malformed) or drop --validate to write unvalidated.\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
 K=V, K!=V, K>=V, K<=V, K>V, K<V, K for existence, K~=/re/ for a regex, K=null / K=[] for a null or \
@@ -1397,6 +1402,10 @@ Repeatable (AND).\n\
         ///
         /// Validates the new values against the schema before writing. Implied by
         /// `validate_on_write = true` in the [schema] config.
+        ///
+        /// Refuses with exit 1 (writing nothing) when `[schema]` exists but could
+        /// not be loaded: the schema falls back to empty, so validating against
+        /// it would reject nothing.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
@@ -1663,6 +1672,11 @@ Repeatable (AND).\n\
             naming the file and the reason.\n\
             SIZE LIMIT: frontmatter is limited to 64 KiB / 2000 lines. A write that would exceed \
             this limit is rejected with exit 1 and a JSON error (see `hyalo set --help`).\n\
+            UNUSABLE SCHEMA: when [schema] is present but could not be loaded (an uncompilable \
+            regex, a key on the wrong property type), --validate and validate_on_write REFUSE \
+            with exit 1 and write nothing — the schema fell back to empty, so validating \
+            against it would reject nothing. Fix [schema] (hyalo lint reports it as \
+            schema/malformed) or drop --validate to write unvalidated.\n\
             USE WHEN: You need to append items to list-type properties such as 'aliases' or 'authors' \
             without overwriting the existing list.\n\n\
             EXAMPLES:\n\
@@ -1706,6 +1720,10 @@ Repeatable (AND).\n\
         ///
         /// Validates the new values against the schema before writing. Implied by
         /// `validate_on_write = true` in the [schema] config.
+        ///
+        /// Refuses with exit 1 (writing nothing) when `[schema]` exists but could
+        /// not be loaded: the schema falls back to empty, so validating against
+        /// it would reject nothing.
         #[arg(long, alias = "strict")]
         validate: bool,
         #[command(flatten)]
