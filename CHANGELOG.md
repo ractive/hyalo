@@ -191,6 +191,7 @@ and this project adheres to
 - Text-mode errors use the lowercase `error:` prefix, matching clap and anyhow
 - `hyalo config` reports the effective output format plus `format_source`, and an effective `hints` boolean
 - `lint --format github` summary counts files checked: `N errors, M warnings in K of T files checked`
+- `set`/`append` with `--validate` (or `[schema] validate_on_write`) now refuse with exit 1 when `[schema]` exists but cannot be loaded, instead of falling back to an empty schema and writing unvalidated (DEC-290). Writes without `--validate`, and every other command, are unaffected.
 
 ### Removed
 

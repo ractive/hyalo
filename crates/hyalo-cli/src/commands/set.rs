@@ -1714,7 +1714,7 @@ pub(crate) fn run(
         }
     };
     let do_validate = validate || ctx.validate_on_write;
-    // DEC-289: `--validate` (or `validate_on_write`) against a `[schema]` that
+    // DEC-290: `--validate` (or `validate_on_write`) against a `[schema]` that
     // failed to load would validate against an empty schema and reject nothing.
     if let Some(outcome) = crate::commands::reject_write_with_unloadable_schema(
         do_validate,

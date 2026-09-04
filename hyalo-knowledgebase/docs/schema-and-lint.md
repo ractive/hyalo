@@ -110,9 +110,35 @@ matches and is silently absent from every query — lint is what reports it.
 
 `object-list` is **config-only**: `hyalo types set --property-type` does not accept it
 (as with `string-list`), and `--fix` has no fixer for its violations, so they report
-`autofixable: false`. Writing object items with `hyalo set` / `hyalo append` is not
-supported; `--validate` does reject a scalar or string-item value for an
-`object-list` property.
+`autofixable: false`. Writing object *items* with `hyalo set` / `hyalo append` is not
+supported and will not be (DEC-291): a write must say *which* item it means, which the
+dot-path syntax `find` uses for reads cannot express, and `--property` on the write side
+is a literal top-level key by design. Author items in an editor; `hyalo new` scaffolds
+the property as `[]`, and `lint` plus `--validate` enforce the shape afterwards —
+`--validate` already rejects a scalar or string-item value for an `object-list` property.
+
+### When the schema itself cannot be loaded (DEC-290)
+
+A `[schema]` block can be valid TOML and still be rejected — an uncompilable
+`key-patterns` regex, `min-length` on a `number`, `values` outside an `enum`.
+The rest of `.hyalo.toml` still applies; the schema is replaced by an empty one.
+
+`hyalo lint` reports that as a `schema/malformed` violation (an error under
+`--strict`), and `set` / `append` **refuse with exit 1 when validation was
+asked for** — `--validate`, or `[schema] validate_on_write = true` — including
+under `--dry-run`, because validating against an empty schema rejects nothing
+and the promise would be silently vacuous:
+
+```text
+error: refusing to validate against an unusable [schema]: invalid [schema] in
+.hyalo.toml: property 'sources': key-patterns.commit: invalid regex …; the
+schema could not be loaded, so --validate would reject nothing
+```
+
+The gate is scoped to the promise, not to the command: a `set`/`append` without
+`--validate` claims no validation and still writes (with the `-q`-proof
+warning), and `mv`, `remove`, `task toggle` and every read are untouched — so a
+vault whose schema is briefly broken mid-edit stays usable.
 
 ### Schema Merging
 

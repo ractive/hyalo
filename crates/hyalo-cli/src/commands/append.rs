@@ -1179,7 +1179,7 @@ pub(crate) fn run(
         }
     };
     let do_validate = validate || ctx.validate_on_write;
-    // DEC-289: same refusal as `set` — validating against a schema that failed
+    // DEC-290: same refusal as `set` — validating against a schema that failed
     // to load rejects nothing, so the promise is kept by refusing instead.
     if let Some(outcome) = crate::commands::reject_write_with_unloadable_schema(
         do_validate,

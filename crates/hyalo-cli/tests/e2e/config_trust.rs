@@ -836,7 +836,7 @@ fn dir_to_a_healthy_vault_drops_the_malformed_cwd_warning() {
 }
 
 // ---------------------------------------------------------------------------
-// iter-270 / DEC-289 — a write that *promised* validation refuses when
+// iter-270 / DEC-290 — a write that *promised* validation refuses when
 // `[schema]` cannot be loaded
 // ---------------------------------------------------------------------------
 //

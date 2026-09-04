@@ -353,7 +353,7 @@ pub(crate) struct ResolvedDefaults {
     /// Parsed schema configuration from `[schema.*]` sections.
     pub(crate) schema: SchemaConfig,
     /// The diagnostic when a `[schema]` section **existed** but could not be
-    /// turned into a [`SchemaConfig`] (DEC-289), `None` otherwise.
+    /// turned into a [`SchemaConfig`] (DEC-290), `None` otherwise.
     ///
     /// Distinct from [`Self::malformed`]: the `.hyalo.toml` parsed fine as
     /// TOML, so `dir`, `[lint] ignore` and the views are all intact — only the
@@ -1194,7 +1194,7 @@ pub(crate) fn try_parse_schema_from_toml(
 /// since a stderr warning alone let `lint --strict` exit 0 on a vault whose
 /// schema validation was silently disabled.
 ///
-/// The returned diagnostic is what makes DEC-289 possible: the empty schema is
+/// The returned diagnostic is what makes DEC-290 possible: the empty schema is
 /// a fine basis for a read or a plain write, but a caller that asked for
 /// validation needs to know the schema it is validating against is not the
 /// vault's.

@@ -602,7 +602,7 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
 /// literal flat key) — nested-path support itself is out of scope.
 #[must_use]
 /// Refuse a write that asked for schema validation while `[schema]` could not
-/// be loaded (DEC-289).
+/// be loaded (DEC-290).
 ///
 /// `--validate` (and `[schema] validate_on_write`) promise that a value the
 /// schema forbids is rejected before anything is written. When

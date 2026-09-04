@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 270 — Schema write-side semantics: what set/append --validate promise"
 date: 2026-09-04
-status: planned
+status: in-progress
 tags:
   - iteration
   - schema
@@ -70,18 +70,18 @@ start refusing.
 
 ### GATE-1: decide and implement
 
-- [ ] Re-read DEC-279 in full for why the gate was scoped to `lint`/`find --strict`/
+- [x] Re-read DEC-279 in full for why the gate was scoped to `lint`/`find --strict`/
       `views run` and not writes originally.
-- [ ] Enumerate every `SchemaConfig::TryFrom` rejection path
+- [x] Enumerate every `SchemaConfig::TryFrom` rejection path
       (`crates/hyalo-core/src/schema.rs`) to know the full blast radius of gating writes
       on it — this is not `object-list`-specific.
-- [ ] Decide (1), (2), or a third option research surfaces; record the choice and
+- [x] Decide (1), (2), or a third option research surfaces; record the choice and
       reasoning as a new DEC in [[decision-log]], explicitly resolving DEC-287's "belongs
       to its own decision" note.
-- [ ] Implement the chosen behaviour in `set.rs` and `append.rs`; update
+- [x] Implement the chosen behaviour in `set.rs` and `append.rs`; update
       `lint_reports_schema_malformed_for_an_invalid_key_pattern_regex` (it currently pins
       the vacuous case and must change either way).
-- [ ] Update `set --help` / `append --help` if behaviour changes; update
+- [x] Update `set --help` / `append --help` if behaviour changes; update
       `docs/configuration.md` and [[docs/schema-and-lint]] where they describe
       `--validate`'s guarantees.
 
@@ -103,56 +103,87 @@ concern" unless evidence of real need turns up.
 
 ### Scope questions to resolve before writing any parser
 
-- [ ] Does a second dogfooding cycle, or the mapl-memory `sources:` migration that
+- [x] Does a second dogfooding cycle, or the mapl-memory `sources:` migration that
       motivated iteration 268, actually hit this gap in practice? Check the mapl-memory PR
       referenced in [[backlog/done/object-list-schema-type]] and any hand edits to
       object-list properties in dogfooded vaults since 268 landed.
-- [ ] If a syntax is warranted: one flat `key=value,key2=value2` item per invocation is
+- [x] If a syntax is warranted: one flat `key=value,key2=value2` item per invocation is
       the minimum useful shape — an item needs `required-keys` satisfied in one write, not
       accumulated field-by-field.
-- [ ] Interaction with `--validate` (and with Part A's decision): a partially-specified
+- [x] Interaction with `--validate` (and with Part A's decision): a partially-specified
       item must refuse exactly like today's scalar-item case.
-- [ ] Can the existing `-p`/`--property` dotted-path syntax `find` already understands for
+- [x] Can the existing `-p`/`--property` dotted-path syntax `find` already understands for
       reads be reused for writes (symmetry argument), avoiding any new flag? Investigate
       before proposing a bespoke syntax.
 
 ### ITEM-1: decide and (maybe) implement
 
-- [ ] Decide: implement a syntax, or close as won't-do. Record the reasoning in the same
+- [x] Decide: implement a syntax, or close as won't-do. Record the reasoning in the same
       DEC as Part A or its own DEC in [[decision-log]] — there is no "silently dropped"
       outcome.
 - [ ] If implementing: design the syntax, justify it against the no-new-CLI-surface bar,
       implement in `set.rs` and `append.rs`, validate against
       `required-keys`/`allowed-keys`/`key-patterns` before writing, update `--help`,
       `docs/configuration.md`, [[docs/schema-and-lint]], the skill file, and CHANGELOG.
-- [ ] If won't-do: no code lands for Part B; the DEC is the deliverable.
+- [x] If won't-do: no code lands for Part B; the DEC is the deliverable.
 
 ## Shared closing tasks
 
-- [ ] DEC(s) recorded in [[decision-log]] covering both decisions.
-- [ ] Changelog entry via `hyalo changelog add` for every behaviour that changed.
+- [x] DEC(s) recorded in [[decision-log]] covering both decisions.
+- [x] Changelog entry via `hyalo changelog add` for every behaviour that changed.
 - [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*`
       gates (help drift in particular if any `--help` text changed).
 
 ## Acceptance criteria
 
-- [ ] A DEC resolves DEC-287's "belongs to its own decision" note: either writes now gate
+- [x] A DEC resolves DEC-287's "belongs to its own decision" note: either writes now gate
       on a broken `[schema]`, or the asymmetry is kept but made discoverable in the result
       JSON, with reasoning either way.
-- [ ] `lint_reports_schema_malformed_for_an_invalid_key_pattern_regex` (or its
+- [x] `lint_reports_schema_malformed_for_an_invalid_key_pattern_regex` (or its
       replacement) reflects the new behaviour, not the old vacuous-write pin.
-- [ ] A decision is recorded for the object-list item syntax either way — a working
+- [x] A decision is recorded for the object-list item syntax either way — a working
       `set`/`append` syntax with tests, or a DEC explaining why it stays an editor concern.
 - [ ] If a syntax is implemented: `hyalo set f.md --property '<chosen syntax>' --validate`
       refuses an item missing a `required-keys` key and accepts one that satisfies
       `required-keys`/`allowed-keys`/`key-patterns`.
-- [ ] No new CLI flag lands without an explicit justification in the DEC.
+- [x] No new CLI flag lands without an explicit justification in the DEC.
 - [ ] Gates green.
+
+## Outcome
+
+**Part A → DEC-290, implemented.** Neither of the plan's two options as written.
+The gate is scoped by *what `--validate` promises*, not by command kind: `set` /
+`append` refuse with exit 1 (writing nothing, `--dry-run` included) when
+`[schema]` fails `SchemaConfig::try_from` **and** validation was requested —
+`--validate` or `[schema] validate_on_write`. A write that made no such claim
+still proceeds on the empty fallback with the `-q`-proof warning, and `mv`,
+`remove`, `task toggle` and every read are untouched, so a vault whose schema is
+half-edited stays usable. Option 1 read literally (gate *every* write) was
+rejected because a rejected `[schema]` — unlike an unparsable `.hyalo.toml` —
+still leaves `dir`, `[lint] ignore` and the views intact; option 2
+(`schema_invalid: true` in the result JSON) was rejected because it leaves the
+default case as wrong as before and charges every caller a check for a guarantee
+the flag already advertised. All 13 `try_from` rejection paths are config
+authoring errors reachable only by editing `.hyalo.toml`, never by editing a
+note.
+
+**Part B → DEC-291, won't-do, no code.** No demand: `object-list` appears in zero
+`.hyalo.toml` files across this vault and both dogfood testbeds, and the one real
+user (mapl-memory `sources:`) migrated in an editor and said in its own request
+that `set --property` support was out of scope. The symmetry argument fails —
+`--property` on the write side is a literal top-level key by design
+(`reject_dotted_property_collision` exists to refuse dotted writes), and a write
+needs an item selector the read syntax cannot express. A bespoke `sources[]=k=v`
+item syntax would pack a second key/value language, with its own escaping rules,
+into a value position that already infers types — against the standing
+no-new-CLI-surface bar, for a shape one editor invocation writes correctly.
+
+No new CLI flag landed.
 
 ## Links
 
 - [[iterations/iteration-268-object-list-schema-type]] — found and deferred both questions
 - [[iterations/iteration-265-scan-exclude-and-skipped-files]] — DEC-279, original gate scope
 - [[backlog/done/object-list-schema-type]]
-- [[decision-log]] — DEC-279, DEC-287
+- [[decision-log]] — DEC-279, DEC-287, DEC-290, DEC-291

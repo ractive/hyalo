@@ -882,7 +882,7 @@ commit = "["
         "the TOML parses; it is the schema that is invalid"
     );
 
-    // DEC-289: `set --validate` against an unloadable `[schema]` now refuses.
+    // DEC-290: `set --validate` against an unloadable `[schema]` now refuses.
     // The schema fell back to empty, so validating against it would reject
     // nothing — the flag's promise, not the command's kind, is what makes this
     // a gate (DEC-279 widened the broken-*config* gate by exit code; this one
@@ -920,7 +920,7 @@ commit = "["
     assert_eq!(
         output.status.code().unwrap(),
         0,
-        "a plain write claims no validation and is unaffected by DEC-289"
+        "a plain write claims no validation and is unaffected by DEC-290"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

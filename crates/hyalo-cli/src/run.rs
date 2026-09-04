@@ -2103,7 +2103,7 @@ fn run_inner() -> Result<(), AppError> {
     let config_language_owned = config.search_language.clone();
     let config_default_limit = config.default_limit;
     let mut schema = config.schema;
-    // DEC-289: `[schema]` was present but unloadable, so `schema` above is the
+    // DEC-290: `[schema]` was present but unloadable, so `schema` above is the
     // empty fallback. `set`/`append` refuse when validation was requested.
     let schema_invalid = config.schema_invalid;
     let frontmatter_link_props_owned = config.frontmatter_link_props;
