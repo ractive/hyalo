@@ -512,6 +512,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Properties {
             glob: bare_glob,
             limit: bare_limit,
+            index_flags: _, // consumed in run.rs before dispatch
             action,
         } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::properties::run`.
@@ -520,6 +521,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         Commands::Tags {
             glob: bare_glob,
             limit: bare_limit,
+            index_flags: _, // consumed in run.rs before dispatch
             action,
         } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.

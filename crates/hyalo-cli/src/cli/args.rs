@@ -1002,6 +1002,11 @@ pub(crate) enum Commands {
         /// form of `properties summary --limit`.
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        // iter-266 IDX-1 (BUG-11): `--index` reaches the bare group too, so
+        // `hyalo properties --index` works like every other reading command
+        // instead of erroring with "a similar argument exists: --index-file".
+        #[command(flatten)]
+        index_flags: IndexFlags,
         #[command(subcommand)]
         action: Option<PropertiesAction>,
     },
@@ -1026,6 +1031,9 @@ pub(crate) enum Commands {
         /// form of `tags summary --limit`.
         #[arg(short = 'n', long, value_parser = parse_limit)]
         limit: Option<usize>,
+        // iter-266 IDX-1 (BUG-11): see `Properties`.
+        #[command(flatten)]
+        index_flags: IndexFlags,
         #[command(subcommand)]
         action: Option<TagsAction>,
     },

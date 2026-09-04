@@ -184,18 +184,30 @@ fn effective_index_path_for(
         | Commands::Read { index_flags, .. }
         | Commands::Lint { index_flags, .. }
         | Commands::New { index_flags, .. } => Some(index_flags),
-        Commands::Tags { action, .. } => match action {
+        // iter-266 IDX-1: `--index` is accepted on the bare group as well as on
+        // the subcommand, so `hyalo properties --index` and
+        // `hyalo properties summary --index` are the same request. Whichever
+        // side actually names an index wins; the subcommand takes precedence.
+        Commands::Tags {
+            action,
+            index_flags: bare,
+            ..
+        } => match action {
             Some(
                 TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
-            ) => Some(index_flags),
-            None => None,
+            ) if index_flags.effective_index_path(vault_dir).is_some() => Some(index_flags),
+            _ => Some(bare),
         },
-        Commands::Properties { action, .. } => match action {
+        Commands::Properties {
+            action,
+            index_flags: bare,
+            ..
+        } => match action {
             Some(
                 PropertiesAction::Summary { index_flags, .. }
                 | PropertiesAction::Rename { index_flags, .. },
-            ) => Some(index_flags),
-            None => None,
+            ) if index_flags.effective_index_path(vault_dir).is_some() => Some(index_flags),
+            _ => Some(bare),
         },
         Commands::Links { action } => match action {
             Some(LinksAction::Fix { index_flags, .. } | LinksAction::Auto { index_flags, .. }) => {
@@ -1465,6 +1477,7 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Properties {
                 glob: bare_glob,
                 limit: bare_limit,
+                index_flags: _,
                 action,
             } if !matches!(
                 action,
@@ -1485,6 +1498,7 @@ fn run_inner() -> Result<(), AppError> {
             Commands::Tags {
                 glob: bare_glob,
                 limit: bare_limit,
+                index_flags: _,
                 action,
             } if !matches!(action, Some(crate::cli::args::TagsAction::Rename { .. })) => {
                 let (glob, limit) = match action {
