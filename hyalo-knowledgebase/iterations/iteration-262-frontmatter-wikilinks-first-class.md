@@ -44,6 +44,18 @@ rules (schemes, attachments, case) which land first in
 [[iterations/iteration-266-properties-tags-schema-mutations]]), and `links auto`
 inserting links into frontmatter (never).
 
+## Carry-over from iteration 261
+
+[[iterations/iteration-261-link-resolution-obsidian-compat]] merged (PR #304)
+with everything in its own scope landed — nothing unticked, nothing deferred.
+Its one item explicitly routed here was link-target resolution rules
+(schemes, attachments, case), which iter-261 kept and this plan already
+excludes under "Out of scope" above; FM-1 already assumes iter-261's `kind`
+field is in place (`kind: "frontmatter"` complements it) and 261's e2e fixture
+`[[AidenLx]]` → `People/aidenlx.md` case-folding is the resolver behaviour
+this iteration's frontmatter links inherit unchanged. No scope change needed
+here as a result of iter-261's actual outcome.
+
 ## Tasks
 
 ### FM-1: scan every frontmatter value for wikilinks (BUG-1)
