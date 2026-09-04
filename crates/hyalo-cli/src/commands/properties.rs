@@ -41,9 +41,31 @@ pub fn properties_summary(
         }
     }
 
-    // Collapse each property: if multiple types exist, mark as "mixed".
-    let mut result: Vec<PropertySummaryEntry> = agg
-        .into_iter()
+    let mut result = collapse_property_types(agg);
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let total = result.len() as u64;
+    if let Some(n) = limit.filter(|n| *n > 0) {
+        result.truncate(n);
+    }
+    let _ = format;
+    Ok(CommandOutcome::success_with_total(
+        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        total,
+    ))
+}
+
+/// Collapse a `name → (type → count)` aggregation into one entry per property
+/// **name**, marking a property that appears with more than one type as
+/// `mixed` and attaching the per-type breakdown.
+///
+/// Shared by `properties summary` and `summary` (iter-266 OUT-1): keying by
+/// name alone is what makes `hyalo summary`'s property count the number of
+/// distinct property names rather than the number of (name, type) pairs.
+pub fn collapse_property_types(
+    agg: std::collections::BTreeMap<String, std::collections::BTreeMap<String, usize>>,
+) -> Vec<PropertySummaryEntry> {
+    agg.into_iter()
         .map(|(name, type_counts)| {
             let total_count: usize = type_counts.values().sum();
             if type_counts.len() == 1 {
@@ -74,18 +96,7 @@ pub fn properties_summary(
                 }
             }
         })
-        .collect();
-    result.sort_by(|a, b| a.name.cmp(&b.name));
-
-    let total = result.len() as u64;
-    if let Some(n) = limit.filter(|n| *n > 0) {
-        result.truncate(n);
-    }
-    let _ = format;
-    Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
-        total,
-    ))
+        .collect()
 }
 
 /// Result of a `properties rename` operation.
@@ -153,21 +164,40 @@ pub fn properties_rename(
         };
 
         // Source key not present -- skip
-        let Some(value) = props.shift_remove(from) else {
+        if !props.contains_key(from) {
             skipped_count += 1;
             continue;
-        };
+        }
 
-        // Target key already exists -- conflict, put the source back
+        // Target key already exists -- conflict
         if props.contains_key(to) {
-            props.insert(from.to_owned(), value);
             conflicts.push(rel_path.clone());
             continue;
         }
 
-        props.insert(to.to_owned(), value);
+        // iter-266 PROP-1: rename the key where it stands. Rebuilding the map
+        // with `shift_remove` + `insert` moved the key to the end of the block
+        // and re-serialized its value (an empty `rating:` came back as
+        // `score: null`), so the map is rebuilt in place and the write itself
+        // is a text-level key-token rewrite whenever the block allows it.
+        props = props
+            .into_iter()
+            .map(|(k, v)| {
+                if k == from {
+                    (to.to_owned(), v)
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
+
         if !dry_run {
-            frontmatter::write_frontmatter_within(dir, full_path, &props)?;
+            if !frontmatter::rename_frontmatter_key_within(dir, full_path, from, to)? {
+                // Shapes the text splicer does not model (mixed line endings,
+                // non-UTF-8, YAML it cannot span-map) still get renamed — the
+                // props path warns about the reformatting it causes.
+                frontmatter::write_frontmatter_within(dir, full_path, &props)?;
+            }
             // Journal refresh covers entry AND link graph (frontmatter link
             // properties can change in a rename) — the pre-journal code only
             // patched the entry, leaving the persisted graph stale.

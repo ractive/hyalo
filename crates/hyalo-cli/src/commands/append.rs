@@ -250,10 +250,10 @@ pub fn append(
                 // succeeds.
                 let _ = append_value_in_memory(&mut merged, name, raw_value, new_val);
             }
-            let doc_type = merged.get("type").and_then(|v| match v {
-                serde_json::Value::String(s) => Some(s.as_str()),
-                _ => None,
-            });
+            let doc_type = merged
+                .get("type")
+                .and_then(hyalo_core::schema::normalize_type_value);
+            let doc_type = doc_type.as_deref();
             // Explicit `type:` wins; otherwise a `[schema.bind]` path binding
             // supplies the effective type for validation-on-write.
             let effective_type = doc_type.or_else(|| schema.bound_type_for(rel_path));

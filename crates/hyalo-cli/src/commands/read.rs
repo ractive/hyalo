@@ -364,6 +364,15 @@ pub fn run(
         None
     };
 
+    // iter-266 OUT-1 (UX-15): the raw frontmatter text, so a read never
+    // re-serializes YAML. `None` when the block is absent, empty, or not
+    // UTF-8 — the parsed-map rendering below is the fallback for those.
+    let fm_raw = if frontmatter_flag {
+        frontmatter::read_frontmatter_raw(&full_path).unwrap_or(None)
+    } else {
+        None
+    };
+
     // Determine what content to return
     let need_body = section.is_some() || !frontmatter_flag || line_range.is_some();
 
@@ -459,6 +468,12 @@ pub fn run(
         let json_val =
             serde_json::to_value(props).context("failed to serialize frontmatter as JSON")?;
         obj["frontmatter"] = json_val;
+        // The parsed map stays the machine-readable shape; `frontmatter_raw`
+        // carries the block's exact source text beside it (iter-266 OUT-1).
+        obj["frontmatter_raw"] = match fm_raw {
+            Some(ref raw) => serde_json::json!(raw),
+            None => serde_json::Value::Null,
+        };
     }
     if need_body {
         obj["content"] = serde_json::json!(content_str);
@@ -475,12 +490,24 @@ pub fn run(
     // Text format: raw output — frontmatter as YAML, body as plain text.
     let mut out = String::new();
     if let Some(ref props) = fm_value {
-        // Render frontmatter as YAML
+        // Frontmatter between its fences. iter-266 OUT-1 (UX-15): emit the
+        // block's own bytes — indentation, quoting and comments intact — and
+        // fall back to serializing the parsed map only when there is no raw
+        // text to show (empty or non-UTF-8 block).
         out.push_str("---\n");
-        if !props.is_empty() {
-            let yaml = serde_saphyr::to_string(props)
-                .context("failed to serialize frontmatter as YAML")?;
-            out.push_str(&yaml);
+        match fm_raw {
+            Some(ref raw) => {
+                out.push_str(raw);
+                if !raw.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            None if !props.is_empty() => {
+                let yaml = serde_saphyr::to_string(props)
+                    .context("failed to serialize frontmatter as YAML")?;
+                out.push_str(&yaml);
+            }
+            None => {}
         }
         out.push_str("---\n");
         if need_body && !content_str.is_empty() {

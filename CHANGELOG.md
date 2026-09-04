@@ -183,6 +183,7 @@ and this project adheres to
 - Per-file YAML parse diagnostics are collapsed into one end-of-run stderr line naming the count and `hyalo lint --rule HYALO005` (DEC-278); `-q` silences it and `[scan] verbose_skips`/`RUST_LOG=hyalo=debug` restores the detail
 - A malformed `.hyalo.toml` now exits 1 for gate commands (`lint`, `find --strict`, `views run`) as well as writes (DEC-279); plain reads keep answering with the `-q`-proof warning
 - A `--index` read that names its files stat-refreshes just those entries instead of warning that the whole index is stale (DEC-280)
+- `types set --required K` infers the property type it auto-declares for K from the values the vault already holds for that key, instead of always declaring `string`
 
 ### Removed
 
@@ -324,6 +325,12 @@ and this project adheres to
 - find --filenames-only no longer emits a trailing blank line, so 'find --filenames-only | wc -l' equals 'find --count' (also fixes 'views run --filenames-only').
 - `links auto --index` no longer aborts when its refresh pass meets a file with unparsable frontmatter; it skips and counts it like the disk scan (BUG-8)
 - `create-index` keeps invalid-UTF-8 files out of the BM25 corpus, so `--index` scores match the disk scan's exactly, and reports them under `warnings` (BUG-14)
+- `properties rename` renames the key in place: same position in the frontmatter block and the value's exact source text (quoting, spacing, comments, list indentation); an empty `rating:` becomes an empty `score:` instead of `score: null`
+- `tags rename` on a parent tag renames its whole subtree (Obsidian semantics): `--from music --to audio` also moves `music/genres`, works when only children exist, and never matches `musical`; every renamed tag is listed in the text output and under `renamed_tags` in JSON
+- `hyalo properties --index` and `hyalo tags --index` are accepted on the bare command, not only on the `summary`/`rename` subcommand
+- Schema type binding accepts `type:` as a `[[Wikilink]]` or a one-element list of either a string or a wikilink, so `types set`, `lint` and `set --validate` apply to Obsidian vaults that write `type: ["[[Authors]]"]`
+- `hyalo summary` lists a mixed-type property once with a type breakdown instead of once per type, so its property count is the number of distinct names and matches `hyalo properties --count`
+- `hyalo read --frontmatter` returns the frontmatter block's own bytes instead of re-serialised YAML; JSON adds `frontmatter_raw` beside the parsed map
 
 ### Added
 

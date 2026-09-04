@@ -478,10 +478,10 @@ pub fn set(
             for (name, _, value) in &parsed_props {
                 merged.insert((*name).to_owned(), value.clone());
             }
-            let doc_type = merged.get("type").and_then(|v| match v {
-                serde_json::Value::String(s) => Some(s.as_str()),
-                _ => None,
-            });
+            let doc_type = merged
+                .get("type")
+                .and_then(hyalo_core::schema::normalize_type_value);
+            let doc_type = doc_type.as_deref();
             // Explicit `type:` wins; otherwise a `[schema.bind]` path binding
             // supplies the effective type for validation-on-write.
             let effective_type = doc_type.or_else(|| schema.bound_type_for(rel_path));
@@ -566,9 +566,11 @@ pub fn set(
 
         // Record the first mutated file's declared type for the advisory pass.
         if batch_type_from_file.is_none()
-            && let Some(Value::String(t)) = props.get("type")
+            && let Some(t) = props
+                .get("type")
+                .and_then(hyalo_core::schema::normalize_type_value)
         {
-            batch_type_from_file = Some(t.clone());
+            batch_type_from_file = Some(t);
         }
 
         let mut file_changed = false;

@@ -233,6 +233,155 @@ pub(super) fn splice_frontmatter(
     }
 }
 
+/// Rename one top-level key **in the raw text**, touching nothing but the key
+/// token itself (iter-266 PROP-1).
+///
+/// `properties rename` used to go through the ordinary props write path, which
+/// meant the renamed key was removed and re-inserted: it moved to the end of
+/// the block and its value was re-serialized, so an empty `rating:` came back
+/// as `score: null`. This function instead rewrites the key token on its own
+/// line and re-emits every other byte — including the value text, its quoting,
+/// comments and block-list indentation — verbatim.
+///
+/// `original_yaml` is the raw text between the `---` delimiters. Returns `None`
+/// when the block cannot be modeled (the caller then falls back to a
+/// props-based write), when `from` is absent, or when `to` already exists.
+pub(super) fn rename_key_in_place(original_yaml: &str, from: &str, to: &str) -> Option<String> {
+    if from == to {
+        return None;
+    }
+    // Same LF normalization as `splice_frontmatter`: a lone `\r` is content the
+    // caller's CRLF re-expansion would mangle, so refuse to touch the block.
+    let normalized;
+    let yaml = if original_yaml.contains('\r') {
+        normalized = original_yaml.replace("\r\n", "\n");
+        if normalized.contains('\r') {
+            return None;
+        }
+        normalized.as_str()
+    } else {
+        original_yaml
+    };
+
+    let original_map = parse_map(yaml).ok()?;
+    if !original_map.contains_key(from) || original_map.contains_key(to) {
+        return None;
+    }
+
+    let (header, segments, footer) = segment(yaml)?;
+    // Same cross-check `splice_frontmatter` performs: if the line spans do not
+    // reproduce the authoritative parse, this document is not ours to edit.
+    if segments.len() != original_map.len()
+        || !segments
+            .iter()
+            .zip(original_map.iter())
+            .all(|(seg, (key, value))| seg.key == *key && seg.value == *value)
+    {
+        return None;
+    }
+
+    let key_text = render_key_token(to);
+    let mut out = String::with_capacity(yaml.len() + key_text.len());
+    out.push_str(header);
+    for seg in &segments {
+        out.push_str(seg.pre_trivia);
+        if seg.key == from {
+            let first_line_end = seg.body.find('\n').unwrap_or(seg.body.len());
+            let token_len = key_token_len(&seg.body[..first_line_end])?;
+            out.push_str(&key_text);
+            out.push_str(&seg.body[token_len..]);
+        } else {
+            out.push_str(seg.body);
+        }
+    }
+    out.push_str(footer);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+
+    // Same final gate as `splice_frontmatter`: the result must parse back to
+    // the original map with exactly one key renamed, in the same position.
+    let expected: IndexMap<String, Value> = original_map
+        .into_iter()
+        .map(|(k, v)| {
+            if k == from {
+                (to.to_owned(), v)
+            } else {
+                (k, v)
+            }
+        })
+        .collect();
+    match parse_map_with(&out, verify_options()) {
+        Ok(round_tripped) if map_eq(&round_tripped, &expected) => Some(out),
+        _ => None,
+    }
+}
+
+/// Render `key` as a YAML mapping-key token (no `:` separator).
+///
+/// Emits the key bare when it is unambiguously a plain scalar, and
+/// double-quoted otherwise. A wrong guess cannot corrupt a file: the caller
+/// re-parses the spliced result and falls back when it does not match.
+fn render_key_token(key: &str) -> String {
+    use std::fmt::Write as _;
+    if is_plain_safe_key(key) {
+        return key.to_owned();
+    }
+    let mut out = String::with_capacity(key.len() + 2);
+    out.push('"');
+    for c in key.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            // Escaping never fails on a String; the result is checked by the
+            // caller's re-parse either way.
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `true` when `key` can be written as a bare YAML scalar key.
+///
+/// Deliberately conservative — anything not obviously plain gets quoted.
+fn is_plain_safe_key(key: &str) -> bool {
+    // Would re-read as a bool / null rather than as this string.
+    const RESERVED: &[&str] = &[
+        "true", "false", "yes", "no", "on", "off", "null", "~", "y", "n",
+    ];
+    if key.is_empty() || key.trim() != key {
+        return false;
+    }
+    if RESERVED
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(key.trim_start_matches('-')))
+    {
+        return false;
+    }
+    // A key that parses as a number would come back as a non-string key.
+    if key.parse::<f64>().is_ok() {
+        return false;
+    }
+    if key
+        .chars()
+        .next()
+        .is_some_and(|c| "-?:,[]{}#&*!|>'\"%@`".contains(c))
+    {
+        return false;
+    }
+    key.chars()
+        .all(|c| c.is_alphanumeric() || " _-./+()".contains(c))
+        && !key.contains(": ")
+        && !key.contains(" #")
+}
+
 /// Parse YAML text into an ordered property map using hyalo's shared parser
 /// options (strict booleans, no anchors/aliases, duplicate keys rejected).
 ///
@@ -812,38 +961,44 @@ fn classify_line(line: &str) -> LineRole {
     ) {
         return LineRole::Unsupported;
     }
+    if key_token_len(line).is_some() {
+        LineRole::Key
+    } else {
+        LineRole::Unsupported
+    }
+}
+
+/// Byte length of the key token at the start of a column-0 key line — the text
+/// before the `:` separator, quotes included.
+///
+/// Returns `None` when `line` does not start with a key token recognized by
+/// [`classify_line`]. Splitting this out lets [`rename_key_in_place`] replace
+/// exactly the key token and keep the rest of the line byte-identical, using
+/// the same recognition rule the segmenter itself applies.
+fn key_token_len(line: &str) -> Option<usize> {
+    let first = *line.as_bytes().first()?;
     let rest = match first {
-        b'"' => match scan_quoted(line, '"', true) {
-            Some(rest) => rest,
-            None => return LineRole::Unsupported,
-        },
-        b'\'' => match scan_quoted(line, '\'', false) {
-            Some(rest) => rest,
-            None => return LineRole::Unsupported,
-        },
+        b'"' => scan_quoted(line, '"', true)?,
+        b'\'' => scan_quoted(line, '\'', false)?,
         _ => {
             // Plain key: everything up to the first `:` that is followed by a
             // space or end-of-line. A leading `#` would have made the line
-            // trivia, which is handled above.
+            // trivia, which the caller handles before reaching here.
             let bytes = line.as_bytes();
-            let mut found = None;
-            for (i, b) in bytes.iter().enumerate() {
-                if *b == b':' && (i + 1 == bytes.len() || bytes[i + 1] == b' ') {
-                    found = Some(i);
-                    break;
-                }
+            let found = bytes.iter().enumerate().find_map(|(i, b)| {
+                (*b == b':' && (i + 1 == bytes.len() || bytes[i + 1] == b' ')).then_some(i)
+            })?;
+            if found == 0 {
+                return None;
             }
-            match found {
-                Some(0) | None => return LineRole::Unsupported,
-                Some(i) => &line[i..],
-            }
+            &line[found..]
         }
     };
     // `rest` must start at the key separator.
     if rest.starts_with(':') && (rest.len() == 1 || rest.as_bytes()[1] == b' ') {
-        LineRole::Key
+        Some(line.len() - rest.len())
     } else {
-        LineRole::Unsupported
+        None
     }
 }
 
@@ -1545,6 +1700,151 @@ mod tests {
             reparsed.get("aliases"),
             Some(&json!([])),
             "must round-trip to the requested empty list, however it got there:\n{out}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-place key rename (iter-266 PROP-1)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    /// Rename `from` → `to` and assert the block is byte-identical except for
+    /// the key token itself.
+    fn renamed(yaml: &str, from: &str, to: &str) -> String {
+        rename_key_in_place(yaml, from, to)
+            .unwrap_or_else(|| panic!("rename {from} -> {to} must splice in place:\n{yaml}"))
+    }
+
+    #[test]
+    fn renames_scalar_in_place() {
+        let out = renamed("title: Note\nrating: 7\ntags:\n  - a\n", "rating", "score");
+        assert_eq!(out, "title: Note\nscore: 7\ntags:\n  - a\n");
+    }
+
+    #[test]
+    fn empty_value_stays_empty_not_null() {
+        // BUG-12: the props path turned `rating:` into `score: null`.
+        let out = renamed("title: Note\nrating:\n", "rating", "score");
+        assert_eq!(out, "title: Note\nscore:\n");
+        assert!(!out.contains("null"), "empty value must stay empty: {out}");
+    }
+
+    #[test]
+    fn preserves_position_first_middle_last() {
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "a", "z"),
+            "z: 1\nb: 2\nc: 3\n"
+        );
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "b", "z"),
+            "a: 1\nz: 2\nc: 3\n"
+        );
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "c", "z"),
+            "a: 1\nb: 2\nz: 3\n"
+        );
+    }
+
+    #[test]
+    fn preserves_quoting_and_spacing() {
+        let yaml = "rating:   \"7\"  \ntitle: 'x'\n";
+        assert_eq!(
+            renamed(yaml, "rating", "score"),
+            "score:   \"7\"  \ntitle: 'x'\n"
+        );
+    }
+
+    #[test]
+    fn preserves_block_list_indentation() {
+        let yaml = "kw:\n- one\n- two\nafter: x\n";
+        assert_eq!(
+            renamed(yaml, "kw", "keywords"),
+            "keywords:\n- one\n- two\nafter: x\n"
+        );
+        let two_space = "kw:\n  - one\n  - two\n";
+        assert_eq!(
+            renamed(two_space, "kw", "keywords"),
+            "keywords:\n  - one\n  - two\n"
+        );
+    }
+
+    #[test]
+    fn preserves_flow_list() {
+        let yaml = "kw: [one,  two]\n";
+        assert_eq!(renamed(yaml, "kw", "keywords"), "keywords: [one,  two]\n");
+    }
+
+    #[test]
+    fn preserves_trailing_comment_and_comment_block() {
+        let yaml = "# leading\nrating: 7 # why\n# trailing\n";
+        assert_eq!(
+            renamed(yaml, "rating", "score"),
+            "# leading\nscore: 7 # why\n# trailing\n"
+        );
+    }
+
+    #[test]
+    fn preserves_nested_map_value() {
+        let yaml = "meta:\n  a: 1\n  b:\n    c: 2\nend: x\n";
+        assert_eq!(
+            renamed(yaml, "meta", "metadata"),
+            "metadata:\n  a: 1\n  b:\n    c: 2\nend: x\n"
+        );
+    }
+
+    #[test]
+    fn renames_quoted_key() {
+        let yaml = "\"my key\": 1\nb: 2\n";
+        // The target is a plain scalar, so it is written bare even though the
+        // source was quoted — quoting follows the new key, not the old one.
+        assert_eq!(renamed(yaml, "my key", "other key"), "other key: 1\nb: 2\n");
+        let single = "'my key': 1\n";
+        assert_eq!(renamed(single, "my key", "plain"), "plain: 1\n");
+    }
+
+    #[test]
+    fn quotes_a_target_that_needs_it() {
+        let out = renamed("a: 1\n", "a", "true");
+        assert_eq!(out, "\"true\": 1\n");
+        assert_eq!(renamed("a: 1\n", "a", "1.5"), "\"1.5\": 1\n");
+        assert_eq!(renamed("a: 1\n", "a", "x: y"), "\"x: y\": 1\n");
+    }
+
+    #[test]
+    fn preserves_crlf_by_normalizing_to_lf_for_the_caller() {
+        // The caller re-expands to CRLF; the splicer works in LF.
+        let out = renamed("a: 1\r\nrating: 7\r\n", "rating", "score");
+        assert_eq!(out, "a: 1\nscore: 7\n");
+    }
+
+    #[test]
+    fn refuses_lone_cr() {
+        assert!(rename_key_in_place("a: 1\rrating: 7\n", "rating", "score").is_none());
+    }
+
+    #[test]
+    fn refuses_when_source_absent_or_target_present() {
+        assert!(rename_key_in_place("a: 1\n", "missing", "z").is_none());
+        assert!(rename_key_in_place("a: 1\nz: 2\n", "a", "z").is_none());
+        assert!(rename_key_in_place("a: 1\n", "a", "a").is_none());
+    }
+
+    #[test]
+    fn refuses_unmappable_document() {
+        // A top-level flow mapping is not span-mappable.
+        assert!(rename_key_in_place("{a: 1, b: 2}\n", "a", "z").is_none());
+    }
+
+    #[test]
+    fn preserves_multiline_block_scalar() {
+        let yaml = "desc: |\n  line one\n  line two\nafter: x\n";
+        assert_eq!(
+            renamed(yaml, "desc", "description"),
+            "description: |\n  line one\n  line two\nafter: x\n"
         );
     }
 }

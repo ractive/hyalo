@@ -116,7 +116,7 @@ pub(super) const TASK_DRY_RUN_RESULT_FILTER: &str =
 /// dir now goes to stderr as a `note:` (see `commands::summary::summary`),
 /// matching how `--dir`-switching and other resolution context is already
 /// announced, and stays in the JSON payload as `.dir` for machine consumers.
-pub(super) const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total)\(if (.files.skipped // 0) > 0 or (.files.excluded // 0) > 0 then " (\(.files.skipped // 0) skipped, \(.files.excluded // 0) excluded)" else "" end)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\(if .links.broken_anchors > 0 then ", \(.links.broken_anchors) broken anchor\(if .links.broken_anchors == 1 then "" else "s" end)" else "" end)\(if .links.out_of_vault > 0 then ", \(.links.out_of_vault) out of vault" else "" end)\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
+pub(super) const VAULT_SUMMARY_FILTER: &str = r#""Files: \(.files.total)\(if (.files.skipped // 0) > 0 or (.files.excluded // 0) > 0 then " (\(.files.skipped // 0) skipped, \(.files.excluded // 0) excluded)" else "" end)\nDirectories: \(if (.files.directories | length) > 0 then (.files.directories | .[:7] | map("\(.directory)/ (\(.count))") | join(", ")) + (if (.files.directories | length) > 7 then ", ..." else "" end) else "(none)" end)\nProperties: \(.properties | length) — \(if (.properties | length) > 0 then (.properties | sort_by(-.count) | .[:7] | map("\(.name) (\(.count)\(if .mixed_types then ": " + (.mixed_types | map("\(.count) \(.type)") | join(", ")) else "" end))") | join(", ")) + (if (.properties | length) > 7 then ", ..." else "" end) else "(none)" end)\nTags: \(.tags.total) — \(if (.tags.tags | length) > 0 then (.tags.tags | .[:7] | map("\(.name) (\(.count))") | join(", ")) + (if (.tags.tags | length) > 7 then ", ..." else "" end) else "(none)" end)\nTasks: \(.tasks.done)/\(.tasks.total)\nLinks: \(.links.total) total, \(.links.broken) broken\(if .links.broken_anchors > 0 then ", \(.links.broken_anchors) broken anchor\(if .links.broken_anchors == 1 then "" else "s" end)" else "" end)\(if .links.out_of_vault > 0 then ", \(.links.out_of_vault) out of vault" else "" end)\nOrphans: \(.orphans)\nDead-ends: \(.dead_ends)\nStatus: \(if (.status | length) > 0 then (.status | sort_by(-.count) | map("\(.value) (\(.count))") | join(", ")) else "(none)" end)\nRecent: \(if (.recent_files | length) > 0 then (.recent_files | map(.path) | join(", ")) else "(none)" end)""#;
 
 /// `FindTaskInfo`: `{done, line, section, status, text}`
 /// Format: `  [x] text (line N, section)` or `  [ ] text (line N, section)`
@@ -149,6 +149,19 @@ pub(super) const PROPERTY_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-r
 /// Format: `[dry-run] tag: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 pub(super) const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+
+/// `RenamePropertyResult` (`properties rename`).
+/// Key signature: `conflicts,dry_run,from,modified,scanned,skipped_count,to,total`
+/// Format: `[dry-run] from → to: N/T modified`, the modified files, then any
+/// conflicts (files that already carried the target key).
+pub(super) const PROPERTY_RENAME_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.from) → \(.to): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)\(if (.conflicts | length) > 0 then "\nconflicts: \(.conflicts | join(", "))" else "" end)""#;
+
+/// `RenameTagResult` (`tags rename`).
+/// Key signature: `dry_run,from,modified,renamed_tags,scanned,skipped_count,to,total`
+/// Format: the headline pair, then one line per tag the rename actually
+/// touched — iter-266 DEC-282 expands a parent rename over its whole subtree,
+/// so `music → audio` alone would hide that `music/genres` moved too.
+pub(super) const TAG_RENAME_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.from) → \(.to): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.renamed_tags | length) > 0 then "\n\(.renamed_tags | map("  \(.from) → \(.to) (\(.files) file\(if .files == 1 then "" else "s" end))") | join("\n"))" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// `BacklinksResult`: `{file, backlinks: [...]}`
 /// Format: `N backlink(s) for "file"` with each backlink listed as `  source.md: line N`.
@@ -314,6 +327,14 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         }
         // Mutation results with tag (SetTagResult, RemoveTagResult)
         "dry_run,modified,scanned,skipped,skipped_count,tag,total" => Some(TAG_MUTATION_FILTER),
+        // RenamePropertyResult (`properties rename`)
+        "conflicts,dry_run,from,modified,scanned,skipped_count,to,total" => {
+            Some(PROPERTY_RENAME_FILTER)
+        }
+        // RenameTagResult (`tags rename`, iter-266 adds `renamed_tags`)
+        "dry_run,from,modified,renamed_tags,scanned,skipped_count,to,total" => {
+            Some(TAG_RENAME_FILTER)
+        }
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)

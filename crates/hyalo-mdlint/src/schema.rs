@@ -317,10 +317,9 @@ pub fn lint_file_with_fix(
     // Validate required_sections against the body outline. The effective type is
     // the explicit `type:` else the `[schema.bind]` path binding, so a bound ADR
     // gets its required sections checked even without frontmatter.
-    let doc_type: Option<String> = final_props.get("type").and_then(|v| match v {
-        Value::String(s) => Some(s.clone()),
-        _ => None,
-    });
+    let doc_type: Option<String> = final_props
+        .get("type")
+        .and_then(schema::normalize_type_value);
     let effective_type: Option<String> = doc_type
         .clone()
         .or_else(|| schema.bound_type_for(rel_path).map(ToOwned::to_owned));
@@ -442,10 +441,7 @@ pub fn apply_fixes(
     }
 
     // Determine the effective schema after any type inference.
-    let doc_type: Option<String> = props.get("type").and_then(|v| match v {
-        Value::String(s) => Some(s.clone()),
-        _ => None,
-    });
+    let doc_type: Option<String> = props.get("type").and_then(schema::normalize_type_value);
     let effective_schema: TypeSchema = match &doc_type {
         Some(t) => schema.merged_schema_for_type(t),
         None => schema.default_schema().clone(),
@@ -683,21 +679,24 @@ pub fn validate_properties(
 
     // Determine the document type.
     let type_value = properties.get("type");
-    let doc_type: Option<String> = type_value.and_then(|v| match v {
-        Value::String(s) => Some(s.clone()),
-        _ => None,
-    });
+    let doc_type: Option<String> = type_value.and_then(schema::normalize_type_value);
 
-    // If `type` is present but not a string, report an error. A non-string `type`
+    // If `type` is present but names no type, report an error. Such a `type`
     // still satisfies a bare `required = ["type"]` check, so without this error
     // invalid type values would slip through silently.
+    //
+    // iter-266 DEC-281 widened what counts as naming a type — a `[[Wikilink]]`
+    // and a one-element list both bind now — so the message names the shapes
+    // that work rather than just "expected string".
     if let Some(v) = type_value
         && doc_type.is_none()
     {
         violations.push(Violation {
             severity: Severity::Error,
             kind: None,
-            message: format!("property \"type\" expected string, got {v}"),
+            message: format!(
+                "property \"type\" must name one type (a string, a [[Wikilink]], or a one-element list of either), got {v}"
+            ),
         });
     }
 

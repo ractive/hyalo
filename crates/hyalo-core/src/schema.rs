@@ -337,6 +337,51 @@ impl SchemaConfig {
     }
 }
 
+/// Normalise a frontmatter `type:` value to the schema type name it binds to
+/// (iter-266 SCHEMA-1, DEC-281).
+///
+/// Obsidian vaults do not spell `type:` one single way. The shapes that bind:
+///
+/// - a plain string — `type: Author`
+/// - a `[[Wikilink]]`, bare or quoted — `type: "[[Author]]"` → `Author`
+///   (an aliased link `[[Author|writer]]` binds to the target, `Author`)
+/// - a **one-element** list of either of the above — `type: ["[[Author]]"]`,
+///   the shape Obsidian's own property editor writes for a link-typed property
+///
+/// Everything else — a multi-element list, a map, a number, a bool, an empty
+/// list — returns `None` and is reported by the linter exactly as before.
+/// A wikilink target carrying a path (`[[People/Author]]`) normalises to the
+/// final segment, matching how a wikilink resolves to a note name.
+#[must_use]
+pub fn normalize_type_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => normalize_type_str(s),
+        serde_json::Value::Array(items) => match items.as_slice() {
+            [serde_json::Value::String(s)] => normalize_type_str(s),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Strip an optional `[[…]]` wrapper (and any `|alias` / `#anchor` /
+/// directory prefix inside it) from a `type:` string.
+fn normalize_type_str(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    match s.strip_prefix("[[").and_then(|r| r.strip_suffix("]]")) {
+        Some(inner) => {
+            let target = inner.split('|').next().unwrap_or(inner);
+            let target = target.split('#').next().unwrap_or(target);
+            let target = target.rsplit('/').next().unwrap_or(target).trim();
+            // `[[]]` names nothing; leave it to be reported as an invalid type.
+            (!target.is_empty()).then(|| target.to_owned())
+        }
+        // A plain string is the type name verbatim — including the empty
+        // string, which binds to nothing but is not a *shape* error.
+        None => Some(s.to_owned()),
+    }
+}
+
 /// Schema definition for a single document type (or the global default).
 #[derive(Debug, Clone, Default)]
 pub struct TypeSchema {

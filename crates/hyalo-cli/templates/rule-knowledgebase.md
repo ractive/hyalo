@@ -76,6 +76,27 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Hints marked `[writes]`** (`=>` prefix in text, `"writes": true` in JSON) modify the vault or
   `.hyalo.toml`; `->` hints are read-only and safe to run unattended.
 - **Read frontmatter/metadata**: `hyalo find --file <path>`, `hyalo properties`, `hyalo tags`
+- **`--index` reaches the bare group** (iter-266): `hyalo properties --index` and
+  `hyalo tags --index` are accepted just like `hyalo properties summary --index`, so every
+  reading command takes the flag the same way.
+- **Renames touch only what changed** (iter-266): `properties rename --from rating --to score`
+  rewrites the key token where it stands — same position in the block, same value bytes
+  (quoting, spacing, comments, list indentation), and an empty `rating:` becomes an empty
+  `score:`, never `score: null`. `tags rename --from music --to audio` renames the parent
+  **and its whole subtree** (`music/genres` → `audio/genres`, DEC-282), proceeds when only
+  children exist, and never matches `musical` — the match needs a `/` boundary.
+  `results.renamed_tags` lists every tag actually renamed with its file count.
+- **A `type:` may be a string, a `[[Wikilink]]`, or a one-element list of either**
+  (DEC-281): `type: ["[[Authors]]"]`, `type: "[[Authors]]"` and `type: Authors` all bind to
+  the `Authors` schema, so `types set Authors …` applies and `set --validate` refuses a
+  violating value (exit 1, `--dry-run` included). A multi-element list names no type and
+  `lint` reports it. `types set --required K` auto-declares K's constraint with the type
+  **inferred from the vault's existing values** for K, not a hardcoded `string`.
+- **`summary` keys properties by name** (iter-266): a property with more than one type across
+  the vault is ONE row reading `published (103: 79 datetime, 24 date)`, so
+  `.results.properties | length` equals `hyalo properties --count`.
+- **`read --frontmatter` is byte-exact**: text mode echoes the block between its `---` fences
+  verbatim (no YAML re-serialization); JSON keeps the parsed map and adds `frontmatter_raw`.
 - **`find` results are compact by default**: every item carries `file`, `modified`, `size`
   (bytes), `lines`, `title`, `properties` and `tags`. `sections`, `tasks`, `links`, `backlinks`
   and `properties-typed` come only from `--fields` (or `--fields all`) — or automatically from the

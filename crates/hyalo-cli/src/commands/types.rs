@@ -450,9 +450,15 @@ pub(crate) fn set_type(
             .is_some();
         let already_has = in_type || in_default;
         if !already_has {
-            toml_changes.push(format!("auto-add property {f}: type=string"));
+            // iter-266 DEC-281: infer the property type from what the vault
+            // already holds for this key on files of this type, instead of
+            // hardcoding `string`. On a vault where `categories` is a list
+            // everywhere, the hardcoded `string` declared a constraint every
+            // file violated the moment it was written.
+            let inferred = infer_property_type_from_vault(dir, type_name, f);
+            toml_changes.push(format!("auto-add property {f}: type={inferred}"));
             if !dry_run {
-                set_property_type_field(&mut doc, type_name, f, "string")?;
+                set_property_type_field(&mut doc, type_name, f, inferred)?;
             }
         }
     }
@@ -475,7 +481,7 @@ pub(crate) fn set_type(
             };
             let file_type = props
                 .get("type")
-                .and_then(|v| v.as_str())
+                .and_then(hyalo_core::schema::normalize_type_value)
                 .unwrap_or_default();
             if file_type != type_name {
                 continue;
@@ -545,7 +551,7 @@ pub(crate) fn set_type(
                     .and_then(|props| {
                         props
                             .get("type")
-                            .and_then(|v| v.as_str())
+                            .and_then(hyalo_core::schema::normalize_type_value)
                             .map(|t| t == type_name)
                     })
                     .unwrap_or(false)
@@ -792,6 +798,65 @@ fn set_default_field(
         .context("malformed .hyalo.toml: defaults section is not a table")?;
     defaults[key] = toml_edit::value(value);
     Ok(())
+}
+
+/// Infer the schema property type to auto-declare for a newly required field
+/// (iter-266 SCHEMA-1, DEC-281).
+///
+/// Scans the vault for files whose `type:` normalises to `type_name` and takes
+/// the most common inferred type of their `key` values. Falls back to `string`
+/// when nothing in the vault carries the key — the historical default — so a
+/// brand-new type behaves exactly as before.
+///
+/// Best-effort by design: a file whose frontmatter will not parse is simply
+/// not consulted, and a tie is broken by the type name so the result is
+/// deterministic.
+fn infer_property_type_from_vault(
+    dir: &std::path::Path,
+    type_name: &str,
+    key: &str,
+) -> &'static str {
+    const DEFAULT: &str = "string";
+    let Ok(files) = discovery::discover_files(dir) else {
+        return DEFAULT;
+    };
+    let mut counts: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
+    for full_path in &files {
+        let Ok(props) = read_frontmatter(full_path) else {
+            continue;
+        };
+        let matches_type = props
+            .get("type")
+            .and_then(hyalo_core::schema::normalize_type_value)
+            .is_some_and(|t| t == type_name);
+        if !matches_type {
+            continue;
+        }
+        let Some(value) = props.get(key) else {
+            continue;
+        };
+        // `null` says nothing about the intended type.
+        if value.is_null() {
+            continue;
+        }
+        // Map hyalo's inferred value type onto the schema's property-type
+        // vocabulary; anything without a counterpart stays `string`.
+        let pt = match hyalo_core::frontmatter::infer_type(value) {
+            "number" => "number",
+            "checkbox" => "boolean",
+            "list" => "list",
+            "date" => "date",
+            "datetime" => "datetime",
+            "datetime-tz" => "datetime-tz",
+            _ => DEFAULT,
+        };
+        *counts.entry(pt).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(name, count)| (*count, std::cmp::Reverse(*name)))
+        .map_or(DEFAULT, |(name, _)| name)
 }
 
 /// Set a simple (non-enum) property constraint: `type = "<pt>"`.
