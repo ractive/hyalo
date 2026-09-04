@@ -14,11 +14,14 @@
 //! new crate in the tree, and small enough to read.
 //!
 //! The list holds high-frequency English words plus generic doc filenames
-//! (`readme`, `changelog`, `index`, …) and the platform/format names that show
-//! up as note titles in almost every vault while being prose nouns everywhere
-//! else (`github`, `markdown`, `wiki`, `template` — iter-267, UX-9). Product
-//! and domain nouns a vault genuinely links to (`Obsidian`, `Dataview`,
-//! `Canvas`) are deliberately absent. Words shorter than 3 characters are
+//! (`readme`, `changelog`, `index`, …) and the four platform/format names that
+//! show up as note titles in almost every vault while being prose nouns
+//! everywhere else (`github`, `gitlab`, `markdown`, `wiki` — iter-267, UX-9).
+//! The list stays deliberately narrow there: product and domain nouns a vault
+//! genuinely links to (`Obsidian`, `Dataview`, `Canvas`) and words that are
+//! plausible page titles in their own right (`config`, `setup`, `template`)
+//! are absent, because the frequency trigger already catches the ones that
+//! actually flood a run. Words shorter than 3 characters are
 //! omitted because `links auto --min-length` defaults to 3 and never proposes
 //! them anyway.
 //!
@@ -140,8 +143,6 @@ static COMMON_WORDS: &[&str] = &[
     "computer",
     "concern",
     "condition",
-    "config",
-    "configuration",
     "consider",
     "contain",
     "content",
@@ -183,7 +184,6 @@ static COMMON_WORDS: &[&str] = &[
     "direction",
     "discuss",
     "display",
-    "doc",
     "document",
     "does",
     "done",
@@ -276,7 +276,6 @@ static COMMON_WORDS: &[&str] = &[
     "gitlab",
     "give",
     "glass",
-    "glossary",
     "goal",
     "good",
     "government",
@@ -325,8 +324,6 @@ static COMMON_WORDS: &[&str] = &[
     "industry",
     "information",
     "inside",
-    "install",
-    "installation",
     "instead",
     "interest",
     "internal",
@@ -593,7 +590,6 @@ static COMMON_WORDS: &[&str] = &[
     "rise",
     "risk",
     "road",
-    "roadmap",
     "role",
     "room",
     "rule",
@@ -625,7 +621,6 @@ static COMMON_WORDS: &[&str] = &[
     "service",
     "set",
     "setting",
-    "setup",
     "seven",
     "several",
     "share",
@@ -705,7 +700,6 @@ static COMMON_WORDS: &[&str] = &[
     "team",
     "technology",
     "tell",
-    "template",
     "term",
     "test",
     "text",
@@ -757,7 +751,6 @@ static COMMON_WORDS: &[&str] = &[
     "truth",
     "try",
     "turn",
-    "tutorial",
     "two",
     "type",
     "under",

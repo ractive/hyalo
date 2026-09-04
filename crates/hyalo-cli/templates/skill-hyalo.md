@@ -97,13 +97,21 @@ hyalo find --property contacts.0.email=ada@example.com # first element only
 hyalo find --property '!contacts.phone'                # no element has a phone
 ```
 
-`--title` filters by the displayed title (frontmatter `title` or first H1 heading).
-Case-insensitive substring by default; use `"/regex/"` for regex. Note: `--title` checks
-the *displayed* title, while `--property title~=` only checks the frontmatter property.
+**The promoted title (DEC-283).** `title` is resolved in three steps: a scalar frontmatter
+`title`, else the first H1 heading, else **the filename stem** — Obsidian's own behaviour, so
+a vault whose notes carry no `title` property still sorts and filters usefully instead of
+showing `title: (none)` everywhere. JSON reports which one it was under `title_source`
+(`"property"`, `"h1"` or `"filename"`), so a consumer can tell an authored title from a
+derived one. `--title` and `--property title~=` both match the promoted value — neither is
+frontmatter-only. To test the raw frontmatter key, use `--property title` / `--property
+'!title'`.
+
+Case-insensitive substring by default; use `"/regex/"` for regex.
 
 ```bash
-hyalo find --title "meeting"           # substring match on displayed title
-hyalo find --title "/^Design/i"        # regex on displayed title
+hyalo find --title "meeting"           # substring match on the promoted title
+hyalo find --title "/^Design/i"        # regex on the promoted title
+hyalo find --limit 5 --format json --jq '[.results[] | {file, title, title_source}]'
 ```
 
 Neither one sees body prose. An identifier that lives in a `##` heading — `DEC-251` in a
@@ -197,6 +205,13 @@ hyalo summary --jq '.results.tasks.total'                  # tasks count from su
   number of items that command considered* — `set`/`remove`/`append`/`properties rename`/
   `tags rename` use `total = modified + skipped`. A count of *findings* is never called
   `total`: `lint` reports `.results.violations`, `links auto` reports `.results.matched`.
+- **`links auto` holds back common-word titles by default** (DEC-286). Titles that are
+  ordinary English words, generic doc filenames or platform names (`index`, `README`,
+  `github`, `markdown`), plus any title that dominates the run (25+ matches and 2.5% of it),
+  are excluded and listed under `.results.default_excluded_titles` /
+  `.default_excluded_mentions`. Setting `[links.auto] exclude_titles` hands the decision to
+  your own list; `warn_common_titles = false` (or `--no-warn-common-titles`) proposes every
+  candidate again.
 - Top-level `results` keys are always present, including `0`, `false`, `[]` and `null`. Only
   per-item records inside arrays omit absent optional keys, so `.results.dry_run` is `false`
   (not missing) on a non-dry-run of any mutating command.
@@ -575,6 +590,13 @@ to `.hyalo.toml` to skip listed files during `hyalo lint` (plain strings match l
 glob meta-characters use `--glob` semantics). Read-only commands still count them among the
 files they skipped.
 
+**Naming a file overrides the ignore list (DEC-284).** A path given positionally, with
+`--file`, or through `--files-from` is linted even when `[lint] ignore` matches it — naming a
+file is a stronger signal than a glob written once in `.hyalo.toml`. `--glob` and the bare
+vault sweep keep honouring the list. So `git diff --name-only | hyalo lint --files-from -`
+lints changed ignored files (what a diff gate wants); select paths with `--glob` when you
+*do* want the ignore list applied.
+
 **Exclude a tree from the whole tool:** `[lint] ignore` narrows one command. `[scan] exclude =
 ["Templates/**"]` is the vault-wide knob — hyalo's analogue of Obsidian's "Excluded files".
 Matching files are dropped at discovery, so `find`, `summary`, `tags`, `properties`, `lint`,
@@ -612,6 +634,20 @@ hyalo types set iteration --required branch --dry-run  # preview without writing
 **How a file binds to a type** (DEC-281): `type:` may be a plain string, a `[[Wikilink]]` (bare or quoted; an alias or a path resolves to the note name), or a **one-element list** of either — the shape Obsidian's property editor writes for a link-typed property. `type: ["[[Authors]]"]`, `type: "[[Authors]]"` and `type: Authors` all bind to `Authors`. A multi-element list names no type and `lint` reports it.
 
 When `--default` is used, hyalo applies the default to all vault files of that type missing that property.
+
+**Scaffolding a file from a type:** `hyalo new --type <name> --file <path>` writes the type's
+required properties and required sections. `--dry-run` prints the scaffold (JSON adds
+`content`) and writes nothing — not even the parent directory. The placeholders are
+deliberately un-fillable rather than plausible (DEC-285): a required `string` gets `TBD`, and
+a required `number` / `date` / `datetime` / `boolean` with no schema `default` is written
+**empty** (`rating:`), which `hyalo lint` reports as "required property must not be empty".
+A `default` declared in the schema (including `$today`) is emitted verbatim. `new` writes
+only what the schema declares — chain `hyalo set` for anything else.
+
+```bash
+hyalo new --type iteration --file iterations/iteration-99-x.md --dry-run   # preview
+hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft
+```
 
 ## Views — saved find queries
 
