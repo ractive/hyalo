@@ -348,6 +348,10 @@ and this project adheres to
 - A `set`/`remove`/`append --index` run that names its files no longer warns about staleness it repairs itself
 - The root `-h` banner no longer tells you not to `cd` into a vault configured as `dir = "."`
 - SCHEMA-group constraint violations (`pattern`, `item_pattern`, `object-list`) no longer report `autofixable: true` when `--fix` has no fixer for them
+- `mv` now reports a frontmatter wikilink that spans a line break even when the file holding it has no other link to the moved target — such a link is not a graph edge, so the backlinks graph alone never surfaced it (DEC-288)
+- `mv` flags an ambiguous bare `[[stem]]` between two same-stemmed files even when neither sits at the vault root; which candidate was being moved no longer decides whether the warning appears (DEC-288)
+- `lint --fix` no longer swallows an HTML tag into MD034's autolink: `https://…/x<br>` fixes to `<https://…/x><br>` instead of corrupting the markup (DEC-289)
+- MD047 no longer reports a frontmatter-only file as missing a trailing newline (DEC-289)
 
 ### Added
 

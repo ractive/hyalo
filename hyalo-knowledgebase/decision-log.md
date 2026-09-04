@@ -4744,3 +4744,102 @@ passes through `toml::Value`, whose tables are sorted, so the keys arrive — an
 `crates/hyalo-cli/src/commands/types.rs` (`constraint_to_json`),
 `crates/hyalo-cli/src/output/text_types.rs` (nested-map block),
 `crates/hyalo-cli/src/commands/new.rs` (scaffolds as `[]`).
+
+## DEC-288: `mv` looks past the backlinks graph, but only in single-file mode (2026-09-04)
+
+**Decision:** `plan_mv` no longer scans only the files the backlinks graph
+pointed at. Two shapes of reference are invisible to that graph and were
+therefore silently missed, and both are now found by widening what `mv` looks
+at rather than by widening what counts as a graph edge.
+
+**A split frontmatter wikilink is not a backlink, and must not become one.**
+`extract_frontmatter_links` deliberately refuses to emit a graph edge for a
+`[[…]]` whose brackets straddle a line break (iteration 262, FM-1) — reading a
+folded block scalar as a link would make `backlinks` / `summary` / `--orphan`
+depend on YAML wrapping. That scope is unchanged here and is pinned by an e2e
+test. What changed is that `mv`'s FM-2 *warning* used to inherit the same
+blind spot: it only fired for a file the graph had already flagged for some
+*other* link, so a file whose only reference to the moved target was the folded
+link got neither a rewrite nor a warning — the exact silent-dangling-reference
+case FM-2 exists to close.
+
+**Mechanism: option (b), a marker on the build result — chosen on measurement,
+not taste.** Option (a), the plan's simpler "sweep every file `plan_mv` has not
+already opened and read just its frontmatter block", was implemented first and
+measured on the Obsidian Hub vault (6,520 files, no split links present):
+**0.25 s → 0.36 s** median of five, both directions, interleaved. That is a 44%
+regression on a command whose whole cost is one graph build, and the sweep is
+pure waste on the overwhelmingly common vault where no file has a split link at
+all — 6,520 extra opens to find nothing.
+
+So the flag rides along with the scan that already happened. `LinkGraphVisitor`
+already receives each file's raw frontmatter text (`on_frontmatter_text`,
+iter-262), and now records whether any line of it opens a `[[` that does not
+close on that line — the exact opening test `split_frontmatter_wikilink` uses,
+so a file the marker says no to provably cannot produce a report.
+`LinkGraphBuild` carries the resulting paths as `split_frontmatter_candidates`
+and `plan_mv` re-reads only those, which on a clean vault is none.
+
+The coupling objection stands but lands softer than expected: the marker is on
+`LinkGraphBuild`, the **build result**, not on `LinkGraph`. Nothing is
+serialized into a snapshot, no query answers differently, `from_file_links`
+(the `summary` path) leaves it empty, and the fact recorded — "this
+frontmatter opens a bracket it does not close on the same line" — is a property
+of the file, not of `mv`.
+
+**NEW-3 folded into the same widening, one line lower.** An ambiguous bare
+`[[b]]` cannot be resolved during the graph build, so it is indexed under the
+*written* key `b` — a key `backlinks_ci("one/b.md")` never probes. The result
+was that the ambiguity report only fired when one of the same-stemmed candidates
+happened to sit at the vault root (whose `old_stem` *is* the bare stem), making
+`mv`'s warning depend on which of two identically-named files was moved. `plan_mv`
+now also probes the moved file's basename stem when it is nested. Every link that
+extra key contributes is one the graph could not resolve — a resolvable stem was
+already found under `old_rel` — so it reaches the unchanged ambiguity probe in
+`plan_inbound_rewrites` and nothing new is rewritten by default.
+
+**Batch `mv` is deliberately excluded.** `plan_batch_mv` returns bare
+`RewritePlan`s and has never had a channel for `frontmatter_links_skipped` at
+all, so giving it the sweep means changing its return type and the CLI's batch
+output shape — a larger change than the three carry-over fixes this iteration
+bundles, and one with no reported failure behind it. `mv --help` now states the
+asymmetry instead of leaving it to be discovered.
+
+**Where:** `crates/hyalo-core/src/link_graph.rs`
+(`LinkGraphBuild::split_frontmatter_candidates`,
+`frontmatter_opens_an_unclosed_wikilink`, the `LinkGraphVisitor` flag),
+`crates/hyalo-core/src/link_rewrite.rs` (`plan_mv` steps 2/3b,
+`scan_split_frontmatter_links`), `crates/hyalo-cli/src/cli/args.rs` (`mv` help).
+
+## DEC-289: two lint rules narrowed at their boundaries, not suppressed (2026-09-04)
+
+**Decision:** MD034 and MD047 each keep reporting; only the extent of what they
+claim is corrected.
+
+**MD034 stops the autolink at a `<`.** Upstream's end-of-URL scan does not treat
+`<` as a boundary, so `https://…/Retroma<br>` (three occurrences on the Obsidian
+Hub vault) fixed to `<https://…/Retroma<br>>` — the tag pulled inside the
+autolink and the markup corrupted. hyalo narrows the fix's range and re-emitted
+text instead of dropping the diagnostic: the URL really is bare and really
+should be wrapped, just not that far. *Trimming at any `<` rather than only at a
+tag-shaped `</?[A-Za-z]…` run:* RFC 3986 excludes `<` from the URI character set
+outright, so a `<` inside a span claiming to be a bare URL is always adjacent
+markup. *Rejected: suppressing the fix for this shape* (iteration 263's
+under-fix bias) — the correct boundary is computable, so under-fixing would
+leave a real finding unfixable for no gain. A URL followed by a bare `>` is
+over-measured the same way but wraps to `<https://a.example/>>`, which still
+renders as the autolink plus a literal `>`, so it is left alone and pinned by a
+test.
+
+**MD047 has nothing to check on an empty body.** A frontmatter-only file hands
+the lint engine a zero-byte body and MD047 read "no bytes" as "no trailing
+newline", reporting a file that plainly ends in one — a pre-existing bug, not
+something iteration 267's `new --dry-run` work introduced. The rule is skipped
+for a 0-byte body rather than given a fabricated diagnosis, extending the same
+reasoning as the existing single-line-body guard one shape further down. A
+non-empty body genuinely missing its terminator still fires and still fixes.
+
+**Where:** `crates/hyalo-mdlint/src/rules/obsidian.rs`
+(`bare_url_len_before_html`), `crates/hyalo-mdlint/src/engine.rs`
+(`narrow_md034_autolink_fix`, the MD047 empty-body guard, `DESCRIPTION_SUFFIX`),
+`hyalo-knowledgebase/docs/schema-and-lint.md` (Obsidian-grammar table).

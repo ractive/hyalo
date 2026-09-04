@@ -226,7 +226,7 @@ target elsewhere in its frontmatter) — a file whose *only* reference to the
 target is the split link gets neither a rewrite nor a warning, because
 `plan_mv`'s file set (`by_source`) comes from the backlinks graph, which
 never extracts a split link as an edge in the first place. See
-[[backlog/mv-frontmatter-split-link-detection-gap]] for the full analysis,
+[[backlog/done/mv-frontmatter-split-link-detection-gap]] for the full analysis,
 a related pre-existing `NEW-3` gap found by the same probing, and a fix
 proposal.
 
@@ -235,5 +235,5 @@ proposal.
 - [[dogfood-results/dogfood-v0220-obsidian-vaults]]
 - [[iterations/iteration-261-link-resolution-obsidian-compat]]
 - [[iterations/iteration-266-properties-tags-schema-mutations]]
-- [[backlog/mv-frontmatter-split-link-detection-gap]]
+- [[backlog/done/mv-frontmatter-split-link-detection-gap]]
 - [[decision-log]]

@@ -29,6 +29,18 @@ pub struct LinkGraphBuild {
     pub warnings: Vec<(PathBuf, String)>,
     /// Case-insensitive index of all vault-relative paths discovered during build.
     pub case_index: CaseInsensitiveIndex,
+    /// Vault-relative paths whose frontmatter opens a `[[` that does not close
+    /// on the same line (iter-269, SCAN-1).
+    ///
+    /// Deliberately on the *build result*, not on [`LinkGraph`]: these are not
+    /// edges, nothing is serialized into a snapshot, and no query answers
+    /// differently because of them. They exist so `hyalo mv` can find the
+    /// files worth re-reading — a split `[[…]]` is not a backlink, so a file
+    /// whose only reference to a moved target is one is invisible to the graph
+    /// — without opening every file in the vault a second time. Always empty
+    /// for a graph built from pre-collected [`FileLinks`], whose caller did the
+    /// scanning and never captured the flag.
+    pub split_frontmatter_candidates: Vec<PathBuf>,
 }
 
 /// In-memory reverse index mapping link targets to their sources.
@@ -120,6 +132,7 @@ impl LinkGraph {
         }
 
         // Second pass: scan files and insert resolved links.
+        let mut split_frontmatter_candidates: Vec<PathBuf> = Vec::new();
         for (full_path, rel) in files {
             let mut visitor =
                 LinkGraphVisitor::with_frontmatter_props(rel.clone(), fm_props.clone());
@@ -130,6 +143,9 @@ impl LinkGraph {
                     continue;
                 }
                 Err(e) => return Err(e),
+            }
+            if visitor.frontmatter_has_split_wikilink() {
+                split_frontmatter_candidates.push(rel.clone());
             }
             insert_file_links(
                 &mut index,
@@ -143,6 +159,7 @@ impl LinkGraph {
             graph: Self::from_index(index),
             warnings,
             case_index,
+            split_frontmatter_candidates,
         })
     }
 
@@ -173,6 +190,8 @@ impl LinkGraph {
             graph: Self::from_index(index),
             warnings: Vec::new(),
             case_index,
+            // The caller scanned the files and never captured the marker.
+            split_frontmatter_candidates: Vec::new(),
         }
     }
 
@@ -747,6 +766,17 @@ pub(crate) struct LinkGraphVisitor {
     frontmatter_text: String,
     /// 1-based file line of the first byte of [`Self::frontmatter_text`].
     frontmatter_first_line: usize,
+    /// Whether this file's frontmatter opened a `[[` that did not close on the
+    /// same line (iter-269, SCAN-1).
+    ///
+    /// Not a link and not a graph edge — [`extract_frontmatter_links`] refuses
+    /// to make one out of a `[[…]]` that straddles a line break, because
+    /// `backlinks` / `summary` / `--orphan` must not depend on how a YAML block
+    /// scalar happened to wrap. It is a *candidate marker*: `hyalo mv` warns
+    /// about such a link rather than leaving a dangling reference behind, and
+    /// this flag is what lets it find the handful of files worth re-reading
+    /// without opening the whole vault a second time.
+    frontmatter_has_split_wikilink: bool,
 }
 
 impl LinkGraphVisitor {
@@ -764,7 +794,15 @@ impl LinkGraphVisitor {
             frontmatter_props,
             frontmatter_text: String::new(),
             frontmatter_first_line: 2,
+            frontmatter_has_split_wikilink: false,
         }
+    }
+
+    /// Whether the file just scanned has a frontmatter `[[` that does not close
+    /// on its own line — see [`Self::frontmatter_has_split_wikilink`].
+    #[must_use]
+    pub fn frontmatter_has_split_wikilink(&self) -> bool {
+        self.frontmatter_has_split_wikilink
     }
 
     /// Consume the visitor and return the collected per-file link data.
@@ -784,12 +822,28 @@ impl LinkGraphVisitor {
     }
 }
 
+/// Whether any line of a raw frontmatter block opens a `[[` that does not close
+/// on the same line (iter-269, SCAN-1).
+///
+/// Mirrors the opening test in `link_rewrite::split_frontmatter_wikilink`
+/// exactly — last `[[` on the line, no `]]` after it — so a file this returns
+/// `false` for can never produce a split-link report and needs no second read.
+/// A `[[` that never closes anywhere is a false positive here, which costs one
+/// extra frontmatter read on a `mv` and nothing else.
+fn frontmatter_opens_an_unclosed_wikilink(yaml: &str) -> bool {
+    yaml.lines().any(|line| {
+        line.rfind("[[")
+            .is_some_and(|open| !line[open + 2..].contains("]]"))
+    })
+}
+
 impl FileVisitor for LinkGraphVisitor {
     fn on_frontmatter_text(&mut self, yaml: &str, first_line: usize) {
         if self.scans_frontmatter() {
             self.frontmatter_text.clear();
             self.frontmatter_text.push_str(yaml);
             self.frontmatter_first_line = first_line;
+            self.frontmatter_has_split_wikilink = frontmatter_opens_an_unclosed_wikilink(yaml);
         }
     }
 
@@ -978,6 +1032,69 @@ mod tests {
     use super::*;
     use std::fmt::Write as _;
     use std::fs;
+
+    /// SCAN-1 (iter-269): the marker mirrors `split_frontmatter_wikilink`'s own
+    /// opening test, so a block it says no to can never produce a report.
+    #[test]
+    fn unclosed_frontmatter_wikilink_marker_matches_the_opening_test() {
+        for (yaml, want) in [
+            (
+                "summary: >\n  points at [[Categories/\n  Books]] somehow\n",
+                true,
+            ),
+            ("related:\n  - \"[[Books]]\"\n", false),
+            ("title: plain\n", false),
+            // Two links on one line: only the *last* `[[` can span the break.
+            ("v: \"[[A]] and [[B]]\"\n", false),
+            ("v: \"[[A]] and [[B\n  C]]\"\n", true),
+            // A `[[` that never closes at all is a false positive here, which
+            // only costs one extra frontmatter read.
+            ("v: \"[[never closed\n", true),
+        ] {
+            assert_eq!(
+                frontmatter_opens_an_unclosed_wikilink(yaml),
+                want,
+                "on {yaml:?}"
+            );
+        }
+    }
+
+    /// The marker must reach the build result, and must stay silent for a file
+    /// whose frontmatter links all close on their own line.
+    #[test]
+    fn build_lists_only_files_with_a_split_frontmatter_wikilink() {
+        let vault = create_vault(&[
+            (
+                "Categories/Books.md",
+                "---\ntags: [categories]\n---\n\n# Books\n",
+            ),
+            (
+                "folded.md",
+                "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nBody\n",
+            ),
+            (
+                "closed.md",
+                "---\nrelated:\n  - \"[[Categories/Books]]\"\n---\n\nBody\n",
+            ),
+            ("plain.md", "See [[Categories/Books]] here\n"),
+        ]);
+        let build = LinkGraph::build(vault.path(), None, None).unwrap();
+        let candidates: Vec<String> = build
+            .split_frontmatter_candidates
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        assert_eq!(candidates, vec!["folded.md".to_string()], "{candidates:?}");
+        // The split link is still not a graph edge — FM-1's scope is unchanged.
+        assert!(
+            build
+                .graph
+                .backlinks_ci("Categories/Books.md")
+                .iter()
+                .all(|e| e.source.to_string_lossy().replace('\\', "/") != "folded.md"),
+            "a split frontmatter link must not become a backlink"
+        );
+    }
 
     /// BUG-5 (iter-243): backlinks must come back sorted by (source, line)
     /// regardless of the graph's insertion order, so an index refreshed by
