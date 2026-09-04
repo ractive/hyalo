@@ -531,7 +531,7 @@ use mutation::{
 };
 use summary::{hints_for_properties_summary, hints_for_summary, hints_for_tags_summary};
 use util::{first_modified_file, status_priority};
-pub(crate) use zero_result::filter_echo;
+pub(crate) use zero_result::zero_result_notice;
 
 #[cfg(test)]
 mod tests;

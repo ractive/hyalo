@@ -51,6 +51,18 @@ pub(crate) fn cwd_help_banner_for_tty(
         // banner reflects the effective `dir` (and its malformed-config
         // fallback) without re-reading the file.
         let dir_value = resolved_dir.display().to_string();
+        // iter-267 (UX-18): `dir = "."` means the vault IS this directory, so
+        // "don't cd into it" is advice about a directory the user is already
+        // standing in — nonsense, and it made the banner read as a scolding.
+        // Only the separate-subdirectory case gets the path-relativity note.
+        if resolved_dir
+            .components()
+            .eq(std::path::Path::new(".").components())
+        {
+            return Some(format!(
+                "{info_prefix}hyalo runs against this directory (`dir = \".\"` in ./.hyalo.toml).\n"
+            ));
+        }
         return Some(format!(
             "{info_prefix}hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
              Don't `cd` into it; pass paths relative to `{dir_value}`.\n"

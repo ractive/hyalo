@@ -850,6 +850,19 @@ fn run_inner() -> Result<(), AppError> {
                         );
                         return Err(AppError::Exit(2));
                     }
+                    // iter-267 (UX-13): `hyalo index` is the name agents and
+                    // users reach for first. clap's nearest match by edit
+                    // distance is `find`, which has nothing to do with the
+                    // snapshot, so the empty state pointed the wrong way.
+                    // Name the two commands that actually manage it.
+                    if invalid == "index" {
+                        eprintln!(
+                            "{e}\n  hint: did you mean 'hyalo create-index'? (writes the \
+                             `.hyalo-index` snapshot; 'hyalo drop-index' removes it, and read \
+                             commands opt in with --index)\n"
+                        );
+                        return Err(AppError::Exit(2));
+                    }
                     for (target, suggestion) in [("version", "--version"), ("help", "--help")] {
                         if strsim::damerau_levenshtein(invalid, target) <= 2 {
                             eprintln!("{e}\n  tip: did you mean `hyalo {suggestion}`?\n");

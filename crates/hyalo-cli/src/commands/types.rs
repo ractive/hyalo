@@ -139,11 +139,35 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
 // ---------------------------------------------------------------------------
 
 /// `hyalo types remove <type>` — remove a type entry.
-pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result<CommandOutcome> {
+pub(crate) fn remove_type(
+    dir: &Path,
+    type_name: &str,
+    schema: &SchemaConfig,
+    format: Format,
+) -> Result<CommandOutcome> {
     let toml_path = resolve_toml_path(dir);
     let mut doc = read_toml_doc(&toml_path)?;
 
     if !toml_type_exists(&doc, type_name) {
+        // iter-267 (UX-18): a type that a bundled profile contributes shows up
+        // in `types list` and is enforced by `lint`, but lives in the profile
+        // template, not in this vault's `.hyalo.toml` — so "not found" read as
+        // a bug. Say where it comes from and what CAN be done with it.
+        if schema.types.contains_key(type_name) {
+            return Ok(CommandOutcome::UserError(format_error(
+                format,
+                &format!(
+                    "type '{type_name}' is not declared in .hyalo.toml — it comes from an enabled \
+                     profile and cannot be removed, only overridden"
+                ),
+                None,
+                Some(&format!(
+                    "declare your own version with 'hyalo types set {type_name} --required …', \
+                     or drop the profile from [profiles] in .hyalo.toml"
+                )),
+                None,
+            )));
+        }
         return Ok(CommandOutcome::UserError(format_error(
             format,
             &format!("type '{type_name}' not found"),
@@ -1405,9 +1429,12 @@ pub(crate) fn run(
             ctx.schema,
             effective_format,
         )),
-        TypesAction::Remove { type_name } => {
-            crate::commands::types::remove_type(ctx.config_dir, &type_name, effective_format)
-        }
+        TypesAction::Remove { type_name } => crate::commands::types::remove_type(
+            ctx.config_dir,
+            &type_name,
+            ctx.schema,
+            effective_format,
+        ),
         TypesAction::Set {
             type_name,
             required,

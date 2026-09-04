@@ -1068,7 +1068,20 @@ pub(crate) enum Commands {
     },
     /// Show a compact vault summary: file counts, property/tag/status counts, tasks, links, orphans, dead-ends (read-only)
     #[command(
+        // iter-267 (HELP-14): the short page names the JSON result keys. A
+        // caller reaching for `--jq` had to run the command once and read the
+        // envelope back to learn them; `-h` is where that belongs.
+        about = "Show a compact vault summary: file counts, property/tag/status counts, tasks, links, orphans, dead-ends (read-only)\n\
+            RESULT KEYS (all under `results`): files.total, files.skipped, files.excluded, \
+            files.directories, properties, tags, status, tasks.total, tasks.done, links.total, \
+            links.broken, links.broken_anchors, orphans, dead_ends, recent_files, schema.\n\
+            Example: hyalo summary --jq '.results.links.broken'",
         long_about = "Show a compact vault summary (~20-30 lines regardless of vault size).\n\n\
+            RESULT KEYS (all under `results`): files.total, files.skipped (unparseable\n\
+            frontmatter), files.excluded ([scan] exclude), files.directories, properties, tags,\n\
+            status, tasks.total, tasks.done, links.total, links.broken, links.broken_anchors,\n\
+            orphans, dead_ends, recent_files, schema. Example:\n\
+            hyalo summary --jq '.results.links.broken'\n\n\
             OUTPUT: A 'VaultSummary' object with file counts (total + top-level directories), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
             status grouping (value + count, no file lists), \

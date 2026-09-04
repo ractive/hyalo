@@ -188,21 +188,29 @@ fn append_hint_lines(text: &mut String, hints: &[crate::hints::Hint]) {
     if hints.is_empty() {
         return;
     }
-    text.push('\n');
-    for hint in hints {
+    // Blank separator line only when there IS a body to separate from.
+    // iter-267 (UX-13): a zero-result run has no body, and the unconditional
+    // separator opened its stdout with two blank lines before the first hint.
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    for (i, hint) in hints.iter().enumerate() {
+        if i > 0 {
+            text.push('\n');
+        }
         if hint.cmd.is_empty() {
             // Advice-only hint (no follow-up command). Render the
             // description directly without the `cmd  # desc` layout.
-            text.push_str("\n  -> ");
+            text.push_str("  -> ");
             text.push_str(&hint.description);
         } else if hint.writes {
-            text.push_str("\n  => ");
+            text.push_str("  => ");
             text.push_str(&hint.cmd);
             text.push_str("  # ");
             text.push_str(&hint.description);
             text.push_str(" [writes]");
         } else {
-            text.push_str("\n  -> ");
+            text.push_str("  -> ");
             text.push_str(&hint.cmd);
             text.push_str("  # ");
             text.push_str(&hint.description);
