@@ -1871,6 +1871,48 @@ pub fn files_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<S
     stale
 }
 
+/// Bring one named file's index entry up to date with disk, if it drifted.
+///
+/// UX-7 (iter-265, DEC-280): the stale-index policy is "refresh what you are
+/// about to touch or return, and warn only when you cannot". This is the
+/// per-file half — one `stat`, and a re-scan only when the recorded mtime is
+/// behind the file's. Used by `--index` reads that named their targets, so
+/// `find --index --file just-appended.md` reports the file as it is now rather
+/// than as the snapshot remembers it.
+///
+/// Returns `true` when the entry is now known-current: either it was already
+/// current, or the re-scan succeeded. Returns `false` when the caller must fall
+/// back to warning — the file is not in the index at all (so there is nothing
+/// to refresh in place), it could not be stat'ed, or the re-scan failed.
+pub fn refresh_if_changed_on_disk(index: &mut SnapshotIndex, dir: &Path, rel: &str) -> bool {
+    let Some(entry) = index.get(rel) else {
+        return false;
+    };
+    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
+        return false;
+    };
+    let full = dir.join(rel);
+    let Ok(meta) = std::fs::metadata(&full) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+        return false;
+    };
+    // Size is compared too: a same-second edit that changes the length is
+    // invisible to an mtime-only check, and appending is exactly that case.
+    if disk.as_secs() <= indexed.saturating_add(STALENESS_TOLERANCE_SECS)
+        && meta.len() == entry.size
+    {
+        return true;
+    }
+    index
+        .refresh_entry_and_links_at(&full, rel)
+        .unwrap_or(false)
+}
+
 /// Files present under `dir` (per [`crate::discovery::discover_files`]) but
 /// absent from `index` — files created outside hyalo after the last
 /// `create-index`.

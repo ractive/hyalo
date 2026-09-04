@@ -124,6 +124,80 @@ impl Commands {
             },
         }
     }
+
+    /// `true` when this invocation's **exit code is a gate** — a verdict a
+    /// caller (usually CI) acts on, rather than a report a human reads.
+    ///
+    /// BUG-19 (iter-265, DEC-279): a `.hyalo.toml` that fails to parse leaves
+    /// the run on built-in defaults, which silently drops `[lint] ignore`, the
+    /// schemas and the views. For a read that a person is reading, a loud
+    /// warning is enough. For a gate it is not: `hyalo lint` in CI went on to
+    /// check files the config excluded, validate against schemas it no longer
+    /// had, and still exit 0 — a green build whose verdict was computed from
+    /// rules nobody wrote. A gate whose rules went missing must fail, not pass.
+    ///
+    /// The gates are exactly the read commands whose exit code is documented as
+    /// a pass/fail verdict:
+    /// - `lint` (any form — `--strict` only changes which warnings are errors),
+    /// - `find --strict` (the broken-link/anchor CI gate),
+    /// - `views run` (a saved query used the same way).
+    ///
+    /// A *writing* command is already refused by [`Self::writes`]; this only
+    /// widens the refusal to reads that answer yes/no. Every other read keeps
+    /// the warning-and-continue behaviour.
+    pub(crate) fn gates(&self) -> bool {
+        match self {
+            Self::Lint { .. } => true,
+            Self::Find { filters, .. } => filters.strict,
+            Self::Views { action } => matches!(action, Some(ViewsAction::Run { .. })),
+            _ => false,
+        }
+    }
+
+    /// The vault-relative files this invocation explicitly named, if any.
+    ///
+    /// UX-7 (iter-265, DEC-280): the stale-index policy is "refresh what you
+    /// are about to touch or return; warn only when you cannot". A run that
+    /// names its targets *can* — one `stat` per named file is cheap and exact,
+    /// which is strictly better than the whole-vault mtime heuristic that
+    /// produced the "index older than vault" warning. A run with no named
+    /// targets (a full-vault query) keeps the heuristic, because refreshing
+    /// every file on every read would re-introduce exactly the cost iteration
+    /// 260 removed.
+    ///
+    /// Returns an empty vec for a run that scans the vault, uses `--glob`, or
+    /// is not one of the file-targeted read commands.
+    pub(crate) fn explicit_file_targets(&self) -> Vec<String> {
+        // `--glob` reopens the whole-vault question, so a run that mixes globs
+        // with `--file` is treated as unnamed and keeps the warning.
+        let named = |file: &[String], positional: &[String], glob: &[String]| -> Vec<String> {
+            if !glob.is_empty() {
+                return Vec::new();
+            }
+            let mut out = file.to_vec();
+            out.extend_from_slice(positional);
+            out
+        };
+        match self {
+            Self::Find {
+                file_positional,
+                filters,
+                ..
+            } => named(&filters.file, file_positional, &filters.glob),
+            Self::Lint {
+                file,
+                file_positional,
+                glob,
+                ..
+            } => named(file, file_positional, glob),
+            Self::Backlinks { selection, .. } | Self::Read { selection, .. } => named(
+                &selection.file,
+                selection.file_positional.as_slice(),
+                &selection.glob,
+            ),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Top-level subcommands (and `group sub` pairs) that write unconditionally.
