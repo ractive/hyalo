@@ -18,7 +18,21 @@ try edge cases that occur to you naturally.
 
 ## Phase 1: Prepare
 
-1. **Build from source**: `cargo build --release`
+1. **Build and install from source, then prove the `hyalo` on PATH is this tree**. The PATH
+   binary is a cargo install and goes stale silently: on 2026-09-04 it was three days and eleven
+   PRs behind `target/release/hyalo`, and a DEC-284 check against it nearly got filed as a bug.
+   ```bash
+   cargo build --release
+   cargo install --path crates/hyalo-cli --target-dir target --force
+   test "$(hyalo --version | awk '{print $3}' | tr -d '(' | sed 's/+dirty$//')" = "$(git rev-parse --short=12 HEAD)" \
+     && echo "hyalo on PATH is HEAD" || { echo "STALE hyalo on PATH: $(which hyalo)"; exit 1; }
+   ```
+   `--target-dir target` reuses the release build so the install takes seconds; the version
+   string is `hyalo X.Y.Z (<12-char hash>[+dirty] <date>)`, and `+dirty` is fine — it only means
+   uncommitted edits such as the report you are about to write. If the check
+   fails, fix the PATH before doing anything else — every later command in this skill, and every
+   explorer agent you spawn, must run the same binary. Never fall back to
+   `./target/release/hyalo` for some commands and `hyalo` for others in one session.
 2. **Find the last dogfood report** to establish the baseline:
    ```bash
    hyalo find --tag dogfooding --sort date --reverse --limit 1 --format text
