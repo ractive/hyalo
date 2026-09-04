@@ -1126,6 +1126,18 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
+    // Install `[scan] exclude` (iter-265, DEC-277) the same way, so every
+    // command's discovery — and every `--index` load — drops the same files.
+    for (pat, msg) in hyalo_core::discovery::set_scan_exclude(&config.scan_exclude) {
+        crate::warn::warn(format!("invalid [scan] exclude glob {pat:?}: {msg}"));
+    }
+
+    // DEC-278: per-file skip diagnostics are collected, not streamed, unless
+    // the vault asks for them or `RUST_LOG` is turned up for this one run.
+    hyalo_core::warn::set_verbose_skips(
+        config.scan_verbose_skips || hyalo_core::warn::rust_log_wants_debug(),
+    );
+
     // Note when --dir is redundant: the user passed the dir .hyalo.toml already
     // resolves to. The config still applies (iter-201) — the flag is simply
     // noise, which is all this note now claims.

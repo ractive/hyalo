@@ -142,7 +142,11 @@ pub fn properties_rename(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                crate::warn::warn(format!("skipping {rel_path}: {e}"));
+                hyalo_core::warn::record_skip(
+                    rel_path,
+                    e.to_string(),
+                    hyalo_core::warn::SkipKind::Frontmatter,
+                );
                 continue;
             }
             Err(e) => return Err(e),

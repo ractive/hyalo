@@ -132,6 +132,16 @@ pub fn scan_excluded_count() -> usize {
     EXCLUDED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Record that a walk (or an index load) dropped `dropped` files.
+///
+/// `fetch_max` rather than `fetch_add`: one CLI run walks the vault several
+/// times (count, collect, hint) and loads the index once, and the figure that
+/// `summary` reports is "how many files this vault lost", not "how many drops
+/// happened".
+pub fn note_scan_excluded(dropped: usize) {
+    EXCLUDED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Reset the excluded counter. **Tests only.**
 pub fn reset_scan_excluded_count() {
     EXCLUDED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -456,7 +466,7 @@ fn discover_files_with_include_ext(
         kept.retain(|p| !exc.is_excluded(&relative_path(dir, p)));
         let dropped = before - kept.len();
         if dropped > 0 {
-            EXCLUDED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
+            note_scan_excluded(dropped);
         }
     }
 

@@ -243,7 +243,14 @@ pub(crate) fn report_unparseable_skip(
     if globs.is_empty() && files.len() == 1 {
         crate::warn::error(format!("{rel}: {detail}"));
     } else {
-        crate::warn::warn(format!("skipping {rel}: {detail}"));
+        // A batch run continues, so the diagnostic is collected and collapsed
+        // into the end-of-run summary line (iter-265, DEC-278) rather than
+        // streamed per file.
+        hyalo_core::warn::record_skip(
+            rel,
+            detail.to_string(),
+            hyalo_core::warn::SkipKind::Frontmatter,
+        );
     }
 }
 
@@ -502,7 +509,11 @@ pub fn build_scanned_index(
     let build = ScannedIndex::build(&files, site_prefix, options)?;
 
     for w in &build.warnings {
-        crate::warn::warn(format!("skipping {}: {}", w.rel_path, w.message));
+        hyalo_core::warn::record_skip(
+            w.rel_path.as_str(),
+            w.message.as_str(),
+            hyalo_core::warn::SkipKind::Frontmatter,
+        );
     }
 
     Ok(ScannedIndexOutcome::Index(build))

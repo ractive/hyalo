@@ -1319,6 +1319,29 @@ impl SnapshotIndex {
         let mut entries = entries;
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
+        // `[scan] exclude` (iter-265) is applied on load, not only on the disk
+        // walk, so `--index` and off-disk runs agree on which files exist. A
+        // snapshot built before the exclusion was configured — or by a version
+        // that predates it — therefore needs no rebuild to be correct. The
+        // excluded sources are dropped from the link graph too, so a note that
+        // only an excluded template links to is still an orphan.
+        let mut graph = graph;
+        if crate::discovery::scan_exclude().is_some() {
+            let mut removed = 0usize;
+            entries.retain(|e| {
+                if crate::discovery::is_scan_excluded(&e.rel_path) {
+                    graph.remove_source(&e.rel_path);
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            if removed > 0 {
+                crate::discovery::note_scan_excluded(removed);
+            }
+        }
+
         let path_index: HashMap<String, usize> = entries
             .iter()
             .enumerate()
@@ -1327,7 +1350,6 @@ impl SnapshotIndex {
         // The graph's lowercased companion map is `#[serde(skip)]`, so a
         // freshly-deserialized graph has an empty one — rebuild it from
         // the restored index keys so `backlinks_ci` works off snapshots.
-        let mut graph = graph;
         graph.rebuild_lower_index();
         Some(Self {
             entries,

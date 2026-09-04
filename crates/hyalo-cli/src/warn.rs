@@ -321,6 +321,8 @@ pub fn warn_llm_misuse(dir: &std::path::Path) {
 /// Should be called just before the process exits. Prints to stderr.
 /// If no warnings were suppressed (or `init` was never called) this is a no-op.
 pub fn flush_summary() {
+    flush_skipped_files();
+
     let total_suppressed: usize = match SUPPRESSED.lock() {
         Ok(guard) => guard.as_ref().map_or(0, |map| map.values().sum()),
         Err(_) => return,
@@ -328,6 +330,38 @@ pub fn flush_summary() {
 
     if !QUIET.load(Ordering::Relaxed) && total_suppressed > 0 {
         eprintln!("warning: {total_suppressed} additional identical warning(s) suppressed");
+    }
+}
+
+/// Collapse this run's skipped files into one stderr line (iter-265, DEC-278).
+///
+/// A vault of Templater templates printed one multi-line `serde_yaml` excerpt
+/// per unparsable file on *every* scanning command — 251 stderr lines for 28
+/// templates, which buried the actual output. The diagnostics are collected by
+/// `hyalo_core::warn::record_skip` and summarised here instead. `-q` silences
+/// the line, and `[scan] verbose_skips = true` / `RUST_LOG=hyalo=debug` streams
+/// the full excerpts as they happen (in which case there is nothing left to
+/// collapse and this prints nothing).
+pub fn flush_skipped_files() {
+    if QUIET.load(Ordering::Relaxed) || hyalo_core::warn::verbose_skips() {
+        return;
+    }
+    let frontmatter = hyalo_core::warn::skipped_frontmatter_count();
+    let total = hyalo_core::warn::skipped_count();
+    if frontmatter > 0 {
+        let plural = if frontmatter == 1 { "file" } else { "files" };
+        eprintln!(
+            "warning: skipped {frontmatter} {plural} with unparsable frontmatter \
+             (run hyalo lint --rule HYALO005 for details)"
+        );
+    }
+    let other = total - frontmatter;
+    if other > 0 {
+        let plural = if other == 1 { "file" } else { "files" };
+        eprintln!(
+            "warning: skipped {other} unreadable {plural} \
+             (set [scan] verbose_skips = true, or RUST_LOG=hyalo=debug, to list them)"
+        );
     }
 }
 

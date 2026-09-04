@@ -164,7 +164,14 @@ pub fn plan_mv(
     // is used later to canonicalize link targets that differ only in casing.
     let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
     for (path, msg) in &build.warnings {
-        eprintln!("warning: skipping {}: {msg}", path.display());
+        // Collected, not streamed (iter-265, DEC-278): `mv` used to print one
+        // multi-line YAML excerpt per unparsable template before saying
+        // anything about the move itself.
+        crate::warn::record_skip(
+            crate::discovery::relative_path(dir, path),
+            msg.as_str(),
+            crate::warn::SkipKind::Frontmatter,
+        );
     }
     let graph = build.graph;
     let case_index = build.case_index;
@@ -1071,7 +1078,14 @@ pub fn plan_batch_mv(
     // Build the link graph once.
     let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
     for (path, msg) in &build.warnings {
-        eprintln!("warning: skipping {}: {msg}", path.display());
+        // Collected, not streamed (iter-265, DEC-278): `mv` used to print one
+        // multi-line YAML excerpt per unparsable template before saying
+        // anything about the move itself.
+        crate::warn::record_skip(
+            crate::discovery::relative_path(dir, path),
+            msg.as_str(),
+            crate::warn::SkipKind::Frontmatter,
+        );
     }
     let graph = build.graph;
     let case_index = build.case_index;

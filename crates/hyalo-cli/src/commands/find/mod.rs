@@ -532,15 +532,19 @@ pub fn find(
                         // surfaces agree; every other io error (permissions, a
                         // file deleted mid-run) keeps its own message.
                         Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
-                            crate::warn::warn(format!(
-                                "skipping {}: {}",
-                                entry.rel_path,
-                                crate::commands::INVALID_UTF8_CONSEQUENCE
-                            ));
+                            hyalo_core::warn::record_skip(
+                                entry.rel_path.as_str(),
+                                crate::commands::INVALID_UTF8_CONSEQUENCE,
+                                hyalo_core::warn::SkipKind::Other,
+                            );
                             return;
                         }
                         Err(e) => {
-                            crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                            hyalo_core::warn::record_skip(
+                                entry.rel_path.as_str(),
+                                e.to_string(),
+                                hyalo_core::warn::SkipKind::Other,
+                            );
                             return;
                         }
                     };
@@ -824,7 +828,11 @@ pub fn find(
             match scan_result {
                 Ok(()) => {}
                 Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
-                    crate::warn::warn(format!("skipping {}: {e}", entry.rel_path));
+                    hyalo_core::warn::record_skip(
+                        entry.rel_path.as_str(),
+                        e.to_string(),
+                        hyalo_core::warn::SkipKind::Frontmatter,
+                    );
                     continue;
                 }
                 Err(e) => return Err(e),
