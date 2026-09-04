@@ -622,14 +622,18 @@ pub(super) struct PerFileLintResult {
 /// even when the listing is truncated (iter-218 NEW-6).
 pub(super) fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usize) {
     let mut applied_rules: HashSet<&str> = HashSet::new();
-    let mut conflict_rules: HashSet<&str> = HashSet::new();
-    for (rule_id, _line, outcome) in &r.body_fix_outcomes {
+    // Keyed by (rule, line), matching the per-violation `conflicts` array the
+    // display loop builds (iteration 263). Counting distinct *rules* here
+    // made the summary's `conflicts N` smaller than the number of `conflict`
+    // lines printed above it, which reads as an accounting bug.
+    let mut conflict_violations: HashSet<(&str, usize)> = HashSet::new();
+    for (rule_id, line, outcome) in &r.body_fix_outcomes {
         match outcome {
             FixOutcome::Applied => {
                 applied_rules.insert(rule_id.as_str());
             }
             FixOutcome::Conflict { .. } => {
-                conflict_rules.insert(rule_id.as_str());
+                conflict_violations.insert((rule_id.as_str(), *line));
             }
             FixOutcome::NoFix => {}
         }
@@ -657,7 +661,7 @@ pub(super) fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usiz
         remaining += violations.iter().filter(|v| !v.fixed).count();
     }
 
-    (fixed, remaining, conflict_rules.len())
+    (fixed, remaining, conflict_violations.len())
 }
 
 /// Count the error- and warning-severity violations across every result,

@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 263 — Lint autofix safety on Obsidian content
 date: 2026-09-03
-status: planned
+status: completed
 tags:
   - iteration
   - lint
@@ -62,96 +62,145 @@ No change to this plan's own scope as a result.
 
 ### FIX-1: MD018 respects Obsidian tag grammar (BUG-3)
 
-- [ ] Define the rule precisely and record it as DEC-271 (tentative). Proposal:
+- [x] Define the rule precisely and record it as DEC-271 (tentative). Proposal:
       a line matching `^#+\S` is exempt from MD018 when the token after the
       hashes is a valid Obsidian tag, meaning it consists of letters, digits,
       `_`, `-`, `/` or non-ASCII word characters, contains at least one
       non-digit, and uses a single `#` (a `##tag` line is not a tag in
       Obsidian). MD018 keeps firing on `#1 item` (digits only), `#` followed by
       punctuation, and on `##Heading` with two or more hashes.
-- [ ] hyalo-mdlint MD018: implement the exemption in both detection and
+- [x] hyalo-mdlint MD018: implement the exemption in both detection and
       autofix; add a shared `is_obsidian_tag_token` helper so a future tag rule
       reuses it.
-- [ ] Unit tests: `#todo`, `#todo/next`, `#2024-goals`, `#日本語`, `#1`,
+- [x] Unit tests: `#todo`, `#todo/next`, `#2024-goals`, `#日本語`, `#1`,
       `#!bang`, `##todo`, `#todo trailing text` (still a tag line in
       Obsidian), plus the two lines from `T - Thecookiemomma's Daily Log.md`
       quoted in the report.
-- [ ] e2e in `crates/hyalo-cli/tests/e2e`: `lint --fix --rule MD018` on a file
+- [x] e2e in `crates/hyalo-cli/tests/e2e`: `lint --fix --rule MD018` on a file
       with `#todo` leaves it byte-identical and reports no fix.
-- [ ] Docs: `hyalo lint-rules show MD018` description mentions the exemption;
+- [x] Docs: `hyalo lint-rules show MD018` description mentions the exemption;
       changelog entry.
 
 ### FIX-2: MD034 and MD042 understand link destinations and image link text (BUG-9)
 
-- [ ] hyalo-mdlint MD034: skip any URL that sits inside a markdown link or
+- [x] hyalo-mdlint MD034: skip any URL that sits inside a markdown link or
       image destination `](…)`, an autolink `<…>`, a reference definition, or a
       wikilink; only a URL in plain prose is bare. Use the same span map the
       auto-linker uses for inert regions if one exists in hyalo-core.
-- [ ] hyalo-mdlint MD042: link text consisting of an image `![…](…)` or
+- [x] hyalo-mdlint MD042: link text consisting of an image `![…](…)` or
       `![[…]]` is not empty. Keep flagging `[](url)` and `[ ](url)`.
-- [ ] Unit tests for both rules with `[![](img.png)](https://x/y.png)`, a bare
+- [x] Unit tests for both rules with `[![](img.png)](https://x/y.png)`, a bare
       URL after a link on the same line (must still fire), and a URL in a
       fenced code block (must not).
-- [ ] e2e: `lint --fix --fix-rule MD034` on the report's fixture line makes no
+- [x] e2e: `lint --fix --fix-rule MD034` on the report's fixture line makes no
       change; `lint --rule MD042` reports 0 on it.
-- [ ] Docs: rule descriptions, changelog.
+- [x] Docs: rule descriptions, changelog.
 
 ### FIX-3: MD001 stops autofixing deliberate heading jumps (UX-10)
 
-- [ ] DEC-272 (tentative): choose between (a) MD001 stays enabled but is no
+- [x] DEC-272 (tentative): choose between (a) MD001 stays enabled but is no
       longer autofixable (report only), or (b) MD001 default-disabled in the
       built-in rule table. Recommend (a): a skipped heading level is worth a
       warning, but rewriting `######` to `##` changes what the author meant,
       and the fix is trivially applied by hand. Keep `lint-rules set MD001
       --enabled false` as the per-vault opt-out.
-- [ ] Implement in hyalo-mdlint (drop the fixer, keep the check) and update the
+- [x] Implement in hyalo-mdlint (drop the fixer, keep the check) and update the
       built-in defaults table; `hyalo lint-rules list` shows `AUTOFIX no` for
       MD001.
-- [ ] e2e: `lint --fix --dry-run` on a `######` caption file proposes nothing
+- [x] e2e: `lint --fix --dry-run` on a `######` caption file proposes nothing
       for MD001 but `lint` still reports it as a warning.
-- [ ] Docs: `hyalo lint-rules show MD001`, `lint --help` autofix list, the
+- [x] Docs: `hyalo lint-rules show MD001`, `lint --help` autofix list, the
       `hyalo-knowledgebase/` lint docs page, changelog.
 
 ### FIX-4: explain autofix conflicts in text mode (UX-16)
 
-- [ ] hyalo-cli `lint --fix` text output: after `conflicts N`, print one line
+- [x] hyalo-cli `lint --fix` text output: after `conflicts N`, print one line
       per conflict in the form `conflict  <file>  <rule> line <n>: range
       overlap with <other rule>` (the same data JSON already carries), capped
       at 20 lines with `… and N more (use --detailed)`. `--detailed` prints
       all.
-- [ ] e2e: a fixture producing an MD012/MD047 overlap shows the explanation
+- [x] e2e: a fixture producing an MD012/MD047 overlap shows the explanation
       line in text and unchanged JSON.
-- [ ] Docs: `lint -h/--help` output section, changelog.
+- [x] Docs: `lint -h/--help` output section, changelog.
 
 ## Acceptance criteria
 
-- [ ] Obsidian Hub, cwd `../obsidian-hub`, clean checkout: before the change
+- [x] Obsidian Hub, cwd `../obsidian-hub`, clean checkout: before the change
       `hyalo lint --fix --dry-run --format json --jq '[.results.fixes[] |
       .rule] | group_by(.) | map({(.[0]): length}) | add'` records the per-rule
       baseline (MD018 162, MD034 209, MD001 17 per the report); after the
       change MD018 proposals on tag lines are 0 (verify with `--rule MD018
       --detailed` that every remaining proposal is a real `#Heading` typo),
       MD034 proposals on link destinations are 0, MD001 proposals are 0.
-- [ ] `../obsidian-hub`: `hyalo lint --rule MD042 --count` → 0 for the
+- [x] `../obsidian-hub`: `hyalo lint --rule MD042 --count` → 0 for the
       image-as-link-text pattern (was 55); any remaining MD042 hit is a
       genuine `[](…)`.
-- [ ] `../obsidian-hub`: `hyalo lint --fix --fix-rule MD034 "02 - Community
+- [x] `../obsidian-hub`: `hyalo lint --fix --fix-rule MD034 "02 - Community
       Expansions/02.05 All Community Expansions/CSS Snippets/Embed
       Adjustments.md"` followed by `git diff --exit-code` → exit 0.
-- [ ] `../obsidian-hub`: `hyalo lint --fix --dry-run --format text | grep -A3
+- [x] `../obsidian-hub`: `hyalo lint --fix --dry-run --format text | grep -A3
       conflicts` shows a per-conflict explanation line.
-- [ ] Scratch vault: body line `#todo`, `hyalo lint --fix --rule MD018 <file>`
+- [x] Scratch vault: body line `#todo`, `hyalo lint --fix --rule MD018 <file>`
       → file unchanged, `fixed 0`; body line `#Heading typo` → still fixed.
-- [ ] `hyalo lint-rules list --format json --jq '.results[] |
+- [x] `hyalo lint-rules list --format json --jq '.results[] |
       select(.id=="MD001") | .autofixable'` → `false`.
-- [ ] Own KB: `hyalo lint --strict` result unchanged; `hyalo lint --fix
+- [x] Own KB: `hyalo lint --strict` result unchanged; `hyalo lint --fix
       --dry-run --count` unchanged or lower, with any difference explained.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D
       warnings`, `cargo test --workspace -q`, `hyalo lint --strict` on the KB,
       xtask help-drift check.
-- [ ] Changelog entry via `hyalo changelog add`; DEC-271 and DEC-272 recorded
+- [x] Changelog entry via `hyalo changelog add`; DEC-271 and DEC-272 recorded
       in [[decision-log]]; `.claude/skills/hyalo/SKILL.md` lint paragraph
       updated where it lists autofixable rules.
+
+## Outcome (2026-09-04)
+
+Landed on `iter-263/lint-autofix-obsidian-safety`. Measured on `../obsidian-hub`
+(6,520 files) with the release binary:
+
+| Rule | `--fix --dry-run` proposals before | after |
+|------|-----------------------------------|-------|
+| MD018 | 162 | **0** |
+| MD034 | 209 | **116** (all remaining are prose URLs) |
+| MD001 | 17 | **0** |
+| MD042 "Found empty link" | 55 | **0** |
+
+Three deviations from the plan as written, each recorded in the decision log:
+
+- **MD018 needed a tiebreak the plan did not anticipate.** `#todo trailing
+  text` (exempt per the plan) and `#Heading typo` (still fixed per the
+  acceptance criteria) are the same grammatical shape — a tag token followed by
+  prose. DEC-271 resolves it by capitalization: a plain capitalized ASCII word
+  followed by more text stays flagged. This retired the old
+  `md018_ignores_paragraph_continuation_lines` assertion that `#standalone` is a
+  heading; the test now uses `#Standalone typo`.
+- **MD034 could not reuse `hyalo_core::links::inert_link_zones`.** That map
+  closes a link label at the *first* `]`, so on `[![](img)](url)` the
+  destination falls outside every zone — exactly the BUG-9 shape. `hyalo-mdlint`
+  grew its own nesting-aware `link_markup_spans` instead; the auto-linker is
+  unaffected because a bare URL is inert there on its own.
+- **MD042 emits two diagnostics for one badge**, "Found empty link" on the link
+  and "Found image with empty alt text" on the image. Both are suppressed when
+  the image opens a link label, which is what gets the vault's count to 0 for
+  the pattern. A standalone `![](img.png)` keeps its empty-alt warning — 21 of
+  those remain on the Hub, in 6 files, and they are genuine.
+
+Two things beyond the plan's four items, both forced by FIX-4:
+
+- The iter-213 UX-5 dedup (never show a rule as both `fixed` and `conflict`)
+  suppressed *every* conflict line in the MD012/MD047 fixture, which is why
+  UX-16 saw `conflicts 2` and nothing else. Now that a conflict carries its
+  line, the dedup is narrowed to the same *violation* (rule + line); a fixed
+  group that lists no violations still suppresses its rule wholesale.
+- `fix_mode_file_totals` counted distinct conflicting *rules* per file while the
+  listing prints one line per violation, so the Hub showed 11 `conflict` lines
+  under `conflicts 9`. Both now count `(rule, line)`.
+
+Noticed while verifying, out of scope, worth a dogfood item: MD034's URL
+boundary scan swallows a following `<br` in HTML-ish prose
+(`Themes/Retroma.md:65`), so its autofix would emit
+`<https://github.com/emarpiee/Retroma<br>`. Upstream boundary bug, three
+occurrences vault-wide.
 
 ## Links
 

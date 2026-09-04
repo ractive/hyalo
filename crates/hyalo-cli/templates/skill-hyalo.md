@@ -428,6 +428,23 @@ hyalo lint --fix --dry-run               # preview autofixes
 hyalo lint --fix                         # apply
 ```
 
+**Obsidian grammar (autofix safety).** Four stock rules are narrowed so `--fix` cannot
+corrupt a vault; `hyalo lint-rules show <ID>` states each deviation:
+
+- **MD018** exempts tag lines — a single `#` plus a tag token is `#todo`, not a heading
+  missing its space. `##Heading`, `#1`, and a capitalized word followed by prose
+  (`#Heading typo`) still fire.
+- **MD034** ignores URLs that already sit inside link markup (link/image destination,
+  autolink, wikilink, reference definition).
+- **MD042** accepts an image as link text (`[![](img.png)](https://…)`).
+- **MD001** reports a skipped heading level but is **not autofixable**: renumbering a
+  deliberate `######` caption rewrites authored structure. Silence the warning with
+  `hyalo lint-rules set MD001 --enabled false`.
+
+When two fixes want the same bytes one is deferred and reported as a conflict;
+`--fix` text output names it as `conflict <RULE> line <N>: range overlap with <RULE>`
+(first 20 per file, `--detailed` for all).
+
 Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix-rule`, etc.). The snapshot index does **not** accelerate the body pass.
 
 **Strict mode:** `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`)
