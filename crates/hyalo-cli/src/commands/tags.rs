@@ -323,6 +323,10 @@ pub fn tags_rename(
         if remove_tags_key {
             props.shift_remove("tags");
         }
+        // Count each renamed tag once per FILE, even when the file listed it
+        // twice (a duplicated list item is legal YAML).
+        file_renames.sort_by(|a, b| a.0.cmp(&b.0));
+        file_renames.dedup_by(|a, b| a.0.eq_ignore_ascii_case(&b.0));
         for (old, new) in file_renames {
             let counter = renamed_tags
                 .entry(old.to_ascii_lowercase())

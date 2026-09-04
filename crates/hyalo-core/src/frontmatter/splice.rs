@@ -323,6 +323,7 @@ pub(super) fn rename_key_in_place(original_yaml: &str, from: &str, to: &str) -> 
 /// double-quoted otherwise. A wrong guess cannot corrupt a file: the caller
 /// re-parses the spliced result and falls back when it does not match.
 fn render_key_token(key: &str) -> String {
+    use std::fmt::Write as _;
     if is_plain_safe_key(key) {
         return key.to_owned();
     }
@@ -335,7 +336,11 @@ fn render_key_token(key: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // Escaping never fails on a String; the result is checked by the
+            // caller's re-parse either way.
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.push(c),
         }
     }
@@ -347,13 +352,13 @@ fn render_key_token(key: &str) -> String {
 ///
 /// Deliberately conservative — anything not obviously plain gets quoted.
 fn is_plain_safe_key(key: &str) -> bool {
-    if key.is_empty() || key.trim() != key {
-        return false;
-    }
     // Would re-read as a bool / null rather than as this string.
     const RESERVED: &[&str] = &[
         "true", "false", "yes", "no", "on", "off", "null", "~", "y", "n",
     ];
+    if key.is_empty() || key.trim() != key {
+        return false;
+    }
     if RESERVED
         .iter()
         .any(|r| r.eq_ignore_ascii_case(key.trim_start_matches('-')))
