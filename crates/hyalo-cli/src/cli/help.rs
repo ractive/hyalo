@@ -307,7 +307,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo types remove <TYPE>                              Delete a type entry (mutates .hyalo.toml)
 
   New (scaffold a file from a schema type, mutates files):
-    hyalo new --type <TYPE> -f/--file PATH
+    hyalo new --type <TYPE> -f/--file PATH [--dry-run]
 
   Madr (Markdown Architecture Decision Record generators):
     hyalo madr toc [--apply]                               Regenerate the ADR table of contents / status dashboard
