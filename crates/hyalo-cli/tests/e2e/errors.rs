@@ -408,7 +408,7 @@ fn error_text_format() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("Error:"));
+    assert!(stderr.contains("error:"));
     assert!(stderr.contains("file not found"));
 }
 
@@ -444,8 +444,8 @@ title: Test
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("Error:"),
-        "expected 'Error:' in stderr; got: {stderr}"
+        stderr.contains("error:"),
+        "expected 'error:' in stderr; got: {stderr}"
     );
     assert!(
         stderr.contains("is a file, not a directory"),

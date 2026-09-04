@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Hint, HintBuilder, HintContext};
+use super::{Hint, HintBuilder, HintContext, HintSource};
 
 /// Maximum hints emitted for a zero-result query (plan: 1–3).
 pub(super) const MAX_ZERO_RESULT_HINTS: usize = 3;
@@ -160,6 +160,27 @@ pub(crate) fn filter_echo(ctx: &HintContext) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" "),
     )
+}
+
+/// The one-line empty-state notice `--format text` prints when a list command
+/// returns zero items.
+///
+/// iter-267 (UX-13/COH-17): `No results` was the same sentence for every
+/// command, including the ones where "results" is not the noun the reader is
+/// holding — `types list` on a vault with no `[schema.types]` block is not a
+/// failed query, it is an unconfigured vault. Commands that have a better
+/// sentence get it here; everything else keeps the filter-echoing default.
+#[must_use]
+pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
+    if let HintSource::Types { subcommand } = &ctx.source
+        && matches!(subcommand.as_deref(), None | Some("list"))
+    {
+        return "No types configured".to_owned();
+    }
+    match filter_echo(ctx) {
+        Some(filters) => format!("No results for {filters}"),
+        None => "No results".to_owned(),
+    }
 }
 
 /// The `K` and `V` of every `--property K=V` equality filter on the query.

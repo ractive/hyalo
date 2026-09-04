@@ -175,16 +175,24 @@ pub(crate) fn run(
         // separators) as a glob: `vendor/**/*.md`, `legacy/known-bad.md`,
         // `templates/*.md`. An entry without glob meta-characters is matched
         // literally (exact path equality on the normalized path).
-        // `--file`/positional args are "explicit": the user named them
-        // directly rather than sweeping a glob. When an explicit file is
-        // excluded by `[lint] ignore` it must produce a visible notice, not
-        // a silent `0 files checked` (df-scale silent-drop family).
+        // `--file`/positional/`--files-from` args are "explicit": the user
+        // named them directly rather than sweeping a glob.
+        //
+        // DEC-284 (iter-267): naming a file BYPASSES `[lint] ignore`
+        // altogether. Asking for one specific path is a stronger signal than
+        // a glob written once in `.hyalo.toml`, and the previous behaviour —
+        // drop it, then warn that it was dropped — left no way to lint an
+        // ignored file at all. `--glob` and the bare vault sweep keep
+        // honouring the list, so `git diff --name-only | hyalo lint
+        // --files-from -` now lints changed ignored files (the desired
+        // behaviour for a diff gate); a caller who wants the ignore list
+        // applied to a set of paths uses `--glob` instead.
         let explicit_named = !files_arg.is_empty();
         // UX-1 (dogfood pre3): how many files `[lint] ignore` dropped from
         // this run, regardless of scope. Zero when there is no `[lint]
         // ignore` at all (the branch below never runs).
         let mut lint_ignored_count: usize = 0;
-        let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() {
+        let filtered_pairs: Vec<_> = if ctx.lint_ignore.is_empty() || explicit_named {
             file_pairs
         } else {
             use globset::{GlobBuilder, GlobSetBuilder};
@@ -226,7 +234,7 @@ pub(crate) fn run(
                         .filter(|(_, rel)| {
                             let norm = rel.replace('\\', "/");
                             let matched = set.is_match(&norm);
-                            if matched && (explicit_named || explicit_glob) {
+                            if matched && explicit_glob {
                                 ignored_named.push(norm);
                             }
                             !matched
@@ -246,8 +254,11 @@ pub(crate) fn run(
                     // ignore list stays quiet here: the bare-sweep count
                     // above already makes the exclusion visible without
                     // the noise of naming every match.
-                    let glob_all_ignored = explicit_glob && !explicit_named && kept.is_empty();
-                    if !ignored_named.is_empty() && (explicit_named || glob_all_ignored) {
+                    // Only the all-matches-ignored `--glob` case is named
+                    // here: an explicitly named file is no longer dropped at
+                    // all (DEC-284), so there is nothing to explain for it.
+                    let glob_all_ignored = explicit_glob && kept.is_empty();
+                    if !ignored_named.is_empty() && glob_all_ignored {
                         let list = ignored_named.join(", ");
                         let plural = if ignored_named.len() == 1 {
                             "file"
@@ -255,7 +266,8 @@ pub(crate) fn run(
                             "files"
                         };
                         crate::warn::warn(format!(
-                            "{} named {plural} excluded by [lint] ignore (not linted): {list}",
+                            "{} {plural} matched by --glob but excluded by [lint] ignore \
+                             (not linted): {list} — name the path with --file to lint it anyway",
                             ignored_named.len()
                         ));
                     }

@@ -307,7 +307,7 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo types remove <TYPE>                              Delete a type entry (mutates .hyalo.toml)
 
   New (scaffold a file from a schema type, mutates files):
-    hyalo new --type <TYPE> -f/--file PATH
+    hyalo new --type <TYPE> -f/--file PATH [--dry-run]
 
   Madr (Markdown Architecture Decision Record generators):
     hyalo madr toc [--apply]                               Regenerate the ADR table of contents / status dashboard
@@ -560,12 +560,14 @@ OUTPUT SHAPES (JSON, default):
   #     included); only per-item records inside arrays omit optional keys
   #   - every mutating command reports dry_run and skipped_count
 
-  # find — results is an array of file objects; these seven keys are the
-  # default set, and `title` is promoted OUT of `properties`. --fields adds
-  # sections, tasks, links, backlinks, properties-typed; an explicit --fields
-  # is an exact projection, where only `file` always survives.
+  # find — results is an array of file objects; these keys are the default
+  # set, and `title` is promoted OUT of `properties`. `title_source` rides
+  # along with `title` (property | h1 | filename). --fields adds sections,
+  # tasks, links, backlinks, properties-typed; an explicit --fields is an
+  # exact projection, where only `file` always survives.
   {\"results\": [{\"file\": \"notes/todo.md\", \"modified\": \"2026-03-21T...\",
    \"size\": 1093, \"lines\": 35, \"title\": \"My Note\",
+   \"title_source\": \"property\",
    \"properties\": {\"status\": \"draft\"}, \"tags\": [...]}],
   \"total\": N, \"hints\": [...]}
 

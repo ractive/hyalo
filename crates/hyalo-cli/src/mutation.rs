@@ -198,6 +198,44 @@ impl Commands {
             _ => Vec::new(),
         }
     }
+
+    /// `true` when this run is a named-target write whose own index
+    /// maintenance already repairs the entries it touches.
+    ///
+    /// iter-267 (UX-13): `set --index` on a file the disk has outgrown printed
+    /// "index older than vault; results may be stale" — a warning about
+    /// staleness the very same command was about to repair through
+    /// `MutationJournal` (iteration 255 made even a *no-op* write re-scan the
+    /// entry it read). Unlike the read path's [`Self::explicit_file_targets`],
+    /// this does NOT pre-refresh anything: the write's own rescan is the
+    /// repair, and refreshing the entry's mtime beforehand would make that
+    /// rescan think there was nothing to do. It only silences the warning.
+    pub(crate) fn write_repairs_named_targets(&self) -> bool {
+        let named = |file: &[String], positional: &[String], glob: &[String]| -> bool {
+            glob.is_empty() && !(file.is_empty() && positional.is_empty())
+        };
+        match self {
+            Self::Set {
+                file_positional,
+                file,
+                glob,
+                ..
+            }
+            | Self::Remove {
+                file_positional,
+                file,
+                glob,
+                ..
+            }
+            | Self::Append {
+                file_positional,
+                file,
+                glob,
+                ..
+            } => named(file, file_positional, glob),
+            _ => false,
+        }
+    }
 }
 
 /// Top-level subcommands (and `group sub` pairs) that write unconditionally.

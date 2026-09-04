@@ -188,21 +188,29 @@ fn append_hint_lines(text: &mut String, hints: &[crate::hints::Hint]) {
     if hints.is_empty() {
         return;
     }
-    text.push('\n');
-    for hint in hints {
+    // Blank separator line only when there IS a body to separate from.
+    // iter-267 (UX-13): a zero-result run has no body, and the unconditional
+    // separator opened its stdout with two blank lines before the first hint.
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    for (i, hint) in hints.iter().enumerate() {
+        if i > 0 {
+            text.push('\n');
+        }
         if hint.cmd.is_empty() {
             // Advice-only hint (no follow-up command). Render the
             // description directly without the `cmd  # desc` layout.
-            text.push_str("\n  -> ");
+            text.push_str("  -> ");
             text.push_str(&hint.description);
         } else if hint.writes {
-            text.push_str("\n  => ");
+            text.push_str("  => ");
             text.push_str(&hint.cmd);
             text.push_str("  # ");
             text.push_str(&hint.description);
             text.push_str(" [writes]");
         } else {
-            text.push_str("\n  -> ");
+            text.push_str("  -> ");
             text.push_str(&hint.cmd);
             text.push_str("  # ");
             text.push_str(&hint.description);
@@ -376,6 +384,14 @@ const FIND_FIELD_ORDER: &[&str] = &[
     "score",
 ];
 
+/// Keys that ride along with a `--fields` field rather than being selectable
+/// themselves, so they belong to the FileObject vocabulary but never appear in
+/// the `fields:` footer.
+///
+/// iter-267 (DEC-283): `title_source` is emitted whenever `title` is, and
+/// naming it in the footer would imply `--fields title_source` works.
+const FIND_COMPANION_KEYS: &[&str] = &["title_source"];
+
 /// The `fields:` footer under a `--format text` find listing (iter-252).
 ///
 /// The default result shape omits `sections`, `links`, `tasks`, `backlinks`
@@ -394,7 +410,10 @@ const FIND_FIELD_ORDER: &[&str] = &[
 fn find_fields_summary(results: &serde_json::Value) -> Option<String> {
     let arr = results.as_array()?;
     let first = arr.first()?.as_object()?;
-    if !first.contains_key("file") || !first.keys().all(|k| FIND_FIELD_ORDER.contains(&k.as_str()))
+    if !first.contains_key("file")
+        || !first.keys().all(|k| {
+            FIND_FIELD_ORDER.contains(&k.as_str()) || FIND_COMPANION_KEYS.contains(&k.as_str())
+        })
     {
         return None;
     }
@@ -441,7 +460,10 @@ pub fn format_error(
             serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
         }
         Format::Text => {
-            let mut msg = format!("Error: {error}");
+            // iter-267 (UX-18): lowercase `error:`, matching clap's own parse
+            // errors and the Rust CLI convention. The two prefixes used to
+            // disagree inside a single session's scrollback.
+            let mut msg = format!("error: {error}");
             if let Some(p) = path {
                 let _ = write!(msg, "\n  path: {p}");
             }
@@ -486,7 +508,7 @@ pub fn format_budget_error(
         }
         Format::Text => {
             format!(
-                "Error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {} (limit {})\n  would_be_lines: {} (limit {})",
+                "error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {} (limit {})\n  would_be_lines: {} (limit {})",
                 safe_file, e.would_be_bytes, e.limit_bytes, e.would_be_lines, e.limit_lines
             )
         }

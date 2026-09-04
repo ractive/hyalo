@@ -51,6 +51,18 @@ pub(crate) fn cwd_help_banner_for_tty(
         // banner reflects the effective `dir` (and its malformed-config
         // fallback) without re-reading the file.
         let dir_value = resolved_dir.display().to_string();
+        // iter-267 (UX-18): `dir = "."` means the vault IS this directory, so
+        // "don't cd into it" is advice about a directory the user is already
+        // standing in — nonsense, and it made the banner read as a scolding.
+        // Only the separate-subdirectory case gets the path-relativity note.
+        if resolved_dir
+            .components()
+            .eq(std::path::Path::new(".").components())
+        {
+            return Some(format!(
+                "{info_prefix}hyalo runs against this directory (`dir = \".\"` in ./.hyalo.toml).\n"
+            ));
+        }
         return Some(format!(
             "{info_prefix}hyalo runs against `{dir_value}` (from ./.hyalo.toml). \
              Don't `cd` into it; pass paths relative to `{dir_value}`.\n"
@@ -153,16 +165,26 @@ mod tests {
         );
     }
 
+    /// `dir = "."` names the directory the user is already standing in, so the
+    /// banner states the fact and stops — the "don't `cd` into it" half of the
+    /// separate-subdirectory message is nonsense here (iter-267, UX-18).
     #[test]
     fn cwd_has_config_with_default_dir() {
-        // dir = "." (or absent) — banner should still mention "."
         let tmp = make_temp();
         fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
 
         let result = cwd_help_banner_for(tmp.path()).expect("expected Some banner");
         assert!(
-            result.contains("runs against `.`"),
-            "expected info banner mentioning '.', got: {result}"
+            result.contains("runs against this directory"),
+            "expected the this-directory banner, got: {result}"
+        );
+        assert!(
+            result.contains("`dir = \".\"` in ./.hyalo.toml"),
+            "expected the config source, got: {result}"
+        );
+        assert!(
+            !result.contains("cd"),
+            "no cd advice for a vault that IS the cwd, got: {result}"
         );
     }
 

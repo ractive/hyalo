@@ -103,6 +103,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   filter that implies them (`--section`, `--task`, `--broken-links`, `--orphan`, `--dead-end`,
   `--sort links_count|backlinks_count`). `title` is promoted out of `properties`, so read it as
   `.results[].title`, not `.results[].properties.title`.
+- **`title` is promoted in three steps** (DEC-283, iter-267): a scalar frontmatter `title`, else
+  the first H1, else the **filename stem** — Obsidian's own fallback, so a vault whose notes carry
+  no `title` property still sorts and filters usefully instead of reporting `title: (none)`.
+  `title_source` (`property` | `h1` | `filename`) rides along with `title` and says which step
+  answered, so a consumer can tell an authored title from a derived one. `--title`,
+  `--property 'title~=…'` and `--sort title` all read the promoted value; test the raw
+  frontmatter key with `--property title` / `--property '!title'`.
 - **Sort direction is uniform** (DEC-273, iter-264): every `--sort` key orders ascending and
   `--reverse` inverts it, so `--sort backlinks_count --reverse` is "most linked first" just as
   `--sort modified --reverse` is "newest first". `score` alone ranks best-match-first. A file
@@ -147,9 +154,13 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `--no-first-only` forces first-only OFF for one run when the config persists
   `first_only = true`. When a candidate title looks noisy — an ordinary English word,
   or unusually frequent (>= 25 matches and >= 2.5% of the run, which also catches non-English
-  titles) — a stderr `note:` names it with its match count and share, and suggests
-  `--exclude-title` for every offender; act on it or silence it with
-  `--no-warn-common-titles` / `[links.auto] warn_common_titles = false`.
+  titles) — it is **held back** rather than proposed (DEC-286, iter-267), listed under
+  `results.default_excluded_titles` with `default_excluded_mentions`, and named in a stderr
+  `note:` with its count, share and the `--exclude-title` flag that reproduces the choice.
+  Setting `[links.auto] exclude_titles` hands the decision to your own list and the built-in
+  stop-list steps aside entirely; `--no-warn-common-titles` /
+  `[links.auto] warn_common_titles = false` switches off both the exclusion and the note and
+  proposes every candidate again.
   Inert everywhere, including across a wrapped line: frontmatter, code/HTML-comment spans,
   existing `[[wikilinks]]`/`[markdown](links)`, ANY well-formed `[...]` bracket span (not just
   real links — covers CommonMark reference links, and also undefined bracketed mentions like
@@ -160,9 +171,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   instead of silently rewriting the prose to the bare target.
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
-- **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton with `TBD` placeholders; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild). `new` takes no `--property`: it writes only what the schema declares, so chain `hyalo new --type <name> --file <path> && hyalo set <path> --property k=v` to set anything else
+- **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild). `--dry-run` prints the scaffold and writes nothing — not even the parent directory (DEC-285, iter-267). Placeholders are deliberately un-fillable: a required `string` gets `TBD`, a required `number`/`date`/`datetime`/`boolean` with no schema `default` is written **empty** (`rating:`), which lint reports as `required property must not be empty`; a schema `default` (including `$today`) is emitted verbatim. `new` takes no `--property`: it writes only what the schema declares, so chain `hyalo new --type <name> --file <path> && hyalo set <path> --property k=v` to set anything else
 - **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
-- **Diff-aware lint (CI)**: `git diff --name-only origin/main...HEAD | hyalo lint --files-from -` — scope any command to a caller-supplied file list; non-.md paths and deleted files are silently skipped (counters in JSON envelope). Three-dot `origin/main...HEAD` (merge-base) keeps a stale branch scoped to files it changed
+- **Diff-aware lint (CI)**: `git diff --name-only origin/main...HEAD | hyalo lint --files-from -` — scope any command to a caller-supplied file list; non-.md paths and deleted files are silently skipped (counters in JSON envelope). Three-dot `origin/main...HEAD` (merge-base) keeps a stale branch scoped to files it changed. A path named explicitly — positionally, with `--file`, or through `--files-from` — is linted **even when `[lint] ignore` matches it** (DEC-284, iter-267), which is what a diff gate wants; `--glob` and the bare vault sweep still honour the ignore list, so select paths with `--glob` when you want it applied
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.
 - **Detect broken heading anchors**: `hyalo find --broken-links` reports a `[[Foo#Section]]` / `[t](foo.md#Section)` whose target file exists but whose `#Section` heading does not, as a `broken_anchor` category distinct from a broken target (never both on one link). A fragment matches either the raw heading text (case-insensitive, Obsidian style) or the rendered GitHub slug — `#sub-section` matches `### Sub Section`, with `-1`/`-2` suffixes for repeated headings. Same-file fragments (`[b](#nope)`, `[[#nope]]`) are checked against the file's own headings and reported with `target: ""`; `^block-id` refs are skipped. Rebuild the index (`hyalo create-index`) after upgrading to pick up anchor data on the `--index` path. `find --fields links` (no `--broken-links` filter) always inventories same-file anchors, resolvable or not — `broken_anchor` is the verdict field, not a presence filter. A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`, `${z}`) renders to an anchor hyalo cannot compute, so no anchor into that file is ever reported broken — same marker set `links fix` uses to leave templated destinations alone.

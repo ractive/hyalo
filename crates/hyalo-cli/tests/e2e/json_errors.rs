@@ -3,7 +3,7 @@
 //! control-character sanitization), and finding [19] (`links fix --index`
 //! leaving the persisted link graph stale).
 //!
-//! H-6's root pattern was `CommandOutcome::UserError(format!("Error: {e}"))`
+//! H-6's root pattern was `CommandOutcome::UserError(format!("error: {e}"))`
 //! sites in dispatch.rs and bare `eprintln!`s in run.rs that never checked
 //! the requested output format — meaning `--format json` (and the default
 //! piped format) emitted plain text instead of `{"error": ...}` on stderr.
@@ -273,7 +273,7 @@ fn dir_missing_is_text_under_format_text() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.starts_with("Error: --dir path"),
+        stderr.starts_with("error: --dir path"),
         "expected human-readable text, got: {stderr}"
     );
     assert!(serde_json::from_str::<serde_json::Value>(&stderr).is_err());
@@ -669,7 +669,7 @@ fn read_error_respects_explicit_format_text() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.starts_with("Error:"),
+        stderr.starts_with("error:"),
         "explicit text format must stay text: {stderr}"
     );
 }

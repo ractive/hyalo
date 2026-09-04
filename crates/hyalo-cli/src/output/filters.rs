@@ -194,13 +194,13 @@ pub(super) const BACKLINKS_RESULT_FILTER: &str = r#"if (.backlinks | length) == 
 /// count.
 pub(super) const LINKS_FIX_FILTER: &str = r#""Broken links: \(.broken)\(if .broken_anchors > 0 then "\n\(.broken_anchors) broken anchor(s) — see `find --broken-links`" else "" end)\nFixable: \(.fixable)\(if .fuzzy > 0 then "\nLow-confidence matches (\(if .fuzzy_applied then "applied via --apply-fuzzy" else "excluded from plain --apply" end)): \(.fuzzy)" else "" end)\nUnfixable: \(.unfixable)\nIgnored: \(.ignored)\(if .case_mismatches > 0 then "\nCase mismatches: \(.case_mismatches)" else "" end)\(if .relocations > 0 then "\nRelocations: \(.relocations)" else "" end)\(if .ambiguous > 0 then "\nAmbiguous (short-form): \(.ambiguous)" else "" end)\(if .out_of_vault > 0 then "\nOut of vault (target above vault root): \(.out_of_vault)" else "" end)\(if .templated > 0 then "\nTemplated (dynamic destination, never rewritten): \(.templated)" else "" end)\(if .failed > 0 then "\nFailed (write error): \(.failed)\n\(.failed_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.error)]") | join("\n"))" else "" end)\nApplied: \(if .applied then "yes (\(.applied_fixes | length) fix\(if (.applied_fixes | length) == 1 then "" else "es" end))" else if .dry_run then "no (dry run)" else "no (no fixes written — nothing to apply)" end end)\(if .applied then "\(if (.applied_fixes | length) > 0 then "\n\(.applied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)\(if .unapplied > 0 then "\nUnapplied (plan did not match on-disk text): \(.unapplied)\n\(.unapplied_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" else "\(if (.fixes | length) > 0 then "\n\(.fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\"") | join("\n"))" else "" end)" end)\(if (.unfixable_links | length) > 0 then "\nUnfixable links (no candidate in the vault):\n\(.unfixable_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.unfixable_links | length) > 20 then "\n  … and \((.unfixable_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.out_of_vault_links | length) > 0 then "\nOut-of-vault links (target above vault root, never rewritten):\n\(.out_of_vault_links | .[:20] | map("  \(.source) line \(.line): \"\(.target)\"") | join("\n"))\(if (.out_of_vault_links | length) > 20 then "\n  … and \((.out_of_vault_links | length) - 20) more (use --format json for the full list)" else "" end)" else "" end)\(if (.case_mismatch_fixes | length) > 0 then "\nCase-mismatch fixes:\n\(.case_mismatch_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "link-case-mismatch")]") | join("\n"))" else "" end)\(if (.relocation_fixes | length) > 0 then "\nRelocation fixes:\n\(.relocation_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "shortest-path")]") | join("\n"))" else "" end)\(if (.ambiguous_links | length) > 0 then "\nAmbiguous links:\n\(.ambiguous_links | map("  \(.source) line \(.line): \"\(.target)\" [ambiguous]") | join("\n"))" else "" end)\(if (.templated_links | length) > 0 then "\nTemplated links (dynamic destination, never rewritten):\n\(.templated_links | map("  \(.source) line \(.line): \"\(.target)\" [templated]") | join("\n"))" else "" end)\(if (.fuzzy_fixes | length) > 0 then "\nLow-confidence matches (\(if .fuzzy_applied then "applied at or above confidence \(.fuzzy_min_confidence)" else "not applied — pass --apply-fuzzy" end)):\n\(.fuzzy_fixes | map("  \(.source) line \(.line): \"\(.old_target)\" → \"\(.new_target)\" [\(.rule // "fuzzy-match") \((.confidence * 1000 | floor) / 1000)]\(if .below_floor then " — below floor" else "" end)") | join("\n"))\(if .fuzzy_below_floor > 0 then "\n  \(.fuzzy_below_floor) of \(.fuzzy_fixes | length) below the confidence floor \(.fuzzy_min_confidence) — raise or lower it with --min-confidence <0.0-1.0>" else "" end)" else "" end)""#;
 
-/// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, files_applied, files_failed, files_skipped, matches, scanned, total}`
+/// `LinksAuto result`: `{ambiguous_titles, applied, apply_outcomes, default_excluded_mentions, default_excluded_titles, files_applied, files_failed, files_skipped, matches, scanned, total}`
 /// plus optional `config_excluded_titles` / `config_excluded_mentions`
 /// (iter-195a, renamed and paired in iter-213), present only when
 /// `[links.auto]` config exclusions removed candidate titles — hence the
 /// `// 0` fallbacks in the filter.
 /// Format: summary line + per-match details.
-pub(super) const LINKS_AUTO_FILTER: &str = r#""\(.matched) unlinked mention\(if .matched == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)\(if .matched_text == .link_target then "" else "|\(.matched_text)" end)]]") | join("\n"))" else "" end)""#;
+pub(super) const LINKS_AUTO_FILTER: &str = r#""\(.matched) unlinked mention\(if .matched == 1 then "" else "s" end) found in \(.matches | map(.file) | unique | length) file\(if (.matches | map(.file) | unique | length) == 1 then "" else "s" end) (\(.scanned) scanned)\(if (.ambiguous_titles | length) > 0 then " (\(.ambiguous_titles | length) ambiguous title\(if (.ambiguous_titles | length) == 1 then "" else "s" end) skipped)" else "" end)\(if (.config_excluded_titles // 0) > 0 then "\nExcluded by [links.auto] config: \(.config_excluded_titles) title\(if .config_excluded_titles == 1 then "" else "s" end), suppressing \(.config_excluded_mentions // 0) mention\(if (.config_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\(if ((.default_excluded_titles // []) | length) > 0 then "\nHeld back by the built-in stop-list: \((.default_excluded_titles) | length) title\(if ((.default_excluded_titles) | length) == 1 then "" else "s" end) (\((.default_excluded_titles) | join(", "))), suppressing \(.default_excluded_mentions // 0) mention\(if (.default_excluded_mentions // 0) == 1 then "" else "s" end)" else "" end)\nApplied: \(if .applied then "yes" else "no" end)\(if (.files_failed + .files_skipped) > 0 then "\nWrites: \(.files_applied) applied, \(.files_skipped) skipped, \(.files_failed) failed" else "" end)\(if (.matches | length) > 0 then "\n\(.matches | map("  \(.file):\(.line)    \"\(.matched_text)\" → [[\(.link_target)\(if .matched_text == .link_target then "" else "|\(.matched_text)" end)]]") | join("\n"))" else "" end)""#;
 
 /// `MvResult`: `{dry_run, from, to, total_files_updated, total_links_updated, updated_files}`
 /// Format: `[dry-run] Moved <from> → <to>`, the two counters, then the list of
@@ -274,6 +274,15 @@ fn is_link_info_signature(key_sig: &str) -> bool {
 /// Look up the jq filter for a given key signature.
 ///
 /// Returns `None` for unknown shapes, which will fall back to generic formatting.
+/// `hyalo new` result — the created (or previewed) file.
+///
+/// iter-267 (UX-17): before `--dry-run` existed the shape fell through to the
+/// generic `key: value` dump, which printed `created: true` / `dry_run: false`
+/// / `file: …` / `type: …` as four lines. With the scaffold body riding along
+/// in a preview, the dump became unreadable — hence a filter that prints the
+/// headline and, for a dry run, the scaffold underneath it.
+pub(super) const NEW_RESULT_FILTER: &str = r#""\(if .dry_run then "[dry-run] would create " else "created " end)\(.file)\(if .content then "\n\n" + .content else "" end)""#;
+
 pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
     // `LinkInfo` is matched by shape rather than by exact signature (iter-261):
     // with `kind` always present and five optional keys around it, the
@@ -282,6 +291,10 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         return Some(LINK_INFO_FILTER);
     }
     match key_sig {
+        // `hyalo new` (with and without the --dry-run `content` payload)
+        "created,dry_run,file,type" | "content,created,dry_run,file,type" => {
+            Some(NEW_RESULT_FILTER)
+        }
         // PropertyInfo
         "name,type,value" => Some(PROPERTY_INFO_FILTER),
         // PropertySummaryEntry (mixed_types is skipped when None, so two signatures)
@@ -346,8 +359,10 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // `[links.auto]` config exclusions removed candidates — hence two
         // signatures. iter-213 split it into a title count and a mention count,
         // which always appear together).
-        "ambiguous_titles,applied,apply_outcomes,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned"
-        | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned" => {
+        // iter-267 adds the always-present `default_excluded_*` pair; the
+        // `config_excluded_*` keys stay conditional, hence two signatures.
+        "ambiguous_titles,applied,apply_outcomes,default_excluded_mentions,default_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned"
+        | "ambiguous_titles,applied,apply_outcomes,config_excluded_mentions,config_excluded_titles,default_excluded_mentions,default_excluded_titles,dry_run,files_applied,files_failed,files_skipped,matched,matches,scanned" => {
             Some(LINKS_AUTO_FILTER)
         }
         // MvResult (`skipped_ambiguous` / `frontmatter_links_skipped` are each

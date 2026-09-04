@@ -216,6 +216,30 @@ impl OutputPipeline<'_> {
                         &hints,
                         &value,
                     );
+                    // In text mode, when a list command returns zero results,
+                    // emit the empty-state notice on stderr so the user knows
+                    // the command ran successfully. Only fires for list
+                    // commands (total is Some) with empty arrays.
+                    //
+                    // iter-267 (COH-17): printed BEFORE the hints, not after.
+                    // The hints go to stdout and this line to stderr, so on a
+                    // merged terminal the old order showed the suggested next
+                    // step above the reason it was suggested. Rust's stdout is
+                    // line-buffered even when piped, so emission order is what
+                    // a `2>&1` reader sees.
+                    let zero_results = self.user_format == Format::Text
+                        && total == Some(0)
+                        && value.as_array().is_some_and(Vec::is_empty);
+                    if zero_results {
+                        // iter-251: echo the effective filters. `No results`
+                        // alone left the reader to reconstruct what was asked;
+                        // naming the filters makes the empty state definitive
+                        // and pairs with the zero-result hints below it.
+                        match self.hint_ctx {
+                            Some(ctx) => eprintln!("{}", crate::hints::zero_result_notice(ctx)),
+                            None => eprintln!("No results"),
+                        }
+                    }
                     println!("{formatted}");
                     // Surface dropped `--files-from` input paths as a stderr
                     // note so a diff-scoped `--format text` run shows that some
@@ -226,22 +250,6 @@ impl OutputPipeline<'_> {
                         && let Some(summary) = self.skip_summary()
                     {
                         eprintln!("note: {summary}");
-                    }
-                    // In text mode, when a list command returns zero results, emit a
-                    // notice on stderr so the user knows the command ran successfully.
-                    // Only fires for list commands (total is Some) with empty arrays.
-                    if self.user_format == Format::Text
-                        && total == Some(0)
-                        && value.as_array().is_some_and(Vec::is_empty)
-                    {
-                        // iter-251: echo the effective filters. `No results`
-                        // alone left the reader to reconstruct what was asked;
-                        // naming the filters makes the empty state definitive
-                        // and pairs with the zero-result hints below it.
-                        match self.hint_ctx.and_then(crate::hints::filter_echo) {
-                            Some(filters) => eprintln!("No results for {filters}"),
-                            None => eprintln!("No results"),
-                        }
                     }
                 }
                 0

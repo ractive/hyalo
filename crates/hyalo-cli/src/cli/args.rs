@@ -258,7 +258,7 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         Globs use standard syntax: '**/*.md' matches recursively, 'notes/*.md' matches one level.\n\n\
         OUTPUT: Default format is \"text\" when stdout is a terminal, \"json\" when piped. \
         All JSON is wrapped in a consistent envelope:\n\
-        \u{00a0} {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
+          {\"results\": <payload>, \"total\": N, \"hints\": [...]}\n\
         total is present for list commands ({LIST_COMMANDS}). \
         hints is always present (empty [] when --no-hints). \
         --jq operates on the full envelope, e.g. --jq '.results[].file' or --jq '.total'.\n\
@@ -281,10 +281,10 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         Override with --site-prefix <PREFIX>, or --site-prefix \"\" to resolve absolute links from the vault/bundle root (strip only the leading `/`). Also settable in .hyalo.toml. \
         For bundle-root resolution (e.g. OKF bundles where `/x/y.md` is relative to the bundle root), set `site_prefix = \"\"` so only the leading `/` is stripped — this also avoids mis-stripping when a bundle subdir shares its name with the vault dir.\n\n\
         CONFIG: Place a .hyalo.toml in the working directory to set defaults:\n\
-        \u{00a0} dir = \"vault/\"        # default --dir\n\
-        \u{00a0} format = \"text\"       # pin format regardless of TTY detection\n\
-        \u{00a0} hints = false          # disable hints (CLI default is on)\n\
-        \u{00a0} site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
+          dir = \"vault/\"        # default --dir\n\
+          format = \"text\"       # pin format regardless of TTY detection\n\
+          hints = false         # disable hints (CLI default is on)\n\
+          site_prefix = \"docs\"  # override auto-derived site prefix for absolute links\n\
         CLI flags always take precedence.\n\n\
         See COMMAND REFERENCE below for full syntax of each command.";
 
@@ -807,20 +807,20 @@ pub(crate) enum Commands {
             but should not under-match a real substring.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
-            \u{00a0} OPERATOR TABLE:\n\
-            \u{00a0}   K=V / K!=V        equality / inequality (case-insensitive; any element of a list)\n\
-            \u{00a0}   K> K>= K< K<=     ordered comparison, typed (see below)\n\
-            \u{00a0}   K / !K            present / absent\n\
-            \u{00a0}   K~=pat K~=/pat/i  regex over the value (empty pattern rejected; `=~` is not an operator)\n\
-            \u{00a0}   K=null / K!=null  present with a YAML null (`~`, `null`, empty value) / present and non-null\n\
-            \u{00a0}   K=[] / K!=[]      present and an empty list / present and not an empty list\n\
-            \u{00a0} A list CONTAINING a null (`aliases: [null]`) does not match `K=null` — the value's own\n\
-            \u{00a0} type is what is tested, so `K=null` and `--fields properties-typed` (type \"null\") agree.\n\
-            \u{00a0} TYPED COMPARISONS: >, >=, < and <= compare numerically when both sides parse as numbers\n\
-            \u{00a0} (so `rating>=6` matches `rating: \"7\"`), by date when both parse as ISO dates, and as text\n\
-            \u{00a0} only when both are plain strings. A value of any other kind never matches, so\n\
-            \u{00a0} `last>=2023-09-01` skips `last: \"[[2022-04]]\"` instead of comparing it as text.\n\
-            \u{00a0} Dot-paths traverse nested frontmatter: a literal dotted key in a flat map wins first, \
+              OPERATOR TABLE:\n\
+                K=V / K!=V        equality / inequality (case-insensitive; any element of a list)\n\
+                K> K>= K< K<=     ordered comparison, typed (see below)\n\
+                K / !K            present / absent\n\
+                K~=pat K~=/pat/i  regex over the value (empty pattern rejected; `=~` is not an operator)\n\
+                K=null / K!=null  present with a YAML null (`~`, `null`, empty value) / present and non-null\n\
+                K=[] / K!=[]      present and an empty list / present and not an empty list\n\
+              A list CONTAINING a null (`aliases: [null]`) does not match `K=null` — the value's own\n\
+              type is what is tested, so `K=null` and `--fields properties-typed` (type \"null\") agree.\n\
+              TYPED COMPARISONS: >, >=, < and <= compare numerically when both sides parse as numbers\n\
+              (so `rating>=6` matches `rating: \"7\"`), by date when both parse as ISO dates, and as text\n\
+              only when both are plain strings. A value of any other kind never matches, so\n\
+              `last>=2023-09-01` skips `last: \"[[2022-04]]\"` instead of comparing it as text.\n\
+              Dot-paths traverse nested frontmatter: a literal dotted key in a flat map wins first, \
             then `contact.email=x` descends the map `contact: {email: x}`. Sequences are descended too: \
             a numeric segment indexes one element (`contacts.0.email`), any other segment auto-descends into \
             EVERY element and collects the hits (`contacts.email=x` matches when any contact has that email; \
@@ -888,7 +888,9 @@ pub(crate) enum Commands {
               as an equality test against the literal value '~/pat/', which matched YAML nulls.)\n\
             - An empty property regex ('title~=' or 'title~=//') is rejected: it matched every file.\n\
               Use bare 'title' to test presence, or 'title=null' for a present-but-null value.\n\
-            - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
+            - --title and --property title~= search the SAME promoted title: the frontmatter\n\
+              `title` when it is a scalar, else the first H1, else the filename stem. Neither is\n\
+              frontmatter-only. Use --property 'title' / '!title' to test the raw frontmatter key.\n\
             - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
             - For sequence-keyed lookups, prefer a filename glob (`--glob '**/iteration-206-*.md'`) over\n\
               `--property 'title~=206'` — the frontmatter title is typically `Iteration 206: …`,\n\
@@ -1066,7 +1068,20 @@ pub(crate) enum Commands {
     },
     /// Show a compact vault summary: file counts, property/tag/status counts, tasks, links, orphans, dead-ends (read-only)
     #[command(
+        // iter-267 (HELP-14): the short page names the JSON result keys. A
+        // caller reaching for `--jq` had to run the command once and read the
+        // envelope back to learn them; `-h` is where that belongs.
+        about = "Show a compact vault summary: file counts, property/tag/status counts, tasks, links, orphans, dead-ends (read-only)\n\
+            RESULT KEYS (all under `results`): files.total, files.skipped, files.excluded, \
+            files.directories, properties, tags, status, tasks.total, tasks.done, links.total, \
+            links.broken, links.broken_anchors, orphans, dead_ends, recent_files, schema.\n\
+            Example: hyalo summary --jq '.results.links.broken'",
         long_about = "Show a compact vault summary (~20-30 lines regardless of vault size).\n\n\
+            RESULT KEYS (all under `results`): files.total, files.skipped (unparseable\n\
+            frontmatter), files.excluded ([scan] exclude), files.directories, properties, tags,\n\
+            status, tasks.total, tasks.done, links.total, links.broken, links.broken_anchors,\n\
+            orphans, dead_ends, recent_files, schema. Example:\n\
+            hyalo summary --jq '.results.links.broken'\n\n\
             OUTPUT: A 'VaultSummary' object with file counts (total + top-level directories), \
             property summary (unique names/types/counts), tag summary (unique tags/counts), \
             status grouping (value + count, no file lists), \
@@ -1793,8 +1808,8 @@ Repeatable (AND).\n\
             markdown body against bundled rules (mdbook-lint MD001..MD059 + HYALO native rules).\n\n\
             FRONTMATTER PASS: schema violations from `[schema.default]` / `[schema.types.*]`.\n\
             - error: missing required property, wrong type, invalid enum value, pattern mismatch,\n\
-            \u{00a0}         `item_pattern` violation on `string-list` items, missing `required-sections`,\n\
-            \u{00a0}         empty value on a required property (see REQUIRED EMPTINESS below)\n\
+                      `item_pattern` violation on `string-list` items, missing `required-sections`,\n\
+                      empty value on a required property (see REQUIRED EMPTINESS below)\n\
             - warn:  no 'type' property, property not declared in schema\n\
             When no `[schema]` section exists, this pass exits 0 with zero violations.\n\
             Schema extensions `item_pattern` (per-item regex on `string-list` properties) and\n\
@@ -1817,32 +1832,32 @@ Repeatable (AND).\n\
             `min_items` knob needed.\n\n\
             BODY PASS: ~14 default-on stock rules from mdbook-lint plus the HYALO native\n\
             cross-cutting rules:\n\
-            \u{00a0} - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
-            \u{00a0} - HYALO002: `status: completed` requires all task checkboxes ticked\n\
-            \u{00a0}            (only fires when the schema declares `status` as an enum\n\
-            \u{00a0}            containing `completed`)\n\
-            \u{00a0} - HYALO007: frontmatter `title` is a list or a map, so it cannot be promoted\n\
-            \u{00a0}            to the `find --fields title` value (usually a quoting typo such as\n\
-            \u{00a0}            `title: [Draft] Notes`) \u{2014} the item falls back to its first H1\n\
-            \u{00a0} - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
-            \u{00a0}            oversized scalar) — error by default; the file still counts in\n\
-            \u{00a0}            `files_checked` so a corrupt file can never leave a green lint.\n\
-            \u{00a0}            Severity is configurable via `[lint.rules.HYALO005]` but no\n\
-            \u{00a0}            profile downgrades it.\n\
+              - HYALO001: bare `[]` should be `- [ ]` (autofixable)\n\
+              - HYALO002: `status: completed` requires all task checkboxes ticked\n\
+                         (only fires when the schema declares `status` as an enum\n\
+                         containing `completed`)\n\
+              - HYALO007: frontmatter `title` is a list or a map, so it cannot be promoted\n\
+                         to the `find --fields title` value (usually a quoting typo such as\n\
+                         `title: [Draft] Notes`) \u{2014} the item falls back to its first H1\n\
+              - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
+                         oversized scalar) — error by default; the file still counts in\n\
+                         `files_checked` so a corrupt file can never leave a green lint.\n\
+                         Severity is configurable via `[lint.rules.HYALO005]` but no\n\
+                         profile downgrades it.\n\
             Severity is hyalo-controlled. Manage rule enable/severity with `hyalo lint-rules`.\n\
             Override defaults via `[lint]` and `[lint.rules]` in `.hyalo.toml`.\n\n\
             OBSIDIAN GRAMMAR: four stock rules are narrowed so `--fix` cannot corrupt a vault\n\
             (`hyalo lint-rules show <ID>` spells each one out):\n\
-            \u{00a0} - MD018 exempts tag lines — a single `#` plus a tag token (letters, digits,\n\
-            \u{00a0}          `_`, `-`, `/`, non-ASCII word chars, at least one non-digit) is\n\
-            \u{00a0}          `#todo`, not a heading missing its space. `##Heading`, `#1` and a\n\
-            \u{00a0}          capitalized word followed by prose (`#Heading typo`) still fire.\n\
-            \u{00a0} - MD034 ignores URLs already inside link markup (a markdown link or image\n\
-            \u{00a0}          destination, an autolink, a wikilink, a reference definition).\n\
-            \u{00a0} - MD042 accepts an image as link text (`[![](img.png)](https://…)`).\n\
-            \u{00a0} - MD001 reports skipped heading levels but never autofixes them: renumbering\n\
-            \u{00a0}          a deliberate `######` caption rewrites authored structure. Turn the\n\
-            \u{00a0}          warning off with `hyalo lint-rules set MD001 --enabled false`.\n\n\
+              - MD018 exempts tag lines — a single `#` plus a tag token (letters, digits,\n\
+                       `_`, `-`, `/`, non-ASCII word chars, at least one non-digit) is\n\
+                       `#todo`, not a heading missing its space. `##Heading`, `#1` and a\n\
+                       capitalized word followed by prose (`#Heading typo`) still fire.\n\
+              - MD034 ignores URLs already inside link markup (a markdown link or image\n\
+                       destination, an autolink, a wikilink, a reference definition).\n\
+              - MD042 accepts an image as link text (`[![](img.png)](https://…)`).\n\
+              - MD001 reports skipped heading levels but never autofixes them: renumbering\n\
+                       a deliberate `######` caption rewrites authored structure. Turn the\n\
+                       warning off with `hyalo lint-rules set MD001 --enabled false`.\n\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default — summary mode groups violations by `(file, rule)` and caps\n\
@@ -1869,12 +1884,21 @@ Repeatable (AND).\n\
             SKIP VISIBILITY: with `--files-from`, dropped input paths (missing / non-markdown)\n\
             are reported as a `note:` line (--format text, on stderr) or a `::notice::` (--format\n\
             github), matching the `files_missing`/`files_skipped_*` counters in the JSON envelope.\n\
-            An explicitly named `--file` excluded by `[lint] ignore` also prints a notice rather\n\
-            than silently reporting `0 files checked`.\n\n\
+            NAMED FILES vs [lint] ignore (DEC-284, iteration 267): a path named explicitly —\n\
+            positionally, with `--file`, or through `--files-from` — is linted even when\n\
+            `[lint] ignore` matches it. Naming a file is a stronger signal than a glob written\n\
+            once in .hyalo.toml, and the previous behaviour (drop it, then warn that it was\n\
+            dropped) left no way to lint an ignored file at all. `--glob` and the bare vault\n\
+            sweep keep honouring the ignore list, and a `--glob` whose matches are ENTIRELY\n\
+            ignored still says so. CI implication: `git diff --name-only | hyalo lint\n\
+            --files-from -` now lints changed files that the ignore list covers — the right\n\
+            behaviour for a diff gate. To have the ignore list applied to a set of paths, select\n\
+            them with `--glob` instead of naming them.\n\n\
             GITHUB ANNOTATIONS: --format github (lint-only) emits one GitHub Actions workflow\n\
             command per violation — `::error file=<path>,line=<line>,title=<RULE_ID>::<message>`\n\
             (warnings use `::warning`) — so findings render as inline annotations on the PR diff,\n\
-            followed by a one-line `N errors, M warnings in K files` summary. Annotations are\n\
+            followed by a one-line `N errors, M warnings in K of T files checked` summary, whose\n\
+            denominator is the same `files_checked` count --format text prints. Annotations are\n\
             never truncated (the display caps are lifted for github so every finding lands on\n\
             the PR). Under `--fix --dry-run`, would-be-fixed violations are emitted as `::notice`\n\
             with a `[fixable]` title prefix and the summary becomes `N fixable, M remaining`, so\n\
@@ -1885,9 +1909,9 @@ Repeatable (AND).\n\
             resolve. Composes with --strict, --rule/--rule-prefix, --max-per-rule, and\n\
             `[lint] ignore`; exit codes are unchanged. Other subcommands reject `--format github`.\n\n\
             FILTER FLAGS:\n\
-            \u{00a0} --rule <ID>             restrict to a single rule\n\
-            \u{00a0} --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
-            \u{00a0} --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\
+              --rule <ID>             restrict to a single rule\n\
+              --rule-prefix <PREFIX>  restrict to rules with this prefix (e.g. HYALO)\n\
+              --max-per-rule <N>      override per-rule cap (0 = unlimited)\n\
             --rule and --rule-prefix are both case-insensitive and both validated: an id or a\n\
             prefix that selects no rule is a user error at exit 1, never a silent full-vault\n\
             lint that reads as green. `hyalo lint-rules list` shows what exists.\n\n\
@@ -2069,7 +2093,16 @@ Repeatable (AND).\n\
             `hyalo lint`, driving the agent fill-in loop. A pattern/length-constrained string\n\
             property whose default (or the generic `TBD`) would itself violate the constraint\n\
             (e.g. a `branch` property with pattern `^iter-\\d+[a-z]*/`) is OMITTED rather than\n\
-            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\n\
+            scaffolded with an invalid value — `hyalo lint` then flags it as missing-required.\n\
+            PLACEHOLDERS (DEC-285, iteration 267): a required `string` gets `TBD`; a required\n\
+            `number`, `date`, `datetime` or `boolean` with no schema default is written as an\n\
+            EMPTY value (`rating:`), not as `0` / today / `false`. Those three would read as real\n\
+            data and lint would accept them; an empty value is a schema error naming the exact\n\
+            field, so the fill-in loop is told what is missing. A `default` declared in the\n\
+            schema (including `$today`) is always emitted verbatim.\n\
+            DRY RUN: --dry-run prints the scaffold and writes nothing (`dry_run: true`,\n\
+            `created: false`, plus the `content` it would have written). Same flag, same\n\
+            meaning as on every other writing command.\n\n\
             CONSTRAINTS:\n\
             - Refuses with an error if the target file already exists\n\
             - `--file` must be vault-relative (no leading `/`, no `..` components)\n\
@@ -2080,10 +2113,13 @@ Repeatable (AND).\n\
             EXAMPLES:\n\
             hyalo new --type iteration --file iterations/iter-99-example.md\n\
             hyalo new --type note --file notes/2026-05-24-standup.md\n\
-            hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft\n\n\
-            OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true}}`.\n\
-            Text mode: `created <rel-path>`.\n\n\
-            SIDE EFFECTS: Writes one new file. When `--index` or `--index-file` is set,\n\
+            hyalo new --type note --file notes/draft.md && hyalo set notes/draft.md --property status=draft\n\
+            hyalo new --type iteration --file iterations/iter-99-x.md --dry-run   # preview only\n\n\
+            OUTPUT: JSON envelope `{\"results\": {\"type\": ..., \"file\": ..., \"created\": true,\n\
+            \"dry_run\": false}}`; a --dry-run adds `content` (the scaffold it would write).\n\
+            Text mode: `created <rel-path>`, or `[dry-run] would create <rel-path>` followed by\n\
+            the scaffold.\n\n\
+            SIDE EFFECTS: Writes one new file (nothing at all under --dry-run). When `--index` or `--index-file` is set,\n\
             also inserts a fresh entry into the snapshot index so subsequent `--index`\n\
             queries (find, summary, etc.) see the file without a full rebuild."
     )]
@@ -2097,6 +2133,15 @@ Repeatable (AND).\n\
         /// the vault after symlinks.
         #[arg(long, value_name = "FILE", required = true)]
         file: String,
+        /// Print the scaffold without creating the file
+        ///
+        /// iter-267 (UX-17, DEC-285): parity with every other writing command,
+        /// not new surface — `dry_run` is already a universal key on
+        /// object-shaped mutation results (DEC-257), and `new` was the only
+        /// writer whose preview you had to get by creating the file and
+        /// deleting it again.
+        #[arg(long)]
+        dry_run: bool,
         /// When `--index` or `--index-file` is set, the snapshot index is patched in place
         /// after the file is created, so later `--index` queries see it without a full
         /// rebuild.
@@ -2242,10 +2287,10 @@ Repeatable (AND).\n\
             Accepts a subcommand path, so `hyalo help task toggle` works.\n\
             An unknown name gets clap's usual did-you-mean suggestion.\n\n\
             EXAMPLES:\n\
-            \u{00a0} hyalo help              # same as hyalo -h\n\
-            \u{00a0} hyalo help find         # same as hyalo find -h\n\
-            \u{00a0} hyalo help task toggle  # same as hyalo task toggle -h\n\
-            \u{00a0} hyalo find --help       # the long reference page\n\n\
+              hyalo help              # same as hyalo -h\n\
+              hyalo help find         # same as hyalo find -h\n\
+              hyalo help task toggle  # same as hyalo task toggle -h\n\
+              hyalo find --help       # the long reference page\n\n\
             SIDE EFFECTS: None (prints to stdout)."
     )]
     Help {
@@ -2264,11 +2309,11 @@ Repeatable (AND).\n\
             Prints a completion script for the specified shell to stdout.\n\
             Source or install the output in your shell's completion directory.\n\n\
             EXAMPLES:\n\
-            \u{00a0} bash:        hyalo completions bash  > ~/.local/share/bash-completion/completions/hyalo\n\
-            \u{00a0} zsh:         hyalo completions zsh   > ~/.local/share/zsh/site-functions/_hyalo\n\
-            \u{00a0} fish:        hyalo completions fish  > ~/.config/fish/completions/hyalo.fish\n\
-            \u{00a0} elvish:      hyalo completions elvish > ~/.config/elvish/lib/completions/hyalo.elv\n\
-            \u{00a0} powershell:  hyalo completions powershell > _hyalo.ps1\n\n\
+              bash:        hyalo completions bash  > ~/.local/share/bash-completion/completions/hyalo\n\
+              zsh:         hyalo completions zsh   > ~/.local/share/zsh/site-functions/_hyalo\n\
+              fish:        hyalo completions fish  > ~/.config/fish/completions/hyalo.fish\n\
+              elvish:      hyalo completions elvish > ~/.config/elvish/lib/completions/hyalo.elv\n\
+              powershell:  hyalo completions powershell > _hyalo.ps1\n\n\
             SIDE EFFECTS: None (prints to stdout)."
     )]
     Completion {
@@ -2869,33 +2914,37 @@ pub(crate) enum LinksAction {
             is only written when the matched text is byte-identical to the target.\n\n\
             Filtering options:\n\
             --first-only          Only emit the first mention of each target per source file. An\n\
-            \u{00a0}                      existing [[wikilink]] (or aliased [[target|label]]) to a target\n\
-            \u{00a0}                      anywhere in the file counts as its first mention, case-insensitively\n\
-            \u{00a0}                      — no new match is emitted for that target in that file even if a\n\
-            \u{00a0}                      plain-text mention appears earlier in the file than the link.\n\
+                                   existing [[wikilink]] (or aliased [[target|label]]) to a target\n\
+                                   anywhere in the file counts as its first mention, case-insensitively\n\
+                                   — no new match is emitted for that target in that file even if a\n\
+                                   plain-text mention appears earlier in the file than the link.\n\
             --no-first-only       Force first-only OFF for this run, even when [links.auto]\n\
-            \u{00a0}                      first_only = true is set in .hyalo.toml. Conflicts with\n\
-            \u{00a0}                      --first-only.\n\
+                                   first_only = true is set in .hyalo.toml. Conflicts with\n\
+                                   --first-only.\n\
             --exclude-title       Exclude specific titles (repeatable, case-insensitive)\n\
             --exclude-target-glob Exclude target pages by vault-relative path glob (repeatable,\n\
-            \u{00a0}                      case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
-            NOISY CANDIDATE TITLES: the run prints one advisory note on stderr when a candidate \
-            title looks like a source of over-linking. Two things trigger it: the title is an \
-            ordinary English word or a generic doc filename (\"permissions\", \"index\", \"README\"), \
-            or the title is unusually frequent — at least 25 proposed links and at least 2.5% of \
-            the run. The frequency trigger is language-independent, so non-English titles are \
-            covered too. The note names the offenders with their match counts (plus their share of \
-            the run when frequency is the reason) and the --exclude-title flags that would skip \
-            them; the prose list stops at the five noisiest and says so, but the flags cover every \
-            offender, so one paste-back is enough. It only names titles that actually produced \
-            matches, so excluding them makes the note disappear. The note never appears on stdout — \
-            the report is unchanged — and -q or --no-warn-common-titles silences it.\n\n\
+                                   case-insensitive — 'templates/*' also excludes 'Templates/X.md')\n\n\
+            NOISY CANDIDATE TITLES (built-in stop-list): titles that look like a source of \
+            over-linking are HELD BACK by default, not merely warned about. Two things flag a \
+            title: it is an ordinary English word, a generic doc filename or a platform/format \
+            name (\"permissions\", \"index\", \"README\", \"github\", \"markdown\"), or it is unusually \
+            frequent for this run — at least 25 proposed links and at least 2.5% of the run. The \
+            frequency trigger is language-independent, so non-English titles are covered too. \
+            The report always carries default_excluded_titles (the lowercased titles held back) \
+            and default_excluded_mentions (how many mentions that was), and one stderr note names \
+            them with their counts plus the --exclude-title flags that reproduce the exclusion \
+            explicitly; the prose list stops at the five noisiest and says so, while the flags \
+            cover every one. Only titles that actually produced matches are ever flagged.\n\
+            TURNING IT OFF: setting [links.auto] exclude_titles hands the decision to your own \
+            list — the built-in stop-list steps aside entirely — and warn_common_titles = false \
+            (or --no-warn-common-titles for one run) switches off both the exclusion and the \
+            note, restoring the pre-iteration-267 all-candidates report.\n\n\
             PERSISTING THESE: put them in the [links.auto] section of .hyalo.toml so they apply to every run:\n\
-            \u{00a0} [links.auto]\n\
-            \u{00a0} exclude_titles = [\"permissions\", \"README\"]\n\
-            \u{00a0} exclude_target_globs = [\"templates/*\"]\n\
-            \u{00a0} first_only = true\n\
-            \u{00a0} warn_common_titles = false   # opt out of the noisy-title note\n\
+              [links.auto]\n\
+              exclude_titles = [\"permissions\", \"README\"]\n\
+              exclude_target_globs = [\"templates/*\"]\n\
+              first_only = true\n\
+              warn_common_titles = false   # opt out of the built-in stop-list AND its note\n\
             The two lists are UNIONED with the flags — --exclude-title/--exclude-target-glob extend the \
             config, they never replace it. --first-only turns first-only on for a single run whatever the \
             config says, and --no-first-only turns it off for a single run whatever the config says. \
@@ -2955,12 +3004,14 @@ pub(crate) enum LinksAction {
         /// Matched case-insensitively, mirroring --exclude-title.
         #[arg(long, value_name = "GLOB")]
         exclude_target_glob: Vec<String>,
-        /// Do not print the advisory note naming noisy candidate titles
+        /// Switch off the built-in common-title stop-list and its advisory note
         ///
-        /// The note names common English words (e.g. "permissions", "index") and titles
-        /// that dominate the run (at least 25 matches and 2.5% of the proposed links).
+        /// By default hyalo holds back candidate titles that are common English words,
+        /// generic doc filenames or platform names (e.g. "permissions", "index",
+        /// "github"), plus any title that dominates the run (at least 25 matches and
+        /// 2.5% of the proposed links); the report names them under
+        /// default_excluded_titles. This flag proposes every candidate instead.
         ///
-        /// The note goes to stderr only and never changes the report on stdout.
         /// Persist the opt-out with `warn_common_titles = false` under
         /// [links.auto] in .hyalo.toml.
         #[arg(long)]

@@ -778,11 +778,25 @@ struct Offender {
 /// never reaches the stdout envelope: a vault that has not opted into anything
 /// must see a byte-identical report (see the iteration's non-goals).
 fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option<String> {
+    let total = matches.len();
+    let offenders = common_title_offenders(matches);
+    if offenders.is_empty() {
+        return None;
+    }
+    render_common_title_note(&offenders, total, NoteMode::Advisory)
+}
+
+/// The suspicious titles among `matches`, most-noisy first.
+///
+/// Extracted in iter-267 (UX-9) so the built-in stop-list and the advisory
+/// note agree by construction: what the note complains about is exactly what
+/// [`default_excluded_titles`] holds back.
+fn common_title_offenders(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Vec<Offender> {
     use std::collections::HashMap;
 
     let total = matches.len();
     if total == 0 {
-        return None;
+        return Vec::new();
     }
 
     let mut tallies: HashMap<String, TitleTally> = HashMap::new();
@@ -827,12 +841,37 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
             })
         })
         .collect();
+    // Most-noisy first; ties broken alphabetically so the note is deterministic.
+    offenders.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
+    offenders
+}
+
+/// Whether the offenders in a note were merely flagged or actually held back.
+///
+/// iter-267 (DEC-286): the stop-list turned the advisory into a report of what
+/// the run left out, and "skip them with --exclude-title X" is stale advice
+/// for mentions that were never proposed. Both wordings share every other
+/// part of the sentence, so they share the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NoteMode {
+    /// The offenders ARE in the report; the note suggests excluding them.
+    Advisory,
+    /// The offenders were held back by the built-in stop-list.
+    Excluded,
+}
+
+/// Render the note for a non-empty offender set.
+///
+/// `total` is the number of links the run *would* have proposed — including
+/// the held-back ones — so the quoted share means the same thing in both modes.
+fn render_common_title_note(
+    offenders: &[Offender],
+    total: usize,
+    mode: NoteMode,
+) -> Option<String> {
     if offenders.is_empty() {
         return None;
     }
-    // Most-noisy first; ties broken alphabetically so the note is deterministic.
-    offenders.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
-
     let affected: usize = offenders.iter().map(|o| o.count).sum();
     let listed = offenders.len().min(COMMON_TITLE_NOTE_MAX_LISTED);
 
@@ -890,7 +929,7 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
         .collect();
 
     let mut flags = String::new();
-    for o in &offenders {
+    for o in offenders {
         use std::fmt::Write as _;
         // Writing into a String is infallible; the Result only exists to satisfy
         // the `fmt::Write` signature. Reuse the same shell-quoting the other
@@ -907,11 +946,25 @@ fn common_title_note(matches: &[hyalo_core::auto_link::AutoLinkMatch]) -> Option
         );
     }
 
+    let tail = match mode {
+        NoteMode::Advisory => format!(
+            "If those are prose mentions rather than deliberate references, skip them with{flags} \
+             — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
+             Silence this note with --no-warn-common-titles."
+        ),
+        NoteMode::Excluded => format!(
+            "Those mentions were NOT proposed. Make the choice explicit with{flags} — or \
+             persist it once under [links.auto] exclude_titles in .hyalo.toml, which replaces \
+             the built-in list entirely. To propose them after all, pass \
+             --no-warn-common-titles."
+        ),
+    };
+    let verb = match mode {
+        NoteMode::Advisory => "proposed",
+        NoteMode::Excluded => "candidate",
+    };
     Some(format!(
-        "{subject} {affected} of {total} proposed links{truncation}: {names}. \
-         If those are prose mentions rather than deliberate references, skip them with{flags} \
-         — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
-         Silence this note with --no-warn-common-titles.",
+        "{subject} {affected} of {total} {verb} links{truncation}: {names}. {tail}",
         names = names.join(", "),
     ))
 }
@@ -986,17 +1039,88 @@ pub fn links_auto(
         (0, 0)
     };
 
-    let report = hyalo_core::auto_link::auto_link(index, dir, &opts)?;
+    // iter-267 (UX-9, DEC-286): the built-in stop-list. `links auto` on a
+    // vault whose note titles double as ordinary words — or that has a handful
+    // of titles every other note mentions in passing (`github`, `links`,
+    // `Markdown` on the Obsidian Hub: 18,510 proposed links) — used to hand
+    // back a proposal nobody could review, and only *warned* about the
+    // offenders it had already put in the list. The heuristic that powers the
+    // warning now powers an exclusion: a preview pass identifies the
+    // suspicious titles, and the run that counts holds them back.
+    //
+    // Off when `[links.auto] exclude_titles` is configured (the user's list
+    // replaces the default) or `warn_common_titles = false` /
+    // `--no-warn-common-titles` (the heuristic itself is switched off).
+    let stop_list_active =
+        filters.effective_warn_common_titles() && filters.config_exclude_titles.is_empty();
+    let mut default_excluded_titles: Vec<String> = Vec::new();
+    let mut default_excluded_mentions: usize = 0;
+    let mut offenders: Vec<Offender> = Vec::new();
+    let mut preview: Option<hyalo_core::auto_link::AutoLinkReport> = None;
+    if stop_list_active {
+        // A preview pass, because in `--apply` mode the pass that counts also
+        // writes and must not write the excluded mentions.
+        let scouted = hyalo_core::auto_link::auto_link(
+            index,
+            dir,
+            &hyalo_core::auto_link::AutoLinkOptions {
+                apply: false,
+                ..opts
+            },
+        )?;
+        offenders = common_title_offenders(&scouted.matches);
+        default_excluded_titles = offenders.iter().map(|o| o.key.clone()).collect();
+        default_excluded_titles.sort_unstable();
+        default_excluded_mentions = offenders.iter().map(|o| o.count).sum();
+        preview = Some(scouted);
+    }
+
+    // The effective exclusion set: the caller's plus the stop-list.
+    let effective_exclude_titles: Vec<String> = if default_excluded_titles.is_empty() {
+        exclude_titles.clone()
+    } else {
+        let mut v = exclude_titles.clone();
+        v.extend(default_excluded_titles.iter().cloned());
+        v
+    };
+    let opts = hyalo_core::auto_link::AutoLinkOptions {
+        exclude_titles: &effective_exclude_titles,
+        ..opts
+    };
+
+    // Reuse the preview when nothing was held back and no write is due — the
+    // two passes would be byte-identical.
+    let report = match preview {
+        Some(scouted) if default_excluded_titles.is_empty() && !apply => scouted,
+        _ => hyalo_core::auto_link::auto_link(index, dir, &opts)?,
+    };
     // `baseline.matched` counted mentions *before* the config exclusions; the
     // difference is what they suppressed. Saturating because a future filter
     // that is not purely subtractive must report 0, never underflow.
-    let config_excluded_mentions = config_excluded_mentions.saturating_sub(report.matched);
+    let config_excluded_mentions =
+        config_excluded_mentions.saturating_sub(report.matched + default_excluded_mentions);
 
     // iter-197: advisory note when common English words drive the candidates.
     // stderr only (deduped and suppressed by `-q` like every other note), so the
     // stdout envelope stays byte-identical for vaults that never opt into
     // anything.
-    if filters.effective_warn_common_titles()
+    //
+    // iter-267: with the stop-list active the note reports what was *held
+    // back* (the offenders are no longer in `report.matches`, so re-deriving
+    // it from them would find nothing). Without it — a vault that configured
+    // `exclude_titles` or switched the heuristic off — nothing changes.
+    if stop_list_active {
+        // The share is quoted against what the run WOULD have proposed, so the
+        // percentages mean the same thing as before the stop-list existed.
+        let would_have_matched = report.matched + default_excluded_mentions;
+        if let Some(note) =
+            render_common_title_note(&offenders, would_have_matched, NoteMode::Excluded)
+        {
+            crate::warn::note(format!(
+                "held back by the built-in common-title stop-list: {note}"
+            ));
+        }
+    } else if filters.effective_warn_common_titles()
         && let Some(note) = common_title_note(&report.matches)
     {
         crate::warn::note(note);
@@ -1048,6 +1172,12 @@ pub fn links_auto(
         "files_skipped": skipped_count,
         "files_failed": failed_count,
         "apply_outcomes": report.apply_outcomes,
+        // iter-267 (UX-9, DEC-286): always present so a consumer never has to
+        // distinguish "absent" from "nothing held back" — the lowercased
+        // titles the built-in stop-list removed from this run, and how many
+        // mentions that was. Empty and 0 when the stop-list is off.
+        "default_excluded_titles": default_excluded_titles,
+        "default_excluded_mentions": default_excluded_mentions,
     });
     // Omitted when zero, matching the `links.out_of_vault` precedent: the keys
     // only appear when `[links.auto]` config actually removed candidates.

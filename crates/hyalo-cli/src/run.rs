@@ -520,7 +520,7 @@ pub fn run() {
                 AppError::Internal(err) => {
                     let s = err.to_string();
                     if !s.is_empty() {
-                        eprintln!("Error: {err}");
+                        eprintln!("error: {err}");
                     }
                     2
                 }
@@ -534,6 +534,31 @@ pub fn run() {
             process::exit(code);
         }
     }
+}
+
+/// Does `token` look like a word from an unquoted multi-word `find` query
+/// rather than a file target? (iter-267, UX-3)
+///
+/// Three guards keep a real path out of this branch: a path separator, an
+/// explicit `.md` extension, and existence on disk (either as given or with
+/// `.md` appended, which is the spelling `read`/`lint` already suggest). What
+/// is left — a bare word naming nothing in the vault — is a quoting accident
+/// in every realistic invocation, so it earns the quoting message instead of
+/// `file not found`.
+fn looks_like_unquoted_query_word(token: &str, dir: &std::path::Path) -> bool {
+    if token.is_empty()
+        || token.contains('/')
+        || token.contains('\\')
+        // Case-insensitive, matching `discovery`'s own markdown test — a
+        // `NOTE.MD` target is a path, not a stray query word.
+        || std::path::Path::new(token)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        || token.starts_with('-')
+    {
+        return false;
+    }
+    !dir.join(token).exists() && !dir.join(format!("{token}.md")).exists()
 }
 
 /// `-h` layout for the top-level command (iteration 251).
@@ -850,6 +875,19 @@ fn run_inner() -> Result<(), AppError> {
                         );
                         return Err(AppError::Exit(2));
                     }
+                    // iter-267 (UX-13): `hyalo index` is the name agents and
+                    // users reach for first. clap's nearest match by edit
+                    // distance is `find`, which has nothing to do with the
+                    // snapshot, so the empty state pointed the wrong way.
+                    // Name the two commands that actually manage it.
+                    if invalid == "index" {
+                        eprintln!(
+                            "{e}\n  hint: did you mean 'hyalo create-index'? (writes the \
+                             `.hyalo-index` snapshot; 'hyalo drop-index' removes it, and read \
+                             commands opt in with --index)\n"
+                        );
+                        return Err(AppError::Exit(2));
+                    }
                     for (target, suggestion) in [("version", "--version"), ("help", "--help")] {
                         if strsim::damerau_levenshtein(invalid, target) <= 2 {
                             eprintln!("{e}\n  tip: did you mean `hyalo {suggestion}`?\n");
@@ -936,15 +974,6 @@ fn run_inner() -> Result<(), AppError> {
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
     if let Commands::Config { raw } = &mut cli.command {
         let raw = *raw;
-        // Determine output format (respect --format if given; otherwise default to Text
-        // since this command is read-only introspection, not a pipeline command).
-        let format = cli.format.unwrap_or_else(|| {
-            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                crate::output::Format::Text
-            } else {
-                crate::output::Format::Json
-            }
-        });
         // Report exactly what the rest of the CLI would use, by going through
         // the shared `--dir` resolution rather than a second, divergent one
         // (iter-201, H-4). `config` is the command users reach for to *check*
@@ -954,6 +983,37 @@ fn run_inner() -> Result<(), AppError> {
         if let Some(note) = crate::config::dir_override_note(&effective) {
             crate::warn::note(note);
         }
+        // Determine output format with the SAME precedence every other
+        // command uses: --format flag > --jq (forces JSON) > `.hyalo.toml`
+        // format pin > TTY detection.
+        //
+        // iter-267 (UX-18) made this the `format`/`format_source` the report
+        // itself carries — the answer to "what will hyalo do here?" — so it
+        // must match what a real pipeline command run in this same directory
+        // would resolve to. Stopping at `cli.format.unwrap_or_else(TTY)` (the
+        // pre-267 behaviour) skipped the config-file pin entirely: a vault
+        // pinning `format = "text"` reported `format: "json"` under a piped
+        // invocation, while `format_source` said "config" — self-contradictory,
+        // and wrong for the one command whose job is this answer.
+        let format = if let Some(f) = cli.format {
+            f
+        } else if cli.jq.is_some() {
+            crate::output::Format::Json
+        } else if let Some(fmt_str) = effective.config.format.as_deref() {
+            crate::output::Format::from_str_opt(fmt_str).unwrap_or_else(|| {
+                // Malformed value; `report.malformed`/`parse_error` already
+                // surfaces this — fall back to TTY detection here too.
+                if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                    crate::output::Format::Text
+                } else {
+                    crate::output::Format::Json
+                }
+            })
+        } else if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            crate::output::Format::Text
+        } else {
+            crate::output::Format::Json
+        };
         // UX-3 (dogfood pre3): every other command relies on this stderr
         // warning as the only signal that its config is unusable, but
         // `hyalo config` itself already leads its own report body with the
@@ -967,6 +1027,8 @@ fn run_inner() -> Result<(), AppError> {
             dir_override.is_some(),
             cli.site_prefix.as_deref(),
             raw,
+            format,
+            cli.format.is_some(),
         )
         .map_err(AppError::Internal)?;
 
@@ -1929,6 +1991,22 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(ref mut ctx) = hint_ctx {
         ctx.quiet = cli.quiet;
         ctx.has_index = index_path_buf.is_some();
+        // iter-267 (UX-18): a vault that has already been indexed should be
+        // told to *use* the snapshot, not to build another one. Only probed
+        // when no index was requested, so the common `--index` path pays
+        // nothing for the stat.
+        ctx.snapshot_on_disk = index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
+        // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
+        // existing `.md` path is a body search for that literal text. Record
+        // it so `find`'s hints can offer `--file`.
+        if let Some(pat) = ctx.body_pattern.as_deref()
+            && std::path::Path::new(pat)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            && dir.join(pat).is_file()
+        {
+            ctx.pattern_names_a_file = Some(pat.to_owned());
+        }
         // Preserve the active index into derived `find` hints so they query the
         // same snapshot rather than silently rescanning the vault (BUG-7
         // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
@@ -1989,7 +2067,8 @@ fn run_inner() -> Result<(), AppError> {
                             hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
                         })
                     };
-                    if stale && !refreshed_all_targets {
+                    if stale && !refreshed_all_targets && !cli.command.write_repairs_named_targets()
+                    {
                         crate::warn::warn(
                             "index older than vault; results may be stale — re-run create-index",
                         );
@@ -2082,6 +2161,33 @@ fn run_inner() -> Result<(), AppError> {
                 )));
             }
         }
+    }
+
+    // iter-267 (UX-3): `hyalo find dataview plugin` is an unquoted two-word
+    // body search, not a query plus a file target — but clap hands the second
+    // word to FILE and the run died with a bare `file not found: plugin`,
+    // which describes the symptom and hides the cause. Catch the argv shape
+    // before dispatch and name the quoted command that does what was meant.
+    if let Commands::Find {
+        pattern: Some(pattern),
+        file_positional,
+        ..
+    } = &cli.command
+        && let Some(bad) = file_positional
+            .iter()
+            .find(|t| looks_like_unquoted_query_word(t, &dir))
+    {
+        let quoted: String = std::iter::once(pattern.as_str())
+            .chain(file_positional.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "error: '{bad}' is not a file; did you mean hyalo find '{quoted}'?\n\n\
+             tip: the FIRST positional is the body-search PATTERN; every later one is a FILE \
+             target, so an unquoted multi-word query is read as a query plus file names. \
+             Quote the whole phrase.\n"
+        );
+        return Err(AppError::Exit(2));
     }
 
     // Propagate the configured frontmatter-link property list into the loaded

@@ -84,6 +84,8 @@ fn default_shape_is_the_compact_field_set() {
         "size",
         "tags",
         "title",
+        // iter-267 (DEC-283): rides along with `title`, not selectable alone.
+        "title_source",
     ];
     expected.sort_unstable();
     assert_eq!(

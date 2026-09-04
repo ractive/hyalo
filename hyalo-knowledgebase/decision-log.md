@@ -4504,3 +4504,150 @@ as wide as the data hyalo already owns.
 **Where:** `crates/hyalo-cli/src/commands/tags.rs` (`tags_rename`,
 `rename_nested_tag`), `crates/hyalo-cli/src/output/filters.rs`
 (`TAG_RENAME_FILTER`).
+
+## DEC-283: a title with no property and no H1 is the filename stem (2026-09-04)
+
+**Decision:** the promoted `title` resolves in three steps, not two — a scalar
+frontmatter `title`, else the first H1, else **the filename with `.md`
+stripped**. JSON reports which step answered under `title_source`
+(`"property" | "h1" | "filename"`), present exactly when `title` is.
+`--title`, `--property 'title~=…'` and `--sort title` all read the promoted
+value, so the three agree by construction. `HYALO007` (a `title` that cannot
+promote) is unaffected: it is about the property, not about the fallback.
+
+This supersedes DEC-255's "the honest answer is null, not a filename". The
+honesty argument was right about one file and wrong about a vault: on the
+Obsidian Hub, where notes carry neither a `title` property nor an H1,
+`find --format text` printed `title: (none)` for every result and
+`--sort title` collected the whole vault into one indistinguishable null
+bucket (UX-5). Obsidian itself shows the stem in its file list and sidebar, so
+the stem is not a fabrication — it is the name the author is already looking
+at. What DEC-255 actually protected against was a consumer mistaking a derived
+title for an authored one, and `title_source` answers that directly, which is
+why the fallback is safe now and was not before.
+
+**Rejected: a `--title-fallback` flag.** No new CLI surface from dogfood
+pressure (standing project rule), and a per-run switch is the wrong shape for
+a vault-wide property of how titles are read.
+
+**Rejected: emitting `title_source` only under `--fields`.** It is meaningless
+without `title` and would let an exact projection carry a provenance for a
+value it dropped. It rides along with `title` and is never selectable alone —
+so it is a companion key, absent from the `fields:` footer.
+
+The stem strips a trailing `.md` and nothing else: `v0.22.0.md` promotes to
+`v0.22.0`, not `v0.22` — `Path::file_stem` splits on the last dot and is
+wrong here. A path with nothing left after stripping (`sub/.md`) keeps the
+null.
+
+**Where:** `crates/hyalo-cli/src/commands/find/build.rs`
+(`extract_title_with_source`, `filename_stem`), `crates/hyalo-core/src/types.rs`
+(`FileObject::title_source`), `crates/hyalo-cli/src/output.rs`
+(`FIND_COMPANION_KEYS`), `crates/hyalo-cli/src/output/text.rs`
+(`is_file_object_key`).
+
+## DEC-284: naming a file overrides `[lint] ignore` (2026-09-04)
+
+**Decision:** a path named explicitly — positionally, with `--file`, or through
+`--files-from` — is linted even when `[lint] ignore` matches it. `--glob` and
+the bare vault sweep keep honouring the list, and a `--glob` whose matches are
+*entirely* ignored still explains itself on stderr.
+
+Naming a file is a stronger, more recent and more specific signal than a glob
+written once in `.hyalo.toml`. The previous behaviour — drop the file, then
+warn that it was dropped — left no way to lint an ignored file at all, so the
+answer to "why does this file have findings I cannot see?" was "edit the
+config, run, edit it back".
+
+**CI implication, and the reason this is the right default:**
+`git diff --name-only | hyalo lint --files-from -` now lints changed files the
+ignore list covers. For a diff gate that is the desired behaviour — the point
+of a diff gate is that what you touched gets checked. A caller who wants the
+ignore list applied to a set of paths selects them with `--glob` instead of
+naming them; that is the documented opt-out.
+
+**Rejected: a `--force` / `--no-ignore` flag.** This is a policy about what
+naming a file *means*, not a new mode, and the project rule stands against
+growing the flag surface from dogfood findings.
+
+**Where:** `crates/hyalo-cli/src/commands/lint/run.rs` (target resolution),
+`crates/hyalo-cli/src/cli/args.rs` (`lint --help`).
+
+## DEC-285: `new` gains `--dry-run`, and un-fillable placeholders stay empty (2026-09-04)
+
+**Decision, two halves.**
+
+`hyalo new --dry-run` prints the scaffold and writes nothing — not the file,
+not its parent directory — reporting `dry_run: true`, `created: false` and the
+`content` it would have written. This is **parity, not new surface**: DEC-257
+already makes `dry_run` a universal key on object-shaped mutation results, and
+every other writing command has the flag. `new` was the only writer whose
+preview you obtained by creating the file and deleting it again (UX-17).
+
+Second half: a required `number`, `date`, `datetime` or `boolean` with no
+schema `default` scaffolds as an **empty value** (`rating:`) rather than `0`,
+today's date or `false`. Those three are values a reader takes at face value
+and `lint` accepts — a scaffold that looks complete and is not. An empty value
+is a schema error (`required property "rating" must not be empty`), so lint
+names exactly the fields the scaffold could not know, which is what drives the
+fill-in loop. A required `string` keeps `TBD` (it is visibly a placeholder and
+already fails lint), an `enum` keeps its first declared value (schema-valid and
+the only guess available), a list keeps `[]`, and a `default` declared in the
+schema — including `$today` — is still emitted verbatim.
+
+**Rejected: `TBD` for numbers and dates.** It violates the property's own
+constraint, which iteration 181 already established is worse than omitting the
+key.
+
+**Rejected: omitting the key entirely** (the existing treatment for a
+pattern-constrained string whose placeholder would be invalid). An empty key is
+strictly more informative: the reader sees which fields are theirs to fill
+without consulting the schema.
+
+**Where:** `crates/hyalo-cli/src/commands/new.rs` (`create_new`,
+`synthesise_content`, `PropValue::Null`), `crates/hyalo-cli/src/output/filters.rs`
+(`NEW_RESULT_FILTER`).
+
+## DEC-286: `links auto` holds back common-title candidates by default (2026-09-04)
+
+**Decision:** the heuristic that has powered the noisy-title *warning* since
+iteration 197 now powers an *exclusion*. Titles that are ordinary English
+words, generic doc filenames or one of four platform/format names (`github`,
+`gitlab`, `markdown`, `wiki`), plus any title that dominates the run (at least
+25 proposed links and at least 2.5% of it), are held back. The report always
+carries `default_excluded_titles` (the lowercased titles) and
+`default_excluded_mentions`, and one stderr note names them with their counts
+and the `--exclude-title` flags that reproduce the choice explicitly.
+
+Warning about a list you have already handed over is the wrong shape. On the
+Obsidian Hub a bare `links auto --dry-run` proposed 18,510 links, most of them
+prose mentions of `github`, `links` and `Markdown`, and then advised excluding
+them (UX-9) — a proposal nobody could review, plus homework. Holding them back
+gives 7,014 reviewable proposals and a two-line account of what was left out.
+
+**Two opt-outs, both existing config:** setting `[links.auto] exclude_titles`
+hands the decision to your own list and the built-in stop-list steps aside
+entirely (your judgment replaces it, it does not compose with it);
+`warn_common_titles = false` / `--no-warn-common-titles` switches off both the
+exclusion and the note, restoring the pre-iteration-267 all-candidates report.
+No new flag.
+
+**The word list stays narrow.** Product and domain nouns a vault genuinely
+links to (`Obsidian`, `Dataview`, `Canvas`) and words that are plausible page
+titles in their own right (`config`, `setup`, `template`) are deliberately
+absent: the frequency trigger already catches the ones that actually flood a
+run, and a false exclusion is invisible in a way a false proposal is not.
+
+**Cost:** when the stop-list is active, a preview pass runs before the pass
+that counts, because in `--apply` mode the pass that counts also writes and
+must not write the held-back mentions. A run with nothing held back and no
+write reuses the preview, so the common case stays at one pass.
+
+**Supersedes** iteration 197's non-goal that "a vault that has not opted into
+anything must see a byte-identical report". It does not: the report changes,
+structurally and visibly, and the advisory prose still never reaches stdout.
+
+**Where:** `crates/hyalo-cli/src/commands/links.rs` (`links_auto`,
+`common_title_offenders`, `render_common_title_note`, `NoteMode`),
+`crates/hyalo-core/src/common_words.rs`,
+`crates/hyalo-cli/src/output/filters.rs` (`LINKS_AUTO_FILTER`).

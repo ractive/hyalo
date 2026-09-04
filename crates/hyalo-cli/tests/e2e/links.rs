@@ -1870,7 +1870,12 @@ fn run_links_auto(dir: &std::path::Path, extra_args: &[&str]) -> serde_json::Val
         "--dir",
         dir.to_str().expect("temp path should be valid UTF-8"),
     ])
-    .args(["links", "auto"])
+    // iter-267 (DEC-286): the built-in common-title stop-list now HOLDS BACK
+    // ordinary-word titles by default. These fixtures predate it and are about
+    // other behaviour (first-only, target globs, code fences, apply outcomes),
+    // and their titles are words like "Start" and "Config", so they opt out.
+    // The stop-list's own tests build their commands without this flag.
+    .args(["links", "auto", "--no-warn-common-titles"])
     .args(extra_args);
     let output = cmd.output().expect("hyalo links auto should run");
     assert!(
@@ -4163,7 +4168,15 @@ A Widget is rendered, and Daily wraps up.
 fn run_links_auto_in_vault(dir: &std::path::Path, extra_args: &[&str]) -> serde_json::Value {
     let output = hyalo_no_hints()
         .current_dir(dir)
-        .args(["links", "auto", "--format", "json"])
+        // See `run_links_auto`: these fixtures opt out of the iter-267
+        // stop-list so they keep testing what they were written for.
+        .args([
+            "links",
+            "auto",
+            "--format",
+            "json",
+            "--no-warn-common-titles",
+        ])
         .args(extra_args)
         .output()
         .expect("hyalo links auto should run");
@@ -4825,15 +4838,16 @@ fn links_auto_notes_common_word_titles_on_stderr() {
     );
 }
 
+/// iter-267 (DEC-286): the stop-list DOES change the report — that is the
+/// point — but it changes it structurally, never in prose. The note stays on
+/// stderr; stdout gains `default_excluded_titles` and loses the held-back
+/// matches, and `--no-warn-common-titles` restores the old proposal set.
 #[test]
-fn links_auto_common_title_note_never_touches_the_stdout_report() {
-    // The report shape is the contract; the note lives on stderr only. A run
-    // with the note enabled must produce byte-identical stdout to one with it
-    // suppressed.
+fn links_auto_stop_list_changes_the_report_only_structurally() {
     let tmp = setup_auto_config_vault("");
 
-    let (with_note, stderr) = run_links_auto_capturing(tmp.path(), &[]);
-    let (without_note, silent_stderr) =
+    let (held_back, stderr) = run_links_auto_capturing(tmp.path(), &[]);
+    let (every_candidate, silent_stderr) =
         run_links_auto_capturing(tmp.path(), &["--no-warn-common-titles"]);
 
     assert!(
@@ -4844,13 +4858,44 @@ fn links_auto_common_title_note_never_touches_the_stdout_report() {
         silent_stderr.is_empty(),
         "--no-warn-common-titles should leave stderr empty: {silent_stderr}"
     );
+
+    let held: serde_json::Value =
+        serde_json::from_str(&held_back).expect("stdout should be valid JSON");
+    let every: serde_json::Value =
+        serde_json::from_str(&every_candidate).expect("stdout should be valid JSON");
+
+    let excluded = held["results"]["default_excluded_titles"]
+        .as_array()
+        .expect("default_excluded_titles should always be present");
+    assert!(
+        excluded.iter().any(|t| t == "permissions"),
+        "the wordlist hit should be named in the report: {excluded:?}"
+    );
     assert_eq!(
-        with_note, without_note,
-        "the note must not change the stdout envelope"
+        every["results"]["default_excluded_titles"]
+            .as_array()
+            .expect("present when the stop-list is off too")
+            .len(),
+        0,
+        "--no-warn-common-titles holds nothing back"
+    );
+    let held_matched = held["results"]["matched"].as_u64().expect("matched");
+    let every_matched = every["results"]["matched"].as_u64().expect("matched");
+    assert!(
+        held_matched < every_matched,
+        "the stop-list must actually remove proposals: {held_matched} vs {every_matched}"
+    );
+    assert_eq!(
+        held_matched
+            + held["results"]["default_excluded_mentions"]
+                .as_u64()
+                .expect("default_excluded_mentions"),
+        every_matched,
+        "held-back mentions plus proposals must account for every candidate"
     );
     assert!(
-        !with_note.contains("common English word"),
-        "the advisory text must never leak into stdout: {with_note}"
+        !held_back.contains("common English word"),
+        "the advisory prose must never leak into stdout: {held_back}"
     );
 }
 
@@ -5053,15 +5098,15 @@ fn links_auto_frequency_note_disappears_after_one_paste_back() {
     );
 }
 
+/// The frequency path holds titles back the same way the wordlist path does,
+/// and its prose stays on stderr in every output format (iter-267, DEC-286).
 #[test]
-fn links_auto_frequency_note_never_touches_the_stdout_report() {
-    // Same contract as the wordlist path: the note is stderr-only, in every
-    // output format.
+fn links_auto_frequency_stop_list_prose_stays_on_stderr() {
     let tmp = setup_frequent_title_vault("", "Workflows", 30);
 
     for format in ["json", "text"] {
-        let (with_note, stderr) = run_links_auto_capturing_format(tmp.path(), format, &[]);
-        let (without_note, silent_stderr) =
+        let (held_back, stderr) = run_links_auto_capturing_format(tmp.path(), format, &[]);
+        let (every_candidate, silent_stderr) =
             run_links_auto_capturing_format(tmp.path(), format, &["--no-warn-common-titles"]);
 
         assert!(
@@ -5072,15 +5117,21 @@ fn links_auto_frequency_note_never_touches_the_stdout_report() {
             silent_stderr.is_empty(),
             "--no-warn-common-titles should leave stderr empty ({format}): {silent_stderr}"
         );
-        assert_eq!(
-            with_note, without_note,
-            "the note must not change the stdout envelope ({format})"
+        assert!(
+            held_back.len() < every_candidate.len(),
+            "the dominant title's 30 mentions should be gone from the report ({format})"
         );
         assert!(
-            !with_note.contains("unusually frequent"),
-            "the advisory text must never leak into stdout ({format}): {with_note}"
+            !held_back.contains("unusually frequent"),
+            "the advisory prose must never leak into stdout ({format}): {held_back}"
         );
     }
+    // Text mode names what was held back, structurally, on stdout.
+    let (text, _) = run_links_auto_capturing_format(tmp.path(), "text", &[]);
+    assert!(
+        text.contains("Held back by the built-in stop-list: 1 title (workflows)"),
+        "text report should name the stop-list exclusion: {text}"
+    );
 }
 
 #[test]

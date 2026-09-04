@@ -144,11 +144,24 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
     let mut doc = read_toml_doc(&toml_path)?;
 
     if !toml_type_exists(&doc, type_name) {
+        // iter-267 (UX-18): the bare "not found" read as a contradiction —
+        // `hyalo lint` was busy reporting schema errors for files whose
+        // frontmatter says `type: note`, so the type plainly existed as far as
+        // the user could see. It exists in the FILES, not in `.hyalo.toml`:
+        // there is no declaration to remove, and lint's complaints come from
+        // `[schema.default]` plus the undeclared-type warning. Name both, and
+        // the two things that actually change the outcome.
         return Ok(CommandOutcome::UserError(format_error(
             format,
-            &format!("type '{type_name}' not found"),
+            &format!("no [schema.types.{type_name}] block in .hyalo.toml — nothing to remove"),
             None,
-            Some("run 'hyalo types list' to see available types"),
+            Some(&format!(
+                "run 'hyalo types list' to see declared types. If `hyalo lint` reports errors for \
+                 files whose frontmatter says `type: {type_name}`, those come from \
+                 [schema.default] and the undeclared-type warning, not from a type entry — \
+                 declare it with 'hyalo types set {type_name} --required …', or exclude those \
+                 files with [schema] exempt in .hyalo.toml"
+            )),
             None,
         )));
     }
@@ -1341,7 +1354,7 @@ mod tests {
         match result {
             Ok(CommandOutcome::UserError(msg)) => {
                 assert!(
-                    msg.contains("not found") || msg.contains("malformed"),
+                    msg.contains("nothing to remove") || msg.contains("malformed"),
                     "unexpected error: {msg}"
                 );
             }

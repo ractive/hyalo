@@ -2024,16 +2024,77 @@ fn extract_title_falls_back_to_the_h1_when_the_property_cannot_promote() {
     let mut props = indexmap::IndexMap::new();
     props.insert("title".to_owned(), json!(["a", "b"]));
     assert_eq!(
-        extract_title(&props, Some(&sections)),
+        extract_title(&props, Some(&sections), "notes/a.md"),
         json!("From the body")
     );
 
     props.insert("title".to_owned(), json!(42));
-    assert_eq!(extract_title(&props, Some(&sections)), json!("42"));
-
-    // Nothing at all: the honest answer is null, not a filename (DEC-255).
     assert_eq!(
-        extract_title(&indexmap::IndexMap::new(), None),
-        serde_json::Value::Null
+        extract_title(&props, Some(&sections), "notes/a.md"),
+        json!("42")
+    );
+
+    // Neither property nor H1: the filename stem (DEC-283 supersedes DEC-255,
+    // which returned null here — Obsidian shows the stem, and a whole vault of
+    // `title: (none)` sorted into one bucket was worse than a derived value
+    // labelled as derived).
+    assert_eq!(
+        extract_title(&indexmap::IndexMap::new(), None, "notes/plain note.md"),
+        json!("plain note")
+    );
+}
+
+/// The three title sources are distinguishable through `title_source`, and the
+/// stem survives Unicode, emoji and interior dots (iter-267, DEC-283).
+#[test]
+fn extract_title_with_source_reports_provenance_for_each_source() {
+    use super::build::{TitleSource, extract_title_with_source};
+    use hyalo_core::types::OutlineSection;
+    use serde_json::json;
+
+    let h1 = vec![OutlineSection {
+        level: 1,
+        heading: Some("Body heading".to_owned()),
+        line: 1,
+        tasks: None,
+        code_blocks: Vec::new(),
+        links: Vec::new(),
+    }];
+    let empty = indexmap::IndexMap::new();
+
+    let mut props = indexmap::IndexMap::new();
+    props.insert("title".to_owned(), json!("From frontmatter"));
+    assert_eq!(
+        extract_title_with_source(&props, Some(&h1), "a.md"),
+        (json!("From frontmatter"), Some(TitleSource::Property))
+    );
+    assert_eq!(
+        extract_title_with_source(&empty, Some(&h1), "a.md"),
+        (json!("Body heading"), Some(TitleSource::H1))
+    );
+
+    // Emoji + space stem, nested path, and a stem with interior dots: the
+    // `.md` extension is stripped, nothing else.
+    for (path, expected) in [
+        ("\u{1f5c2}\u{fe0f} hub.md", "\u{1f5c2}\u{fe0f} hub"),
+        ("sub/dir/Zettel — Idee.md", "Zettel — Idee"),
+        ("releases/v0.22.0.md", "v0.22.0"),
+        ("2026-09-03.notes.md", "2026-09-03.notes"),
+        ("no-extension", "no-extension"),
+    ] {
+        let (value, source) = extract_title_with_source(&empty, None, path);
+        assert_eq!(value, json!(expected), "path: {path}");
+        assert_eq!(source, Some(TitleSource::Filename), "path: {path}");
+    }
+
+    // A path with nothing left after stripping the extension keeps the honest
+    // null — there is no text to promote.
+    assert_eq!(
+        extract_title_with_source(&empty, None, "sub/.md"),
+        (serde_json::Value::Null, None)
+    );
+    assert_eq!(
+        extract_title_with_source(&empty, None, ""),
+        (serde_json::Value::Null, None)
     );
 }

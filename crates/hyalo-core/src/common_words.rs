@@ -14,7 +14,14 @@
 //! new crate in the tree, and small enough to read.
 //!
 //! The list holds high-frequency English words plus generic doc filenames
-//! (`readme`, `changelog`, `index`, …). Words shorter than 3 characters are
+//! (`readme`, `changelog`, `index`, …) and the four platform/format names that
+//! show up as note titles in almost every vault while being prose nouns
+//! everywhere else (`github`, `gitlab`, `markdown`, `wiki` — iter-267, UX-9).
+//! The list stays deliberately narrow there: product and domain nouns a vault
+//! genuinely links to (`Obsidian`, `Dataview`, `Canvas`) and words that are
+//! plausible page titles in their own right (`config`, `setup`, `template`)
+//! are absent, because the frequency trigger already catches the ones that
+//! actually flood a run. Words shorter than 3 characters are
 //! omitted because `links auto --min-length` defaults to 3 and never proposes
 //! them anyway.
 //!
@@ -265,6 +272,8 @@ static COMMON_WORDS: &[&str] = &[
     "get",
     "getting-started",
     "girl",
+    "github",
+    "gitlab",
     "give",
     "glass",
     "goal",
@@ -378,6 +387,7 @@ static COMMON_WORDS: &[&str] = &[
     "management",
     "manager",
     "many",
+    "markdown",
     "market",
     "material",
     "matter",
@@ -580,7 +590,6 @@ static COMMON_WORDS: &[&str] = &[
     "rise",
     "risk",
     "road",
-    "roadmap",
     "role",
     "room",
     "rule",
@@ -787,6 +796,7 @@ static COMMON_WORDS: &[&str] = &[
     "whose",
     "why",
     "wide",
+    "wiki",
     "will",
     "win",
     "window",

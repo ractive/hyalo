@@ -208,10 +208,26 @@ fn config_json_output_with_config() {
         "vault",
         "expected dir 'vault'; got: {json}"
     );
+    // iter-267 (UX-18): `format` is the format this run RESOLVED to (here
+    // `--format json`, since the assertion needs JSON to read); the config's
+    // own value moved to `format_configured`, with `format_source` naming
+    // which won. Before this, `format` reported the file value and said
+    // nothing about what the CLI would actually do — `null` on every vault
+    // that pins nothing.
     assert_eq!(
         results["format"].as_str().unwrap(),
+        "json",
+        "expected the effective format; got: {json}"
+    );
+    assert_eq!(
+        results["format_configured"].as_str().unwrap(),
         "text",
         "expected format 'text' from config; got: {json}"
+    );
+    assert_eq!(
+        results["format_source"].as_str().unwrap(),
+        "flag",
+        "an explicit --format wins over the config; got: {json}"
     );
     // config_path should be a non-null string
     assert!(
@@ -239,6 +255,48 @@ fn config_json_output_with_config() {
     assert!(
         results["parse_error"].is_null(),
         "expected no parse_error on a valid config; got: {json}"
+    );
+}
+
+/// iter-267 (UX-18) regression: without an explicit `--format` flag or
+/// `--jq` (both of which force JSON, same precedence as every other
+/// command), a `.hyalo.toml` format pin must win the effective format the
+/// same way it wins for every other command — even though stdout is piped
+/// here (not a TTY), where TTY-detection alone would pick `json`. Before the
+/// fix, the resolved format ignored the pin and fell through to
+/// TTY-detection while `format_source` simultaneously claimed `"config"`,
+/// contradicting `format_configured`. This is asserted on the TEXT render
+/// (rather than parsed as JSON) precisely because forcing JSON via `--format`
+/// or `--jq` would take the same higher-precedence branch as `--format` and
+/// mask the bug.
+#[test]
+fn config_format_pin_wins_over_tty_detection_without_format_flag() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join("vault")).unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \"vault\"\nformat = \"text\"\n",
+    )
+    .unwrap();
+    setup_minimal(tmp.path());
+
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config"])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+
+    // Piped stdout + no --format flag: TTY-detection alone would render
+    // JSON. The `.hyalo.toml` pin must win instead, so this must be the text
+    // renderer (which the JSON branch would never print) naming its source.
+    assert!(
+        stdout.contains("format: text (.hyalo.toml)"),
+        "expected the config pin ('.hyalo.toml') to win over TTY-detected json \
+         under a piped invocation with no --format flag; got: {stdout}"
     );
 }
 

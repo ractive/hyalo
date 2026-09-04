@@ -360,7 +360,8 @@ pub fn find(
                     );
 
                 if has_missing_fm_title {
-                    let derived = extract_title(&entry.properties, Some(&entry.sections));
+                    let derived =
+                        extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
                     let title_ok = property_filters
                         .iter()
                         .filter(|f| f.key() == Some("title"))
@@ -399,7 +400,8 @@ pub fn find(
 
                 // Title filter
                 if let Some(ref matcher) = title_matcher {
-                    let title_val = extract_title(&entry.properties, Some(&entry.sections));
+                    let title_val =
+                        extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
                     if !matcher.matches(&title_val) {
                         continue;
                     }
@@ -586,7 +588,8 @@ pub fn find(
                         raw_body.to_owned()
                     };
 
-                    let title_val = extract_title(&entry.properties, Some(&entry.sections));
+                    let title_val =
+                        extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
                     let title_str = title_val.as_str().unwrap_or("").to_owned();
                     let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
                     let lang = resolve_language(fm_lang, language, config_language);
@@ -736,7 +739,8 @@ pub fn find(
                 );
 
             if has_missing_fm_title {
-                let derived = extract_title(&entry.properties, Some(&entry.sections));
+                let derived =
+                    extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
                 let title_ok = property_filters
                     .iter()
                     .filter(|f| f.key() == Some("title"))
@@ -775,7 +779,8 @@ pub fn find(
 
             // --- Apply title filter (index path: sections are pre-indexed, no I/O needed) ---
             if let Some(ref matcher) = title_matcher {
-                let title_val = extract_title(&entry.properties, Some(&entry.sections));
+                let title_val =
+                    extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
                 if !matcher.matches(&title_val) {
                     continue;
                 }
@@ -1111,10 +1116,18 @@ pub fn find(
         // --- Title field (index path) ---
         // entry.sections is always available in the index, so we can look up
         // the first H1 even when fields.sections is false.
-        let title = if fields.title {
-            Some(extract_title(&entry.properties, Some(&entry.sections)))
+        // iter-267 (DEC-283): `title_source` rides along with `title` — it is
+        // meaningless without it, and emitting it separately would let a
+        // `--fields` projection carry a provenance for a value it dropped.
+        let (title, title_source) = if fields.title {
+            let (value, source) = build::extract_title_with_source(
+                &entry.properties,
+                Some(&entry.sections),
+                &entry.rel_path,
+            );
+            (Some(value), source.map(|s| s.as_str().to_owned()))
         } else {
-            None
+            (None, None)
         };
 
         let obj = FileObject {
@@ -1123,6 +1136,7 @@ pub fn find(
             size: fields.size.then_some(entry.size),
             lines: fields.lines.then_some(entry.lines),
             title,
+            title_source,
             properties,
             properties_typed,
             tags: tags_field,

@@ -1927,7 +1927,7 @@ fn lint_github_clean_vault_summary_only_exit_zero() {
     );
     assert_eq!(
         stdout.trim(),
-        "0 errors, 0 warnings in 0 files",
+        "0 errors, 0 warnings in 0 of 1 file checked",
         "expected summary-only output"
     );
 }
@@ -2483,23 +2483,67 @@ fn lint_skip_summary_singular_missing_path() {
 /// An explicitly named `--file` that is excluded by `[lint] ignore` prints a
 /// notice instead of silently reporting `0 files checked`.
 #[test]
-fn lint_ignored_named_file_prints_notice() {
+fn lint_named_file_overrides_the_ignore_list() {
+    // DEC-284 (iter-267): naming a path is stronger than a glob in
+    // `.hyalo.toml`, so the file is LINTED rather than dropped-and-explained.
+    // Before this there was no way to lint an ignored file at all.
     let tmp = TempDir::new().unwrap();
     write_schema_toml(
         tmp.path(),
-        "dir = \".\"\n[schema.default]\nrequired = []\n[lint]\nignore = [\"skip.md\"]\n",
+        "dir = \".\"\n[schema.default]\nrequired = [\"type\"]\n[lint]\nignore = [\"skip.md\"]\n",
     );
+    // No `type` property, so linting it must produce a finding — proof the
+    // file was actually looked at rather than counted and waved through.
     write_md(tmp.path(), "skip.md", "---\ntitle: Skipped\n---\n# Body\n");
 
-    let out = hyalo_no_hints()
+    for argv in [
+        vec!["lint", "--format", "text", "skip.md"],
+        vec!["lint", "--format", "text", "--file", "skip.md"],
+    ] {
+        let out = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(&argv)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stdout.contains("1 file checked"),
+            "{argv:?} should lint the named file; stdout:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("skip.md"),
+            "{argv:?} should report findings for it; stdout:\n{stdout}"
+        );
+        assert!(
+            !stderr.contains("[lint] ignore"),
+            "{argv:?} must not explain an exclusion that no longer happens; stderr:\n{stderr}"
+        );
+    }
+
+    // `--files-from` is the same signal, and the CI case DEC-284 names.
+    let piped = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["lint", "--format", "text", "skip.md"])
+        .args(["lint", "--format", "text", "--files-from", "-"])
+        .write_stdin("skip.md\n")
         .output()
         .unwrap();
-    let stderr = std::str::from_utf8(&out.stderr).unwrap();
+    assert!(
+        String::from_utf8_lossy(&piped.stdout).contains("1 file checked"),
+        "--files-from should lint an ignored path too: {}",
+        String::from_utf8_lossy(&piped.stdout)
+    );
+
+    // `--glob` keeps honouring the list, and says so.
+    let globbed = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--format", "text", "--glob", "*.md"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&globbed.stderr);
     assert!(
         stderr.contains("excluded by [lint] ignore") && stderr.contains("skip.md"),
-        "expected an ignore-exclusion notice naming skip.md; got stderr:\n{stderr}"
+        "a --glob whose matches are all ignored must still explain itself; stderr:\n{stderr}"
     );
 }
 

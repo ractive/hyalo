@@ -156,7 +156,7 @@ fn format_json_error() {
 #[test]
 fn format_text_error() {
     let out = format_error(Format::Text, "file not found", Some("foo"), None, None);
-    assert!(out.contains("Error: file not found"));
+    assert!(out.contains("error: file not found"));
     assert!(out.contains("path: foo"));
 }
 
@@ -1173,6 +1173,28 @@ fn format_value_as_text_falls_back_for_unknown_shape() {
     let out = fmt(&val);
     // Generic fallback: key: value
     assert!(out.contains("foo: bar") || out.contains("baz: 42"));
+}
+
+/// iter-267 (UX-14): a multi-line value in the generic fallback is indented
+/// under its key, so continuation lines cannot be read as further keys.
+#[test]
+fn generic_fallback_indents_a_multi_line_value_under_its_key() {
+    let val = json!({
+        "modified": ["References/Bass on Top.md", "References/Blade Runner.md"],
+        "scanned": 2,
+    });
+    let out = fmt(&val);
+    assert!(
+        out.contains("modified:\n  References/Bass on Top.md\n  References/Blade Runner.md"),
+        "expected the list indented under its key, got:\n{out}"
+    );
+    // A scalar keeps the compact one-line form.
+    assert!(out.contains("scanned: 2"), "got:\n{out}");
+    // No file path starts at column 0.
+    assert!(
+        !out.lines().any(|l| l.starts_with("References/")),
+        "no continuation line at column 0, got:\n{out}"
+    );
 }
 
 #[test]

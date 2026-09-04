@@ -184,6 +184,13 @@ and this project adheres to
 - A malformed `.hyalo.toml` now exits 1 for gate commands (`lint`, `find --strict`, `views run`) as well as writes (DEC-279); plain reads keep answering with the `-q`-proof warning
 - A `--index` read that names its files stat-refreshes just those entries instead of warning that the whole index is stale (DEC-280)
 - `types set --required K` infers the property type it auto-declares for K from the values the vault already holds for that key, instead of always declaring `string`
+- A title with no frontmatter `title` and no H1 is now the filename stem, as in Obsidian (DEC-283)
+- `links auto` holds back common-word and run-dominating candidate titles by default; opt out with `--no-warn-common-titles` or `[links.auto] exclude_titles` (DEC-286)
+- A file named with `--file` / positionally / via `--files-from` is linted even when `[lint] ignore` matches it; `--glob` and the bare sweep still honour the list (DEC-284)
+- `hyalo new` scaffolds a required number/date/boolean with no schema default as an empty value instead of 0/today/false, so `lint` reports it (DEC-285)
+- Text-mode errors use the lowercase `error:` prefix, matching clap and anyhow
+- `hyalo config` reports the effective output format plus `format_source`, and an effective `hints` boolean
+- `lint --format github` summary counts files checked: `N errors, M warnings in K of T files checked`
 
 ### Removed
 
@@ -331,6 +338,15 @@ and this project adheres to
 - Schema type binding accepts `type:` as a `[[Wikilink]]` or a one-element list of either a string or a wikilink, so `types set`, `lint` and `set --validate` apply to Obsidian vaults that write `type: ["[[Authors]]"]`
 - `hyalo summary` lists a mixed-type property once with a type breakdown instead of once per type, so its property count is the number of distinct names and matches `hyalo properties --count`
 - `hyalo read --frontmatter` returns the frontmatter block's own bytes instead of re-serialised YAML; JSON adds `frontmatter_raw` beside the parsed map
+- An unquoted multi-word `find` query (`hyalo find dataview plugin`) now names the quoted command instead of failing with `file not found`
+- The zero-result notice prints before the hints that explain it, and the hint block no longer opens with blank lines
+- `find --help` COMMON MISTAKES no longer claims `--property title~=` searches only frontmatter; help pages carry no non-breaking spaces
+- `hyalo index` suggests `create-index` instead of clap's nearest match; `types list` on an unconfigured vault says `No types configured`
+- The slow-query hint suggests `--index` when a `.hyalo-index` snapshot already exists, instead of rebuilding it
+- Multi-line values in text output are indented under their key, so continuation lines cannot be read as new keys
+- `types remove` on an undeclared type explains that lint's errors come from `[schema.default]`, not from a type entry
+- A `set`/`remove`/`append --index` run that names its files no longer warns about staleness it repairs itself
+- The root `-h` banner no longer tells you not to `cd` into a vault configured as `dir = "."`
 
 ### Added
 
@@ -351,6 +367,10 @@ and this project adheres to
 - find --fields accepts 'properties_typed' as well as 'properties-typed'; the JSON key stays the snake_case 'properties_typed' (DEC-275).
 - `[scan] exclude` in `.hyalo.toml` hides matching files from every command and every `--index` read (DEC-277); `hyalo config` reports it under `results.scan.exclude`
 - `summary` reports `results.files.skipped` and `results.files.excluded` (text: `Files: 75 (28 skipped, 0 excluded)`), with per-directory skipped counts
+- summary -h/--help now list the JSON result keys with a worked --jq example
+- `hyalo new --dry-run` prints the scaffold and writes nothing (DEC-285)
+- `find` reports `title_source` (property | h1 | filename) alongside `title` (DEC-283)
+- `links auto` reports `default_excluded_titles` / `default_excluded_mentions` (DEC-286)
 
 ## [0.21.0] - 2026-08-28
 

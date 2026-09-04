@@ -164,6 +164,21 @@ pub struct HintContext {
     /// Whether an `--index` / `--index-file` snapshot was active for this run.
     /// Suppresses index-suggestion hints when already using an index.
     pub has_index: bool,
+    /// `true` when a `.hyalo-index` snapshot already exists in the vault dir
+    /// but this run did not opt into it.
+    ///
+    /// iter-267 (UX-18): the slow-query hint always said `create-index`, even
+    /// on a vault that had been indexed minutes earlier — telling the reader
+    /// to rebuild what they already had instead of to pass `--index`.
+    pub snapshot_on_disk: bool,
+    /// Vault-relative path the `find` PATTERN itself names, when the pattern
+    /// is a `.md` path that exists in the vault.
+    ///
+    /// iter-267 (UX-3, reverse direction): `hyalo find notes/todo.md` is a
+    /// body search for the literal text `notes/todo.md`, which is almost never
+    /// what the caller meant. The results are not wrong, so this is a hint,
+    /// not an error — `--file` is one line away.
+    pub pattern_names_a_file: Option<String>,
     // Find context
     pub fields: Vec<String>,
     pub sort: Option<String>,
@@ -262,6 +277,8 @@ impl HintContext {
             elapsed_ms: None,
             quiet: false,
             has_index: false,
+            snapshot_on_disk: false,
+            pattern_names_a_file: None,
             fields: vec![],
             sort: None,
             has_limit: false,
@@ -446,6 +463,24 @@ fn slow_query_hint(ctx: &HintContext) -> Option<Hint> {
     // (and other explicit global flags) the slow command ran with. A bare
     // `hyalo create-index` string would index the *default* vault, not the
     // `--dir` one the user is actually querying (BUG-7).
+    // iter-267 (UX-18): when the vault already HAS a `.hyalo-index`, the
+    // actionable advice is to USE it, not to rebuild what is already there.
+    // `find`, `lint` and `summary` get a runnable command with their scope
+    // preserved; the remaining eligible commands get advice only, because
+    // they take no `--index` flag of their own.
+    if ctx.snapshot_on_disk {
+        let description = format!(
+            "Command took {elapsed} ms — a `.hyalo-index` snapshot exists in the vault; \
+             re-run with --index to use it"
+        );
+        let cmd = match ctx.source {
+            HintSource::Find => build_find_command_preserving_filters(ctx, &["--index"]),
+            HintSource::Lint => build_command_with_glob_and_files(ctx, &["lint", "--index"]),
+            HintSource::Summary => build_command_with_glob(ctx, &["summary", "--index"]),
+            _ => String::new(),
+        };
+        return Some(Hint::new(description, cmd));
+    }
     Some(Hint::new(
         format!("Command took {elapsed} ms — create an index for faster queries"),
         build_command_no_glob(ctx, &["create-index"]),
@@ -531,7 +566,7 @@ use mutation::{
 };
 use summary::{hints_for_properties_summary, hints_for_summary, hints_for_tags_summary};
 use util::{first_modified_file, status_priority};
-pub(crate) use zero_result::filter_echo;
+pub(crate) use zero_result::zero_result_notice;
 
 #[cfg(test)]
 mod tests;

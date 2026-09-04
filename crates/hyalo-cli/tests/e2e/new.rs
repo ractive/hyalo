@@ -112,16 +112,45 @@ fn new_creates_skeleton_for_type() {
         content.contains("status: planned"),
         "expected first enum value for status, got:\n{content}"
     );
-    // Date should be a valid ISO date, not 'TBD'
-    let has_date = content.lines().any(|l| {
-        l.starts_with("date:")
-            && l.len() > 6
-            && l[6..].trim().len() == 10
-            && l[6..].trim().contains('-')
-    });
+    // iter-267 (DEC-285): a required `date` with no schema default is left
+    // EMPTY, not filled with today. Today's date is a value a reader would
+    // take at face value and lint would accept; an empty value is a schema
+    // error naming the field the scaffold could not know.
     assert!(
-        has_date,
-        "expected date property with ISO date, got:\n{content}"
+        content.lines().any(|l| l.trim_end() == "date:"),
+        "expected an empty date placeholder, got:\n{content}"
+    );
+}
+
+/// The empty placeholders are not merely blank — `hyalo lint` reports each one,
+/// which is what makes the fill-in loop work (iter-267, DEC-285).
+#[test]
+fn new_empty_placeholders_are_reported_by_lint() {
+    let tmp = setup_with_iteration_type();
+    fs::create_dir_all(tmp.path().join("iterations")).unwrap();
+    let created = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["new", "--type", "iteration", "--file", "iterations/x.md"])
+        .output()
+        .expect("hyalo new should run");
+    assert!(created.status.success());
+
+    let lint = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--file",
+            "iterations/x.md",
+            "--format",
+            "text",
+            "--detailed",
+        ])
+        .output()
+        .expect("hyalo lint should run");
+    let stdout = String::from_utf8_lossy(&lint.stdout);
+    assert!(
+        stdout.contains("\"date\" must not be empty"),
+        "lint should name the un-filled date, got:\n{stdout}"
     );
 }
 
