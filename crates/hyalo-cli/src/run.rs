@@ -2178,8 +2178,15 @@ fn run_inner() -> Result<(), AppError> {
     // iter-264 (BUG-22): `find`'s envelope always carries the three
     // `--files-from` counters, zero when the flag was not used, so a consumer
     // can read `.files_missing` without first checking how the file list was
-    // supplied. Captured before dispatch, which moves `cli.command`.
-    let find_always_reports_counters = matches!(cli.command, Commands::Find { .. });
+    // supplied. `views run` is `find` under another spelling and must stay
+    // byte-identical to it. Captured before dispatch, which moves `cli.command`.
+    let find_always_reports_counters = matches!(
+        cli.command,
+        Commands::Find { .. }
+            | Commands::Views {
+                action: Some(crate::cli::args::ViewsAction::Run { .. })
+            }
+    );
 
     let dispatch_start = Instant::now();
     let result = if files_from_empty {

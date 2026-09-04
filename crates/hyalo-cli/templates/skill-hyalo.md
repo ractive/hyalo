@@ -56,13 +56,33 @@ Per-file override via frontmatter `language: french`. Config default via
 
 Property filters support: `K=V` (eq), `K!=V` (neq), `K>=V`/`K<=V`/`K>V`/`K<V` (comparison),
 `K` (existence), `!K` (absence — files missing the property), `K~=pattern` or `K~=/pattern/flags`
-(regex match on value; for list properties, matches if any element matches):
+(regex match on value; for list properties, matches if any element matches), and the value
+shapes `K=null` / `K!=null` / `K=[]` / `K!=[]`:
 
 ```bash
 hyalo find --property '!status'           # files missing the status property
 hyalo find --property 'title~=draft'      # title contains "draft"
 hyalo find --property 'title~=/^Draft/i'  # case-insensitive regex on title
+hyalo find --property 'aliases=null'      # present, but the value is a YAML null
+hyalo find --property 'aliases!=null'     # present AND non-null
+hyalo find --property 'aliases=[]'        # present, and an empty list
 ```
+
+**Null vs empty vs absent (iter-264, DEC-274):** `!K` is *absent*, `K=null` is *present with a
+YAML null* (`~`, `null`, or an empty value), `K=[]` is *present and an empty list*. A list
+containing a null (`aliases: [null]`) matches none of them — the value's own type is what is
+tested, so `K=null` and `--fields properties-typed` (`type: "null"`) always agree.
+
+**Comparisons are typed (DEC-274):** `>`, `>=`, `<`, `<=` compare numerically when both sides
+parse as numbers (`rating>=6` matches `rating: "7"`), by date when both parse as ISO dates, and
+as text only when both are plain strings. A value of any other kind never matches, so
+`last>=2023-09-01` skips `last: "[[2022-04]]"` instead of comparing it as text.
+
+**Rejected input (DEC-276, BUG-23/24):** the regex operator is `~=`, never `=~` — `title=~/pat/`
+is now a hard error naming `~=` (it used to be silently read as equality against the literal
+value `~/pat/`, which matched every YAML null in the vault). An empty pattern (`title~=` or
+`title~=//`) and an empty selection (`--fields ''`, `--fields ,`) are errors too; all of them
+exit 1, like every other bad argument.
 
 `K` may be a **dot-path** into nested frontmatter. A literal dotted key in a flat map is
 tried first; otherwise the path is walked. Maps descend by key, and sequences descend too:
@@ -105,12 +125,19 @@ globbing flag; single-file commands like `read`/`set` have no `--glob` — resol
 `find --glob ... --filenames-only`, then pass the exact path.)
 
 `--sort` controls result ordering. Available: `file` (default), `modified`, `date`, `title`,
-`backlinks_count`, `links_count`, or `property:<KEY>` for any frontmatter property. Add
-`--reverse` to flip the direction.
+`backlinks_count`, `links_count`, `score`, or `property:<KEY>` for any frontmatter property.
+
+**Direction (iter-264, DEC-273):** every key sorts **ascending** and `--reverse` inverts it, so
+`--sort backlinks_count --reverse` is "most linked first" exactly as `--sort modified --reverse`
+is "newest first". `score` is the one exception — it ranks best-match-first (descending
+relevance), and `--reverse score` puts the weakest match first. Files whose sort property is
+missing or null always sort **last**, in both directions. (Before 0.23, `backlinks_count` and
+`links_count` sorted descending, so `--reverse` on those two keys meant the opposite of what it
+means everywhere else — a script relying on the old order needs its `--reverse` flipped.)
 
 ```bash
 hyalo find --sort modified --reverse --limit 10   # recently modified files
-hyalo find --sort property:priority                # sort by custom property
+hyalo find --sort property:priority                # sort by custom property (nulls last)
 hyalo find --sort backlinks_count --reverse        # most-linked files first
 ```
 

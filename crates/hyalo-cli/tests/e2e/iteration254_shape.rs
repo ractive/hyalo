@@ -250,9 +250,11 @@ fn views_run_honours_the_filename_projections() {
         .args(["views", "run", "all", "--filenames-only"])
         .output()
         .unwrap();
+    // iter-264 (BUG-21): exactly one newline per path, no trailing blank line,
+    // so `wc -l` equals `--count`.
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
-        "alpha.md\nbeta.md\n\n"
+        "alpha.md\nbeta.md\n"
     );
 
     let out0 = hyalo_no_hints()

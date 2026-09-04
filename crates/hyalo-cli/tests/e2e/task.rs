@@ -1126,16 +1126,15 @@ fn task_toggle_files_from_list_file() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    // Multi-file with --files-from: results carries a flat `files` array of all
-    // toggled tasks plus the `files_*` counters from the envelope.
-    let results = json["results"]
-        .as_object()
-        .expect("expected results object with files-from counters");
-    let files = results["files"]
+    // Multi-file with --files-from: results carries a flat array of all
+    // toggled tasks; the `files_*` counters live on the envelope.
+    // iter-264: `results` stays a bare array under --files-from; the counters
+    // are top-level envelope keys.
+    let files = json["results"]
         .as_array()
-        .expect("expected results.files array");
+        .expect("expected results array");
     assert!(files.len() >= 2, "expected tasks from both files");
-    assert_eq!(results["files_missing"], 0);
+    assert_eq!(json["files_missing"], 0);
 
     // bulk.md tasks should be toggled.
     let content = fs::read_to_string(tmp.path().join("bulk.md")).unwrap();
@@ -1178,12 +1177,11 @@ fn task_toggle_files_from_stdin() {
     assert!(output.status.success(), "stderr: {stderr}");
 
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("expected JSON output");
-    let results = json["results"]
-        .as_object()
-        .expect("expected results object with files-from counters");
-    let files = results["files"]
+    // iter-264: `results` stays a bare array under --files-from; the counters
+    // are top-level envelope keys.
+    let files = json["results"]
         .as_array()
-        .expect("expected results.files array");
+        .expect("expected results array");
     // Section "Tasks" has Task A and Task B.
     assert_eq!(files.len(), 2, "expected 2 tasks in Tasks section");
 
@@ -1221,12 +1219,11 @@ fn task_set_files_from_list_file() {
     );
     assert!(status.success(), "stderr: {stderr}");
 
-    let results = json["results"]
-        .as_object()
-        .expect("expected results object with files-from counters");
-    let files = results["files"]
+    // iter-264: `results` stays a bare array under --files-from; the counters
+    // are top-level envelope keys.
+    let files = json["results"]
         .as_array()
-        .expect("expected results.files array");
+        .expect("expected results array");
     assert!(files.len() >= 2, "expected tasks from both files");
 
     // All tasks should be marked done.
@@ -1385,16 +1382,14 @@ fn task_toggle_files_from_counters_for_missing_and_outside_vault() {
         ],
     );
     assert!(status.success(), "stderr: {stderr}");
-    let results = json["results"]
-        .as_object()
-        .expect("expected results object with files-from counters");
+    // iter-264: the counters are top-level envelope keys, beside `total`.
     assert!(
-        results["files_missing"].as_u64().unwrap_or(0) >= 1,
-        "expected files_missing >= 1, got: {results:?}"
+        json["files_missing"].as_u64().unwrap_or(0) >= 1,
+        "expected files_missing >= 1, got: {json:?}"
     );
     assert!(
-        results["files_skipped_outside_vault"].as_u64().unwrap_or(0) >= 1,
-        "expected files_skipped_outside_vault >= 1, got: {results:?}"
+        json["files_skipped_outside_vault"].as_u64().unwrap_or(0) >= 1,
+        "expected files_skipped_outside_vault >= 1, got: {json:?}"
     );
 }
 

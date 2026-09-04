@@ -452,7 +452,7 @@ pub(crate) struct FindFilters {
     #[arg(long, short = 'e', value_name = "REGEX", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regexp: Option<String>,
-    /// K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/|K=null; AND; K may be a dot-path
+    /// K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/i|K=null; AND; K may be a dot-path
     ///
     /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
     /// K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
