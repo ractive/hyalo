@@ -83,9 +83,11 @@ pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
         let mut builder = GlobSetBuilder::new();
         let mut kept = Vec::new();
         for pat in patterns {
-            // `literal_separator(false)`: a bare `Templates` or `*.tmpl.md`
-            // should behave the way users expect from Obsidian's excluded
-            // folders, and a trailing `/**` still only matches below the dir.
+            // `literal_separator(true)`: `*` and `?` do not cross a `/`,
+            // matching how `[lint] ignore` and `--glob` already behave, so
+            // `*.md` excludes only top-level files and `Templates/**` is
+            // needed (and sufficient — `**` still crosses separators) to drop
+            // a whole subtree, the way Obsidian's excluded folders work.
             match GlobBuilder::new(pat).literal_separator(true).build() {
                 Ok(g) => {
                     builder.add(g);

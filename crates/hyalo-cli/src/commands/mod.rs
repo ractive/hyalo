@@ -511,12 +511,19 @@ pub fn build_scanned_index(
 
     let build = ScannedIndex::build(&files, site_prefix, options)?;
 
+    // Same distinction `create_index` makes: a warning is the BUG-14
+    // invalid-UTF-8 notice (`Other`) or an unparsable-frontmatter skip
+    // (`Frontmatter`) depending on which one produced it. `options.bm25_tokenize`
+    // is `false` at every current call site of this function, so the UTF-8
+    // message never actually appears here today — but tagging it correctly
+    // costs nothing and keeps this in sync if that changes.
     for w in &build.warnings {
-        hyalo_core::warn::record_skip(
-            w.rel_path.as_str(),
-            w.message.as_str(),
-            hyalo_core::warn::SkipKind::Frontmatter,
-        );
+        let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
+            hyalo_core::warn::SkipKind::Other
+        } else {
+            hyalo_core::warn::SkipKind::Frontmatter
+        };
+        hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
     }
 
     Ok(ScannedIndexOutcome::Index(build))
