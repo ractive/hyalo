@@ -600,6 +600,14 @@ When no `[schema]` block exists, lint exits 0 with zero violations (backwards co
 **Validate on write:** `hyalo set` and `hyalo append` accept `--validate` to reject values
 that would fail lint. Enable globally via `[schema] validate_on_write = true` in `.hyalo.toml`.
 
+**A `--validate` write refuses when the schema itself is broken (DEC-290).** If `[schema]`
+is present but cannot be loaded — an uncompilable regex, a key on the wrong property type —
+the schema falls back to empty, so validating against it would reject nothing. `set` /
+`append` therefore exit 1 and write nothing whenever validation was asked for (`--validate`
+or `validate_on_write`), `--dry-run` included. The same write *without* `--validate` still
+proceeds, and `mv`, `remove`, `task toggle` and every read are unaffected — fix `[schema]`
+(`hyalo lint` reports it as `schema/malformed`) or drop `--validate` for that one write.
+
 **Ignore known-bad files:** add `[lint] ignore = ["legacy/known-bad.md", "vendor/**/*.md"]`
 to `.hyalo.toml` to skip listed files during `hyalo lint` (plain strings match literally;
 glob meta-characters use `--glob` semantics). Read-only commands still count them among the

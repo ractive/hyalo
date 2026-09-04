@@ -601,6 +601,34 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
 /// rejected; a dotted key with no colliding map is unchanged (still a
 /// literal flat key) — nested-path support itself is out of scope.
 #[must_use]
+pub fn reject_dotted_property_collision(
+    name: &str,
+    props: &indexmap::IndexMap<String, serde_json::Value>,
+    rel_path: &str,
+    format: Format,
+) -> Option<CommandOutcome> {
+    let (prefix, _) = name.split_once('.')?;
+    if !matches!(props.get(prefix), Some(serde_json::Value::Object(_))) {
+        return None;
+    }
+    let out = crate::output::format_error(
+        format,
+        &format!(
+            "{rel_path}: invalid property name '{name}': '{prefix}' already exists as a \
+             mapping in this file's frontmatter"
+        ),
+        None,
+        Some(&format!(
+            "hyalo does not support dotted path syntax for nested properties — --property \
+             sets a literal top-level key only, which would sit beside '{prefix}' rather than \
+             nesting into it; edit the file directly to change a value inside '{prefix}', or \
+             choose a key name that does not collide with it"
+        )),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 /// Refuse a write that asked for schema validation while `[schema]` could not
 /// be loaded (DEC-290).
 ///
@@ -634,34 +662,6 @@ pub(crate) fn reject_write_with_unloadable_schema(
             "Fix the [schema] section in .hyalo.toml (`hyalo lint` reports it as \
              schema/malformed), or rerun without --validate to write unvalidated.",
         ),
-        None,
-    );
-    Some(CommandOutcome::UserError(out))
-}
-
-pub fn reject_dotted_property_collision(
-    name: &str,
-    props: &indexmap::IndexMap<String, serde_json::Value>,
-    rel_path: &str,
-    format: Format,
-) -> Option<CommandOutcome> {
-    let (prefix, _) = name.split_once('.')?;
-    if !matches!(props.get(prefix), Some(serde_json::Value::Object(_))) {
-        return None;
-    }
-    let out = crate::output::format_error(
-        format,
-        &format!(
-            "{rel_path}: invalid property name '{name}': '{prefix}' already exists as a \
-             mapping in this file's frontmatter"
-        ),
-        None,
-        Some(&format!(
-            "hyalo does not support dotted path syntax for nested properties — --property \
-             sets a literal top-level key only, which would sit beside '{prefix}' rather than \
-             nesting into it; edit the file directly to change a value inside '{prefix}', or \
-             choose a key name that does not collide with it"
-        )),
         None,
     );
     Some(CommandOutcome::UserError(out))

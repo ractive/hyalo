@@ -926,7 +926,14 @@ fn set_validate_dry_run_refuses_too() {
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["set", "a.md", "-p", "status=draft", "--validate", "--dry-run"])
+        .args([
+            "set",
+            "a.md",
+            "-p",
+            "status=draft",
+            "--validate",
+            "--dry-run",
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code().unwrap(), 1);
@@ -955,7 +962,11 @@ min-length = 3
 "#),
     )
     .unwrap();
-    write_md(tmp.path(), "a.md", "---\ntitle: A\ntype: note\n---\n\nBody.\n");
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: A\ntype: note\n---\n\nBody.\n",
+    );
 
     let output = hyalo_no_hints()
         .current_dir(tmp.path())

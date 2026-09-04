@@ -1214,7 +1214,7 @@ fn parse_schema_from_toml(raw: Option<&toml::Value>) -> (SchemaConfig, Option<St
         }
         Ok(None) => (SchemaConfig::default(), None),
         Err(e) => {
-            crate::warn::warn(e.clone());
+            crate::warn::warn(&e);
             (SchemaConfig::default(), Some(e))
         }
     }
