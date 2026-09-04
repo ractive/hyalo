@@ -301,8 +301,12 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // Mutation results with property + value (SetPropertyResult, AppendPropertyResult,
         // RemovePropertyResult with value) — with or without optional `note` field
         // (iter-216 D-1 added `skipped_count` to all three shapes.)
+        // iter-262 adds `list_collapsed`, present only when a `set` replaced a
+        // list value with a scalar — hence the two extra signatures.
         "dry_run,modified,property,scanned,skipped,skipped_count,total,value"
-        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value" => {
+        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value"
+        | "dry_run,list_collapsed,modified,property,scanned,skipped,skipped_count,total,value"
+        | "dry_run,list_collapsed,modified,note,property,scanned,skipped,skipped_count,total,value" => {
             Some(PROPERTY_VALUE_MUTATION_FILTER)
         }
         // Mutation results with property only (RemovePropertyResult without value)
