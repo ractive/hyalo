@@ -101,19 +101,18 @@ pub struct SkippedAmbiguous {
 /// outcome: the user sees exactly which links they must fix by hand instead of
 /// discovering a dangling reference later.
 ///
-/// **Known coverage gap** (tracked for a follow-up iteration): this only fires
-/// for a file `mv` already visits for another reason — one with at least one
-/// *other*, same-line link to the moved target, found through the normal
-/// backlinks graph (`by_source` in [`plan_mv`] is built from
-/// [`crate::link_graph::LinkGraph::backlinks_ci`], and [`extract_frontmatter_links`](crate::frontmatter_links::extract_frontmatter_links)
-/// never extracts a split link as a graph edge in the first place). A file
-/// whose *only* reference to the moved target is the line-spanning wikilink is
-/// never scanned by `plan_inbound_rewrites` at all, so it gets neither a
-/// rewrite nor this warning — exactly the silent-dangling-reference case FM-2
-/// otherwise closes. Fixing it needs `plan_mv` to scan such files independent
-/// of the backlinks graph (or the graph to surface split occurrences as a
-/// weaker "maybe" edge), which is a distinct, larger change from what this
-/// struct addresses today.
+/// Reported for **every** file in the vault, not only for files the backlinks
+/// graph pointed at (iter-269, SCAN-1). [`extract_frontmatter_links`](crate::frontmatter_links::extract_frontmatter_links)
+/// deliberately does not count a split link as a graph edge, so a file whose
+/// only reference to the moved target is the line-spanning wikilink is absent
+/// from `by_source` in [`plan_mv`] and used to get neither a rewrite nor this
+/// warning — the silent-dangling-reference case FM-2 exists to close.
+/// [`scan_split_frontmatter_links`] sweeps the remaining files, reading no more
+/// than each one's frontmatter block.
+///
+/// Still limited to single-file [`plan_mv`]: [`plan_batch_mv`] has no channel
+/// for these reports at all (it returns bare [`RewritePlan`]s), so batch moves
+/// neither warn about split links nor did before — see DEC-283.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkippedFrontmatterLink {
     /// Vault-relative path of the file holding the link.
@@ -162,7 +161,19 @@ pub fn plan_mv(
     // Step 1: build link graph to discover inbound links.
     // The build also yields a case-insensitive index of all vault paths, which
     // is used later to canonicalize link targets that differ only in casing.
-    let build = LinkGraph::build(dir, site_prefix, None).context("building link graph")?;
+    //
+    // Discovery is done here rather than inside `LinkGraph::build` so the file
+    // list can be reused by the split-frontmatter scan in step 2b without
+    // walking the vault a second time.
+    let vault_files: Vec<(PathBuf, PathBuf)> = crate::discovery::discover_files(dir)?
+        .into_iter()
+        .map(|f| {
+            let rel = f.strip_prefix(dir).unwrap_or(&f).to_path_buf();
+            (f, rel)
+        })
+        .collect();
+    let build = LinkGraph::build_from_files(&vault_files, site_prefix, None)
+        .context("building link graph")?;
     for (path, msg) in &build.warnings {
         // Collected, not streamed (iter-265, DEC-278): `mv` used to print one
         // multi-line YAML excerpt per unparsable template before saying
@@ -196,7 +207,22 @@ pub fn plan_mv(
     // `web/javascript/….md`) are included in the source set.  The
     // `plan_inbound_rewrites` function then re-checks the match using the
     // case index, so only genuinely matching links produce replacements.
-    let backlinks = graph.backlinks_ci(old_rel);
+    let mut backlinks = graph.backlinks_ci(old_rel);
+    // SCAN-1 (iter-269): also probe the *basename stem* when the moved file is
+    // nested. A bare `[[Books]]` pointing at an ambiguous stem cannot be
+    // resolved during the graph build, so it is indexed under the written key
+    // `Books` — a key `backlinks_ci("Categories/Books.md")` never probes. The
+    // result was that NEW-3's ambiguity report only ever fired when one of the
+    // same-stemmed candidates happened to sit at the vault root (whose
+    // `old_stem` *is* the bare stem), so whether `mv` warned depended on which
+    // of two identically-named files was being moved. Every link this extra
+    // key contributes is one the graph could not resolve, so it reaches
+    // `plan_inbound_rewrites` and goes through the same ambiguity probe as
+    // before — a stem that resolves cleanly was already found under `old_rel`.
+    let old_basename_stem = old_stem.rsplit('/').next().unwrap_or(old_stem);
+    if old_basename_stem != old_stem {
+        backlinks.extend(graph.backlinks_ci(old_basename_stem));
+    }
     let old_rel_norm = old_rel.replace('\\', "/");
     let mut by_source: HashMap<PathBuf, Vec<_>> = HashMap::new();
     for entry in backlinks {
@@ -268,6 +294,23 @@ pub fn plan_mv(
             );
         }
     }
+
+    // Step 3b (SCAN-1, iter-269): a frontmatter wikilink whose `[[…]]` spans a
+    // line break is never extracted as a graph edge (FM-1's deliberate scope),
+    // so a file whose *only* reference to the moved target is that link is not
+    // in `by_source` at all and step 3 never opens it. Sweep the rest of the
+    // vault for exactly that shape, reading no more than each file's
+    // frontmatter block.
+    all_skipped_frontmatter.extend(scan_split_frontmatter_links(
+        &vault_files,
+        &by_source,
+        old_rel,
+        old_stem,
+        &case_index,
+    ));
+    // `by_source` is a HashMap, so step 3 visits files in an arbitrary order.
+    // Sort so the reported list is stable across runs.
+    all_skipped_frontmatter.sort_by(|a, b| a.source.cmp(&b.source).then(a.line.cmp(&b.line)));
 
     // Step 4: plan outbound link updates for the moved file itself.
     //
@@ -1447,6 +1490,65 @@ fn split_frontmatter_wikilink(
     matches.then_some(joined)
 }
 
+/// Sweep the vault for frontmatter wikilinks that name the moved file but span
+/// a line break, in files the backlinks graph never pointed at (iter-269,
+/// SCAN-1).
+///
+/// `files` is the `(absolute, vault-relative)` list the graph was built from;
+/// `already_scanned` holds the files [`plan_mv`] step 3 already walked in full
+/// (they report their own split links through [`plan_inbound_rewrites`], so
+/// re-reporting them here would duplicate every entry).
+///
+/// Only the **frontmatter block** of each remaining file is read
+/// ([`read_frontmatter_raw`](crate::frontmatter::read_frontmatter_raw) stops at
+/// the closing `---` and is bounded by the frontmatter size limits), and the
+/// per-line reconstruction only runs on a block that contains a `[[` at all —
+/// on a vault with no wikilinks in frontmatter the sweep costs one small read
+/// per file and nothing else. Files whose frontmatter cannot be read or does
+/// not parse are skipped silently: the graph build already reported those, and
+/// a second warning for the same file would only add noise.
+///
+/// Line numbers are reported against the **file**, not the block: the raw
+/// frontmatter starts on the file's second line, after the opening `---`.
+fn scan_split_frontmatter_links(
+    files: &[(PathBuf, PathBuf)],
+    already_scanned: &HashMap<PathBuf, Vec<&crate::link_graph::BacklinkEntry>>,
+    old_rel: &str,
+    old_stem: &str,
+    case_index: &CaseInsensitiveIndex,
+) -> Vec<SkippedFrontmatterLink> {
+    let old_rel_norm = old_rel.replace('\\', "/");
+    let mut found = Vec::new();
+    for (abs_path, rel_path) in files {
+        if already_scanned.contains_key(rel_path) {
+            continue;
+        }
+        let rel_norm = rel_path.to_string_lossy().replace('\\', "/");
+        if rel_norm == old_rel_norm {
+            continue;
+        }
+        let Ok(Some(raw)) = crate::frontmatter::read_frontmatter_raw(abs_path) else {
+            continue;
+        };
+        if !raw.contains("[[") {
+            continue;
+        }
+        for (idx, (line, rest)) in lines_with_rest(&raw).enumerate() {
+            if let Some(target) =
+                split_frontmatter_wikilink(line, rest, old_rel, old_stem, Some(case_index))
+            {
+                found.push(SkippedFrontmatterLink {
+                    source: rel_norm.clone(),
+                    // +1 for the opening `---`, +1 to make the index 1-based.
+                    line: idx + 2,
+                    target,
+                });
+            }
+        }
+    }
+    found
+}
+
 /// Find and plan wikilink replacements inside a single frontmatter YAML line.
 ///
 /// Matches patterns like `  - "[[path/to/file]]"` or `  - [[path/to/file]]`
@@ -1824,6 +1926,153 @@ mod tests {
             a_plan.is_none(),
             "ambiguous bare wikilink [[b]] should not be rewritten: {plans:?}"
         );
+    }
+
+    /// SCAN-1 (iter-269): the file's *only* reference to the moved target is a
+    /// frontmatter wikilink split across a folded block scalar, so the
+    /// backlinks graph knows nothing about it. `mv` must still report it.
+    #[test]
+    fn plan_mv_reports_a_split_frontmatter_link_in_an_ungraphed_file() {
+        let vault = create_vault(&[
+            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            (
+                "References/Folded.md",
+                "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nBody with no other link.\n",
+            ),
+        ]);
+        let result = plan_mv(
+            vault.path(),
+            "Categories/Books.md",
+            "Categories/Library.md",
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            result.skipped_frontmatter.len(),
+            1,
+            "the split link must be reported: {:?}",
+            result.skipped_frontmatter
+        );
+        let skipped = &result.skipped_frontmatter[0];
+        assert_eq!(skipped.source, "References/Folded.md");
+        assert_eq!(skipped.line, 3, "the `[[` sits on the file's third line");
+        assert!(
+            skipped.target.contains("Categories/"),
+            "target reconstructed across the break: {:?}",
+            skipped.target
+        );
+    }
+
+    /// The same shape must not be reported twice when the file *also* carries
+    /// an ordinary same-line link that the graph already found.
+    #[test]
+    fn plan_mv_reports_a_split_frontmatter_link_exactly_once() {
+        let vault = create_vault(&[
+            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            (
+                "References/Folded.md",
+                "---\nsummary: >\n  points at [[Categories/\n  Books]] somehow\n---\n\nAlso [[Categories/Books]] inline.\n",
+            ),
+        ]);
+        let result = plan_mv(
+            vault.path(),
+            "Categories/Books.md",
+            "Categories/Library.md",
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            result.skipped_frontmatter.len(),
+            1,
+            "one link, one report: {:?}",
+            result.skipped_frontmatter
+        );
+    }
+
+    /// A split link that names some *other* file is not the moved file's
+    /// problem and must stay quiet.
+    #[test]
+    fn plan_mv_ignores_a_split_frontmatter_link_to_another_file() {
+        let vault = create_vault(&[
+            ("Categories/Books.md", "---\ntags: [categories]\n---\n\n# Books\n"),
+            ("Categories/Films.md", "---\ntags: [categories]\n---\n\n# Films\n"),
+            (
+                "References/Folded.md",
+                "---\nsummary: >\n  points at [[Categories/\n  Films]] somehow\n---\n\nBody.\n",
+            ),
+        ]);
+        let result = plan_mv(
+            vault.path(),
+            "Categories/Books.md",
+            "Categories/Library.md",
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(
+            result.skipped_frontmatter.is_empty(),
+            "unrelated split link must not be reported: {:?}",
+            result.skipped_frontmatter
+        );
+    }
+
+    /// NEW-3 (iter-269): two same-stemmed files, *neither* at the vault root.
+    /// The bare `[[b]]` cannot be resolved during the graph build, so it is
+    /// indexed under the written key `b` — which `backlinks_ci("x/b.md")` never
+    /// probed. Whichever of the two moves, the ambiguity must be reported.
+    #[test]
+    fn plan_mv_flags_an_ambiguous_bare_link_when_no_candidate_is_at_the_root() {
+        let vault = create_vault(&[
+            ("a.md", "See [[b]] here\n"),
+            ("one/b.md", "Content one\n"),
+            ("two/b.md", "Content two\n"),
+        ]);
+        for moved in ["one/b.md", "two/b.md"] {
+            let result = plan_mv(vault.path(), moved, "archive/b.md", None, false).unwrap();
+            assert_eq!(
+                result.skipped_ambiguous.len(),
+                1,
+                "moving {moved} must flag the ambiguous [[b]]: {:?}",
+                result.skipped_ambiguous
+            );
+            let skipped = &result.skipped_ambiguous[0];
+            assert_eq!(skipped.source, "a.md");
+            assert_eq!(skipped.target, "b");
+            assert_eq!(skipped.candidates.len(), 2, "{:?}", skipped.candidates);
+            assert!(
+                result.plans.iter().all(|p| p.rel_path != "a.md"),
+                "an ambiguous bare link is still not rewritten: {:?}",
+                result.plans
+            );
+        }
+    }
+
+    /// The widened stem probe must not invent work: an unambiguous bare link is
+    /// resolved by the graph as before, and an unrelated stem stays untouched.
+    #[test]
+    fn plan_mv_stem_probe_does_not_disturb_unambiguous_links() {
+        let vault = create_vault(&[
+            ("a.md", "See [[b]] and [[c]] here\n"),
+            ("one/b.md", "Content b\n"),
+            ("two/c.md", "Content c\n"),
+        ]);
+        let result = plan_mv(vault.path(), "one/b.md", "archive/b.md", None, false).unwrap();
+        assert!(
+            result.skipped_ambiguous.is_empty(),
+            "a unique stem is not ambiguous: {:?}",
+            result.skipped_ambiguous
+        );
+        // `[[b]]` is already short-form and the stem stays unique, so there is
+        // nothing to rewrite — the point is that `[[c]]` was not touched.
+        for plan in &result.plans {
+            assert!(
+                plan.replacements.iter().all(|r| !r.old_text.contains("[[c]]")),
+                "unrelated link rewritten: {:?}",
+                plan.replacements
+            );
+        }
     }
 
     #[test]
