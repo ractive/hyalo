@@ -45,6 +45,7 @@ mod iteration261_link_kinds;
 mod iteration262_frontmatter_links;
 mod iteration263_obsidian_lint_safety;
 mod iteration264_find_consistency;
+mod iteration265_scan_exclude_and_skips;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;
