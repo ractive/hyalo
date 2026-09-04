@@ -52,6 +52,16 @@ pub struct ScanStats {
     pub size: u64,
     /// Number of lines (see the type docs for the exact definition).
     pub lines: usize,
+    /// Whether the bytes the scan actually read were valid UTF-8.
+    ///
+    /// The scanner itself carries on either way — invalid bytes become U+FFFD
+    /// so linting and regex search still work — but BM25 must not (iter-265,
+    /// BUG-14). `find <term>` off disk reads with `read_to_string` and drops an
+    /// invalid-UTF-8 file entirely, so an index that tokenized the lossy text
+    /// counted a document the disk scan never saw, shifting every score in the
+    /// vault. `true` on the frontmatter-only fast path, whose 16 KiB prefix may
+    /// end mid-character and which produces no BM25 tokens anyway.
+    pub valid_utf8: bool,
 }
 
 /// Count lines in a byte slice: one per `\n`, plus a final unterminated line.
@@ -150,6 +160,9 @@ pub fn scan_file_multi_stats(
         return Ok(ScanStats {
             size: file_size,
             lines: 0,
+            // Not read at all, so nothing to judge; `true` keeps an
+            // over-size file out of the invalid-UTF-8 accounting.
+            valid_utf8: true,
         });
     }
 
@@ -158,10 +171,11 @@ pub fn scan_file_multi_stats(
         let data =
             std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
         let lines = count_lines(&data);
-        scan_slice_multi(&data, visitors)?;
+        let valid_utf8 = scan_slice_multi_utf8(&data, visitors)?;
         Ok(ScanStats {
             size: file_size,
             lines,
+            valid_utf8,
         })
     } else {
         // Frontmatter-only: read a limited prefix to avoid loading the full file.
@@ -201,6 +215,9 @@ pub fn scan_file_multi_stats(
         Ok(ScanStats {
             size: file_size,
             lines,
+            // The 16 KiB prefix can end mid-character, so its validity says
+            // nothing about the file; this path produces no BM25 tokens anyway.
+            valid_utf8: true,
         })
     }
 }
@@ -225,9 +242,22 @@ fn deliver_frontmatter_text(yaml: Option<&str>, visitors: &mut [&mut dyn FileVis
 /// (e.g. from `std::fs::read`). Uses `memchr` for SIMD-accelerated line
 /// splitting instead of `BufRead::read_line`.
 pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> Result<()> {
+    scan_slice_multi_utf8(data, visitors).map(|_| ())
+}
+
+/// [`scan_slice_multi`] that also reports whether `data` was valid UTF-8.
+///
+/// The validity is a by-product of the scan (the slice is validated once, up
+/// front, to decide between zero-copy slicing and a lossy conversion), so
+/// reporting it costs nothing — and it is the only signal the index builder has
+/// that a file must be kept out of the BM25 corpus (iter-265, BUG-14).
+pub fn scan_slice_multi_utf8(
+    data: &[u8],
+    visitors: &mut [&mut dyn FileVisitor],
+) -> Result<bool> {
     let num = visitors.len();
     if num == 0 {
-        return Ok(());
+        return Ok(true);
     }
 
     // Validate UTF-8 upfront; if valid we slice zero-copy.
@@ -294,7 +324,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
                 active[i] = false;
             }
         }
-        return Ok(());
+        return Ok(is_valid_utf8);
     }
 
     let mut line_idx: usize = 0; // 0-based index into `line_starts`
@@ -392,7 +422,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
     // If all visitors are done, skip the body.
     if !active.iter().any(|&a| a) {
-        return Ok(());
+        return Ok(is_valid_utf8);
     }
 
     // --- Phase 2: Body ---
@@ -421,7 +451,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
             &mut body,
         );
         if !active.iter().any(|&a| a) {
-            return Ok(());
+            return Ok(is_valid_utf8);
         }
     }
 
@@ -455,7 +485,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
         }
     }
 
-    Ok(())
+    Ok(is_valid_utf8)
 }
 
 /// Scan from any buffered reader with multiple visitors.

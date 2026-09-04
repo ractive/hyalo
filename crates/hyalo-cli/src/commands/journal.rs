@@ -333,7 +333,14 @@ impl<'a> MutationJournal<'a> {
             match result {
                 Ok(()) => self.dirty = true,
                 Err(e) => {
-                    eprintln!("warning: could not refresh index entry for {rel}: {e:#}");
+                    // Collected, not streamed (iter-265, DEC-278) so a vault of
+                    // unparsable templates does not bury the command's output.
+                    let kind = if hyalo_core::frontmatter::is_parse_error(&e) {
+                        hyalo_core::warn::SkipKind::Frontmatter
+                    } else {
+                        hyalo_core::warn::SkipKind::Other
+                    };
+                    hyalo_core::warn::record_skip(rel.as_str(), format!("{e:#}"), kind);
                 }
             }
         }

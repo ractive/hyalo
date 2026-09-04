@@ -84,9 +84,16 @@ pub fn create_index(
         },
     )?;
 
-    // Warn about skipped files
+    // Collect, rather than stream, the per-file diagnostics (iter-265,
+    // DEC-278): `results.warnings` already carries the count, and the
+    // end-of-run summary line names where to see the details.
     for w in &build.warnings {
-        crate::warn::warn(format!("skipped {}: {}", w.rel_path, w.message));
+        let kind = if w.message == hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE {
+            hyalo_core::warn::SkipKind::Other
+        } else {
+            hyalo_core::warn::SkipKind::Frontmatter
+        };
+        hyalo_core::warn::record_skip(w.rel_path.as_str(), w.message.as_str(), kind);
     }
 
     // Serialize vault_dir as a canonical string (fall back to raw display)

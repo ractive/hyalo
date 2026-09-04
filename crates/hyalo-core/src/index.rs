@@ -173,6 +173,15 @@ pub struct ScannedIndexBuild {
     pub warnings: Vec<IndexWarning>,
 }
 
+/// Why an invalid-UTF-8 file is reported by `create-index` (iter-265, BUG-14).
+///
+/// It is still indexed as a note — its frontmatter, tags, links and headings
+/// are all readable — but it is excluded from the BM25 corpus so `--index`
+/// scores match the disk scan's, which drops the file outright.
+pub const INVALID_UTF8_INDEX_MESSAGE: &str =
+    "invalid UTF-8 — indexed as a note but excluded from full-text search, \
+     matching the disk scan (`find -e` still matches it lossily)";
+
 impl ScannedIndex {
     /// Build an index by scanning a list of files from disk.
     ///
@@ -216,6 +225,17 @@ impl ScannedIndex {
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok((entry, file_links)) => {
+                    // A BM25 build that produced no tokens for a file means the
+                    // file was not valid UTF-8 (iter-265, BUG-14) — it stays in
+                    // the index as a note but out of the search corpus, exactly
+                    // as the disk scan has it. Report it so `create-index`
+                    // `warnings` accounts for the difference.
+                    if options.bm25_tokenize && entry.bm25_tokens.is_none() {
+                        warnings.push(IndexWarning {
+                            rel_path: entry.rel_path.clone(),
+                            message: INVALID_UTF8_INDEX_MESSAGE.to_owned(),
+                        });
+                    }
                     entries.push(entry);
                     if let Some(fl) = file_links {
                         file_links_vec.push(fl);
@@ -2098,7 +2118,15 @@ pub(crate) fn scan_one_file(
     // Populate BM25 pre-tokenized data during index creation.
     // The body text was accumulated by `BodyCollector` during the scan pass above —
     // no second file read is needed.
-    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize {
+    // BUG-14 (iter-265): a file whose bytes are not valid UTF-8 is dropped
+    // entirely by the disk full-text path (`find <term>` reads it with
+    // `read_to_string`), so an index that tokenized its lossy U+FFFD form
+    // counted an extra document and a wrong average length — every BM25 score
+    // in the vault came out different under `--index` than off disk. Keep it
+    // out of the corpus here and let `ScannedIndex::build` report it.
+    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize
+        && stats.valid_utf8
+    {
         let body = body_collector.into_body();
 
         // Resolve title: frontmatter property > first H1 heading.
