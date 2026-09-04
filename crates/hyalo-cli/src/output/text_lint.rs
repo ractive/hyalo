@@ -401,8 +401,7 @@ pub(super) fn format_lint_fix_output_text(
             // second was the whole reason `conflicts N` could go unexplained
             // (UX-16). A fixed group that lists no violations carries no
             // lines to compare, so it still suppresses its rule wholesale.
-            let mut fixed_rules: std::collections::HashSet<&str> =
-                std::collections::HashSet::new();
+            let mut fixed_rules: std::collections::HashSet<&str> = std::collections::HashSet::new();
             let mut fixed_at: std::collections::HashSet<(&str, u64)> =
                 std::collections::HashSet::new();
             if let Some(groups) = file_entry.get("fixed_groups").and_then(|g| g.as_array()) {
@@ -415,9 +414,7 @@ pub(super) fn format_lint_fix_output_text(
                         .and_then(|v| v.as_array())
                         .map(|vs| {
                             vs.iter()
-                                .filter_map(|v| {
-                                    v.get("line").and_then(serde_json::Value::as_u64)
-                                })
+                                .filter_map(|v| v.get("line").and_then(serde_json::Value::as_u64))
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -464,7 +461,9 @@ pub(super) fn format_lint_fix_output_text(
                 let total = file_entry
                     .get("conflicts_total")
                     .and_then(serde_json::Value::as_u64)
-                    .map_or(conflicts.len(), |t| usize::try_from(t).unwrap_or(usize::MAX));
+                    .map_or(conflicts.len(), |t| {
+                        usize::try_from(t).unwrap_or(usize::MAX)
+                    });
                 if shown > 0 && total > conflicts.len() {
                     let _ = writeln!(
                         s,

@@ -206,7 +206,7 @@ pub fn lint_files_extended(
             // violations of the same rule can lose to two different blocking
             // rules on two different lines, and collapsing them to one entry
             // was exactly why `conflicts N` could not be explained.
-            let mut conflict_by_rule: indexmap::IndexMap<(String, usize), String> =
+            let mut conflict_by_violation: indexmap::IndexMap<(String, usize), String> =
                 indexmap::IndexMap::new();
 
             for (rule_id, line, outcome) in &r.body_fix_outcomes {
@@ -215,7 +215,7 @@ pub fn lint_files_extended(
                         applied_by_rule.entry(rule_id.clone()).or_default();
                     }
                     FixOutcome::Conflict { blocking_rule } => {
-                        conflict_by_rule
+                        conflict_by_violation
                             .entry((rule_id.clone(), *line))
                             .or_insert_with(|| blocking_rule.clone());
                     }
@@ -392,7 +392,7 @@ pub fn lint_files_extended(
 
             // conflicts: one entry per (rule, line) whose fix was skipped.
             let mut conflicts: Vec<ConflictEntry> = Vec::new();
-            for ((rule_id, line), blocking_rule) in &conflict_by_rule {
+            for ((rule_id, line), blocking_rule) in &conflict_by_violation {
                 conflicts.push(ConflictEntry {
                     rule: rule_id.clone(),
                     line: *line,
@@ -602,8 +602,10 @@ pub(super) struct PerFileLintResult {
     pub(super) body_modified: bool,
     /// Frontmatter fix actions applied or previewed.
     pub(super) fix_actions: Vec<FixAction>,
-    /// Fix outcomes keyed by (rule_id, index_within_rule).
-    /// Only populated in fix-mode.
+    /// One `(rule_id, line, outcome)` per fixable diagnostic the fix loop
+    /// considered, in pass order. The line is the diagnostic's own 1-based
+    /// line, carried so a conflict can be explained as `<rule> line <n>`
+    /// (iteration 263). Only populated in fix-mode.
     pub(super) body_fix_outcomes: Vec<(String, usize, FixOutcome)>,
     /// SCHEMA (frontmatter) violations remaining *after* applying fixes,
     /// computed by re-running `validate_properties` against the mutated

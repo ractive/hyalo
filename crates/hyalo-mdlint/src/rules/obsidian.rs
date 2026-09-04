@@ -167,7 +167,11 @@ fn link_markup_spans(line: &str) -> Vec<(usize, usize)> {
                 if let Some(&close) = close_of.get(&i) {
                     // `![alt](src)` — start the span at the `!` so the whole
                     // image is one region.
-                    let start = if i > 0 && bytes[i - 1] == b'!' { i - 1 } else { i };
+                    let start = if i > 0 && bytes[i - 1] == b'!' {
+                        i - 1
+                    } else {
+                        i
+                    };
                     let mut end = close + 1;
                     match bytes.get(end) {
                         // Inline destination `(...)`, nesting-aware so a

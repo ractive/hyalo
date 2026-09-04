@@ -794,9 +794,7 @@ impl HyaloLintEngine {
                         && v.line
                             .checked_sub(1)
                             .and_then(|i| doc.lines.get(i))
-                            .is_some_and(|line| {
-                                crate::rules::obsidian::is_obsidian_tag_line(line)
-                            })
+                            .is_some_and(|line| crate::rules::obsidian::is_obsidian_tag_line(line))
                     {
                         continue;
                     }
@@ -1862,7 +1860,10 @@ mod tests {
         let diagnostics = engine
             .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
             .unwrap();
-        let hits: Vec<_> = diagnostics.iter().filter(|d| d.rule_id == "MD034").collect();
+        let hits: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.rule_id == "MD034")
+            .collect();
         assert_eq!(hits.len(), 1, "only the prose URL is bare: {diagnostics:?}");
         let fix = hits[0].fix.as_ref().expect("the bare URL keeps its fix");
         assert_eq!(
