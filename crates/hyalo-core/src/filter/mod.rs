@@ -510,43 +510,48 @@ mod tests {
         }
     }
 
-    // --- =~ alias (Perl/Ruby-style) ---
+    // --- =~ is rejected (iter-264, DEC-276) ---
 
     #[test]
-    fn parse_regex_eq_tilde_bare() {
-        // `=~` bare pattern should behave identically to `~=`
-        let f = parse_property_filter("status=~compl").unwrap();
-        match &f {
-            PropertyFilter::RegexMatch { key, pattern } => {
-                assert_eq!(key, "status");
-                assert!(pattern.is_match("completed"));
-                assert!(!pattern.is_match("planned"));
-            }
-            other => panic!("expected RegexMatch, got {other:?}"),
-        }
+    fn parse_regex_eq_tilde_bare_is_rejected() {
+        let err = parse_property_filter("status=~compl")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("=~"), "{err}");
+        assert!(
+            err.contains("~="),
+            "message must name the right operator: {err}"
+        );
     }
 
     #[test]
-    fn parse_regex_eq_tilde_delimited() {
-        let f = parse_property_filter(r"status=~/^draft$/").unwrap();
-        match &f {
-            PropertyFilter::RegexMatch { key, pattern } => {
-                assert_eq!(key, "status");
-                assert!(pattern.is_match("draft"));
-                assert!(!pattern.is_match("drafts"));
-            }
-            other => panic!("expected RegexMatch, got {other:?}"),
-        }
+    fn parse_regex_eq_tilde_delimited_is_rejected() {
+        let err = parse_property_filter(r"title=~/iter/")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown operator"), "{err}");
+        assert!(
+            err.contains("title~=/iter/"),
+            "message must show the fix: {err}"
+        );
     }
 
     #[test]
-    fn parse_regex_eq_tilde_case_insensitive_flag() {
-        let f = parse_property_filter("title=~/foo/i").unwrap();
+    fn parse_eq_tilde_empty_value_is_rejected() {
+        // `aliases=~` used to parse as Eq against the literal "~" and match
+        // every YAML null in the vault.
+        let err = parse_property_filter("aliases=~").unwrap_err().to_string();
+        assert!(err.contains("=~"), "{err}");
+    }
+
+    #[test]
+    fn parse_tilde_eq_wins_over_a_later_eq_tilde_in_the_pattern() {
+        // `~=` comes first, so the `=~` inside the pattern is pattern text.
+        let f = parse_property_filter("status~=a=~b").unwrap();
         match &f {
             PropertyFilter::RegexMatch { key, pattern } => {
-                assert_eq!(key, "title");
-                assert!(pattern.is_match("FOO bar"));
-                assert!(!pattern.is_match("bar baz"));
+                assert_eq!(key, "status");
+                assert!(pattern.is_match("xa=~by"));
             }
             other => panic!("expected RegexMatch, got {other:?}"),
         }
@@ -573,6 +578,171 @@ mod tests {
     fn parse_lte_value_starting_with_tilde() {
         let f = parse_property_filter("count<=~3").unwrap();
         assert_scalar(&f, "count", FilterOp::Lte, Some("~3"));
+    }
+
+    // --- empty regex is rejected (iter-264, BUG-23) ---
+
+    #[test]
+    fn parse_regex_empty_delimited_pattern_errors() {
+        let err = parse_property_filter("title~=//").unwrap_err().to_string();
+        assert!(err.contains("empty regex"), "{err}");
+    }
+
+    #[test]
+    fn parse_regex_empty_delimited_pattern_with_flag_errors() {
+        let err = parse_property_filter("title~=//i").unwrap_err().to_string();
+        assert!(err.contains("empty regex"), "{err}");
+    }
+
+    #[test]
+    fn parse_regex_empty_bare_pattern_errors() {
+        let err = parse_property_filter("aliases~=").unwrap_err().to_string();
+        assert!(err.contains("empty regex"), "{err}");
+    }
+
+    #[test]
+    fn parse_regex_single_char_pattern_is_fine() {
+        assert!(parse_property_filter("title~=/a/").is_ok());
+        assert!(parse_property_filter("title~=a").is_ok());
+    }
+
+    // --- null and empty-list value syntax (iter-264, DEC-274) ---
+
+    #[test]
+    fn parse_null_value_syntax() {
+        assert_scalar(
+            &parse_property_filter("aliases=null").unwrap(),
+            "aliases",
+            FilterOp::IsNull,
+            None,
+        );
+        assert_scalar(
+            &parse_property_filter("aliases!=null").unwrap(),
+            "aliases",
+            FilterOp::NotNull,
+            None,
+        );
+        // The YAML tilde spelling maps to the same operator.
+        assert_scalar(
+            &parse_property_filter("aliases!=~").unwrap(),
+            "aliases",
+            FilterOp::NotNull,
+            None,
+        );
+    }
+
+    #[test]
+    fn parse_empty_list_value_syntax() {
+        assert_scalar(
+            &parse_property_filter("tags=[]").unwrap(),
+            "tags",
+            FilterOp::IsEmptyList,
+            None,
+        );
+        assert_scalar(
+            &parse_property_filter("tags!=[]").unwrap(),
+            "tags",
+            FilterOp::NotEmptyList,
+            None,
+        );
+    }
+
+    #[test]
+    fn null_matches_only_a_real_null() {
+        let f = parse_property_filter("aliases=null").unwrap();
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        props.insert("aliases".into(), Value::Null);
+        assert!(f.matches(&props), "explicit null must match");
+
+        // A list containing a null is not itself null.
+        props.insert("aliases".into(), json!([null]));
+        assert!(!f.matches(&props), "[null] must not match =null");
+
+        // A file without the key at all does not match either.
+        let empty: IndexMap<String, Value> = IndexMap::new();
+        assert!(!f.matches(&empty), "missing key must not match =null");
+
+        // The literal string "null" is a string, not a null.
+        props.insert("aliases".into(), json!("null"));
+        assert!(!f.matches(&props));
+    }
+
+    #[test]
+    fn not_null_matches_present_and_non_null() {
+        let f = parse_property_filter("aliases!=null").unwrap();
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        props.insert("aliases".into(), Value::Null);
+        assert!(!f.matches(&props));
+        props.insert("aliases".into(), json!(["a"]));
+        assert!(f.matches(&props));
+        assert!(!f.matches(&IndexMap::new()), "missing key is not non-null");
+    }
+
+    #[test]
+    fn empty_list_matches_only_an_empty_sequence() {
+        let f = parse_property_filter("aliases=[]").unwrap();
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        props.insert("aliases".into(), json!([]));
+        assert!(f.matches(&props));
+        // An empty scalar is a null, not an empty list.
+        props.insert("aliases".into(), Value::Null);
+        assert!(!f.matches(&props));
+        props.insert("aliases".into(), json!(["a"]));
+        assert!(!f.matches(&props));
+
+        let neg = parse_property_filter("aliases!=[]").unwrap();
+        props.insert("aliases".into(), json!(["a"]));
+        assert!(neg.matches(&props));
+        props.insert("aliases".into(), json!([]));
+        assert!(!neg.matches(&props));
+    }
+
+    // --- typed ordering comparisons (iter-264, DEC-274) ---
+
+    fn cmp_matches(filter: &str, value: Value) -> bool {
+        let f = parse_property_filter(filter).unwrap();
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        let key = filter
+            .split(['=', '>', '<', '!'])
+            .next()
+            .expect("key")
+            .to_owned();
+        props.insert(key, value);
+        f.matches(&props)
+    }
+
+    #[test]
+    fn date_comparison_ignores_non_date_strings() {
+        assert!(cmp_matches("last>=2023-09-01", json!("2023-09-02")));
+        assert!(!cmp_matches("last>=2023-09-01", json!("2022-04-01")));
+        // A wikilink string is not a date and must not compare as text.
+        assert!(!cmp_matches("last>=2023-09-01", json!("[[2022-04]]")));
+        assert!(!cmp_matches("last>=2023-09-01", json!("[[2024-04]]")));
+    }
+
+    #[test]
+    fn numeric_comparison_parses_quoted_numbers() {
+        assert!(cmp_matches("rating>=6", json!("7")));
+        assert!(cmp_matches("rating>=6", json!(7)));
+        assert!(!cmp_matches("rating>=6", json!("5")));
+        // 10 vs 9 must be numeric, not lexicographic.
+        assert!(cmp_matches("rating>9", json!("10")));
+    }
+
+    #[test]
+    fn comparison_never_matches_a_non_orderable_value() {
+        assert!(!cmp_matches("rating>=6", json!(null)));
+        assert!(!cmp_matches("rating>=6", json!(true)));
+        assert!(!cmp_matches("rating>=6", json!([7])));
+        assert!(!cmp_matches("rating>=6", json!({"a": 7})));
+    }
+
+    #[test]
+    fn text_comparison_still_orders_plain_strings() {
+        assert!(cmp_matches("status>alpha", json!("beta")));
+        assert!(!cmp_matches("status>beta", json!("alpha")));
+        // Text on one side and a number on the other never matches.
+        assert!(!cmp_matches("status>3", json!("beta")));
     }
 
     #[test]

@@ -376,6 +376,15 @@ COOKBOOK:
   # Find files where title contains 'draft' (property value regex)
   hyalo find --property 'title~=draft'
 
+  # Find files where a property is present but null (empty value, ~, or null)
+  hyalo find --property 'aliases=null'
+
+  # Find files whose list property is present but empty
+  hyalo find --property 'tags=[]'
+
+  # Most linked-to files first (every sort key ascends; --reverse inverts it)
+  hyalo find --sort backlinks_count --reverse --limit 10
+
   # Case-insensitive regex on a property value
   hyalo find --property 'title~=/^Draft/i'
 

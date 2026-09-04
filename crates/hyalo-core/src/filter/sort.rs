@@ -53,7 +53,7 @@ pub fn parse_sort(input: &str) -> Result<SortField> {
 // format is recognised -- locale-dependent formats like `MM/DD/YYYY` are
 // intentionally ignored. This does not validate actual calendar dates (e.g.
 // it may accept `2023-02-31`).
-fn try_as_iso_date(s: &str) -> Option<&str> {
+pub(super) fn try_as_iso_date(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     if bytes.len() < 10 {
         return None;

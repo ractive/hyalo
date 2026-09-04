@@ -1928,28 +1928,38 @@ fn find_property_regex_invalid_pattern_returns_user_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Regex filter: =~ alias (Perl/Ruby-style)
+// Regex filter: =~ is rejected (iter-264, DEC-276)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn find_property_eq_tilde_bare_substring() {
+fn find_property_eq_tilde_bare_is_rejected() {
     let tmp = setup_vault();
-    // =~ bare pattern: status=~compl should behave identically to status~=compl
-    let (status, json, stderr) = find_typed(&tmp, &["--property", "status=~compl"]);
-    assert!(status.success(), "stderr: {stderr}");
-
-    let arr = &json.results;
-    assert_eq!(arr.len(), 1, "expected 1 file: {arr:?}");
-    assert_eq!(arr[0].file, "beta.md");
+    // `status=~compl` used to be read as a regex; it is now a hard error that
+    // names the operator that works.
+    let (status, _json, stderr) = find_typed(&tmp, &["--property", "status=~compl"]);
+    assert!(!status.success(), "expected a rejection");
+    assert!(
+        stderr.contains("=~") && stderr.contains("~="),
+        "expected an unknown-operator error naming ~=, got: {stderr}"
+    );
 }
 
 #[test]
-fn find_property_eq_tilde_delimited_case_insensitive() {
+fn find_property_eq_tilde_delimited_is_rejected() {
     let tmp = setup_vault();
-    // =~ delimited with /i flag: title=~/ALPHA/i should match alpha.md
-    let (status, json, stderr) = find_typed(&tmp, &["--property", "title=~/ALPHA/i"]);
-    assert!(status.success(), "stderr: {stderr}");
+    let (status, _json, stderr) = find_typed(&tmp, &["--property", "title=~/ALPHA/i"]);
+    assert!(!status.success(), "expected a rejection");
+    assert!(
+        stderr.contains("title~=/ALPHA/i"),
+        "the error must show the ~= spelling, got: {stderr}"
+    );
+}
 
+#[test]
+fn find_property_tilde_eq_still_works_where_eq_tilde_used_to() {
+    let tmp = setup_vault();
+    let (status, json, stderr) = find_typed(&tmp, &["--property", "title~=/ALPHA/i"]);
+    assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     assert_eq!(arr.len(), 1, "expected alpha.md: {arr:?}");
     assert_eq!(arr[0].file, "alpha.md");
@@ -2615,9 +2625,10 @@ fn find_sort_backlinks_count() {
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
     assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
-    assert_eq!(files[0], "c.md", "c.md should be first (2 backlinks)");
+    // iter-264 (DEC-273): every sort key ascends; --reverse means most-linked first.
+    assert_eq!(files[0], "a.md", "a.md should be first (0 backlinks)");
     assert_eq!(files[1], "b.md", "b.md should be second (1 backlink)");
-    assert_eq!(files[2], "a.md", "a.md should be last (0 backlinks)");
+    assert_eq!(files[2], "c.md", "c.md should be last (2 backlinks)");
 }
 
 #[test]
@@ -2629,9 +2640,10 @@ fn find_sort_links_count() {
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
     assert_eq!(files.len(), 3, "expected 3 files, got: {files:?}");
-    assert_eq!(files[0], "a.md", "a.md should be first (2 links)");
+    // iter-264 (DEC-273): ascending by default, --reverse for most links first.
+    assert_eq!(files[0], "c.md", "c.md should be first (0 links)");
     assert_eq!(files[1], "b.md", "b.md should be second (1 link)");
-    assert_eq!(files[2], "c.md", "c.md should be last (0 links)");
+    assert_eq!(files[2], "a.md", "a.md should be last (2 links)");
 }
 
 #[test]
@@ -2640,11 +2652,11 @@ fn find_sort_backlinks_count_auto_includes_backlinks() {
     // returns the counted field: ranking by a number the caller cannot see was
     // a dead end, so the sort auto-includes it the way --orphan does.
     let tmp = setup_link_vault();
-    let (status, json, stderr) = find_typed(&tmp, &["--sort", "backlinks_count"]);
+    let (status, json, stderr) = find_typed(&tmp, &["--sort", "backlinks_count", "--reverse"]);
     assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
-    assert_eq!(files[0], "c.md", "c.md should be first (most backlinks)");
+    assert_eq!(files[0], "c.md", "--reverse means most backlinks first");
     assert!(
         arr[0].backlinks.is_some(),
         "the counted field must be included by the sort that ranks on it"
@@ -2657,12 +2669,20 @@ fn find_sort_links_count_auto_includes_links() {
     // counted field comes back regardless — an auto-include, like
     // --broken-links → links, which has always overridden --fields.
     let tmp = setup_link_vault();
-    let (status, json, stderr) =
-        find_typed(&tmp, &["--sort", "links_count", "--fields", "properties"]);
+    let (status, json, stderr) = find_typed(
+        &tmp,
+        &[
+            "--sort",
+            "links_count",
+            "--reverse",
+            "--fields",
+            "properties",
+        ],
+    );
     assert!(status.success(), "stderr: {stderr}");
     let arr = &json.results;
     let files: Vec<&str> = arr.iter().map(|v| v.file.as_str()).collect();
-    assert_eq!(files[0], "a.md", "a.md should be first (most links)");
+    assert_eq!(files[0], "a.md", "--reverse means most links first");
     assert!(
         arr[0].links.is_some(),
         "the counted field must be included by the sort that ranks on it"

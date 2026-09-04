@@ -177,6 +177,9 @@ and this project adheres to
 - Link resolution folds ASCII case on every platform, not only on a case-insensitive filesystem (DEC-267). `links fix --case-insensitive` no longer changes what resolves; it only suppresses the cosmetic case-mismatch rewrite plans.
 - lint: MD001 (heading-increment) is reported but no longer autofixable — renumbering a deliberate `######` caption rewrites authored structure (DEC-272). `lint-rules list` shows `autofixable: false`
 - lint --fix: each deferred fix now prints `conflict <RULE> line <N>: range overlap with <RULE>` in text output (first 20 per file, `--detailed` for all) instead of a bare `conflicts N`; JSON `conflicts[]` entries gain `line` and each file gains `conflicts_total`
+- find: every --sort key now orders ascending and --reverse inverts it; 'backlinks_count' and 'links_count' no longer sort descending, so '--sort backlinks_count --reverse' is 'most linked first' (BEHAVIOUR CHANGE, DEC-273). 'score' still ranks best-match-first. Files whose sort property is missing or null always sort last, in both directions.
+- find --property ordering comparisons (>, >=, <, <=) are typed: numeric when both sides parse as numbers, by date when both are ISO dates, textual only between plain strings; a value of any other kind never matches, so 'last>=2023-09-01' no longer matches the string '[[2022-04]]' (DEC-274).
+- find --files-from returns the same 'results' array as --file: the files_missing, files_skipped_non_md and files_skipped_outside_vault counters moved from inside 'results' to top-level envelope keys, present on every find (zero when --files-from was unused), and results is no longer promoted to {files: [...]} (SHAPE CHANGE; same for lint, task and read --files-from).
 
 ### Removed
 
@@ -189,6 +192,7 @@ and this project adheres to
   mixed-endings MD047 tests written against the override keep their expected
   outputs against 0.16.1 (re-pointed at the engine, one extra convergence
   assertion) and stay as the regression check.
+- The undocumented '=~' property-filter operator: 'K=~/pat/' is now a hard error naming '~=' (BREAKING; it was only ever accepted because '=' split first and '~/pat/' became a literal value, which matched YAML nulls). Empty property regexes ('K~=', 'K~=//') and empty --fields selections ('--fields ""', '--fields ,') are rejected too (DEC-276).
 
 ### Fixed
 
@@ -314,6 +318,7 @@ and this project adheres to
 - `hyalo mv` now rewrites frontmatter wikilinks that name the moved file by bare stem (`categories: ["[[Books]]"]` → `Categories/Books.md`), instead of reporting `links updated: 0` and leaving the reference dangling. Quoting style and every other byte of the block are preserved; a `[[…]]` spanning a line break is left alone, warned about on stderr and listed under `frontmatter_links_skipped`.
 - A frontmatter list of wikilinks renders as `["[[Futurism]]", "[[Nonfiction]]"]` in text output instead of the unreadable `[[[Futurism]], [[Nonfiction]]]`; plain lists keep their compact unquoted form.
 - lint: MD018 no longer rewrites an Obsidian tag line (`#todo`) into a heading; MD034 no longer wraps a URL that is already a link destination; MD042 accepts an image as link text (`[![](img.png)](https://…)`) (DEC-271)
+- find --filenames-only no longer emits a trailing blank line, so 'find --filenames-only | wc -l' equals 'find --count' (also fixes 'views run --filenames-only').
 
 ### Added
 
@@ -330,6 +335,8 @@ and this project adheres to
 - `[links] frontmatter = false` in `.hyalo.toml` narrows frontmatter link scanning back to `related`/`depends-on`/`supersedes`/`superseded-by`; `hyalo config` reports the effective value under `links.frontmatter` / `links.frontmatter_properties`.
 - `hyalo mv` text output prints `files updated: N, links updated: M` under the `Moved …` line in both single-file and batch mode, dry runs included, so a rewrite that matched nothing is visible.
 - `hyalo set K=<scalar>` on a property that holds a YAML list reports the type change — a stderr note pointing at `hyalo append`, and the affected files under `list_collapsed` in JSON (DEC-270).
+- find --property value syntax: 'K=null' / 'K!=null' match a property present with (or without) a YAML null, and 'K=[]' / 'K!=[]' an empty list (DEC-274). A list containing a null does not match 'K=null'.
+- find --fields accepts 'properties_typed' as well as 'properties-typed'; the JSON key stays the snake_case 'properties_typed' (DEC-275).
 
 ## [0.21.0] - 2026-08-28
 

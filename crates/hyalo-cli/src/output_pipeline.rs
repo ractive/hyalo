@@ -40,17 +40,20 @@ pub(crate) struct OutputPipeline<'a> {
 }
 
 /// Inject `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`
-/// counters into the envelope's `results` object when `--files-from` was used.
+/// counters as **top-level** envelope keys when `--files-from` was used.
 ///
-/// When `counters` is `None` (no `--files-from` on this invocation), the envelope is
-/// left untouched and the fields are omitted entirely. When `counters` is `Some`, all
-/// three fields are written — including zero values — so consumers can reliably
-/// distinguish "used `--files-from`, zero skips" from "`--files-from` was not used".
+/// When `counters` is `None` (no `--files-from` on this invocation, and not a
+/// command that always reports them), the envelope is left untouched and the
+/// fields are omitted entirely. When `counters` is `Some`, all three fields are
+/// written — including zero values — so consumers can reliably distinguish
+/// "used `--files-from`, zero skips" from "`--files-from` was not used".
 ///
-/// For commands where `results` is an object (e.g. lint), counters are inserted
-/// directly into that object.  For commands where `results` is an array (e.g. find),
-/// the array is promoted to `{"files": [...], "files_missing": N, ...}` so that
-/// `jq '.results | keys'` returns the counter names alongside `"files"`.
+/// iter-264 (BUG-22): the counters used to live *inside* `results`, which meant
+/// `find --files-from -` promoted its result array to
+/// `{"files": [...], "files_missing": N, …}` while `find --file` returned the
+/// bare array — the same query answered in two shapes, so `.results[0]` worked
+/// for one and not the other. They are siblings of `results` now, next to
+/// `total` and `hints`, and `results` keeps whatever shape the command gives it.
 fn inject_files_from_counters(
     envelope: &mut serde_json::Value,
     counters: Option<&FilesFromCounters>,
@@ -59,34 +62,18 @@ fn inject_files_from_counters(
     let Some(envelope_obj) = envelope.as_object_mut() else {
         return;
     };
-    let Some(results) = envelope_obj.get_mut("results") else {
-        return;
-    };
-    if let Some(obj) = results.as_object_mut() {
-        // results is already an object (e.g. lint) — insert directly.
-        obj.insert(
-            "files_missing".to_owned(),
-            serde_json::json!(c.files_missing),
-        );
-        obj.insert(
-            "files_skipped_non_md".to_owned(),
-            serde_json::json!(c.files_skipped_non_md),
-        );
-        obj.insert(
-            "files_skipped_outside_vault".to_owned(),
-            serde_json::json!(c.files_skipped_outside_vault),
-        );
-    } else if results.is_array() {
-        // results is a bare array (e.g. find) — promote to an object so counter
-        // fields are addressable via `.results | keys`.
-        let arr = results.take();
-        *results = serde_json::json!({
-            "files": arr,
-            "files_missing": c.files_missing,
-            "files_skipped_non_md": c.files_skipped_non_md,
-            "files_skipped_outside_vault": c.files_skipped_outside_vault,
-        });
-    }
+    envelope_obj.insert(
+        "files_missing".to_owned(),
+        serde_json::json!(c.files_missing),
+    );
+    envelope_obj.insert(
+        "files_skipped_non_md".to_owned(),
+        serde_json::json!(c.files_skipped_non_md),
+    );
+    envelope_obj.insert(
+        "files_skipped_outside_vault".to_owned(),
+        serde_json::json!(c.files_skipped_outside_vault),
+    );
 }
 
 impl OutputPipeline<'_> {

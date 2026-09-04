@@ -1195,8 +1195,13 @@ pub fn find(
     }
 
     // --- Sort ---
+    // `--reverse` is applied inside the comparator (iter-264, DEC-273) rather
+    // than by reversing the sorted vector afterwards: reversing the vector also
+    // flipped the `file` tiebreak and floated missing/null property values to
+    // the front, which `--sort property:K --reverse` should never do.
+    // `presorted` is false whenever `reverse` is set, so this always runs then.
     if !presorted {
-        apply_sort(&mut results, effective_sort_ref, link_graph_ref);
+        apply_sort(&mut results, effective_sort_ref, link_graph_ref, reverse);
     }
 
     if let Some(SortField::Property(key)) = effective_sort_ref
@@ -1291,11 +1296,6 @@ pub fn find(
         }
     }
 
-    // --- Reverse ---
-    if reverse {
-        results.reverse();
-    }
-
     // --- Limit ---
     // When presorted, total_matching already holds the accurate count and
     // results are already capped — skip truncation.
@@ -1377,8 +1377,9 @@ pub fn find(
 /// internal format is always JSON). Each element's `file` field is the
 /// vault-relative path we want. Zero results → empty output (no trailing
 /// newline), so `find --filenames-only` in a pipe yields nothing rather than
-/// a blank line. A non-empty result set ends with a newline so the last path
-/// is complete in `while read` / `xargs` loops.
+/// a blank line. A non-empty result set ends with exactly one newline — the one
+/// the `RawOutput` printer adds — so the last path is complete for
+/// `while read` / `xargs` loops and `wc -l` equals `--count` (iter-264).
 ///
 /// Errors pass through unchanged — a `UserError` (bad filter, missing
 /// file, boundary refusal) is never remangled into a filename list.
@@ -1440,12 +1441,11 @@ fn project_filenames_delimited(outcome: CommandOutcome, delim: u8) -> CommandOut
         }
         return CommandOutcome::RawBytes(out);
     }
-    let mut out = String::new();
-    for p in paths {
-        out.push_str(p);
-        out.push(delim as char);
-    }
-    CommandOutcome::RawOutput(out)
+    // --filenames-only: join, do NOT terminate. The RawOutput printer adds the
+    // final newline with `println!`, so terminating here too emitted a trailing
+    // blank line and made `--filenames-only | wc -l` one more than `--count`
+    // (iter-264, BUG-21).
+    CommandOutcome::RawOutput(paths.join("\n"))
 }
 
 // ---------------------------------------------------------------------------

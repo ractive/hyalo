@@ -98,19 +98,19 @@ fn find_files_from_stdin_has_counter_keys() {
     let envelope = run_with_stdin(tmp.path(), &["find", "--files-from", "-"], "alpha.md\n");
 
     assert!(
-        envelope["results"]["files_missing"].is_number(),
+        envelope["files_missing"].is_number(),
         "missing files_missing counter in results: {envelope}"
     );
     assert!(
-        envelope["results"]["files_skipped_non_md"].is_number(),
+        envelope["files_skipped_non_md"].is_number(),
         "missing files_skipped_non_md counter: {envelope}"
     );
     assert!(
-        envelope["results"]["files_skipped_outside_vault"].is_number(),
+        envelope["files_skipped_outside_vault"].is_number(),
         "missing files_skipped_outside_vault counter: {envelope}"
     );
     assert_eq!(
-        envelope["results"]["files_missing"].as_u64().unwrap(),
+        envelope["files_missing"].as_u64().unwrap(),
         0,
         "expected no missing files: {envelope}"
     );
@@ -126,15 +126,15 @@ fn lint_files_from_stdin_has_counter_keys() {
     let envelope = run_with_stdin(tmp.path(), &["lint", "--files-from", "-"], "alpha.md\n");
 
     assert!(
-        envelope["results"]["files_missing"].is_number(),
+        envelope["files_missing"].is_number(),
         "missing files_missing counter in lint results: {envelope}"
     );
     assert!(
-        envelope["results"]["files_skipped_non_md"].is_number(),
+        envelope["files_skipped_non_md"].is_number(),
         "missing files_skipped_non_md counter: {envelope}"
     );
     assert!(
-        envelope["results"]["files_skipped_outside_vault"].is_number(),
+        envelope["files_skipped_outside_vault"].is_number(),
         "missing files_skipped_outside_vault counter: {envelope}"
     );
 }
@@ -259,7 +259,7 @@ fn find_files_from_stdin_missing_file_counted() {
         "nonexistent.md\n",
     );
     assert_eq!(
-        envelope["results"]["files_missing"].as_u64().unwrap(),
+        envelope["files_missing"].as_u64().unwrap(),
         1,
         "expected files_missing=1: {envelope}"
     );

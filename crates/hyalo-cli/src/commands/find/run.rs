@@ -632,10 +632,19 @@ mod tests {
 
     /// An empty regex matches the first body line of the first file, which
     /// would suggest the useless `hyalo find -e ''`.
+    ///
+    /// iter-264 made `title~=` a parse error, so the filter is built directly
+    /// here: the probe's own guard is defence in depth behind the parser, and
+    /// a second line of defence still deserves a test.
     #[test]
     fn body_probe_refuses_an_empty_pattern() {
         let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\n\nbody\n")]);
-        assert_eq!(probe(tmp.path(), "title~=", false), None);
+        let index = probe_index(tmp.path());
+        let filters = vec![hyalo_core::filter::PropertyFilter::RegexMatch {
+            key: "title".to_owned(),
+            pattern: regex::Regex::new("").unwrap(),
+        }];
+        assert!(zero_result_body_search(&index, tmp.path(), &filters, false).is_none());
     }
 
     /// The probe matches fenced code, because `find -e` does.

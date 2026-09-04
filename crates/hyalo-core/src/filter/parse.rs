@@ -18,6 +18,16 @@ pub enum FilterOp {
     Lt,
     /// Less than or equal
     Lte,
+    /// `K=null` — property present with a YAML null value (`~`, `null`, or an
+    /// empty value). A list *containing* a null does not match (iter-264,
+    /// DEC-274).
+    IsNull,
+    /// `K!=null` — property present with a non-null value.
+    NotNull,
+    /// `K=[]` — property present and holding an empty list.
+    IsEmptyList,
+    /// `K!=[]` — property present and not an empty list.
+    NotEmptyList,
 }
 
 /// A parsed `--property` filter.
@@ -66,9 +76,17 @@ impl PropertyFilter {
 /// - `name~=pattern`     → RegexMatch (bare pattern, unanchored)
 /// - `name~=/pattern/`   → RegexMatch (delimited, unanchored)
 /// - `name~=/pattern/i`  → RegexMatch (delimited, case-insensitive flag)
-/// - `name=~pattern`     → RegexMatch (Perl/Ruby-style alias for `~=`)
-/// - `name=~/pattern/`   → RegexMatch (Perl/Ruby-style alias, delimited)
-/// - `name=~/pattern/i`  → RegexMatch (Perl/Ruby-style alias, case-insensitive)
+/// - `name=null`         → `IsNull` (present with a YAML null value)
+/// - `name!=null`        → `NotNull` (present with a non-null value)
+/// - `name=[]`           → `IsEmptyList` (present and an empty list)
+/// - `name!=[]`          → `NotEmptyList` (present and not an empty list)
+///
+/// Rejected (iter-264, DEC-276): `name=~pattern` — `=~` was never an operator,
+/// it only worked because `=` split first and `~pattern` was then compared as a
+/// literal value. It is now a hard error naming `~=`.
+///
+/// An empty regex (`name~=` or `name~=//`) is rejected too: it matches every
+/// value, which is never what the caller meant — bare `name` tests presence.
 pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
     // Normalize `\!K` → `!K` so that zsh-escaped absence filters work.
     // zsh escapes `!` to `\!` even in single quotes in some contexts.
@@ -96,26 +114,41 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         }
     }
 
-    // --- Regex filter: `key~=pattern` or `key=~pattern` (and delimited forms) ---
+    // --- Regex filter: `key~=pattern` (and delimited forms) ---
     //
-    // Both `~=` (hyalo-native) and `=~` (Perl/Ruby-style alias) are accepted.
-    // `=~` is checked first so that `key=~/pattern/` is not mistaken for an
-    // equality filter against the literal value `~/pattern/`.
-    let regex_op_pos = input
-        .find("=~")
-        .filter(|&p| {
-            // Reject if the '=' is actually the tail of !=, >=, or <=
-            p == 0 || !matches!(input.as_bytes()[p - 1], b'!' | b'>' | b'<')
-        })
-        .map(|p| (p, "=~"))
-        .or_else(|| input.find("~=").map(|p| (p, "~=")));
+    // `~=` is the one regex operator. `=~` (the Perl/Ruby spelling) is rejected
+    // below rather than silently accepted (DEC-276): it used to "work" only
+    // because `=` split first and `~pattern` became a literal equality value,
+    // which quietly matched YAML nulls across a whole vault.
+    let tilde_eq_pos = input.find("~=");
+    let perl_eq_pos = input.find("=~").filter(|&p| {
+        // Not the tail of `!=`, `>=` or `<=`, whose value may legitimately
+        // start with `~` (`k!=~foo` compares against the literal `~foo`).
+        p == 0 || !matches!(input.as_bytes()[p - 1], b'!' | b'>' | b'<')
+    });
+    if let Some(p) = perl_eq_pos
+        && tilde_eq_pos.is_none_or(|t| p < t)
+    {
+        let key = &input[..p];
+        let pattern = &input[p + 2..];
+        bail!(
+            "unknown operator '=~' in property filter {input:?}: use '~=' for a regex match \
+             (e.g. '{key}~={pattern}')"
+        );
+    }
 
-    if let Some((op_pos, op)) = regex_op_pos {
+    if let Some(op_pos) = tilde_eq_pos {
         let key = &input[..op_pos];
-        let pattern_part = &input[op_pos + op.len()..];
+        let pattern_part = &input[op_pos + 2..];
 
         if key.is_empty() {
             bail!("property filter name must not be empty");
+        }
+        if regex_pattern_is_empty(pattern_part) {
+            bail!(
+                "empty regex in property filter {input:?}: an empty pattern matches every value; \
+                 use bare '{key}' to test for presence, or give the pattern (e.g. '{key}~=/draft/')"
+            );
         }
 
         let re = parse_regex_pattern(pattern_part)
@@ -146,6 +179,28 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
 
         if name.is_empty() {
             bail!("property filter name must not be empty");
+        }
+
+        // `K=null` / `K!=null` / `K=[]` / `K!=[]` are value *syntax*, not
+        // string comparisons (iter-264, DEC-274): a YAML null has no text form
+        // a string compare could match, and `[]` is a shape, not a value.
+        if matches!(op, FilterOp::Eq | FilterOp::NotEq) {
+            let special = match value.trim() {
+                "null" | "~" => Some((FilterOp::IsNull, FilterOp::NotNull)),
+                "[]" => Some((FilterOp::IsEmptyList, FilterOp::NotEmptyList)),
+                _ => None,
+            };
+            if let Some((positive, negative)) = special {
+                return Ok(PropertyFilter::Scalar {
+                    name: name.to_owned(),
+                    op: if op == FilterOp::Eq {
+                        positive
+                    } else {
+                        negative
+                    },
+                    value: None,
+                });
+            }
         }
 
         // Pre-lowercase the value for equality/inequality ops to avoid
@@ -199,7 +254,7 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
     if input.contains('!') || input.contains('~') {
         bail!(
             "invalid property filter {input:?}: contains operator-like characters; \
-             supported operators: =, !=, >=, <=, >, <, ~=, =~, ! (absence)"
+             supported operators: =, !=, >=, <=, >, <, ~= (regex), ! (absence)"
         );
     }
 
@@ -208,6 +263,20 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         op: FilterOp::Exists,
         value: None,
     })
+}
+
+/// Returns `true` when the text after `~=` compiles to a pattern that matches
+/// every value: the bare empty pattern (`k~=`) or the empty delimited pattern
+/// (`k~=//`, `k~=//i`).
+///
+/// A lone `/` is *not* reported here — it is an unterminated delimited pattern,
+/// and [`parse_regex_pattern`]'s own "must end with '/'" error says so better.
+fn regex_pattern_is_empty(s: &str) -> bool {
+    match s.strip_prefix('/') {
+        None => s.is_empty(),
+        // `//` and `//i` both leave an empty pattern before the closing `/`.
+        Some(rest) => rest.rfind('/') == Some(0),
+    }
 }
 
 /// Parse a regex pattern from the part after `~=`.

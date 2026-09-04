@@ -452,11 +452,19 @@ pub(crate) struct FindFilters {
     #[arg(long, short = 'e', value_name = "REGEX", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regexp: Option<String>,
-    /// K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=re|K~=/re/i; AND; K may be a dot-path
+    /// K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/i|K=null; AND; K may be a dot-path
     ///
     /// Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
     /// K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
     /// sequences (contact.email, contacts.0.email, contacts.email = any element).
+    ///
+    /// Value syntax: K=null matches a property present with a YAML null (`~`, `null`, or an
+    /// empty value) and K!=null a present non-null one; K=[] matches an empty list, K!=[] a
+    /// non-empty one. A list *containing* a null does not match K=null.
+    /// Ordering ops (>, >=, <, <=) compare numerically when both sides are numbers, by date
+    /// when both are ISO dates, and as text only when both are plain strings — a value of a
+    /// different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
+    /// The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
     #[arg(
         short,
         long = "property",
@@ -553,10 +561,18 @@ pub(crate) struct FindFilters {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
-    /// file (default)|modified|backlinks_count|links_count|title|date|property:K
+    /// file (default)|modified|backlinks_count|links_count|title|date|score|property:K
     ///
     /// Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count',
-    /// 'title', 'date', or 'property:<KEY>' for any frontmatter property. For 'property:<KEY>',
+    /// 'title', 'date', 'score', or 'property:<KEY>' for any frontmatter property.
+    ///
+    /// DIRECTION: every key sorts ascending and --reverse inverts it, so
+    /// `--sort backlinks_count --reverse` is "most linked first" exactly as
+    /// `--sort modified --reverse` is "newest first". 'score' is the one exception: it ranks
+    /// best-match-first (descending relevance), and --reverse puts the weakest match first.
+    /// Files whose sort property is missing or null always sort last, in both directions.
+    ///
+    /// For 'property:<KEY>',
     /// values of different JSON types (e.g. some files have a string, others a number) compare by
     /// raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a
     /// stderr warning names the property when this happens; use a consistent type in frontmatter
@@ -789,6 +805,19 @@ pub(crate) enum Commands {
             but should not under-match a real substring.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
+            \u{00a0} OPERATOR TABLE:\n\
+            \u{00a0}   K=V / K!=V        equality / inequality (case-insensitive; any element of a list)\n\
+            \u{00a0}   K> K>= K< K<=     ordered comparison, typed (see below)\n\
+            \u{00a0}   K / !K            present / absent\n\
+            \u{00a0}   K~=pat K~=/pat/i  regex over the value (empty pattern rejected; `=~` is not an operator)\n\
+            \u{00a0}   K=null / K!=null  present with a YAML null (`~`, `null`, empty value) / present and non-null\n\
+            \u{00a0}   K=[] / K!=[]      present and an empty list / present and not an empty list\n\
+            \u{00a0} A list CONTAINING a null (`aliases: [null]`) does not match `K=null` — the value's own\n\
+            \u{00a0} type is what is tested, so `K=null` and `--fields properties-typed` (type \"null\") agree.\n\
+            \u{00a0} TYPED COMPARISONS: >, >=, < and <= compare numerically when both sides parse as numbers\n\
+            \u{00a0} (so `rating>=6` matches `rating: \"7\"`), by date when both parse as ISO dates, and as text\n\
+            \u{00a0} only when both are plain strings. A value of any other kind never matches, so\n\
+            \u{00a0} `last>=2023-09-01` skips `last: \"[[2022-04]]\"` instead of comparing it as text.\n\
             \u{00a0} Dot-paths traverse nested frontmatter: a literal dotted key in a flat map wins first, \
             then `contact.email=x` descends the map `contact: {email: x}`. Sequences are descended too: \
             a numeric segment indexes one element (`contacts.0.email`), any other segment auto-descends into \
@@ -825,6 +854,14 @@ pub(crate) enum Commands {
             automatically).\n\
             SIZE: size/lines let a caller budget before reading -- pair them with \
             `read --lines A:B` or `read --section H` instead of pulling a large body whole.\n\
+            RESULT SHAPE: `results` is always the array of matched files, whichever way the file \
+            list was supplied -- `--file`, `--glob`, `--files-from` or a full scan all answer at \
+            `.results[0]`. The three --files-from counters (files_missing, files_skipped_non_md, \
+            files_skipped_outside_vault) are TOP-LEVEL envelope keys beside `total` and `hints`, \
+            present on every find and zero when --files-from was not used. In JSON, \
+            `--fields properties-typed` is emitted under the snake_case key `properties_typed` \
+            (like every other envelope key); `--fields properties_typed` is accepted as a spelling \
+            of the same field so a printed field list round-trips.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
@@ -844,7 +881,11 @@ pub(crate) enum Commands {
             `find --glob '**/iteration-02-*.md'` reaches both `iterations/iteration-2-*.md`\n\
             and `iterations/done/iteration-02-links.md`.\n\
             COMMON MISTAKES:\n\
-            - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). Wrong: 'title=~/pat/', right: 'title~=/pat/'.\n\
+            - Property regex uses ~= (tilde-equals), NOT =~ (Perl-style). 'title=~/pat/' is a hard\n\
+              error naming ~=; write 'title~=/pat/'. (Before iteration 264 it was silently accepted\n\
+              as an equality test against the literal value '~/pat/', which matched YAML nulls.)\n\
+            - An empty property regex ('title~=' or 'title~=//') is rejected: it matched every file.\n\
+              Use bare 'title' to test presence, or 'title=null' for a present-but-null value.\n\
             - --title searches the displayed title (frontmatter or H1); --property title~= only searches frontmatter.\n\
             - --tag uses prefix matching: 'project' matches 'project/backend' but NOT 'projects'.\n\
             - For sequence-keyed lookups, prefer a filename glob (`--glob '**/iteration-206-*.md'`) over\n\
@@ -862,6 +903,8 @@ pub(crate) enum Commands {
             hyalo find 'error handling'\n\
             hyalo find --property status=draft --tag project\n\
             hyalo find --property 'title~=/^Design/i'\n\
+            hyalo find --property aliases=null            # present, but the value is a YAML null\n\
+            hyalo find --sort backlinks_count --reverse   # most linked first\n\
             hyalo find --property contacts.email=team@example.com   # dot-path into a list of maps\n\
             hyalo find --section 'Tasks' --task todo\n\
             hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'\n\
@@ -1179,8 +1222,9 @@ pub(crate) enum Commands {
         /// Property filter for source selection. Same syntax as `find --property`; repeatable (AND)
         ///
         /// The full operator set: K=V, K!=V, K>V, K>=V, K<V, K<=V, K (exists), !K (absent),
-        /// K~=re and K~=/re/i (regex), and K may be a dot-path into a nested map — exactly
-        /// what `find --property` accepts, parsed by the same code.
+        /// K~=re and K~=/re/i (regex), K=null / K!=null and K=[] / K!=[], and K may be a
+        /// dot-path into a nested map — exactly what `find --property` accepts, parsed by the
+        /// same code, including its rejection of `=~` and of an empty regex.
         #[arg(short, long = "property", value_name = "FILTER")]
         properties: Vec<String>,
         /// Tag filter: exact or prefix match. Repeatable (AND)
@@ -1237,7 +1281,8 @@ pub(crate) enum Commands {
             before anything is written.\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, K for existence, K~=/re/ for a regex, K=null / K=[] for a null or \
+empty-list value). Quote filters containing > or < to prevent \
 shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
@@ -1324,7 +1369,8 @@ Repeatable (AND).\n\
             or:          {\"tag\": T, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, K for existence, K~=/re/ for a regex, K=null / K=[] for a null or \
+empty-list value). Quote filters containing > or < to prevent \
 shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
@@ -1553,7 +1599,8 @@ Repeatable (AND).\n\
             Each result: {\"property\": K, \"value\": V, \"modified\": [...], \"skipped\": [...], \"total\": N}\n\
             FILTERS (optional, narrow which files are mutated):\n\
             - --where-property FILTER: only mutate files whose frontmatter matches (same syntax as find --property: \
-K=V, K!=V, K>=V, K<=V, K>V, K<V, or K for existence). Quote filters containing > or < to prevent \
+K=V, K!=V, K>=V, K<=V, K>V, K<V, K for existence, K~=/re/ for a regex, K=null / K=[] for a null or \
+empty-list value). Quote filters containing > or < to prevent \
 shell redirection (e.g. --where-property 'priority>=3'). If the property is a list, matches if any \
 element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \

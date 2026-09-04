@@ -62,6 +62,26 @@ Prefer `hyalo` CLI for operations on files in this directory:
   filter that implies them (`--section`, `--task`, `--broken-links`, `--orphan`, `--dead-end`,
   `--sort links_count|backlinks_count`). `title` is promoted out of `properties`, so read it as
   `.results[].title`, not `.results[].properties.title`.
+- **Sort direction is uniform** (DEC-273, iter-264): every `--sort` key orders ascending and
+  `--reverse` inverts it, so `--sort backlinks_count --reverse` is "most linked first" just as
+  `--sort modified --reverse` is "newest first". `score` alone ranks best-match-first. A file
+  whose sort property is missing or null always sorts last, in both directions.
+- **Null, empty list and absent are three different things** (DEC-274, iter-264): `!K` is absent,
+  `K=null` is present with a YAML null (`~`, `null`, an empty value), `K=[]` is present and an
+  empty list; `K!=null` / `K!=[]` are their present-and-not forms. `aliases: [null]` matches none
+  of them. Ordering ops are typed — numbers compare numerically (`rating>=6` matches
+  `rating: "7"`), ISO dates by date, plain strings as text, and a value of any other kind never
+  matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
+- **The regex operator is `~=`, never `=~`** (DEC-276, iter-264): `K=~/pat/` is a hard error
+  naming `~=` (it used to be read as equality against the literal `~/pat/`, which matched every
+  YAML null). An empty pattern (`K~=`, `K~=//`) and an empty selection (`--fields ''`) are errors
+  too — all exit 1.
+- **`find`'s `results` is always the array of files**, whichever way the file list was supplied
+  (`--file`, `--glob`, `--files-from`, or a full scan), so `.results[0]` always works. The
+  `files_missing` / `files_skipped_non_md` / `files_skipped_outside_vault` counters are top-level
+  envelope keys beside `total` and `hints`, present on every `find` and zero when `--files-from`
+  was not used. In JSON, `--fields properties-typed` lands under `properties_typed`; both
+  spellings are accepted on the flag.
 - **`--fields` is an exact projection**: without it you get the seven default keys above; with it
   you get exactly the fields you named plus `file`, the one key that is never dropped. So
   `--fields title` returns `{file, title}` and `--fields size,lines` returns

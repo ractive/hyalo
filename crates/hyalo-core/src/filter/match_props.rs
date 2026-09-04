@@ -101,6 +101,20 @@ impl PropertyFilter {
                     // Key is present — existence check passes.
                     return true;
                 }
+                // Value-shape operators (iter-264, DEC-274). They inspect the
+                // value's *type*, so they never descend into a sequence:
+                // `K=null` must not match `K: [null]`.
+                match op {
+                    FilterOp::IsNull => return value.is_null(),
+                    FilterOp::NotNull => return !value.is_null(),
+                    FilterOp::IsEmptyList => {
+                        return value.as_array().is_some_and(Vec::is_empty);
+                    }
+                    FilterOp::NotEmptyList => {
+                        return !value.as_array().is_some_and(Vec::is_empty);
+                    }
+                    _ => {}
+                }
                 let filter_val = filter_value.as_deref().unwrap_or("");
                 match op {
                     FilterOp::Eq => yaml_value_eq(value, filter_val),
@@ -117,8 +131,14 @@ impl PropertyFilter {
                         yaml_cmp(value, filter_val),
                         Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
                     ),
-                    // SAFETY: Exists is handled by the early return above
-                    FilterOp::Exists => unreachable!("Exists handled by early return"),
+                    // SAFETY: every other op returns from a branch above.
+                    FilterOp::Exists
+                    | FilterOp::IsNull
+                    | FilterOp::NotNull
+                    | FilterOp::IsEmptyList
+                    | FilterOp::NotEmptyList => {
+                        unreachable!("handled by an early return above")
+                    }
                 }
             }
         }
@@ -322,20 +342,60 @@ fn parse_bool_filter(s: &str) -> Option<bool> {
     }
 }
 
-/// Ordering comparison between a YAML value and a string filter value.
-/// Tries numeric comparison first, then falls back to case-sensitive string
-/// comparison. The filter value preserves its original casing for ordering ops.
-fn yaml_cmp(yaml: &Value, filter: &str) -> Option<std::cmp::Ordering> {
-    // Numeric comparison.
-    if let Some(nv) = yaml.as_f64()
-        && let Ok(fv) = filter.parse::<f64>()
-    {
-        return nv.partial_cmp(&fv);
+/// What kind of ordered comparison a value supports (iter-264, DEC-274).
+///
+/// Both sides of `<`, `<=`, `>`, `>=` are classified independently and compared
+/// only when the kinds agree. This is what keeps `last>=2023-09-01` from
+/// matching the string `"[[2022-04]]"`: the filter is a date, the value is
+/// plain text, and text is never ordered against a date.
+#[derive(Debug, PartialEq)]
+enum CmpKind<'a> {
+    /// Anything that parses as a finite number — a YAML number, or a quoted
+    /// `"7"` (so `rating>=6` still matches `rating: "7"`).
+    Num(f64),
+    /// An ISO 8601 date or datetime; compared on its `YYYY-MM-DD` prefix.
+    Date(&'a str),
+    /// A plain string: neither a number nor a date.
+    Text(&'a str),
+}
+
+/// Classify a string (a filter value, or a string-typed frontmatter value).
+fn classify_str(s: &str) -> CmpKind<'_> {
+    if let Some(date) = super::sort::try_as_iso_date(s) {
+        return CmpKind::Date(date);
     }
-    // String fallback.
-    let yaml_str = match yaml {
-        Value::String(s) => s.as_str(),
-        _ => return None,
-    };
-    Some(yaml_str.cmp(filter))
+    match s.trim().parse::<f64>() {
+        Ok(n) if n.is_finite() => CmpKind::Num(n),
+        _ => CmpKind::Text(s),
+    }
+}
+
+/// Classify a frontmatter value, or `None` when it has no ordered form.
+///
+/// Booleans, nulls, sequences and maps deliberately return `None`: an ordering
+/// comparison against them is meaningless, so the filter simply does not match
+/// rather than falling back to comparing JSON text.
+fn classify_value(yaml: &Value) -> Option<CmpKind<'_>> {
+    match yaml {
+        Value::Number(n) => n.as_f64().filter(|f| f.is_finite()).map(CmpKind::Num),
+        Value::String(s) => Some(classify_str(s)),
+        _ => None,
+    }
+}
+
+/// Ordering comparison between a YAML value and a string filter value.
+///
+/// Numbers compare numerically, dates by date, plain strings by case-sensitive
+/// text order. A mismatch of kinds yields `None` (no match) instead of a
+/// lexicographic accident. The filter value preserves its original casing.
+fn yaml_cmp(yaml: &Value, filter: &str) -> Option<std::cmp::Ordering> {
+    match (classify_value(yaml)?, classify_str(filter)) {
+        (CmpKind::Num(a), CmpKind::Num(b)) => a.partial_cmp(&b),
+        // Dates compare on their `YYYY-MM-DD` prefix, which is exactly a
+        // string comparison — same arm body, different reason.
+        (CmpKind::Date(a), CmpKind::Date(b)) | (CmpKind::Text(a), CmpKind::Text(b)) => {
+            Some(a.cmp(b))
+        }
+        _ => None,
+    }
 }
