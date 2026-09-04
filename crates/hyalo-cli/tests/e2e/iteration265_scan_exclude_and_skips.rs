@@ -112,7 +112,10 @@ fn unparsable_frontmatter_collapses_to_one_line_on_every_scanning_command() {
 fn quiet_suppresses_the_skip_summary_line() {
     let tmp = vault();
     let lines = stderr_lines(tmp.path(), &["find", "--limit", "1", "-q"]);
-    assert!(lines.is_empty(), "-q should leave stderr empty, got {lines:?}");
+    assert!(
+        lines.is_empty(),
+        "-q should leave stderr empty, got {lines:?}"
+    );
 }
 
 /// `[scan] verbose_skips = true` restores the per-file diagnostics for a vault
@@ -159,7 +162,10 @@ fn summary_reports_skipped_and_excluded_counts() {
 
     // A clean directory omits the key entirely rather than carrying a zero.
     let root = dirs.iter().find(|d| d["directory"] == ".").unwrap();
-    assert!(root.get("skipped").is_none(), "clean dirs stay compact: {root}");
+    assert!(
+        root.get("skipped").is_none(),
+        "clean dirs stay compact: {root}"
+    );
 }
 
 /// Text mode says the same thing in one line.
@@ -254,13 +260,20 @@ fn explicitly_named_excluded_file_is_refused_naming_the_glob() {
         .args(["find", "--file", "Templates/album.md", "--format", "json"])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1), "an excluded target must fail");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an excluded target must fail"
+    );
     // A user error is written to stderr, where a script reading stdout for
     // results will not mistake it for one.
     let val: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     let error = val["error"].as_str().unwrap();
     assert!(error.contains("[scan] exclude"), "got: {error}");
-    assert!(error.contains("Templates/**"), "must name the glob: {error}");
+    assert!(
+        error.contains("Templates/**"),
+        "must name the glob: {error}"
+    );
 }
 
 /// `hyalo config` reports the effective list in both surfaces.
@@ -318,7 +331,11 @@ fn scan_exclude_applies_to_an_index_built_before_it_was_configured() {
         .iter()
         .map(|r| r["file"].as_str().unwrap())
         .collect();
-    assert_eq!(files, vec!["a.md", "b.md"], "index load must drop excluded entries");
+    assert_eq!(
+        files,
+        vec!["a.md", "b.md"],
+        "index load must drop excluded entries"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +400,11 @@ fn create_index_reports_the_invalid_utf8_file_once() {
 fn links_auto_index_skips_an_unparsable_file_instead_of_aborting() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write_md(tmp.path(), "target.md", "---\ntitle: Kestrel\n---\n\nBody.\n");
+    write_md(
+        tmp.path(),
+        "target.md",
+        "---\ntitle: Kestrel\n---\n\nBody.\n",
+    );
     write_md(
         tmp.path(),
         "source.md",
@@ -435,7 +456,10 @@ fn index_read_of_a_named_file_refreshes_it_from_disk() {
         .and_then(|mut f| std::io::Write::write_all(&mut f, b"line2\nline3\nline4\n"))
         .unwrap();
 
-    let disk = json(tmp.path(), &["find", "--file", "new.md", "--fields", "lines"]);
+    let disk = json(
+        tmp.path(),
+        &["find", "--file", "new.md", "--fields", "lines"],
+    );
     let indexed = json(
         tmp.path(),
         &["find", "--index", "--file", "new.md", "--fields", "lines"],
@@ -515,7 +539,10 @@ fn malformed_config_still_answers_a_plain_read_with_a_quiet_proof_warning() {
             .args(&extra)
             .output()
             .unwrap();
-        assert!(output.status.success(), "read should still answer {extra:?}");
+        assert!(
+            output.status.success(),
+            "read should still answer {extra:?}"
+        );
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("malformed .hyalo.toml"),
             "the warning must survive {extra:?}"

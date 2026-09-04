@@ -69,13 +69,17 @@ fn error_invalid_yaml() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // iter-265 (DEC-278): the run still continues and still says so, but the
+    // per-file YAML excerpt is collected and collapsed into one summary line.
+    // `iteration265_scan_exclude_and_skips.rs` pins that `[scan] verbose_skips`
+    // brings the naming back.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
     assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("HYALO005"),
+        "the summary must point at the command that names the file; got: {stderr}"
     );
 }
 
@@ -107,13 +111,17 @@ fn error_find_malformed_yaml_graceful_skip() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // iter-265 (DEC-278): the run still continues and still says so, but the
+    // per-file YAML excerpt is collected and collapsed into one summary line.
+    // `iteration265_scan_exclude_and_skips.rs` pins that `[scan] verbose_skips`
+    // brings the naming back.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
     assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("HYALO005"),
+        "the summary must point at the command that names the file; got: {stderr}"
     );
 }
 
@@ -156,13 +164,17 @@ title: OK
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // iter-265 (DEC-278): the run still continues and still says so, but the
+    // per-file YAML excerpt is collected and collapsed into one summary line.
+    // `iteration265_scan_exclude_and_skips.rs` pins that `[scan] verbose_skips`
+    // brings the naming back.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
     assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("HYALO005"),
+        "the summary must point at the command that names the file; got: {stderr}"
     );
 
     // Directory counts must exclude the skipped file
@@ -224,13 +236,17 @@ title: Target
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // iter-265 (DEC-278): the run still continues and still says so, but the
+    // per-file YAML excerpt is collected and collapsed into one summary line.
+    // `iteration265_scan_exclude_and_skips.rs` pins that `[scan] verbose_skips`
+    // brings the naming back.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
     assert!(
-        stderr.contains("bad.md"),
-        "warning should name the bad file; got: {stderr}"
+        stderr.contains("HYALO005"),
+        "the summary must point at the command that names the file; got: {stderr}"
     );
 
     // The good link should still be found
@@ -274,11 +290,17 @@ title: Good
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
 
-    // The warning for bad.md must appear exactly once
-    let warning_count = stderr.matches("bad.md").count();
+    // iter-265 (DEC-278): the point of this test is that a file scanned by two
+    // passes in one run is reported once, not twice. The report is now the
+    // collapsed summary line, whose count is the thing that must not double.
+    let warning_count = stderr.matches("unparsable frontmatter").count();
     assert_eq!(
         warning_count, 1,
-        "expected exactly one warning for bad.md, got {warning_count}; full stderr:\n{stderr}"
+        "expected exactly one skip summary line, got {warning_count}; full stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "bad.md must be counted once, not once per scan pass; full stderr:\n{stderr}"
     );
 }
 
@@ -315,9 +337,10 @@ title: Good
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // iter-265 (DEC-278): collapsed into one end-of-run summary line.
     assert!(
-        stderr.contains("warning: skipping"),
-        "expected warning on stderr; got: {stderr}"
+        stderr.contains("unparsable frontmatter"),
+        "expected the collapsed skip summary on stderr; got: {stderr}"
     );
 }
 
@@ -803,17 +826,32 @@ Body
 
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Warning must mention big.md
+    // iter-265 (DEC-278): the diagnostic is collected and collapsed, so the
+    // file is counted once rather than named once. The deduplication this test
+    // exists to pin — one report per file, not one per scan pass — is now
+    // asserted through the count in the summary line.
     assert!(
-        stderr.contains("big.md"),
-        "should warn about big.md; got: {stderr}"
+        stderr.contains("skipped 1 file with unparsable frontmatter"),
+        "should report big.md exactly once; got: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("unparsable frontmatter").count(),
+        1,
+        "the summary line itself must not repeat; full stderr:\n{stderr}"
     );
 
-    // Warning must appear exactly once (deduplication)
-    let count = stderr.matches("big.md").count();
+    // Naming the file is still available on demand, and still happens once.
+    let verbose = hyalo_no_hints()
+        .env("RUST_LOG", "hyalo=debug")
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find"])
+        .output()
+        .unwrap();
+    let verbose_err = String::from_utf8_lossy(&verbose.stderr);
     assert_eq!(
-        count, 1,
-        "big.md should appear exactly once in warnings; full stderr:\n{stderr}"
+        verbose_err.matches("big.md").count(),
+        1,
+        "big.md should appear exactly once in warnings; full stderr:\n{verbose_err}"
     );
 }
 

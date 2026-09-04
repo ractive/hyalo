@@ -178,8 +178,7 @@ pub struct ScannedIndexBuild {
 /// It is still indexed as a note — its frontmatter, tags, links and headings
 /// are all readable — but it is excluded from the BM25 corpus so `--index`
 /// scores match the disk scan's, which drops the file outright.
-pub const INVALID_UTF8_INDEX_MESSAGE: &str =
-    "invalid UTF-8 — indexed as a note but excluded from full-text search, \
+pub const INVALID_UTF8_INDEX_MESSAGE: &str = "invalid UTF-8 — indexed as a note but excluded from full-text search, \
      matching the disk scan (`find -e` still matches it lossily)";
 
 impl ScannedIndex {
@@ -2166,8 +2165,7 @@ pub(crate) fn scan_one_file(
     // counted an extra document and a wrong average length — every BM25 score
     // in the vault came out different under `--index` than off disk. Keep it
     // out of the corpus here and let `ScannedIndex::build` report it.
-    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize
-        && stats.valid_utf8
+    let (bm25_tokens, bm25_language, bm25_tokenizer_version) = if bm25_tokenize && stats.valid_utf8
     {
         let body = body_collector.into_body();
 

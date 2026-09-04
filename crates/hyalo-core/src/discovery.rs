@@ -56,7 +56,9 @@ impl ScanExclude {
     #[must_use]
     pub fn matching_glob(&self, rel: &str) -> Option<&str> {
         let hit = self.set.matches(rel);
-        hit.first().and_then(|&i| self.patterns.get(i)).map(String::as_str)
+        hit.first()
+            .and_then(|&i| self.patterns.get(i))
+            .map(String::as_str)
     }
 
     /// Whether the vault-relative path `rel` is excluded.
@@ -2086,7 +2088,12 @@ mod tests {
         let mut builder = GlobSetBuilder::new();
         let mut kept = Vec::new();
         for pat in patterns {
-            builder.add(GlobBuilder::new(pat).literal_separator(true).build().unwrap());
+            builder.add(
+                GlobBuilder::new(pat)
+                    .literal_separator(true)
+                    .build()
+                    .unwrap(),
+            );
             kept.push((*pat).to_owned());
         }
         ScanExclude {

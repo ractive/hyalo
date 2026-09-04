@@ -251,10 +251,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 /// front, to decide between zero-copy slicing and a lossy conversion), so
 /// reporting it costs nothing — and it is the only signal the index builder has
 /// that a file must be kept out of the BM25 corpus (iter-265, BUG-14).
-pub fn scan_slice_multi_utf8(
-    data: &[u8],
-    visitors: &mut [&mut dyn FileVisitor],
-) -> Result<bool> {
+pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> Result<bool> {
     let num = visitors.len();
     if num == 0 {
         return Ok(true);

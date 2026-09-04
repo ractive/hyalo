@@ -154,7 +154,9 @@ mod tests {
 
     #[test]
     fn records_and_counts_by_kind() {
-        let _guard = SKIP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = SKIP_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reset_skips_for_test();
         record_skip("a.md", "bad yaml", SkipKind::Frontmatter);
         record_skip("b.md", "invalid utf-8", SkipKind::Other);
@@ -165,7 +167,9 @@ mod tests {
 
     #[test]
     fn repeat_path_recorded_once() {
-        let _guard = SKIP_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = SKIP_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         reset_skips_for_test();
         record_skip("dup.md", "bad yaml", SkipKind::Frontmatter);
         record_skip("dup.md", "bad yaml", SkipKind::Frontmatter);
