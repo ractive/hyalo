@@ -145,8 +145,8 @@ fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
                 obj.insert("allowed-keys".to_owned(), Value::from(allowed.clone()));
             }
             if !key_patterns.is_empty() {
-                // `IndexMap` preserves config-file order; serde_json's map sorts
-                // keys, which is what the text renderer prints.
+                // serde_json's map sorts keys, so the JSON (and the text block
+                // rendered from it) lists the patterns alphabetically.
                 let patterns: serde_json::Map<String, Value> = key_patterns
                     .iter()
                     .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
@@ -1186,6 +1186,60 @@ mod tests {
                 assert_eq!(v["properties"]["status"]["type"], "enum");
                 let vals = v["properties"]["status"]["values"].as_array().unwrap();
                 assert!(vals.contains(&serde_json::json!("draft")));
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn show_type_with_object_list_constraint() {
+        let mut key_patterns = indexmap::IndexMap::new();
+        key_patterns.insert("commit".to_owned(), "^[0-9a-f]{7,40}$".to_owned());
+        let schema = make_schema_with_constraint(
+            "memory",
+            "sources",
+            PropertyConstraint::ObjectList {
+                required_keys: vec!["ref".to_owned()],
+                allowed_keys: Some(vec!["ref".to_owned(), "commit".to_owned()]),
+                key_patterns,
+            },
+        );
+        let outcome = show_type("memory", &schema, Format::Json);
+        match outcome {
+            CommandOutcome::Success { output, .. } => {
+                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let sources = &v["properties"]["sources"];
+                assert_eq!(sources["type"], "object-list");
+                assert_eq!(sources["required-keys"], serde_json::json!(["ref"]));
+                assert_eq!(
+                    sources["allowed-keys"],
+                    serde_json::json!(["ref", "commit"])
+                );
+                assert_eq!(sources["key-patterns"]["commit"], "^[0-9a-f]{7,40}$");
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn show_type_object_list_omits_absent_allowed_keys_and_empty_patterns() {
+        let schema = make_schema_with_constraint(
+            "memory",
+            "sources",
+            PropertyConstraint::ObjectList {
+                required_keys: Vec::new(),
+                allowed_keys: None,
+                key_patterns: indexmap::IndexMap::new(),
+            },
+        );
+        let outcome = show_type("memory", &schema, Format::Json);
+        match outcome {
+            CommandOutcome::Success { output, .. } => {
+                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let sources = v["properties"]["sources"].as_object().unwrap();
+                assert!(!sources.contains_key("allowed-keys"));
+                assert!(!sources.contains_key("key-patterns"));
+                assert_eq!(sources["required-keys"], serde_json::json!([]));
             }
             other => panic!("expected Success, got {other:?}"),
         }

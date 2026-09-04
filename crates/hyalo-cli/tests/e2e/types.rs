@@ -123,6 +123,129 @@ fn types_show_existing_type() {
 }
 
 // ---------------------------------------------------------------------------
+// types show — object-list (iteration 268 / DEC-286)
+// ---------------------------------------------------------------------------
+
+/// A vault whose `memory` type declares the plan's `object-list` property.
+fn setup_with_object_list() -> TempDir {
+    let tmp = setup_empty();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        r#"dir = "."
+
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit", "version", "updated", "read"]
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^(github|confluence|jira|slack|person|runtime|decision):|^https?://"
+commit = "^[0-9a-f]{7,40}$"
+read = "^\\d{4}-\\d{2}-\\d{2}$"
+"#,
+    )
+    .unwrap();
+    tmp
+}
+
+#[test]
+fn types_show_object_list_json() {
+    let tmp = setup_with_object_list();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "memory", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let sources = &json["results"]["properties"]["sources"];
+    assert_eq!(sources["type"], "object-list");
+    assert_eq!(sources["required-keys"], serde_json::json!(["ref"]));
+    assert_eq!(
+        sources["allowed-keys"],
+        serde_json::json!(["ref", "commit", "version", "updated", "read"])
+    );
+    assert_eq!(sources["key-patterns"]["commit"], "^[0-9a-f]{7,40}$");
+
+    // The key set is exactly the four documented names.
+    let mut keys: Vec<&str> = sources
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec!["allowed-keys", "key-patterns", "required-keys", "type"]
+    );
+}
+
+#[test]
+fn types_show_object_list_text_prints_key_patterns_block() {
+    let tmp = setup_with_object_list();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["types", "show", "memory", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("type: object-list"), "{stdout}");
+    assert!(stdout.contains("required-keys: ref"), "{stdout}");
+    assert!(
+        stdout.contains("allowed-keys: ref, commit, version, updated, read"),
+        "{stdout}"
+    );
+    // The nested map prints as an indented block, one key per line.
+    assert!(stdout.contains("    key-patterns:"), "{stdout}");
+    assert!(stdout.contains("      commit: ^[0-9a-f]{7,40}$"), "{stdout}");
+    assert!(stdout.contains("      read: "), "{stdout}");
+    assert!(stdout.contains("      ref: "), "{stdout}");
+}
+
+#[test]
+fn types_set_rejects_object_list_property_type() {
+    // `object-list` carries constraints, so it is configured in `.hyalo.toml`
+    // only — `types set` rejects it exactly like `string-list`.
+    let tmp = setup_empty();
+    for bad in ["object-list", "string-list"] {
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args([
+                "types",
+                "set",
+                "memory",
+                "--property-type",
+                &format!("sources={bad}"),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "`{bad}` must be rejected by --property-type"
+        );
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            combined.contains("invalid property type"),
+            "expected the unknown-type error for `{bad}`, got:\n{combined}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // types remove
 // ---------------------------------------------------------------------------
 

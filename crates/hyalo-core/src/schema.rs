@@ -546,7 +546,9 @@ pub enum PropertyConstraint {
         allowed_keys: Option<Vec<String>>,
         /// Key → regex applied to that key's scalar value when the key is present.
         /// Kept as `String` (like `pattern` / `item_pattern`); every entry is
-        /// verified to compile when the config is parsed.
+        /// verified to compile when the config is parsed. Iteration order is
+        /// whatever the deserializer produced — alphabetical in practice, since
+        /// the config passes through `toml::Value`'s sorted tables.
         key_patterns: IndexMap<String, String>,
     },
 }
@@ -593,8 +595,10 @@ pub struct RawPropertyConstraint {
     /// Omitted means "any extra key is fine".
     #[serde(rename = "allowed-keys")]
     pub allowed_keys: Option<Vec<String>>,
-    /// Per-key regexes for an `object-list` property (DEC-286). `IndexMap` so
-    /// `types show` prints the keys in the order the config file lists them.
+    /// Per-key regexes for an `object-list` property (DEC-286). `IndexMap`
+    /// preserves the order the deserializer hands them over in; note that the
+    /// config goes through `toml::Value` first, whose tables are sorted, so in
+    /// practice the keys arrive (and are rendered) alphabetically.
     #[serde(rename = "key-patterns")]
     pub key_patterns: Option<IndexMap<String, String>>,
 }
@@ -1350,6 +1354,21 @@ values = ["active", "archived", "draft"]
         SchemaConfig::try_from(raw_schema)
     }
 
+    /// Like `parse_cfg`, but surfaces the *deserialization* error instead of
+    /// falling back to an empty schema — needed to assert that
+    /// `deny_unknown_fields` and the field types actually reject bad TOML.
+    fn parse_cfg_strict(toml: &str) -> Result<SchemaConfig, String> {
+        let raw: toml::Value = toml::from_str(toml).map_err(|e| e.to_string())?;
+        let Some(schema_val) = raw.get("schema") else {
+            return Err("no [schema] section".to_owned());
+        };
+        let raw_schema: RawSchemaConfig = schema_val
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| e.to_string())?;
+        SchemaConfig::try_from(raw_schema)
+    }
+
     #[test]
     fn parse_string_list_with_item_pattern() {
         let toml = r#"
@@ -1366,6 +1385,249 @@ item_pattern = "^[a-z]+"
             }
             other => panic!("expected string-list with item_pattern, got {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // object-list (iteration 268 / DEC-286)
+    // ---------------------------------------------------------------------------
+
+    /// The motivating config from the iteration plan, parsed in full.
+    const OBJECT_LIST_TOML: &str = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit", "version", "updated", "read"]
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^(github|confluence|jira|slack|person|runtime|decision):|^https?://"
+commit = "^[0-9a-f]{7,40}$"
+read = "^\\d{4}-\\d{2}-\\d{2}$"
+"#;
+
+    #[test]
+    fn parse_object_list_full() {
+        let cfg = parse_cfg(OBJECT_LIST_TOML).expect("should parse");
+        match cfg.types["memory"].properties.get("sources") {
+            Some(PropertyConstraint::ObjectList {
+                required_keys,
+                allowed_keys,
+                key_patterns,
+            }) => {
+                assert_eq!(required_keys, &["ref".to_owned()]);
+                assert_eq!(
+                    allowed_keys.as_deref(),
+                    Some(
+                        ["ref", "commit", "version", "updated", "read"]
+                            .map(str::to_owned)
+                            .as_slice()
+                    )
+                );
+                // The config passes through `toml::Value`, whose tables are
+                // sorted, so the keys arrive alphabetically regardless of the
+                // order the file lists them in.
+                assert_eq!(
+                    key_patterns.keys().map(String::as_str).collect::<Vec<_>>(),
+                    vec!["commit", "read", "ref"]
+                );
+                assert_eq!(key_patterns["commit"], "^[0-9a-f]{7,40}$");
+                assert_eq!(key_patterns["read"], r"^\d{4}-\d{2}-\d{2}$");
+            }
+            other => panic!("expected object-list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_object_list_without_allowed_keys_is_none() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        match cfg.types["memory"].properties.get("sources") {
+            Some(PropertyConstraint::ObjectList {
+                allowed_keys,
+                key_patterns,
+                ..
+            }) => {
+                assert!(allowed_keys.is_none(), "omitted allowed-keys means None");
+                assert!(key_patterns.is_empty());
+            }
+            other => panic!("expected object-list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reject_pattern_on_object_list() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'pattern'"), "{err}");
+        assert!(err.contains("object-list"), "{err}");
+    }
+
+    #[test]
+    fn reject_item_pattern_on_object_list() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+item_pattern = "foo"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'item_pattern'"), "{err}");
+        assert!(err.contains("object-list"), "{err}");
+    }
+
+    #[test]
+    fn reject_required_keys_on_string() {
+        let toml = r#"
+[schema.types.memory.properties.title]
+type = "string"
+required-keys = ["ref"]
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("property 'title'"), "{err}");
+        assert!(err.contains("'required-keys'"), "{err}");
+        assert!(err.contains("not 'string'"), "{err}");
+    }
+
+    #[test]
+    fn reject_key_patterns_on_list() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "list"
+
+[schema.types.memory.properties.sources.key-patterns]
+ref = "^x"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'key-patterns'"), "{err}");
+        assert!(err.contains("not 'list'"), "{err}");
+    }
+
+    #[test]
+    fn reject_required_key_absent_from_allowed_keys() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["ref", "commit"]
+allowed-keys = ["ref"]
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("property 'sources'"), "{err}");
+        assert!(err.contains("'required-keys' entry 'commit'"), "{err}");
+        assert!(err.contains("allowed-keys"), "{err}");
+    }
+
+    #[test]
+    fn reject_pattern_key_absent_from_allowed_keys() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+allowed-keys = ["ref"]
+
+[schema.types.memory.properties.sources.key-patterns]
+commit = "^[0-9a-f]+$"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("'key-patterns' entry 'commit'"), "{err}");
+    }
+
+    #[test]
+    fn reject_invalid_key_pattern_regex() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+
+[schema.types.memory.properties.sources.key-patterns]
+commit = "["
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("property 'sources'"), "{err}");
+        assert!(err.contains("key-patterns.commit"), "{err}");
+        assert!(err.contains("invalid regex"), "{err}");
+    }
+
+    #[test]
+    fn reject_empty_key_name_in_required_keys() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = [""]
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("empty key name"), "{err}");
+    }
+
+    #[test]
+    fn reject_unknown_key_inside_object_list_property() {
+        // `deny_unknown_fields` still guards the property table.
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+requiredkeys = ["ref"]
+"#;
+        let err = parse_cfg_strict(toml).expect_err("should reject");
+        assert!(err.contains("requiredkeys"), "{err}");
+    }
+
+    #[test]
+    fn reject_non_string_key_pattern_value() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-list"
+
+[schema.types.memory.properties.sources.key-patterns]
+commit = 42
+"#;
+        let err = parse_cfg_strict(toml).expect_err("should reject");
+        assert!(
+            err.contains("string"),
+            "expected a type error naming string, got: {err}"
+        );
+    }
+
+    #[test]
+    fn object_list_type_override_replaces_default_it_does_not_union_keys() {
+        // A profile default plus a type override of the same object-list
+        // property merges by replacement — the type's key sets win whole.
+        let toml = r#"
+[schema.default.properties.sources]
+type = "object-list"
+required-keys = ["ref"]
+allowed-keys = ["ref", "commit"]
+
+[schema.types.memory.properties.sources]
+type = "object-list"
+required-keys = ["uri"]
+allowed-keys = ["uri"]
+"#;
+        let cfg = parse_cfg(toml).expect("should parse");
+        let merged = cfg.merged_schema_for_type("memory");
+        match merged.properties.get("sources") {
+            Some(PropertyConstraint::ObjectList {
+                required_keys,
+                allowed_keys,
+                ..
+            }) => {
+                assert_eq!(required_keys, &["uri".to_owned()]);
+                assert_eq!(allowed_keys.as_deref(), Some(["uri".to_owned()].as_slice()));
+            }
+            other => panic!("expected object-list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_type_error_lists_object_list() {
+        let toml = r#"
+[schema.types.memory.properties.sources]
+type = "object-lst"
+"#;
+        let err = parse_cfg(toml).expect_err("should reject");
+        assert!(err.contains("object-list"), "{err}");
     }
 
     #[test]

@@ -899,6 +899,283 @@ fn lint_fix_splits_comma_joined_tags() {
 }
 
 // ---------------------------------------------------------------------------
+// object-list tests (iteration 268 / DEC-286)
+// ---------------------------------------------------------------------------
+
+/// The motivating constraint from the iteration plan.
+fn sources_constraint() -> PropertyConstraint {
+    let mut key_patterns = indexmap::IndexMap::new();
+    key_patterns.insert(
+        "ref".to_owned(),
+        "^(github|confluence|jira|slack|person|runtime|decision):|^https?://".to_owned(),
+    );
+    key_patterns.insert("commit".to_owned(), "^[0-9a-f]{7,40}$".to_owned());
+    key_patterns.insert("read".to_owned(), r"^\d{4}-\d{2}-\d{2}$".to_owned());
+    PropertyConstraint::ObjectList {
+        required_keys: vec!["ref".to_owned()],
+        allowed_keys: Some(
+            ["ref", "commit", "version", "updated", "read"]
+                .map(str::to_owned)
+                .to_vec(),
+        ),
+        key_patterns,
+    }
+}
+
+/// Build a single `{key: value, ...}` item.
+fn item(pairs: &[(&str, Value)]) -> Value {
+    let mut map = serde_json::Map::new();
+    for (k, v) in pairs {
+        map.insert((*k).to_owned(), v.clone());
+    }
+    Value::Object(map)
+}
+
+fn s(v: &str) -> Value {
+    Value::String(v.to_owned())
+}
+
+#[test]
+fn object_list_accepts_valid_items() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![
+            item(&[
+                ("ref", s("github:comparis/neon")),
+                ("commit", s("3c9e0f2")),
+            ]),
+            item(&[
+                ("ref", s("https://example.org/post")),
+                ("read", s("2026-09-01")),
+            ]),
+        ]),
+        &sources_constraint(),
+    );
+    assert!(
+        violations.is_empty(),
+        "valid object list should pass, got: {:?}",
+        violations.iter().map(|v| &v.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn object_list_string_item_gets_fix_it_hint() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![s("https://example.org/post")]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains("item 0"), "{msg}");
+    assert!(msg.contains("must be a map, not a string"), "{msg}");
+    assert!(
+        msg.contains("did you mean `- ref: https://example.org/post`?"),
+        "expected the fix-it text, got: {msg}"
+    );
+    assert_eq!(violations[0].severity, Severity::Error);
+}
+
+#[test]
+fn object_list_unknown_key_lists_allowed_keys() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[
+            ("ref", s("github:comparis/neon")),
+            ("rev", s("3c9e0f2")),
+        ])]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains("item 0"), "{msg}");
+    assert!(msg.contains(r#"unknown key "rev""#), "{msg}");
+    assert!(
+        msg.contains("allowed: ref, commit, version, updated, read"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn object_list_key_pattern_mismatch_names_key_and_pattern() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[
+            ("ref", s("github:comparis/neon")),
+            ("commit", s("zzz")),
+        ])]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains("item 0"), "{msg}");
+    assert!(msg.contains(r#"key "commit""#), "{msg}");
+    assert!(msg.contains("^[0-9a-f]{7,40}$"), "{msg}");
+}
+
+#[test]
+fn object_list_non_scalar_under_pattern_key_errors() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[(
+            "ref",
+            Value::Array(vec![s("a"), s("b")]),
+        )])]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains(r#"key "ref" must be a scalar"#), "{msg}");
+    assert!(msg.contains("got a list"), "{msg}");
+}
+
+#[test]
+fn object_list_missing_required_key_errors() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[("commit", s("3c9e0f2"))])]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains("item 0"), "{msg}");
+    assert!(msg.contains(r#"missing required key "ref""#), "{msg}");
+}
+
+#[test]
+fn object_list_reports_every_bad_item() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![
+            item(&[("ref", s("github:comparis/neon"))]), // valid
+            s("plain string"),                           // not a map
+            item(&[("commit", s("3c9e0f2"))]),           // missing ref
+            item(&[("ref", s("github:a/b")), ("rev", s("x"))]), // unknown key
+        ]),
+        &sources_constraint(),
+    );
+    assert_eq!(
+        violations.len(),
+        3,
+        "expected one violation per bad item, got: {:?}",
+        violations.iter().map(|v| &v.message).collect::<Vec<_>>()
+    );
+    assert!(violations[0].message.contains("item 1"));
+    assert!(violations[1].message.contains("item 2"));
+    assert!(violations[2].message.contains("item 3"));
+}
+
+#[test]
+fn object_list_vacuous_on_empty_list() {
+    let violations = vc_all("sources", &Value::Array(vec![]), &sources_constraint());
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn object_list_scalar_value_is_one_error() {
+    let violations = vc_all("sources", &s("github:a/b"), &sources_constraint());
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations[0].message.contains("expected a list of maps"),
+        "{}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn object_list_number_item_has_no_fix_it_hint() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![Value::Number(42.into())]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let msg = &violations[0].message;
+    assert!(msg.contains("must be a map, not a number"), "{msg}");
+    assert!(
+        !msg.contains("did you mean"),
+        "the fix-it hint is only for string items, got: {msg}"
+    );
+}
+
+#[test]
+fn object_list_without_allowed_keys_permits_extras() {
+    let constraint = PropertyConstraint::ObjectList {
+        required_keys: vec!["ref".to_owned()],
+        allowed_keys: None,
+        key_patterns: indexmap::IndexMap::new(),
+    };
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[
+            ("ref", s("github:a/b")),
+            ("anything", s("goes")),
+        ])]),
+        &constraint,
+    );
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+#[test]
+fn object_list_matches_non_string_scalars_as_yaml_text() {
+    // A number, bool or date value is matched against its text form.
+    let mut key_patterns = indexmap::IndexMap::new();
+    key_patterns.insert("n".to_owned(), "^4[0-9]$".to_owned());
+    key_patterns.insert("b".to_owned(), "^true$".to_owned());
+    let constraint = PropertyConstraint::ObjectList {
+        required_keys: Vec::new(),
+        allowed_keys: None,
+        key_patterns,
+    };
+    let ok = vc_all(
+        "meta",
+        &Value::Array(vec![item(&[
+            ("n", Value::Number(42.into())),
+            ("b", Value::Bool(true)),
+        ])]),
+        &constraint,
+    );
+    assert!(ok.is_empty(), "{ok:?}");
+    let bad = vc_all(
+        "meta",
+        &Value::Array(vec![item(&[("n", Value::Number(7.into()))])]),
+        &constraint,
+    );
+    assert_eq!(bad.len(), 1, "{bad:?}");
+    assert!(bad[0].message.contains(r#"key "n" value "7""#), "{bad:?}");
+}
+
+#[test]
+fn object_list_null_under_pattern_key_is_not_a_scalar() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![item(&[("ref", Value::Null)])]),
+        &sources_constraint(),
+    );
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert!(
+        violations[0].message.contains("must be a scalar"),
+        "{}",
+        violations[0].message
+    );
+}
+
+#[test]
+fn object_list_violations_are_not_autofixable() {
+    let violations = vc_all(
+        "sources",
+        &Value::Array(vec![s("plain string")]),
+        &sources_constraint(),
+    );
+    assert_eq!(
+        violations[0].kind,
+        Some(hyalo_mdlint::schema::VIOLATION_KIND_CONSTRAINT_VIOLATION),
+        "object-list violations must carry the constraint-violation kind so the \
+         SCHEMA group reports autofixable: false"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // item_pattern tests
 // ---------------------------------------------------------------------------
 
