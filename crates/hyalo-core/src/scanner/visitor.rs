@@ -62,6 +62,23 @@ pub trait FileVisitor {
         ScanAction::Continue
     }
 
+    /// Called with the **raw** frontmatter text — everything between the `---`
+    /// delimiters, newline-terminated per line — immediately before
+    /// [`on_frontmatter`](Self::on_frontmatter) delivers the parsed map.
+    ///
+    /// `first_line` is the 1-based file line the first byte of `yaml` sits on
+    /// (always `2` when the file opens with `---`). Not called at all for a
+    /// file without frontmatter, or when no visitor needs frontmatter.
+    ///
+    /// iter-262: frontmatter wikilinks are graph edges, and reporting the line
+    /// each one sits on needs the source text — the parsed map carries values,
+    /// not spans. The text is borrowed, never cloned, so a visitor that does
+    /// not implement this pays nothing.
+    /// Returns nothing: it is a companion to
+    /// [`on_frontmatter`](Self::on_frontmatter), which is what decides whether
+    /// the scan continues.
+    fn on_frontmatter_text(&mut self, _yaml: &str, _first_line: usize) {}
+
     /// Called for each body line outside fenced code blocks and comment blocks.
     ///
     /// `raw` is the original line text (code spans and comments intact).

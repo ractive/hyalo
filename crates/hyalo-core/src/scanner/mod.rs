@@ -205,6 +205,20 @@ pub fn scan_file_multi_stats(
     }
 }
 
+/// Hand the raw frontmatter block to every visitor before the parsed map is
+/// delivered (iter-262).
+///
+/// `yaml` is `None` for a file with no frontmatter, and for a scan where no
+/// visitor asked for frontmatter at all (the text is never accumulated then).
+/// The first content line is always file line 2, because the block opens on
+/// line 1 with `---`.
+fn deliver_frontmatter_text(yaml: Option<&str>, visitors: &mut [&mut dyn FileVisitor]) {
+    let Some(text) = yaml else { return };
+    for v in visitors.iter_mut() {
+        v.on_frontmatter_text(text, 2);
+    }
+}
+
 /// Scan a UTF-8 byte slice with multiple visitors in a single pass.
 ///
 /// Like `scan_reader_multi`, but works on an in-memory `&[u8]` buffer
@@ -292,7 +306,7 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
 
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
 
-    let (mut fm_props, fm_lines) = if crate::frontmatter::is_opening_delimiter(first_line) {
+    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(first_line) {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         let mut yaml = if any_needs_fm {
@@ -355,10 +369,12 @@ pub fn scan_slice_multi(data: &[u8], visitors: &mut [&mut dyn FileVisitor]) -> R
             }
             _ => IndexMap::new(),
         };
-        (props, fm_line_count)
+        (props, fm_line_count, yaml)
     } else {
-        (IndexMap::new(), 0usize)
+        (IndexMap::new(), 0usize, None)
     };
+
+    deliver_frontmatter_text(fm_text.as_deref(), visitors);
 
     // Deliver frontmatter to all visitors.
     let last = visitors.len() - 1;
@@ -482,7 +498,8 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
 
     // Try to parse frontmatter
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
-    let (mut fm_props, fm_lines) = if crate::frontmatter::is_opening_delimiter(&first_trimmed) {
+    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(&first_trimmed)
+    {
         use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
         // Read past frontmatter lines, optionally collecting YAML content
@@ -547,10 +564,12 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             }
             _ => IndexMap::new(),
         };
-        (props, fm_line_count)
+        (props, fm_line_count, yaml)
     } else {
-        (IndexMap::new(), 0usize)
+        (IndexMap::new(), 0usize, None)
     };
+
+    deliver_frontmatter_text(fm_text.as_deref(), visitors);
 
     // Deliver frontmatter to all visitors.
     // Clone for all but the last visitor; take ownership for the last.

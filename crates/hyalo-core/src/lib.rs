@@ -32,6 +32,7 @@ pub mod discovery;
 pub mod filename_template;
 pub mod filter;
 pub mod frontmatter;
+pub mod frontmatter_links;
 pub(crate) mod fs_util;
 pub mod heading;
 pub mod index;

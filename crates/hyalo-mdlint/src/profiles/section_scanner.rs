@@ -219,6 +219,7 @@ mod tests {
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         assert_eq!(format_link_string(&link), "[[my-note]]");
     }
@@ -233,6 +234,7 @@ mod tests {
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         assert_eq!(format_link_string(&link), "[[my-note|My Note]]");
     }
@@ -247,6 +249,7 @@ mod tests {
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         assert_eq!(format_link_string(&link), "[Example](https://example.com)");
     }
@@ -261,6 +264,7 @@ mod tests {
             query: None,
             embed: false,
             external: false,
+            property: None,
         };
         assert_eq!(format_link_string(&link), "[Some Note](docs/some-note.md)");
     }

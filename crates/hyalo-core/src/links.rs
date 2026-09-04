@@ -101,6 +101,29 @@ pub struct Link {
     /// matches the source byte for byte.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub external: bool,
+    /// The frontmatter property this link was written under, when the link came
+    /// from a YAML frontmatter value rather than the document body — the dotted
+    /// key path for a nested map (`meta.source`), the plain key otherwise.
+    /// `None` for every body link.
+    ///
+    /// iter-262 (BUG-1): Obsidian treats every `[[wikilink]]` inside any
+    /// frontmatter value as a graph edge, not just the handful of properties
+    /// hyalo used to scan. Carrying the key makes the provenance reportable
+    /// (`kind: "frontmatter"`, `property: "categories"`) and keeps the
+    /// distinction available to consumers that must not treat a metadata
+    /// reference like a prose one. Skipped from JSON when absent and defaulted
+    /// on load, so an index written by an older hyalo keeps deserializing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
+}
+
+impl Link {
+    /// Whether this link was extracted from a YAML frontmatter value
+    /// (iter-262). Equivalent to `self.property.is_some()`.
+    #[must_use]
+    pub fn is_frontmatter(&self) -> bool {
+        self.property.is_some()
+    }
 }
 
 /// The kind of link syntax used in the source text.
@@ -752,6 +775,7 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
             query: None,
             embed: false,
             external: true,
+            property: None,
         });
     }
 
@@ -780,6 +804,7 @@ pub(crate) fn parse_wikilink(inner: &str) -> Option<Link> {
         query: None,
         embed: false,
         external: false,
+        property: None,
     })
 }
 
@@ -852,6 +877,7 @@ fn try_parse_markdown_link_at(text: &str, original: &str, start: usize) -> Optio
                 query: None,
                 embed: false,
                 external: true,
+                property: None,
             },
             paren_start + dest.end,
         ));
@@ -900,6 +926,7 @@ pub(crate) fn parse_markdown_link(label_text: &str, target_raw: &str) -> Option<
         query,
         embed: false,
         external: false,
+        property: None,
     })
 }
 

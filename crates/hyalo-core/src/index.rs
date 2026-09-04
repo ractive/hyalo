@@ -18,7 +18,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{
-    DEFAULT_FRONTMATTER_LINK_PROPERTIES, FileLinks, LinkGraph, LinkGraphVisitor,
+    FileLinks, LinkGraph, LinkGraphVisitor,
 };
 use crate::links::Link;
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
@@ -194,15 +194,9 @@ impl ScannedIndex {
         let mut warnings: Vec<IndexWarning> = Vec::new();
 
         let default_language = options.default_language;
-        let fm_link_props: Vec<String> = options.frontmatter_link_props.map_or_else(
-            || {
-                DEFAULT_FRONTMATTER_LINK_PROPERTIES
-                    .iter()
-                    .map(|s| (*s).to_owned())
-                    .collect()
-            },
-            <[String]>::to_vec,
-        );
+        // iter-262: `None` means "scan every frontmatter value"; an explicit
+        // list is the opt-out that narrows the scan back to named properties.
+        let fm_link_props: Option<Vec<String>> = options.frontmatter_link_props.map(<[String]>::to_vec);
         let scan = |(full_path, rel_path): &(std::path::PathBuf, String)| {
             scan_one_file(
                 full_path,
@@ -210,7 +204,7 @@ impl ScannedIndex {
                 options.scan_body,
                 options.bm25_tokenize,
                 default_language,
-                &fm_link_props,
+                fm_link_props.as_deref(),
             )
         };
         #[cfg(not(miri))]
@@ -765,13 +759,8 @@ impl SnapshotIndex {
 
     /// Resolved frontmatter property list — either the session-configured list
     /// or the built-in defaults.
-    fn effective_frontmatter_link_props(&self) -> Vec<String> {
-        self.frontmatter_link_props.clone().unwrap_or_else(|| {
-            DEFAULT_FRONTMATTER_LINK_PROPERTIES
-                .iter()
-                .map(|s| (*s).to_owned())
-                .collect()
-        })
+    fn effective_frontmatter_link_props(&self) -> Option<Vec<String>> {
+        self.frontmatter_link_props.clone()
     }
 
     /// BM25 scan arguments for an incremental re-scan of `rel_path` (BUG-4,
@@ -859,7 +848,7 @@ impl SnapshotIndex {
             true,
             bm25_tokenize,
             default_language.as_deref(),
-            &fm_props,
+            fm_props.as_deref(),
         )?;
         self.entries[idx] = entry;
         Ok(file_links)
@@ -915,7 +904,7 @@ impl SnapshotIndex {
             true,
             bm25_tokenize,
             default_language.as_deref(),
-            &fm_props,
+            fm_props.as_deref(),
         )?;
 
         let entry = &mut self.entries[idx];
@@ -1020,7 +1009,7 @@ impl SnapshotIndex {
             true,
             bm25_tokenize,
             default_language.as_deref(),
-            &fm_props,
+            fm_props.as_deref(),
         )?;
         if let Some(&idx) = self.path_index.get(rel_path) {
             self.entries[idx] = entry;
@@ -1108,7 +1097,7 @@ impl SnapshotIndex {
             true,
             bm25_tokenize,
             default_language.as_deref(),
-            &fm_props,
+            fm_props.as_deref(),
         )?;
 
         // Remove without triggering a path-index rebuild.
@@ -2038,7 +2027,7 @@ pub(crate) fn scan_one_file(
     scan_body: bool,
     bm25_tokenize: bool,
     default_language: Option<&str>,
-    frontmatter_link_props: &[String],
+    frontmatter_link_props: Option<&[String]>,
 ) -> Result<(IndexEntry, Option<FileLinks>)> {
     let mut fm = FrontmatterCollector::new(scan_body);
     let mut body_collector = BodyCollector::new(bm25_tokenize);
@@ -2049,7 +2038,7 @@ pub(crate) fn scan_one_file(
         let mut task_extractor = TaskExtractor::new();
         let mut link_visitor = LinkGraphVisitor::with_frontmatter_props(
             PathBuf::from(rel_path),
-            frontmatter_link_props.to_vec(),
+            frontmatter_link_props.map(<[String]>::to_vec),
         );
 
         stats = scanner::scan_file_multi_stats(
