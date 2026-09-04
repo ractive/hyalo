@@ -4127,3 +4127,61 @@ it gives no way to *deliberately* turn a list into a scalar.
 **Rejected: a `--keep-list` flag.** The project rule is no new CLI flags from
 dogfood pressure, and `hyalo append` is already the command that keeps a list a
 list.
+
+## DEC-271: MD018 defers to Obsidian tag grammar, with a capitalization tiebreak (2026-09-04)
+
+**Decision:** MD018 (`no-missing-space-atx`) does not fire on a line whose
+single leading `#` is followed by a valid Obsidian tag token — letters, digits,
+`_`, `-`, `/` or non-ASCII word characters, with at least one non-digit
+character. Two or more hashes (`##todo`), a purely numeric token (`#1`,
+`#2024`) and a punctuation token (`#!bang`) are not tags and keep firing.
+
+Where the two grammars genuinely collide — `#Word more prose`, which is both a
+tag followed by text and exactly what a heading missing its space looks like —
+the tiebreak is capitalization: a **plain capitalized ASCII word** (initial
+upper-case letter, then letters only: no digit, `-`, `_`, `/`, nothing
+non-ASCII) followed by more text on the line stays flagged as a heading typo.
+`#todo call the vet`, `#Project/alpha notes` and a bare `#Someday` are tags.
+
+**Why:** the two errors are not symmetric. A missed heading typo leaves the file
+byte-identical and costs a warning; a mis-"fixed" tag silently rewrites the
+author's content and, on the Obsidian Hub vault, would have done so 162 times in
+one `--fix` run. So the rule is biased toward exemption, and the one heuristic
+that keeps the rule useful at all is the one that only affects the ambiguous
+shape.
+
+**Rejected: exempting only whole-line tags (`#todo` alone).** `#todo call the
+vet` is the commonest daily-note shape in the corpus and is corrupted just as
+badly.
+
+**Rejected: dropping MD018 entirely, or default-disabling it.** It catches a
+real typo class in prose-first vaults, and turning it off vault-wide is already
+available as `hyalo lint-rules set MD018 --enabled false`.
+
+**Where:** `crates/hyalo-mdlint/src/rules/obsidian.rs`
+(`is_obsidian_tag_token` / `is_obsidian_tag_line`), applied as a post-filter in
+`lint_body` next to the MD011 regex suppression. The token predicate is public
+so a future tag rule reuses one definition of the grammar.
+
+## DEC-272: MD001 is reported, never autofixed (2026-09-04)
+
+**Decision:** MD001 (`heading-increment`) keeps warning about a skipped heading
+level but carries no `fix`, so `lint --fix` never rewrites one. `hyalo
+lint-rules list` reports `autofixable: false` for it, and the per-vault opt-out
+for the warning itself stays `hyalo lint-rules set MD001 --enabled false`.
+Implemented as a `NON_AUTOFIXABLE` table in `hyalo-mdlint`'s engine — a general
+mechanism, not an MD001 special case — that both strips the fix and answers the
+catalog.
+
+**Why:** the fix renumbers a heading. On the Obsidian Hub vault it proposed 17
+rewrites of deliberate `###### Caption` lines on CSS-snippet notes, turning them
+into `##`. Correct per markdownlint, wrong for the author, and unlike a trailing
+space there is no way to tell the two apart from the text. A skipped level is
+still worth a warning, and the manual correction is a one-character edit.
+
+**Rejected: default-disabling MD001 (option (b) in the plan).** That loses the
+warning too, and the warning is the useful half.
+
+**Rejected: a `--no-fix-rule` flag or an autofix allowlist in config.** No new
+CLI surface from dogfood pressure; `--fix-rule` already restricts a run to named
+rules, which covers the opposite need.

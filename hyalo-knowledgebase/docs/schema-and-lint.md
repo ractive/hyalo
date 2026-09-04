@@ -154,11 +154,31 @@ hyalo lint --fix iterations/iteration-101-bm25.md
   fixes and changes no bytes. `--dry-run` previews the fully converged result.
 - **Severity wins conflicts.** When two rules' fixes overlap on the same byte
   range, the higher-severity fix (error over warn) is applied and the other is
-  reported as a conflict.
+  reported as a conflict. Text output explains each one —
+  `conflict  MD047  line 5: range overlap with MD012` — capped at 20 lines per
+  file, with `… and N more (use --detailed)` beyond that (iter-263).
 - **Line endings are preserved.** Fixes on CRLF files emit CRLF; a fix never
   flips a file's line-ending style.
 - **Size cap.** Files larger than 100 MiB are skipped with a warning (reported
   as a `FILE` group) instead of being read into memory.
+
+### Obsidian grammar (autofix safety, iter-263)
+
+The bundled `MD*` rules come from `mdbook-lint`, which targets mdBook — no `#tag`
+grammar, and a line-based link scanner. On a real Obsidian vault that produced
+destructive autofixes, so four rules are narrowed. Each deviation is stated in
+`hyalo lint-rules show <ID>`.
+
+| Rule | Narrowed to |
+|------|-------------|
+| **MD018** | A single `#` followed by a tag token — letters, digits, `_`, `-`, `/`, non-ASCII word characters, at least one non-digit — is an Obsidian tag, not a heading missing its space (DEC-271). `##Heading`, `#1`, `#!bang` and a capitalized word followed by prose (`#Heading typo`) still fire. |
+| **MD034** | A URL already inside link markup — a markdown link or image destination, an autolink, a wikilink, a reference definition — is not bare. Only prose URLs are flagged. |
+| **MD042** | An image is valid link text: `[![](img.png)](https://…)` is neither an empty link nor a missing-alt warning. A standalone `![](img.png)` still warns, and `[](url)` / `[ ](url)` still error. |
+| **MD001** | Reported, never autofixed (DEC-272): renumbering a deliberate `###### Caption` to `##` rewrites authored structure. `hyalo lint-rules list` shows `AUTOFIX no`; silence the warning with `hyalo lint-rules set MD001 --enabled false`. |
+
+Measured on the Obsidian Hub vault (6,520 files): MD018 fix proposals 162 → 0,
+MD034 209 → 116 (all remaining ones are prose URLs), MD001 17 → 0, and MD042's
+"Found empty link" hits 55 → 0.
 
 ### Fix categories
 

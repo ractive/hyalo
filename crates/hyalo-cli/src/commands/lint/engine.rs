@@ -16,6 +16,14 @@ use hyalo_core::schema::SchemaConfig;
 use hyalo_mdlint::schema::{FileFixResult, FixAction, FixMode, LintCounts};
 use std::collections::HashSet;
 
+/// How many per-conflict explanation lines one file lists before the output
+/// switches to `… and N more (use --detailed)` (iteration 263, UX-16).
+///
+/// A file with a pathological overlap can produce hundreds of conflicts;
+/// listing them all would bury the fixed/remaining sections that describe what
+/// actually changed. `--detailed` prints the full list.
+const MAX_CONFLICT_LINES: usize = 20;
+
 /// Run the extended lint (frontmatter + body) and return the new output shape.
 #[allow(clippy::too_many_arguments)]
 pub fn lint_files_extended(
@@ -194,17 +202,21 @@ pub fn lint_files_extended(
             // Easier to just build maps indexed by rule.
             let mut applied_by_rule: indexmap::IndexMap<String, Vec<BodyViolation>> =
                 indexmap::IndexMap::new();
-            let mut conflict_by_rule: indexmap::IndexMap<String, String> =
+            // Keyed by (rule, line) rather than by rule alone (UX-16): two
+            // violations of the same rule can lose to two different blocking
+            // rules on two different lines, and collapsing them to one entry
+            // was exactly why `conflicts N` could not be explained.
+            let mut conflict_by_violation: indexmap::IndexMap<(String, usize), String> =
                 indexmap::IndexMap::new();
 
-            for (rule_id, outcome) in &r.body_fix_outcomes {
+            for (rule_id, line, outcome) in &r.body_fix_outcomes {
                 match outcome {
                     FixOutcome::Applied => {
                         applied_by_rule.entry(rule_id.clone()).or_default();
                     }
                     FixOutcome::Conflict { blocking_rule } => {
-                        conflict_by_rule
-                            .entry(rule_id.clone())
+                        conflict_by_violation
+                            .entry((rule_id.clone(), *line))
                             .or_insert_with(|| blocking_rule.clone());
                     }
                     FixOutcome::NoFix => {}
@@ -378,13 +390,22 @@ pub fn lint_files_extended(
             }
             remaining_groups.sort_by_key(|g| std::cmp::Reverse(g.count));
 
-            // conflicts: rules with at least one conflicting fix.
+            // conflicts: one entry per (rule, line) whose fix was skipped.
             let mut conflicts: Vec<ConflictEntry> = Vec::new();
-            for (rule_id, blocking_rule) in &conflict_by_rule {
+            for ((rule_id, line), blocking_rule) in &conflict_by_violation {
                 conflicts.push(ConflictEntry {
                     rule: rule_id.clone(),
+                    line: *line,
                     reason: format!("range overlap with {blocking_rule}"),
                 });
+            }
+            conflicts.sort_by(|a, b| a.rule.cmp(&b.rule).then(a.line.cmp(&b.line)));
+            // The listing is capped the same way the remaining-violation
+            // listing is; `--detailed` lifts it. `conflicts_total` keeps the
+            // "… and N more" line honest.
+            let conflicts_total = conflicts.len();
+            if !opts.detailed && conflicts_total > MAX_CONFLICT_LINES {
+                conflicts.truncate(MAX_CONFLICT_LINES);
             }
 
             if !fixed_groups.is_empty() || !remaining_groups.is_empty() || !conflicts.is_empty() {
@@ -394,6 +415,7 @@ pub fn lint_files_extended(
                     fixed_groups,
                     remaining_groups,
                     conflicts,
+                    conflicts_total,
                 });
             }
         }
@@ -580,9 +602,11 @@ pub(super) struct PerFileLintResult {
     pub(super) body_modified: bool,
     /// Frontmatter fix actions applied or previewed.
     pub(super) fix_actions: Vec<FixAction>,
-    /// Fix outcomes keyed by (rule_id, index_within_rule).
-    /// Only populated in fix-mode.
-    pub(super) body_fix_outcomes: Vec<(String, FixOutcome)>,
+    /// One `(rule_id, line, outcome)` per fixable diagnostic the fix loop
+    /// considered, in pass order. The line is the diagnostic's own 1-based
+    /// line, carried so a conflict can be explained as `<rule> line <n>`
+    /// (iteration 263). Only populated in fix-mode.
+    pub(super) body_fix_outcomes: Vec<(String, usize, FixOutcome)>,
     /// SCHEMA (frontmatter) violations remaining *after* applying fixes,
     /// computed by re-running `validate_properties` against the mutated
     /// frontmatter. `Some(vec![])` means all SCHEMA violations were resolved;
@@ -600,14 +624,18 @@ pub(super) struct PerFileLintResult {
 /// even when the listing is truncated (iter-218 NEW-6).
 pub(super) fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usize) {
     let mut applied_rules: HashSet<&str> = HashSet::new();
-    let mut conflict_rules: HashSet<&str> = HashSet::new();
-    for (rule_id, outcome) in &r.body_fix_outcomes {
+    // Keyed by (rule, line), matching the per-violation `conflicts` array the
+    // display loop builds (iteration 263). Counting distinct *rules* here
+    // made the summary's `conflicts N` smaller than the number of `conflict`
+    // lines printed above it, which reads as an accounting bug.
+    let mut conflict_violations: HashSet<(&str, usize)> = HashSet::new();
+    for (rule_id, line, outcome) in &r.body_fix_outcomes {
         match outcome {
             FixOutcome::Applied => {
                 applied_rules.insert(rule_id.as_str());
             }
             FixOutcome::Conflict { .. } => {
-                conflict_rules.insert(rule_id.as_str());
+                conflict_violations.insert((rule_id.as_str(), *line));
             }
             FixOutcome::NoFix => {}
         }
@@ -635,7 +663,7 @@ pub(super) fn fix_mode_file_totals(r: &PerFileLintResult) -> (usize, usize, usiz
         remaining += violations.iter().filter(|v| !v.fixed).count();
     }
 
-    (fixed, remaining, conflict_rules.len())
+    (fixed, remaining, conflict_violations.len())
 }
 
 /// Count the error- and warning-severity violations across every result,

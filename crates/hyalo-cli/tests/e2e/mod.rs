@@ -43,6 +43,7 @@ mod iteration255_followups;
 mod iteration257_init_scope;
 mod iteration261_link_kinds;
 mod iteration262_frontmatter_links;
+mod iteration263_obsidian_lint_safety;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

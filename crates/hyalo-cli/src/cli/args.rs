@@ -1754,6 +1754,18 @@ Repeatable (AND).\n\
             \u{00a0}            profile downgrades it.\n\
             Severity is hyalo-controlled. Manage rule enable/severity with `hyalo lint-rules`.\n\
             Override defaults via `[lint]` and `[lint.rules]` in `.hyalo.toml`.\n\n\
+            OBSIDIAN GRAMMAR: four stock rules are narrowed so `--fix` cannot corrupt a vault\n\
+            (`hyalo lint-rules show <ID>` spells each one out):\n\
+            \u{00a0} - MD018 exempts tag lines — a single `#` plus a tag token (letters, digits,\n\
+            \u{00a0}          `_`, `-`, `/`, non-ASCII word chars, at least one non-digit) is\n\
+            \u{00a0}          `#todo`, not a heading missing its space. `##Heading`, `#1` and a\n\
+            \u{00a0}          capitalized word followed by prose (`#Heading typo`) still fire.\n\
+            \u{00a0} - MD034 ignores URLs already inside link markup (a markdown link or image\n\
+            \u{00a0}          destination, an autolink, a wikilink, a reference definition).\n\
+            \u{00a0} - MD042 accepts an image as link text (`[![](img.png)](https://…)`).\n\
+            \u{00a0} - MD001 reports skipped heading levels but never autofixes them: renumbering\n\
+            \u{00a0}          a deliberate `######` caption rewrites authored structure. Turn the\n\
+            \u{00a0}          warning off with `hyalo lint-rules set MD001 --enabled false`.\n\n\
             INPUT: Optional FILE (positional or --file) or --glob to narrow scope.\n\
             Without any file arguments, the entire vault is linted.\n\n\
             OUTPUT: Text by default — summary mode groups violations by `(file, rule)` and caps\n\
@@ -1827,7 +1839,9 @@ Repeatable (AND).\n\
             AUTO-FIX: With --fix, hyalo applies frontmatter fixes (insert defaults, correct enum\n\
             typos, normalize dates, infer type) and body fixes from autofixable rules. Body fixes\n\
             are applied in `(start, end, rule_id)` order; overlapping fixes are deferred and\n\
-            reported as conflicts. Use --fix-rule <ID> (repeatable) to limit which rules autofix,\n\
+            reported as conflicts — text output prints one `conflict <RULE> line <N>: range\n\
+            overlap with <RULE>` line per deferred fix (first 20 per file; --detailed shows all).\n\
+            Use --fix-rule <ID> (repeatable) to limit which rules autofix,\n\
             or --dry-run to preview without writing. JSON under --fix uses `total_fixed`,\n\
             `total_remaining`, and `total_conflicts` in place of plain lint's `total` —\n\
             all three, like every counter above, describe the WHOLE run and are identical at\n\

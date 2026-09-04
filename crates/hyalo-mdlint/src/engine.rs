@@ -61,6 +61,54 @@ static DEFAULT_ON: &[&str] = &[
     "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006", "HYALO007",
 ];
 
+/// Stock rules whose upstream autofix hyalo **refuses to offer**, however the
+/// upstream `Rule::can_fix()` answers.
+///
+/// A rule lands here when its fix is not a mechanical correction but a
+/// rewrite of authored content — applying it silently changes meaning, and
+/// the by-hand correction is trivial. The diagnostic is still reported (and
+/// still counted by `lint`), it just carries no `fix`, so `lint --fix` never
+/// touches it and `lint-rules list` shows `AUTOFIX no`.
+///
+/// - `MD001` (heading-increment, DEC-272, dogfood v0.22.0 UX-10): the fix
+///   renumbers the heading — `###### Caption` under an `## H2` becomes
+///   `### Caption`. On the Obsidian Hub vault that proposed 17 rewrites of
+///   deliberate small-caption headings. `lint-rules set MD001 --enabled false`
+///   remains the per-vault opt-out for the warning itself.
+static NON_AUTOFIXABLE: &[&str] = &["MD001"];
+
+/// Extra sentences appended to a stock rule's upstream description so
+/// `hyalo lint-rules show <id>` documents hyalo's deviation from it.
+///
+/// Kept as a suffix rather than a replacement: the upstream one-liner stays
+/// the primary description, and a version bump that rewords it does not
+/// silently drop hyalo's note.
+static DESCRIPTION_SUFFIX: &[(&str, &str)] = &[
+    (
+        "MD001",
+        "Reported but not autofixed by hyalo: renumbering a heading rewrites authored structure \
+         (a deliberate `######` caption would become `##`). Fix by hand, or turn the warning off \
+         with `hyalo lint-rules set MD001 --enabled false`.",
+    ),
+    (
+        "MD018",
+        "Obsidian tag lines are exempt in hyalo: a single `#` followed by a tag token (letters, \
+         digits, `_`, `-`, `/`, non-ASCII word characters, at least one non-digit) is a tag, not \
+         a malformed heading. `##Heading`, `#1` and `#!bang` still fire.",
+    ),
+    (
+        "MD034",
+        "hyalo suppresses URLs that already sit inside link markup — a markdown link or image \
+         destination, an autolink, a wikilink or a reference definition. Only a URL in plain \
+         prose is bare.",
+    ),
+    (
+        "MD042",
+        "hyalo does not treat an image as empty link text: the badge idiom \
+         `[![alt](img.png)](https://…)` is deliberate markup. `[](url)` and `[ ](url)` still fire.",
+    ),
+];
+
 // ---------------------------------------------------------------------------
 // HYALO rule provider
 // ---------------------------------------------------------------------------
@@ -103,14 +151,22 @@ impl HyaloLintEngine {
                     .registry()
                     .get_rule(id)
                     .map_or(("unknown", ""), |r| (r.name(), r.description()));
-                let autofixable = inner
-                    .registry()
-                    .get_rule(id)
-                    .is_some_and(mdbook_lint_core::rule::Rule::can_fix);
+                let autofixable = !NON_AUTOFIXABLE.contains(id)
+                    && inner
+                        .registry()
+                        .get_rule(id)
+                        .is_some_and(mdbook_lint_core::rule::Rule::can_fix);
+                let description = DESCRIPTION_SUFFIX
+                    .iter()
+                    .find(|(rule, _)| rule == id)
+                    .map_or_else(
+                        || description.to_owned(),
+                        |(_, extra)| format!("{description}. {extra}"),
+                    );
                 RuleCatalogEntry {
                     id: id.to_string(),
                     name: name.to_owned(),
-                    description: description.to_owned(),
+                    description,
                     default_severity: sev,
                     default_enabled: enabled,
                     autofixable,
@@ -729,6 +785,19 @@ impl HyaloLintEngine {
                     if *rule_id == "MD011" && is_regex_false_positive(&v.message) {
                         continue;
                     }
+                    // BUG-3 (dogfood v0.22.0): a line-leading `#todo` is an
+                    // Obsidian tag, not a malformed heading. MD018's autofix
+                    // would rewrite it to `# todo` — silent content
+                    // corruption on any vault that uses tags. See
+                    // `rules::obsidian` and DEC-271.
+                    if *rule_id == "MD018"
+                        && v.line
+                            .checked_sub(1)
+                            .and_then(|i| doc.lines.get(i))
+                            .is_some_and(|line| crate::rules::obsidian::is_obsidian_tag_line(line))
+                    {
+                        continue;
+                    }
                     let fix = convert_fix(&v, body_content);
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
@@ -748,6 +817,39 @@ impl HyaloLintEngine {
                             .map_or(v.column, |line| byte_col_to_scalar_col(line, v.column))
                     } else {
                         v.column
+                    };
+                    // BUG-9 (dogfood v0.22.0): both of these need the
+                    // *scalar* column, so they run after the conversion
+                    // above. MD034 wraps a URL that is already a link
+                    // destination in angle brackets (its own `[`-skipping
+                    // scan cannot see the nested brackets of the badge idiom
+                    // `[![](img)](url)`), and MD042 calls a link whose text
+                    // is an image "empty".
+                    let line_text = v.line.checked_sub(1).and_then(|i| doc.lines.get(i));
+                    if *rule_id == "MD034"
+                        && line_text.is_some_and(|line| {
+                            crate::rules::obsidian::url_is_inside_link_markup(line, column)
+                        })
+                    {
+                        continue;
+                    }
+                    if *rule_id == "MD042"
+                        && line_text.is_some_and(|line| {
+                            crate::rules::obsidian::link_text_is_image(line, column)
+                        })
+                    {
+                        continue;
+                    }
+                    // UX-10 (dogfood v0.22.0) / DEC-272: MD001 keeps
+                    // *reporting* a skipped heading level but is no longer
+                    // autofixable — rewriting a deliberate `######` caption
+                    // to `##` changes what the author meant, and the manual
+                    // fix is a one-character edit. `RuleCatalogEntry` reports
+                    // `autofixable: false` to match (see `NON_AUTOFIXABLE`).
+                    let fix = if NON_AUTOFIXABLE.contains(rule_id) {
+                        None
+                    } else {
+                        fix
                     };
                     diagnostics.push(Diagnostic {
                         rule_id: rule_id.to_string(),
@@ -1597,13 +1699,17 @@ mod tests {
 
     /// Upstream #492 (our issue #491): a paragraph continuation line that
     /// starts with an issue reference such as `#472` is prose, not a
-    /// malformed ATX heading, and must not be flagged. A genuinely standalone
-    /// `#foo` still is, and a mid-line `PR #472` never was.
+    /// malformed ATX heading, and must not be flagged. A genuine heading typo
+    /// still is, and a mid-line `PR #472` never was.
+    ///
+    /// The standalone case used to be `#standalone`, which iteration 263 now
+    /// reads as an Obsidian tag (DEC-271); `#Standalone typo` — a capitalized
+    /// word followed by prose — is the shape that still means "heading".
     #[test]
     fn md018_ignores_paragraph_continuation_lines() {
         let config = LintConfig::default();
         let engine = HyaloLintEngine::create().unwrap();
-        let body = "Upstream tracked this in\n#472 which is a continuation line.\n\nSee PR #472 for the fix.\n\n#standalone\n";
+        let body = "Upstream tracked this in\n#472 which is a continuation line.\n\nSee PR #472 for the fix.\n\n#Standalone typo\n";
         let diagnostics = engine
             .lint_body(body, "test.md", None, false, &config, &["MD018".to_owned()])
             .unwrap();
@@ -1622,7 +1728,7 @@ mod tests {
         );
         assert!(
             lines.contains(&6),
-            "a standalone `#standalone` is still a malformed heading: {lines:?}"
+            "`#Standalone typo` is still a malformed heading: {lines:?}"
         );
     }
 
@@ -1685,5 +1791,158 @@ mod tests {
             .expect("MD009 should fire on the trailing spaces");
         let fix = d.fix.as_ref().expect("MD009 fix should not be dropped");
         assert_eq!(apply(body, fix), "café — naïve\r\nsecond ünïcode line\r\n");
+    }
+
+    // -----------------------------------------------------------------
+    // Obsidian-grammar guards (iteration 263, dogfood v0.22.0)
+    // -----------------------------------------------------------------
+
+    /// BUG-3: MD018 must not read an Obsidian tag line as a broken heading.
+    /// The two `#todo`-shaped lines mirror `T - Thecookiemomma's Daily
+    /// Log.md` lines 31/36 from the report.
+    #[test]
+    fn md018_exempts_obsidian_tag_lines() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "Notes for today.\n\n#todo\n\nMore prose.\n\n#todo/next call the vet\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD018".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().all(|d| d.rule_id != "MD018"),
+            "tag lines must not be flagged: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn md018_still_fires_on_real_heading_typos() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        // `#!bang` is left out: upstream MD018 skips shebang lines outright,
+        // so there is no diagnostic either way (the token-level grammar is
+        // pinned in `rules::obsidian`'s own tests).
+        for (body, should_fire) in [
+            ("#Heading typo\n", true),
+            ("##todo\n", true),
+            ("#1 item\n", true),
+            ("#日本語 heading?\n", false),
+            ("#todo/next\n", false),
+        ] {
+            let diagnostics = engine
+                .lint_body(body, "test.md", None, false, &config, &["MD018".to_owned()])
+                .unwrap();
+            let fires = diagnostics.iter().any(|d| d.rule_id == "MD018");
+            assert_eq!(fires, should_fire, "MD018 on {body:?}");
+        }
+    }
+
+    /// BUG-9: a URL that is already a link destination is not bare, so no
+    /// angle-bracket fix may be proposed for it.
+    #[test]
+    fn md034_ignores_urls_inside_link_destinations() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "[![](img.png)](https://example.com/y.png)\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().all(|d| d.rule_id != "MD034"),
+            "a link destination is not a bare URL: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn md034_still_fires_on_a_bare_url_next_to_a_link() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "see [docs](https://a.example/) and https://b.example/ too\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        let hits: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.rule_id == "MD034")
+            .collect();
+        assert_eq!(hits.len(), 1, "only the prose URL is bare: {diagnostics:?}");
+        let fix = hits[0].fix.as_ref().expect("the bare URL keeps its fix");
+        assert_eq!(
+            apply(body, fix),
+            "see [docs](https://a.example/) and <https://b.example/> too\n"
+        );
+    }
+
+    #[test]
+    fn md034_ignores_urls_in_fenced_code_blocks() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "```text\nhttps://example.com/in-code\n```\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD034".to_owned()])
+            .unwrap();
+        assert!(
+            diagnostics.iter().all(|d| d.rule_id != "MD034"),
+            "code-block URLs are not bare: {diagnostics:?}"
+        );
+    }
+
+    /// BUG-9: an image is link text, not emptiness.
+    #[test]
+    fn md042_accepts_an_image_as_link_text() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "[![](img.png)](https://example.com/y.png)\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD042".to_owned()])
+            .unwrap();
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.rule_id == "MD042" && d.message.contains("empty link")),
+            "an image is not empty link text: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn md042_still_fires_on_genuinely_empty_links() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        for body in ["[](https://example.com/)\n", "[ ](https://example.com/)\n"] {
+            let diagnostics = engine
+                .lint_body(body, "test.md", None, false, &config, &["MD042".to_owned()])
+                .unwrap();
+            assert!(
+                diagnostics.iter().any(|d| d.rule_id == "MD042"),
+                "MD042 must still fire on {body:?}: {diagnostics:?}"
+            );
+        }
+    }
+
+    /// UX-10 / DEC-272: MD001 keeps reporting, never fixes.
+    #[test]
+    fn md001_reports_but_offers_no_fix() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "## Section\n\nprose\n\n###### Caption\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", None, false, &config, &["MD001".to_owned()])
+            .unwrap();
+        let d = diagnostics
+            .iter()
+            .find(|d| d.rule_id == "MD001")
+            .expect("MD001 must still warn about the skipped level");
+        assert!(d.fix.is_none(), "MD001 must not carry an autofix: {d:?}");
+    }
+
+    #[test]
+    fn md001_is_reported_as_not_autofixable_in_the_catalog() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let entry = engine.rule_entry("MD001").expect("MD001 is in the catalog");
+        assert!(!entry.autofixable);
+        assert!(
+            entry.description.contains("not autofixed"),
+            "the catalog description must explain why: {}",
+            entry.description
+        );
     }
 }

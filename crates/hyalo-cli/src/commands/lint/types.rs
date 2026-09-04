@@ -66,9 +66,16 @@ pub struct FixedGroup {
 }
 
 /// One entry in `conflicts`: a rule whose fix was skipped due to range overlap.
+///
+/// One entry per *violation* (rule + line), not per rule: the same rule can
+/// lose two different overlaps on two different lines, and collapsing those
+/// was why `lint --fix` could only print `conflicts N` with nothing to point
+/// at (iteration 263, dogfood v0.22.0 UX-16).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConflictEntry {
     pub rule: String,
+    /// 1-based line of the violation whose fix was skipped.
+    pub line: usize,
     pub reason: String,
 }
 
@@ -85,8 +92,11 @@ pub struct ExtFileLintFixResult {
     pub fixed_groups: Vec<FixedGroup>,
     /// Rules with violations that remain after fixing.
     pub remaining_groups: Vec<RuleGroup>,
-    /// Rules whose fixes were skipped due to conflicts.
+    /// Violations whose fixes were skipped due to conflicts. Capped for
+    /// display unless `--detailed`; see `conflicts_total`.
     pub conflicts: Vec<ConflictEntry>,
+    /// How many conflicts this file actually had, before the display cap.
+    pub conflicts_total: usize,
 }
 
 /// Full extended lint output (read-only mode).

@@ -393,30 +393,83 @@ pub(super) fn format_lint_fix_output_text(
             // rule already appears there. The JSON keeps both: `conflicts` is
             // how a consumer learns a fix was skipped, and dropping entries
             // from it would lose that.
-            let fixed_rules: std::collections::HashSet<&str> = file_entry
-                .get("fixed_groups")
-                .and_then(|g| g.as_array())
-                .map(|groups| {
-                    groups
-                        .iter()
-                        .filter_map(|g| g.get("rule").and_then(serde_json::Value::as_str))
-                        .collect()
-                })
-                .unwrap_or_default();
+            //
+            // Iteration 263 narrows that suppression to the *same violation*
+            // (rule + line): once a conflict names its line, `fixed MD047
+            // line 6` beside `conflict MD047 line 9` reads as two different
+            // violations rather than a contradiction, and suppressing the
+            // second was the whole reason `conflicts N` could go unexplained
+            // (UX-16). A fixed group that lists no violations carries no
+            // lines to compare, so it still suppresses its rule wholesale.
+            let mut fixed_rules: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let mut fixed_at: std::collections::HashSet<(&str, u64)> =
+                std::collections::HashSet::new();
+            if let Some(groups) = file_entry.get("fixed_groups").and_then(|g| g.as_array()) {
+                for group in groups {
+                    let Some(rule) = group.get("rule").and_then(serde_json::Value::as_str) else {
+                        continue;
+                    };
+                    let lines: Vec<u64> = group
+                        .get("violations")
+                        .and_then(|v| v.as_array())
+                        .map(|vs| {
+                            vs.iter()
+                                .filter_map(|v| v.get("line").and_then(serde_json::Value::as_u64))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if lines.is_empty() {
+                        fixed_rules.insert(rule);
+                    } else {
+                        for line in lines {
+                            fixed_at.insert((rule, line));
+                        }
+                    }
+                }
+            }
             if let Some(conflicts) = file_entry.get("conflicts").and_then(|c| c.as_array()) {
+                let mut shown = 0usize;
                 for conflict in conflicts {
                     let rule = conflict
                         .get("rule")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("?");
-                    if fixed_rules.contains(rule) {
+                    // The line is what turns `conflicts 2` into something a
+                    // reader can act on (iteration 263, dogfood UX-16). A
+                    // conflict without one still prints, just without the
+                    // position.
+                    let line = conflict
+                        .get("line")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
+                    if fixed_rules.contains(rule) || fixed_at.contains(&(rule, line)) {
                         continue;
                     }
                     let reason = conflict
                         .get("reason")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
-                    let _ = writeln!(s, "  conflict  {rule}  {reason}");
+                    if line > 0 {
+                        let _ = writeln!(s, "  conflict  {rule}  line {line}: {reason}");
+                    } else {
+                        let _ = writeln!(s, "  conflict  {rule}  {reason}");
+                    }
+                    shown += 1;
+                }
+                // `conflicts_total` counts what the file really had; the
+                // array itself is capped unless `--detailed` was passed.
+                let total = file_entry
+                    .get("conflicts_total")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(conflicts.len(), |t| {
+                        usize::try_from(t).unwrap_or(usize::MAX)
+                    });
+                if shown > 0 && total > conflicts.len() {
+                    let _ = writeln!(
+                        s,
+                        "  … and {} more (use --detailed)",
+                        total - conflicts.len()
+                    );
                 }
             }
         }
