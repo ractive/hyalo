@@ -24,6 +24,119 @@ use crate::util::levenshtein;
 /// `.git/**` is always hard-excluded regardless of the include list.
 static SCAN_INCLUDE: OnceLock<Option<ScanInclude>> = OnceLock::new();
 
+/// Process-global set of `[scan] exclude` globs (iter-265, DEC-277).
+///
+/// Obsidian's "Excluded files" has no analogue in hyalo: the only exclusion
+/// knobs were per-feature (`[lint] ignore`, `[okf] ignore`, `[schema] exempt`),
+/// so a vault of Templater templates had to be excluded once per command that
+/// grew a knob. `[scan] exclude = ["Templates/**"]` is applied here, at file
+/// discovery, which makes matching files invisible to *every* command — `find`,
+/// `summary`, `tags`, `properties`, `lint`, `links *`, `mv`'s link graph,
+/// `backlinks`, `create-index`, `views`, `types`, `okf`, `madr`.
+///
+/// Precedence: exclusion is the widest knob and wins over the narrower
+/// per-feature lists — a file excluded here is never seen, so `[lint] ignore`
+/// and friends only ever narrow further within what the walk returned. An
+/// explicitly named target (`--file`, `--files-from`) is *refused* rather than
+/// silently dropped, so a script never mistakes "excluded" for "clean".
+static SCAN_EXCLUDE: OnceLock<Option<ScanExclude>> = OnceLock::new();
+
+/// Compiled `[scan] exclude` configuration.
+#[derive(Clone)]
+pub struct ScanExclude {
+    /// Glob set matched against vault-relative, forward-slash paths.
+    set: GlobSet,
+    /// The original patterns, in order, so a refusal can name the glob that
+    /// matched rather than just saying "excluded".
+    patterns: Vec<String>,
+}
+
+impl ScanExclude {
+    /// Whether the vault-relative path `rel` is excluded, and by which pattern.
+    #[must_use]
+    pub fn matching_glob(&self, rel: &str) -> Option<&str> {
+        let hit = self.set.matches(rel);
+        hit.first().and_then(|&i| self.patterns.get(i)).map(String::as_str)
+    }
+
+    /// Whether the vault-relative path `rel` is excluded.
+    #[must_use]
+    pub fn is_excluded(&self, rel: &str) -> bool {
+        self.set.is_match(rel)
+    }
+}
+
+/// Install the `[scan] exclude` glob set for this process.
+///
+/// Same contract as [`set_scan_include`]: idempotent-once, and invalid globs
+/// are returned as `(pattern, message)` pairs rather than disabling the rest.
+///
+/// # Errors
+/// Never returns `Err`.
+pub fn set_scan_exclude(patterns: &[String]) -> Vec<(String, String)> {
+    let mut errors = Vec::new();
+    let compiled = if patterns.is_empty() {
+        None
+    } else {
+        let mut builder = GlobSetBuilder::new();
+        let mut kept = Vec::new();
+        for pat in patterns {
+            // `literal_separator(false)`: a bare `Templates` or `*.tmpl.md`
+            // should behave the way users expect from Obsidian's excluded
+            // folders, and a trailing `/**` still only matches below the dir.
+            match GlobBuilder::new(pat).literal_separator(true).build() {
+                Ok(g) => {
+                    builder.add(g);
+                    kept.push(pat.clone());
+                }
+                Err(e) => errors.push((pat.clone(), e.to_string())),
+            }
+        }
+        builder.build().ok().map(|set| ScanExclude {
+            set,
+            patterns: kept,
+        })
+    };
+    let _ = SCAN_EXCLUDE.set(compiled);
+    errors
+}
+
+/// The installed `[scan] exclude` set, if this process has one.
+#[must_use]
+pub fn scan_exclude() -> Option<&'static ScanExclude> {
+    match SCAN_EXCLUDE.get() {
+        Some(Some(exc)) => Some(exc),
+        _ => None,
+    }
+}
+
+/// Whether the vault-relative path `rel` is dropped by `[scan] exclude`.
+#[must_use]
+pub fn is_scan_excluded(rel: &str) -> bool {
+    scan_exclude().is_some_and(|exc| exc.is_excluded(rel))
+}
+
+/// The `[scan] exclude` glob that drops `rel`, if any.
+#[must_use]
+pub fn scan_exclude_glob(rel: &str) -> Option<&'static str> {
+    scan_exclude().and_then(|exc| exc.matching_glob(rel))
+}
+
+/// How many files the last completed vault walk dropped because of
+/// `[scan] exclude`, for `summary`'s `results.files.excluded`.
+static EXCLUDED_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Files dropped by `[scan] exclude` during this process's walks.
+#[must_use]
+pub fn scan_excluded_count() -> usize {
+    EXCLUDED_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reset the excluded counter. **Tests only.**
+pub fn reset_scan_excluded_count() {
+    EXCLUDED_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Compiled `[scan] include` configuration.
 #[derive(Clone)]
 struct ScanInclude {
@@ -334,6 +447,18 @@ fn discover_files_with_include_ext(
     // above; restore it so callers keep their deterministic enumeration.
     let mut kept: Vec<PathBuf> = kept.into_iter().map(|(p, _)| p).collect();
     kept.sort();
+
+    // `[scan] exclude` is applied last, on the deduplicated result, so a file
+    // reachable under two spellings is excluded once and the counter below
+    // matches the number of *files* the vault lost, not directory entries.
+    if let Some(exc) = scan_exclude() {
+        let before = kept.len();
+        kept.retain(|p| !exc.is_excluded(&relative_path(dir, p)));
+        let dropped = before - kept.len();
+        if dropped > 0 {
+            EXCLUDED_COUNT.fetch_max(dropped, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
     Ok(kept)
 }
