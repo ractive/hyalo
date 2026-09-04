@@ -331,6 +331,9 @@ pub fn collect_files(
                     } => {
                         format!("file resolves outside vault boundary: {path} -> {target}")
                     }
+                    FileResolveError::ScanExcluded { glob, .. } => {
+                        format!("skipping {path}: excluded by [scan] exclude = [\"{glob}\"]")
+                    }
                     FileResolveError::OutsideVault { .. } => {
                         format!("file resolves outside vault boundary: {path}")
                     }
@@ -705,6 +708,18 @@ pub fn resolve_error_to_outcome(
                 "path is a directory, not a file",
                 Some(&path),
                 Some(&hint),
+                None,
+            ))
+        }
+        FileResolveError::ScanExcluded { path, glob } => {
+            CommandOutcome::UserError(crate::output::format_error(
+                format,
+                &format!("file is excluded by [scan] exclude = [\"{glob}\"]"),
+                Some(&path),
+                Some(
+                    "remove or narrow that glob in .hyalo.toml to let hyalo see this file; \
+                     run `hyalo config` to see the effective exclusion list",
+                ),
                 None,
             ))
         }

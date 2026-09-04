@@ -734,6 +734,17 @@ pub fn resolve_file_ci(
         }
     }
 
+    // The file exists and is inside the vault, but `[scan] exclude` says no
+    // command should see it (iter-265, DEC-277). Refuse loudly: reporting the
+    // glob is the only way the caller learns why a file they can see on disk
+    // is invisible to hyalo.
+    if let Some(glob) = scan_exclude_glob(&normalized) {
+        return Err(FileResolveError::ScanExcluded {
+            path: normalized,
+            glob: glob.to_owned(),
+        });
+    }
+
     Ok((full, normalized))
 }
 
@@ -1200,6 +1211,16 @@ pub enum FileResolveError {
     ParentTraversal {
         path: String,
     },
+    /// The path resolves to a real vault file that `[scan] exclude` drops
+    /// (iter-265, DEC-277). An explicitly named target is *refused* rather
+    /// than silently skipped: a script that asked for one specific file and
+    /// got a clean exit 0 would read "excluded" as "nothing wrong here".
+    ScanExcluded {
+        path: String,
+        /// The `[scan] exclude` glob that matched, so the message says which
+        /// line of `.hyalo.toml` to change.
+        glob: String,
+    },
     InvalidPath {
         path: String,
         reason: &'static str,
@@ -1241,6 +1262,13 @@ impl std::fmt::Display for FileResolveError {
                      vault-relative without '..' components, even when the target \
                      is inside the vault — use the vault-relative form instead, \
                      e.g. \"broken.md\" or \"sub/broken.md\", not \"../broken.md\")"
+                )
+            }
+            Self::ScanExcluded { path, glob } => {
+                write!(
+                    f,
+                    "file is excluded by [scan] exclude = [\"{glob}\"]: {path} \
+                     (remove the glob from .hyalo.toml, or narrow it, to operate on this file)"
                 )
             }
             Self::InvalidPath { path, reason } => {
