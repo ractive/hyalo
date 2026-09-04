@@ -26,7 +26,24 @@
 /// type = "number"
 /// minimum = 1
 /// maximum = 5
+///
+/// [schema.types.memory.properties.sources]
+/// type = "object-list"
+/// required-keys = ["ref"]
+/// allowed-keys = ["ref", "commit", "version", "updated", "read"]
+///
+/// [schema.types.memory.properties.sources.key-patterns]
+/// ref = "^(github|confluence|jira|slack|person|runtime|decision):|^https?://"
+/// commit = "^[0-9a-f]{7,40}$"
+/// read = "^\\d{4}-\\d{2}-\\d{2}$"
 /// ```
+///
+/// `object-list` describes a list whose items are all YAML maps: `required-keys`
+/// must be present in every item, keys outside `allowed-keys` are errors (omit
+/// the list to allow any extra key), and `key-patterns` maps a key to a regex
+/// applied to that key's scalar value. Every `key-patterns` regex is compiled
+/// when the config is loaded, so an invalid one fails the schema rather than
+/// being reported per file (unlike `item_pattern`, see DEC-286).
 ///
 /// A property constraint block is deserialized with `deny_unknown_fields`:
 /// any key that isn't one of the fields above (a typo, or a plausible but
@@ -35,6 +52,7 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use indexmap::IndexMap;
 use serde::Deserialize;
 
 use crate::heading::parse_atx_heading;
@@ -518,6 +536,19 @@ pub enum PropertyConstraint {
         /// Optional regex each list item must match.
         item_pattern: Option<String>,
     },
+    /// A YAML list whose items must all be maps, with flat per-key constraints
+    /// (DEC-286). Deliberately not JSON Schema: keys are strings, values must be
+    /// scalars when a pattern applies, and there is no nesting or per-key type.
+    ObjectList {
+        /// Keys that must be present in every item.
+        required_keys: Vec<String>,
+        /// When `Some`, the only keys an item may carry. `None` allows any extra key.
+        allowed_keys: Option<Vec<String>>,
+        /// Key → regex applied to that key's scalar value when the key is present.
+        /// Kept as `String` (like `pattern` / `item_pattern`); every entry is
+        /// verified to compile when the config is parsed.
+        key_patterns: IndexMap<String, String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +586,17 @@ pub struct RawPropertyConstraint {
     pub minimum: Option<f64>,
     /// Inclusive maximum value for `number` properties (F3-3).
     pub maximum: Option<f64>,
+    /// Keys required in every item of an `object-list` property (DEC-286).
+    #[serde(rename = "required-keys")]
+    pub required_keys: Option<Vec<String>>,
+    /// The complete set of keys an `object-list` item may carry (DEC-286).
+    /// Omitted means "any extra key is fine".
+    #[serde(rename = "allowed-keys")]
+    pub allowed_keys: Option<Vec<String>>,
+    /// Per-key regexes for an `object-list` property (DEC-286). `IndexMap` so
+    /// `types show` prints the keys in the order the config file lists them.
+    #[serde(rename = "key-patterns")]
+    pub key_patterns: Option<IndexMap<String, String>>,
 }
 
 impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
@@ -600,6 +642,17 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
         if (raw.minimum.is_some() || raw.maximum.is_some()) && constraint_type != "number" {
             return Err(format!(
                 "'minimum'/'maximum' are only valid on 'number' properties, not '{constraint_type}'"
+            ));
+        }
+
+        // The object-list keys (DEC-286) apply only to `object-list` properties.
+        // Same rejection stance as the bounds above: a key on the wrong type is a
+        // hard error, not a silently ignored constraint.
+        if (raw.required_keys.is_some() || raw.allowed_keys.is_some() || raw.key_patterns.is_some())
+            && constraint_type != "object-list"
+        {
+            return Err(format!(
+                "'required-keys'/'allowed-keys'/'key-patterns' are only valid on 'object-list' properties, not '{constraint_type}'"
             ));
         }
 
@@ -729,9 +782,75 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
                     item_pattern: raw.item_pattern,
                 })
             }
+            "object-list" => {
+                if raw.pattern.is_some() {
+                    return Err(format!(
+                        "'pattern' is only valid on 'string' properties, not '{constraint_type}'"
+                    ));
+                }
+                if raw.item_pattern.is_some() {
+                    return Err(format!(
+                        "'item_pattern' is only valid on 'string-list' properties, not '{constraint_type}'"
+                    ));
+                }
+                let required_keys = raw.required_keys.unwrap_or_default();
+                let allowed_keys = raw.allowed_keys;
+                let key_patterns = raw.key_patterns.unwrap_or_default();
+
+                // An empty key name can never match a YAML key and is always a typo.
+                for (label, key) in required_keys
+                    .iter()
+                    .map(|k| ("required-keys", k))
+                    .chain(
+                        allowed_keys
+                            .iter()
+                            .flatten()
+                            .map(|k| ("allowed-keys", k)),
+                    )
+                    .chain(key_patterns.keys().map(|k| ("key-patterns", k)))
+                {
+                    if key.is_empty() {
+                        return Err(format!("'{label}' contains an empty key name"));
+                    }
+                }
+
+                // When `allowed-keys` is given it is the complete key set, so a
+                // name constrained elsewhere but missing from it is unreachable.
+                if let Some(allowed) = &allowed_keys {
+                    for key in &required_keys {
+                        if !allowed.contains(key) {
+                            return Err(format!(
+                                "'required-keys' entry '{key}' is not listed in 'allowed-keys'"
+                            ));
+                        }
+                    }
+                    for key in key_patterns.keys() {
+                        if !allowed.contains(key) {
+                            return Err(format!(
+                                "'key-patterns' entry '{key}' is not listed in 'allowed-keys'"
+                            ));
+                        }
+                    }
+                }
+
+                // Compile every key pattern now so a bad regex fails the config
+                // instead of being reported once per linted file (DEC-286).
+                for (key, pat) in &key_patterns {
+                    regex::Regex::new(pat).map_err(|e| {
+                        format!("key-patterns.{key}: invalid regex: {e}")
+                    })?;
+                }
+
+                Ok(PropertyConstraint::ObjectList {
+                    required_keys,
+                    allowed_keys,
+                    key_patterns,
+                })
+            }
             other => Err(format!(
                 "unknown property constraint type '{other}': expected one of \
-                 string, date, datetime, datetime-tz, number, boolean, list, enum, string-list"
+                 string, date, datetime, datetime-tz, number, boolean, list, enum, string-list, \
+                 object-list"
             )),
         }
     }
