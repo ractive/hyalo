@@ -153,21 +153,34 @@ pub fn properties_rename(
         };
 
         // Source key not present -- skip
-        let Some(value) = props.shift_remove(from) else {
+        if !props.contains_key(from) {
             skipped_count += 1;
             continue;
-        };
+        }
 
-        // Target key already exists -- conflict, put the source back
+        // Target key already exists -- conflict
         if props.contains_key(to) {
-            props.insert(from.to_owned(), value);
             conflicts.push(rel_path.clone());
             continue;
         }
 
-        props.insert(to.to_owned(), value);
+        // iter-266 PROP-1: rename the key where it stands. Rebuilding the map
+        // with `shift_remove` + `insert` moved the key to the end of the block
+        // and re-serialized its value (an empty `rating:` came back as
+        // `score: null`), so the map is rebuilt in place and the write itself
+        // is a text-level key-token rewrite whenever the block allows it.
+        props = props
+            .into_iter()
+            .map(|(k, v)| if k == from { (to.to_owned(), v) } else { (k, v) })
+            .collect();
+
         if !dry_run {
-            frontmatter::write_frontmatter_within(dir, full_path, &props)?;
+            if !frontmatter::rename_frontmatter_key_within(dir, full_path, from, to)? {
+                // Shapes the text splicer does not model (mixed line endings,
+                // non-UTF-8, YAML it cannot span-map) still get renamed — the
+                // props path warns about the reformatting it causes.
+                frontmatter::write_frontmatter_within(dir, full_path, &props)?;
+            }
             // Journal refresh covers entry AND link graph (frontmatter link
             // properties can change in a rename) — the pre-journal code only
             // patched the entry, leaving the persisted graph stale.

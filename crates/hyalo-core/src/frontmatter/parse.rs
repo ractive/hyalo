@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use super::splice::{FallbackReason, SpliceOutcome, splice_frontmatter};
+use super::splice::{FallbackReason, SpliceOutcome, rename_key_in_place, splice_frontmatter};
 use super::{FrontmatterError, MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
 
 /// Convenience macro: return a [`FrontmatterError`] wrapped in `anyhow::Error`.
@@ -446,7 +446,7 @@ pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {
 /// (e.g. tests). CLI call sites should prefer
 /// [`write_frontmatter_within`] (iter-191 follow-up).
 pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result<()> {
-    write_frontmatter_impl(None, path, props)
+    write_frontmatter_impl(None, path, &WriteOp::Props(props)).map(|_| ())
 }
 
 /// Like [`write_frontmatter`], but re-checks the vault boundary against the
@@ -458,14 +458,41 @@ pub fn write_frontmatter_within(
     path: &Path,
     props: &IndexMap<String, Value>,
 ) -> Result<()> {
-    write_frontmatter_impl(Some(vault_root), path, props)
+    write_frontmatter_impl(Some(vault_root), path, &WriteOp::Props(props)).map(|_| ())
 }
 
+/// Rename one top-level frontmatter key **in place**, preserving its position
+/// in the block and the exact bytes of its value (iter-266 PROP-1).
+///
+/// Returns `Ok(true)` when the rename was applied, and `Ok(false)` when the
+/// block's shape rules out a text-level rename (no frontmatter, `from` absent,
+/// `to` already present, or YAML this splicer does not model). On `Ok(false)`
+/// **nothing was written** — the caller decides whether to fall back to a
+/// props-based [`write_frontmatter_within`].
+pub fn rename_frontmatter_key_within(
+    vault_root: &Path,
+    path: &Path,
+    from: &str,
+    to: &str,
+) -> Result<bool> {
+    write_frontmatter_impl(Some(vault_root), path, &WriteOp::RenameKey { from, to })
+}
+
+/// What a frontmatter write is asked to do.
+enum WriteOp<'a> {
+    /// Make the block express exactly this property map.
+    Props(&'a IndexMap<String, Value>),
+    /// Rewrite one key token, leaving every other byte alone.
+    RenameKey { from: &'a str, to: &'a str },
+}
+
+/// Returns whether anything was written (always `true` for
+/// [`WriteOp::Props`]; `false` for a rename the splicer could not model).
 fn write_frontmatter_impl(
     vault_root: Option<&Path>,
     path: &Path,
-    props: &IndexMap<String, Value>,
-) -> Result<()> {
+    op: &WriteOp<'_>,
+) -> Result<bool> {
     // --- Step 0: open the file and guard against unbounded memory use ---
     // Step 2 below reads the whole body into memory; refuse up front rather
     // than let `read_to_end` allocate without bound for a huge file.
@@ -560,36 +587,56 @@ fn write_frontmatter_impl(
     if span.has_bom {
         out.extend_from_slice(BOM.as_bytes());
     }
-    if !props.is_empty() {
-        // Minimal-diff write (iter-214): re-emit every key whose value did not
-        // change byte-for-byte and serialize only what actually changed. Falls
-        // back to a full re-serialization — with a warning — when the original
-        // block cannot be mapped to per-key line spans.
-        let spliced = match original_yaml
-            .as_deref()
-            .map(|orig| splice_frontmatter(orig, props, compact_list_indent))
-        {
-            Some(SpliceOutcome::Spliced(yaml)) => Some(yaml),
-            Some(SpliceOutcome::Fallback(reason)) => {
-                warn_full_frontmatter_rewrite(path, reason);
-                None
-            }
-            None => {
-                if let Some(reason) = splice_blocked {
+    // The YAML block to write, or `None` when the file must end up with no
+    // frontmatter at all (an empty property map).
+    let yaml_out: Option<String> = match op {
+        WriteOp::Props(props) if props.is_empty() => None,
+        WriteOp::Props(props) => {
+            // Minimal-diff write (iter-214): re-emit every key whose value did
+            // not change byte-for-byte and serialize only what actually
+            // changed. Falls back to a full re-serialization — with a warning —
+            // when the original block cannot be mapped to per-key line spans.
+            let spliced = match original_yaml
+                .as_deref()
+                .map(|orig| splice_frontmatter(orig, props, compact_list_indent))
+            {
+                Some(SpliceOutcome::Spliced(yaml)) => Some(yaml),
+                Some(SpliceOutcome::Fallback(reason)) => {
                     warn_full_frontmatter_rewrite(path, reason);
+                    None
                 }
-                None
-            }
-        };
+                None => {
+                    if let Some(reason) = splice_blocked {
+                        warn_full_frontmatter_rewrite(path, reason);
+                    }
+                    None
+                }
+            };
+            Some(match spliced {
+                Some(yaml) => yaml,
+                None => serde_saphyr::to_string_with_options(
+                    props,
+                    hyalo_serializer_options(compact_list_indent),
+                )
+                .context("failed to serialize YAML")?,
+            })
+        }
+        // iter-266 PROP-1: a key rename is a text edit, never a re-serialize.
+        // When the block's shape rules it out we write nothing and let the
+        // caller decide — silently, because the caller's fallback write does
+        // its own warning.
+        WriteOp::RenameKey { from, to } => {
+            let Some(renamed) = original_yaml
+                .as_deref()
+                .and_then(|orig| rename_key_in_place(orig, from, to))
+            else {
+                return Ok(false);
+            };
+            Some(renamed)
+        }
+    };
 
-        let mut yaml = match spliced {
-            Some(yaml) => yaml,
-            None => serde_saphyr::to_string_with_options(
-                props,
-                hyalo_serializer_options(compact_list_indent),
-            )
-            .context("failed to serialize YAML")?,
-        };
+    if let Some(mut yaml) = yaml_out {
         if !yaml.ends_with('\n') {
             yaml.push('\n');
         }
@@ -628,7 +675,7 @@ fn write_frontmatter_impl(
     }
     .with_context(|| format!("failed to write {}", path.display()))?;
 
-    Ok(())
+    Ok(true)
 }
 
 /// A structured error returned when serialized frontmatter would exceed the size budget.
