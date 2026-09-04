@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 267 — Help, hints and text-output polish sweep
 date: 2026-09-03
-status: in-progress
+status: completed
 tags:
   - iteration
   - help
