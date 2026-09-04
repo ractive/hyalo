@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::commands::{FilesOrOutcome, collect_files};
 use crate::output::{CommandOutcome, Format};
-use hyalo_core::filter::extract_tags;
+use hyalo_core::filter::{extract_tags, tag_matches};
 use hyalo_core::frontmatter;
 use hyalo_core::index::VaultIndex;
 use hyalo_core::types::TagSummaryEntry;
@@ -153,6 +153,19 @@ pub fn tags_summary(
 // `hyalo tags rename` — rename a tag across matched files
 // ---------------------------------------------------------------------------
 
+/// One concrete tag the rename expanded to (iter-266 TAG-1, DEC-282).
+///
+/// `tags rename --from music --to audio` renames `music` *and* every nested
+/// `music/…` tag, so the pair the user typed is not the whole story. Each
+/// actually-renamed tag gets an entry here with the number of files it
+/// appeared in.
+#[derive(Debug, Serialize)]
+pub struct RenamedTag {
+    pub from: String,
+    pub to: String,
+    pub files: usize,
+}
+
 /// Result of a `tags rename` operation.
 #[derive(Debug, Serialize)]
 pub struct RenameTagResult {
@@ -160,15 +173,32 @@ pub struct RenameTagResult {
     pub to: String,
     pub dry_run: bool,
     pub modified: Vec<String>,
+    /// Every tag the rename actually touched, parent and children alike.
+    pub renamed_tags: Vec<RenamedTag>,
     pub skipped_count: usize,
     pub total: usize,
     pub scanned: usize,
 }
 
+/// Rewrite `tag` under a `from` → `to` rename, preserving the nested suffix.
+///
+/// `tag` must already satisfy [`tag_matches(tag, from)`](tag_matches), i.e. it
+/// is either `from` itself or a `from/…` child; the suffix (`/genres`) is
+/// carried over verbatim.
+fn rename_nested_tag(tag: &str, from: &str, to: &str) -> String {
+    debug_assert!(tag.len() >= from.len());
+    format!("{to}{}", &tag[from.len()..])
+}
+
 /// Rename a tag across all matched files.
 ///
-/// - Atomic per-file: if new tag already exists, only old one is removed
-/// - Skips files where the source tag is absent
+/// Obsidian semantics (DEC-282): renaming `music` also renames `music/genres`
+/// and every other nested child, and `music` never matches `musical` — the
+/// match must land on a `/` boundary.
+///
+/// - Atomic per-file: if the new tag already exists, the renamed duplicate is
+///   dropped rather than written twice
+/// - Skips files where neither the source tag nor any of its children appear
 #[allow(clippy::too_many_arguments)]
 pub fn tags_rename(
     dir: &Path,
@@ -209,6 +239,8 @@ pub fn tags_rename(
 
     let mut modified = Vec::new();
     let mut skipped_count: usize = 0;
+    // lowercase old tag → (old tag as written, new tag, file count)
+    let mut renamed_tags: BTreeMap<String, (String, String, usize)> = BTreeMap::new();
 
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
@@ -225,40 +257,77 @@ pub fn tags_rename(
         };
 
         let tags = extract_tags(&props);
-        let has_old = tags.iter().any(|t| t.eq_ignore_ascii_case(from));
-        if !has_old {
+        // DEC-282: the parent tag and every nested child are in scope, and the
+        // parent itself need not be present for the children to be renamed.
+        if !tags.iter().any(|t| tag_matches(t, from)) {
             skipped_count += 1;
             continue;
         }
 
-        let has_new = tags.iter().any(|t| t.eq_ignore_ascii_case(to));
+        // Tag names this file's rename produces — used to drop a renamed tag
+        // that would collide with a tag the file already carries.
+        let produced: Vec<String> = tags
+            .iter()
+            .filter(|t| tag_matches(t, from))
+            .map(|t| rename_nested_tag(t, from, to))
+            .collect();
 
         // Remove old tag and add new tag, handling both sequence and scalar forms
         let mut remove_tags_key = false;
+        let mut file_renames: Vec<(String, String)> = Vec::new();
         match props.get_mut("tags") {
             Some(Value::Array(seq)) => {
-                seq.retain(|v| match v {
-                    Value::String(s) => !s.eq_ignore_ascii_case(from),
-                    _ => true,
-                });
-                if !has_new {
-                    seq.push(Value::String(to.to_owned()));
+                let mut emitted: Vec<String> = Vec::new();
+                let mut out_items: Vec<Value> = Vec::with_capacity(seq.len());
+                for item in seq.iter() {
+                    let Value::String(s) = item else {
+                        out_items.push(item.clone());
+                        continue;
+                    };
+                    let renamed = tag_matches(s, from);
+                    let new_tag = if renamed {
+                        rename_nested_tag(s, from, to)
+                    } else {
+                        s.clone()
+                    };
+                    // Collapse a collision the rename created (either the
+                    // renamed tag duplicating one already emitted, or an
+                    // untouched tag the rename is about to duplicate).
+                    let collides = emitted.iter().any(|e| e.eq_ignore_ascii_case(&new_tag));
+                    let rename_related =
+                        renamed || produced.iter().any(|p| p.eq_ignore_ascii_case(&new_tag));
+                    if collides && rename_related {
+                        if renamed {
+                            file_renames.push((s.clone(), new_tag));
+                        }
+                        continue;
+                    }
+                    if renamed {
+                        file_renames.push((s.clone(), new_tag.clone()));
+                    }
+                    emitted.push(new_tag.clone());
+                    out_items.push(Value::String(new_tag));
                 }
+                *seq = out_items;
                 if seq.is_empty() {
                     remove_tags_key = true;
                 }
             }
-            Some(Value::String(s)) if s.eq_ignore_ascii_case(from) => {
-                if has_new {
-                    remove_tags_key = true;
-                } else {
-                    to.clone_into(s);
-                }
+            Some(Value::String(s)) if tag_matches(s, from) => {
+                let new_tag = rename_nested_tag(s, from, to);
+                file_renames.push((s.clone(), new_tag.clone()));
+                *s = new_tag;
             }
             _ => {}
         }
         if remove_tags_key {
             props.shift_remove("tags");
+        }
+        for (old, new) in file_renames {
+            let counter = renamed_tags
+                .entry(old.to_ascii_lowercase())
+                .or_insert_with(|| (old, new, 0usize));
+            counter.2 += 1;
         }
 
         if !dry_run {
@@ -275,11 +344,17 @@ pub fn tags_rename(
     }
 
     let total = modified.len() + skipped_count;
+    let mut renamed_tags: Vec<RenamedTag> = renamed_tags
+        .into_values()
+        .map(|(from, to, files)| RenamedTag { from, to, files })
+        .collect();
+    renamed_tags.sort_by(|a, b| a.from.cmp(&b.from));
     let result = RenameTagResult {
         from: from.to_owned(),
         to: to.to_owned(),
         dry_run,
         modified,
+        renamed_tags,
         skipped_count,
         total,
         scanned,

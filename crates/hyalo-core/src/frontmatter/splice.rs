@@ -1692,3 +1692,142 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// In-place key rename (iter-266 PROP-1)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    /// Rename `from` → `to` and assert the block is byte-identical except for
+    /// the key token itself.
+    fn renamed(yaml: &str, from: &str, to: &str) -> String {
+        rename_key_in_place(yaml, from, to)
+            .unwrap_or_else(|| panic!("rename {from} -> {to} must splice in place:\n{yaml}"))
+    }
+
+    #[test]
+    fn renames_scalar_in_place() {
+        let out = renamed("title: Note\nrating: 7\ntags:\n  - a\n", "rating", "score");
+        assert_eq!(out, "title: Note\nscore: 7\ntags:\n  - a\n");
+    }
+
+    #[test]
+    fn empty_value_stays_empty_not_null() {
+        // BUG-12: the props path turned `rating:` into `score: null`.
+        let out = renamed("title: Note\nrating:\n", "rating", "score");
+        assert_eq!(out, "title: Note\nscore:\n");
+        assert!(!out.contains("null"), "empty value must stay empty: {out}");
+    }
+
+    #[test]
+    fn preserves_position_first_middle_last() {
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "a", "z"),
+            "z: 1\nb: 2\nc: 3\n"
+        );
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "b", "z"),
+            "a: 1\nz: 2\nc: 3\n"
+        );
+        assert_eq!(
+            renamed("a: 1\nb: 2\nc: 3\n", "c", "z"),
+            "a: 1\nb: 2\nz: 3\n"
+        );
+    }
+
+    #[test]
+    fn preserves_quoting_and_spacing() {
+        let yaml = "rating:   \"7\"  \ntitle: 'x'\n";
+        assert_eq!(
+            renamed(yaml, "rating", "score"),
+            "score:   \"7\"  \ntitle: 'x'\n"
+        );
+    }
+
+    #[test]
+    fn preserves_block_list_indentation() {
+        let yaml = "kw:\n- one\n- two\nafter: x\n";
+        assert_eq!(renamed(yaml, "kw", "keywords"), "keywords:\n- one\n- two\nafter: x\n");
+        let two_space = "kw:\n  - one\n  - two\n";
+        assert_eq!(renamed(two_space, "kw", "keywords"), "keywords:\n  - one\n  - two\n");
+    }
+
+    #[test]
+    fn preserves_flow_list() {
+        let yaml = "kw: [one,  two]\n";
+        assert_eq!(renamed(yaml, "kw", "keywords"), "keywords: [one,  two]\n");
+    }
+
+    #[test]
+    fn preserves_trailing_comment_and_comment_block() {
+        let yaml = "# leading\nrating: 7 # why\n# trailing\n";
+        assert_eq!(
+            renamed(yaml, "rating", "score"),
+            "# leading\nscore: 7 # why\n# trailing\n"
+        );
+    }
+
+    #[test]
+    fn preserves_nested_map_value() {
+        let yaml = "meta:\n  a: 1\n  b:\n    c: 2\nend: x\n";
+        assert_eq!(
+            renamed(yaml, "meta", "metadata"),
+            "metadata:\n  a: 1\n  b:\n    c: 2\nend: x\n"
+        );
+    }
+
+    #[test]
+    fn renames_quoted_key() {
+        let yaml = "\"my key\": 1\nb: 2\n";
+        // The target is a plain scalar, so it is written bare even though the
+        // source was quoted — quoting follows the new key, not the old one.
+        assert_eq!(renamed(yaml, "my key", "other key"), "other key: 1\nb: 2\n");
+        let single = "'my key': 1\n";
+        assert_eq!(renamed(single, "my key", "plain"), "plain: 1\n");
+    }
+
+    #[test]
+    fn quotes_a_target_that_needs_it() {
+        let out = renamed("a: 1\n", "a", "true");
+        assert_eq!(out, "\"true\": 1\n");
+        assert_eq!(renamed("a: 1\n", "a", "1.5"), "\"1.5\": 1\n");
+        assert_eq!(renamed("a: 1\n", "a", "x: y"), "\"x: y\": 1\n");
+    }
+
+    #[test]
+    fn preserves_crlf_by_normalizing_to_lf_for_the_caller() {
+        // The caller re-expands to CRLF; the splicer works in LF.
+        let out = renamed("a: 1\r\nrating: 7\r\n", "rating", "score");
+        assert_eq!(out, "a: 1\nscore: 7\n");
+    }
+
+    #[test]
+    fn refuses_lone_cr() {
+        assert!(rename_key_in_place("a: 1\rrating: 7\n", "rating", "score").is_none());
+    }
+
+    #[test]
+    fn refuses_when_source_absent_or_target_present() {
+        assert!(rename_key_in_place("a: 1\n", "missing", "z").is_none());
+        assert!(rename_key_in_place("a: 1\nz: 2\n", "a", "z").is_none());
+        assert!(rename_key_in_place("a: 1\n", "a", "a").is_none());
+    }
+
+    #[test]
+    fn refuses_unmappable_document() {
+        // A top-level flow mapping is not span-mappable.
+        assert!(rename_key_in_place("{a: 1, b: 2}\n", "a", "z").is_none());
+    }
+
+    #[test]
+    fn preserves_multiline_block_scalar() {
+        let yaml = "desc: |\n  line one\n  line two\nafter: x\n";
+        assert_eq!(
+            renamed(yaml, "desc", "description"),
+            "description: |\n  line one\n  line two\nafter: x\n"
+        );
+    }
+}

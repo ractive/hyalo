@@ -150,6 +150,19 @@ pub(super) const PROPERTY_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-r
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 pub(super) const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
+/// `RenamePropertyResult` (`properties rename`).
+/// Key signature: `conflicts,dry_run,from,modified,scanned,skipped_count,to,total`
+/// Format: `[dry-run] from → to: N/T modified`, the modified files, then any
+/// conflicts (files that already carried the target key).
+pub(super) const PROPERTY_RENAME_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.from) → \(.to): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)\(if (.conflicts | length) > 0 then "\nconflicts: \(.conflicts | join(", "))" else "" end)""#;
+
+/// `RenameTagResult` (`tags rename`).
+/// Key signature: `dry_run,from,modified,renamed_tags,scanned,skipped_count,to,total`
+/// Format: the headline pair, then one line per tag the rename actually
+/// touched — iter-266 DEC-282 expands a parent rename over its whole subtree,
+/// so `music → audio` alone would hide that `music/genres` moved too.
+pub(super) const TAG_RENAME_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.from) → \(.to): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.renamed_tags | length) > 0 then "\n\(.renamed_tags | map("  \(.from) → \(.to) (\(.files) file\(if .files == 1 then "" else "s" end))") | join("\n"))" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
+
 /// `BacklinksResult`: `{file, backlinks: [...]}`
 /// Format: `N backlink(s) for "file"` with each backlink listed as `  source.md: line N`.
 /// Empty case: `No backlinks found for "file"`.
@@ -314,6 +327,14 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         }
         // Mutation results with tag (SetTagResult, RemoveTagResult)
         "dry_run,modified,scanned,skipped,skipped_count,tag,total" => Some(TAG_MUTATION_FILTER),
+        // RenamePropertyResult (`properties rename`)
+        "conflicts,dry_run,from,modified,scanned,skipped_count,to,total" => {
+            Some(PROPERTY_RENAME_FILTER)
+        }
+        // RenameTagResult (`tags rename`, iter-266 adds `renamed_tags`)
+        "dry_run,from,modified,renamed_tags,scanned,skipped_count,to,total" => {
+            Some(TAG_RENAME_FILTER)
+        }
         // BacklinksResult
         "backlinks,file" => Some(BACKLINKS_RESULT_FILTER),
         // LinksFix result (iter-187 adds `failed`/`failed_fixes` for L-11)
