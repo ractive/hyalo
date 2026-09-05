@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 272 — Resolution completeness: list-typed type, aliases as link targets, anchor-only links, capture boundaries, resolution feature gaps"
 date: 2026-09-05
-status: in-progress
+status: completed
 tags:
   - iteration
   - links
@@ -34,7 +34,7 @@ carry design content and need DECs; the rest are corrections with fixtures.
 Constraint: **no new CLI flags**. Alias resolution is on by default like case folding
 (DEC-267); an opt-out, if wanted, is a `[links]` config key decided in the DEC.
 
-## Part A — a one-element list `type:` passes the implicit string constraint (BUG-5, HIGH)
+## Part A — a one-element list `type:` passes the implicit string constraint (BUG-5, HIGH) [3/3]
 
 ```text
 # .hyalo.toml declares type "iteration"
@@ -68,7 +68,7 @@ On `../obsidian-hub` 7 of 47 genuinely-broken targets are declared aliases (9 oc
 the vault has 5489 distinct aliases, and `links fix --apply-fuzzy` would rewrite
 `Leah → Lewuathe.md` (0.87), `Cat → CatMuse.md`, `jamesb → jamesgreenblue.md`.
 
-### ALIAS-1: decide
+### ALIAS-1: decide [2/2]
 
 - [x] DEC: property is `aliases` (Obsidian; string or list), nothing else; a filename or path
       match always beats an alias; an alias shared by two notes is ambiguous (reported like a
@@ -78,7 +78,7 @@ the vault has 5489 distinct aliases, and `links fix --apply-fuzzy` would rewrite
 - [x] Index: build the alias map from the snapshot's indexed frontmatter at load rather than
       changing the on-disk format; note the cost on the Hub.
 
-### ALIAS-2: implement
+### ALIAS-2: implement [6/6]
 
 - [x] Resolver in `hyalo-core` (iteration 261's file index): alias map built once per scan,
       consulted after stem/path lookup fails.
@@ -93,7 +93,7 @@ the vault has 5489 distinct aliases, and `links fix --apply-fuzzy` would rewrite
 - [x] Hub measurements: `summary.links.broken` (163 before), `links fix` fuzzy above the floor
       (8 before, three alias-backed), `find --broken-links --count` time (0.51 s before).
 
-## Part C — `[text](#fragment)` is a markdown link, not a wikilink (BUG-8, MEDIUM)
+## Part C — `[text](#fragment)` is a markdown link, not a wikilink (BUG-8, MEDIUM) [2/2]
 
 MDN has no wikilinks, yet its histogram says `wikilink: 2822` (GitHub Docs 1552): an
 anchor-only markdown link is reported as `{"kind":"wikilink","label":null,"target":""}`.
@@ -104,7 +104,7 @@ anchor-only markdown link is reported as `{"kind":"wikilink","label":null,"targe
 
 ## Part D — scanner capture boundaries (BUG-16, BUG-15, BUG-21)
 
-### BOUND-1: a wikilink target never contains `]` or `[[` (BUG-16)
+### BOUND-1: a wikilink target never contains `]` or `[[` (BUG-16) [2/2]
 
 `see [[Leah] here and [[Target]` yields one link whose target is `Leah] here and [[Target`.
 Real Hub occurrence: `Obsidian Community Talks.md:64`.
@@ -114,7 +114,7 @@ Real Hub occurrence: `Obsidian Community Talks.md:64`.
       frontmatter raw-text scanner.
 - [x] Tests: `[[a] b [[c]]` (one link, `c`), `[[a]`, `[[ ]]`, `[[a]]]`, a table row with `\|`.
 
-### BOUND-2: a frontmatter flow list starting `[[[` (BUG-15)
+### BOUND-2: a frontmatter flow list starting `[[[` (BUG-15) [1/1]
 
 `related: [[[iterations/x]], [[research/y]]]` — the raw-text scanner captures
 `[iterations/x`. Own KB has one such line
@@ -125,12 +125,12 @@ Real Hub occurrence: `Obsidian Community Talks.md:64`.
       lists the research file (9 files, not 8). Fix the KB file too (quote the items) and keep
       a fixture with the raw shape.
 
-### BOUND-3: `[y](<(https://…)>)` is external (BUG-21)
+### BOUND-3: `[y](<(https://…)>)` is external (BUG-21) [1/1]
 
 - [x] A markdown destination in `<…>` whose first non-`(` character starts a URI scheme is
       `external`, never broken, never fuzzy-matched; unit test with the Hub's 2021 Roundup line.
 
-## Part E — resolution feature gaps: decide each, DEC or implement
+## Part E — resolution feature gaps: decide each, DEC or implement [4/4]
 
 From the report's "Feature gaps" section. Each ends in a DEC line (implement, backlog, or
 won't-do with reasoning). Implement only what fits the resolver work above without a new flag.
@@ -151,7 +151,7 @@ won't-do with reasoning). Implement only what fits the resolver work above witho
       (not a flag) that adds those values as resolution aliases — sits on Part B's alias map.
       Decide; implement if the alias map makes it a few lines, else backlog.
 
-## Part F — `links fix --dry-run` reports the string `--apply` actually writes (CASE-2 carry-over from iteration 271, MEDIUM)
+## Part F — `links fix --dry-run` reports the string `--apply` actually writes (CASE-2 carry-over from iteration 271, MEDIUM) [3/3]
 
 Iteration 271 Part F fixed *what* gets written for a `site_prefix`/directory-index case plan
 (the site-prefix skip, form-preserving rewrite) but deliberately deferred the second half of
@@ -174,7 +174,7 @@ keeps the author's directory form). See
       assert each applied `new_text` equals the dry-run-reported value for the same
       `(file, line, old_target)`.
 
-## Shared closing tasks
+## Shared closing tasks [4/4]
 
 - [x] Changelog entries via `hyalo changelog add` (one per part that changes behaviour).
 - [x] DECs: aliases (B), one line per Part E item (may share a DEC).
@@ -184,7 +184,7 @@ keeps the author's directory form). See
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*` gates
       (invoke as `CARGO_MANIFEST_DIR=<repo>/crates/xtask ./target/debug/xtask <gate>`).
 
-## Acceptance criteria
+## Acceptance criteria [8/8]
 
 - [x] BUG-5 fixture lints clean under the own KB schema; kepano copy with `Authors` declared:
       zero `expected string` errors on 15 list-typed files; `["a","b"]` and `[]` still rejected.
