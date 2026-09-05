@@ -1952,14 +1952,17 @@ fn hex_val(b: u8) -> Option<u8> {
 /// [`resolve_target`] so the two can never drift apart (iter-203).
 /// What a vault-wide [`CaseInsensitiveIndex`] can say about a path without
 /// touching the filesystem (iter-277, BUG-13).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Existence {
-    /// The index lists this exact path — the file exists and is in the vault.
-    Present,
+    /// The index resolves this path, and carries the vault-relative path to
+    /// report — the link's own spelling when it matched exactly, the canonical
+    /// on-disk spelling when it matched only case-insensitively.
+    Present(String),
     /// The index is complete and holds no casing of this path — it is absent.
     Absent,
-    /// No complete index, or a case-variant exists and only the filesystem can
-    /// say whether the literal spelling opens on this volume (DEC-315).
+    /// No complete index, or a case-variant exists that the index declines to
+    /// resolve (case folding switched off per DEC-315, or two files differing
+    /// only in case), so only the filesystem can answer.
     Unknown,
 }
 
@@ -1977,8 +1980,18 @@ fn indexed_existence(rel_path: &str, case_index: Option<&CaseInsensitiveIndex>) 
         return Existence::Unknown;
     };
     if idx.contains_path(rel_path) {
-        Existence::Present
-    } else if idx.has_any_case(rel_path) {
+        return Existence::Present(rel_path.to_owned());
+    }
+    // The case-folded hit is the *common* case on a static-site corpus: MDN
+    // writes `/en-US/docs/Web/CSS/...` against lowercase directories, so every
+    // one of its site-absolute links reaches this branch. Both the disk probe
+    // and the index fallback below it answer with this same canonical path
+    // whenever `lookup_unique` succeeds, so taking it here changes no verdict
+    // and skips a `stat` plus a `canonicalize` per candidate.
+    if let Some(canonical) = idx.lookup_unique(rel_path) {
+        return Existence::Present(canonical.to_owned());
+    }
+    if idx.has_any_case(rel_path) {
         Existence::Unknown
     } else {
         Existence::Absent
@@ -1991,10 +2004,10 @@ fn resolve_candidate_path(
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
     match indexed_existence(candidate, case_index) {
-        // The vault-wide index already lists this exact path, so the file
-        // exists and is inside the vault by construction — no `stat`, no
+        // The vault-wide index already resolves this path, so the file exists
+        // and is inside the vault by construction — no `stat`, no
         // `canonicalize` (iter-277, BUG-13).
-        Existence::Present => return Some(candidate.to_owned()),
+        Existence::Present(path) => return Some(path),
         // A miss in a complete index is proof of absence: skip both the
         // filesystem probe and the (identical) case lookup below.
         Existence::Absent => return None,
@@ -2163,7 +2176,7 @@ pub fn resolve_target(
     // `canonicalize`. On MDN with `--site-prefix en-US/docs` almost every
     // site-absolute link probed three paths that all had to go to disk.
     match indexed_existence(&target, case_index) {
-        Existence::Present => return Some(target.clone()),
+        Existence::Present(path) => return Some(path),
         Existence::Absent => {
             // Proof of absence for this literal path only; the `.md` /
             // `/index.md` and bare-stem fallbacks below still apply.

@@ -313,9 +313,8 @@ pub fn links_fix(
     // warning above, so the two numbers describe the same set. They used to
     // differ by the bare `/` links the other side excludes, which made the
     // subset (49 776) larger than its superset (49 767) on MDN.
-    let is_site_absolute = |target: &str| {
-        hyalo_core::link_fix::is_prefix_bearing_site_absolute(target, site_prefix)
-    };
+    let is_site_absolute =
+        |target: &str| hyalo_core::link_fix::is_prefix_bearing_site_absolute(target, site_prefix);
     let site_absolute_broken = broken
         .iter()
         .filter(|b| is_site_absolute(&b.target))

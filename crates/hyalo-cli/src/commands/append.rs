@@ -300,7 +300,8 @@ pub fn append(
     // BUG-14 (iter-277): one write phase for the whole batch, so the
     // durability fsync is paid once per directory instead of once per file
     // (DEC-317), and a long run reports progress instead of going silent.
-    let _write_phase = (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "appending properties"));
+    let _write_phase =
+        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "appending properties"));
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
         let mtime = frontmatter::read_mtime(full_path)?;

@@ -2211,7 +2211,9 @@ fn run_inner() -> Result<(), AppError> {
                             // the problem. Nothing to refresh is not a failure
                             // to refresh.
                             !dir.join(rel).exists()
-                                || hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
+                                || hyalo_core::index::refresh_if_changed_on_disk(
+                                    &mut idx, &dir, rel,
+                                )
                         })
                     };
                     if !refreshed_all_targets && !cli.command.write_repairs_named_targets() {
@@ -2523,7 +2525,8 @@ fn run_inner() -> Result<(), AppError> {
         config_dir: &config_dir,
         configured_dir_str,
         site_prefix,
-        site_prefix_source,        effective_format,
+        site_prefix_source,
+        effective_format,
         user_format: format,
         snapshot_index: &mut snapshot_index,
         index_path: index_path_buf.as_deref(),

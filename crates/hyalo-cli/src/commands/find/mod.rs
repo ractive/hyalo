@@ -1300,10 +1300,7 @@ pub fn find(
                 // `is_resolvable_vault_link() == false` is exactly the
                 // external-or-attachment case the predicate's `external` flag
                 // (and its extension rule) reject.
-                hyalo_core::types::is_note_graph_edge(
-                    &l.target,
-                    !l.kind.is_resolvable_vault_link(),
-                )
+                hyalo_core::types::is_note_graph_edge(&l.target, !l.kind.is_resolvable_vault_link())
             })
         };
 

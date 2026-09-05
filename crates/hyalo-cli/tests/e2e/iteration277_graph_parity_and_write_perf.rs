@@ -180,7 +180,8 @@ fn every_fuzzy_plan_carries_an_emitted_target() {
     assert!(!fuzzy.is_empty(), "expected a fuzzy proposal: {fix}");
     for plan in fuzzy {
         assert!(
-            plan.get("emitted_target").is_some_and(|v| v.is_string()),
+            plan.get("emitted_target")
+                .is_some_and(serde_json::Value::is_string),
             "`links fix --help` promises emitted_target on every plan: {plan}"
         );
     }
@@ -309,10 +310,7 @@ fn broken_links_text_prints_only_the_broken_ones() {
 
     let value = json(&tmp, &["find", "--broken-links"]);
     let links = value["results"][0]["links"].as_array().unwrap();
-    assert!(
-        links.len() >= 3,
-        "JSON keeps the full inventory: {value:#}"
-    );
+    assert!(links.len() >= 3, "JSON keeps the full inventory: {value:#}");
 }
 
 /// UX-10: a CommonMark autolink is a link the author marked up, and belongs in
@@ -420,7 +418,10 @@ fn site_prefix_resolution_is_identical_on_disk_and_from_a_snapshot() {
         "[a](/docs/web/api) [b](/docs/web/css) [c](/docs/web/nope)\n",
     );
 
-    let disk = json(&tmp, &["--site-prefix", "docs", "find", "--fields", "links"]);
+    let disk = json(
+        &tmp,
+        &["--site-prefix", "docs", "find", "--fields", "links"],
+    );
     hyalo_no_hints()
         .arg("--dir")
         .arg(tmp.path().to_str().unwrap())
@@ -430,7 +431,14 @@ fn site_prefix_resolution_is_identical_on_disk_and_from_a_snapshot() {
         .success();
     let indexed = json(
         &tmp,
-        &["--site-prefix", "docs", "find", "--fields", "links", "--index"],
+        &[
+            "--site-prefix",
+            "docs",
+            "find",
+            "--fields",
+            "links",
+            "--index",
+        ],
     );
     assert_eq!(
         disk["results"], indexed["results"],

@@ -444,11 +444,12 @@ impl Drop for WritePhase {
         let Some(state) = PHASE.lock().ok().and_then(|mut slot| slot.take()) else {
             return;
         };
-        let dirs = state
-            .dirs
-            .lock()
-            .map(|d| d.clone())
-            .unwrap_or_else(|p| p.into_inner().clone());
+        let dirs = match state.dirs.lock() {
+            Ok(dirs) => dirs.clone(),
+            // A poisoned lock means a worker panicked mid-write; the
+            // directories collected before that are still worth syncing.
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
         for dir in &dirs {
             sync_parent_dir(dir);
         }

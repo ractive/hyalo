@@ -42,7 +42,7 @@ fn broken_links_only() -> bool {
 /// and a resolved attachment are never broken, an out-of-vault target is
 /// reported as such rather than as broken, and a dead `#fragment` counts even
 /// though its target resolved.
-const BROKEN_LINK_SELECT: &str = r##"map(select((.kind != "external" and .kind != "attachment") and ((.path == null and ((.out_of_vault // false) | not)) or (.broken_anchor // false)))) | "##;
+const BROKEN_LINK_SELECT: &str = r#"map(select((.kind != "external" and .kind != "attachment") and ((.path == null and ((.out_of_vault // false) | not)) or (.broken_anchor // false)))) | "#;
 
 /// Build a jaq filter string for a `FileObject` by inspecting which optional
 /// fields are present in the JSON object.
