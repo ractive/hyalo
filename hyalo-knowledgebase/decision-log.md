@@ -5240,7 +5240,8 @@ would be strictly worse than saying nothing: every block reference in every
 Obsidian vault would be a false positive.
 
 **Where:** `anchor::is_block_ref` (the current skip, unchanged). See
-[[iterations/iteration-272-resolution-completeness]].
+[[iterations/iteration-272-resolution-completeness]] and the carry-over item
+[[backlog/link-resolution-block-reference-and-slug-anchors]].
 
 ## DEC-300: no `[links] redirect_property` — backlog (2026-09-05)
 
@@ -5257,6 +5258,8 @@ them means a second, path-keyed alias map with its own precedence against the
 directory-index rule — a different feature wearing the same word. The 1569
 "broken" GitHub Docs files stay reported; a vault that wants them resolved can
 set `site_prefix` or fix the links.
+
+**Where:** carried over as [[backlog/link-resolution-redirect-property]].
 
 **Where:** nothing implemented; recorded so the option is not re-litigated. See
 [[iterations/iteration-272-resolution-completeness]].
