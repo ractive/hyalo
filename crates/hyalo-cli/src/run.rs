@@ -1242,6 +1242,7 @@ fn run_inner() -> Result<(), AppError> {
         dir_redundant,
         ..
     } = effective;
+    let dir_from_config = config.dir_from_config;
 
     // A `.hyalo.toml` that exists but could not be parsed leaves the run on
     // built-in defaults: a different vault root, no schema, no `[lint] ignore`,
@@ -1320,9 +1321,18 @@ fn run_inner() -> Result<(), AppError> {
     // resolves to. The config still applies (iter-201) — the flag is simply
     // noise, which is all this note now claims.
     if dir_redundant {
-        crate::warn::note(format!(
-            "--dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
-        ));
+        // BUG-28 (dogfood v0.22.0): against an empty `.hyalo.toml` the old
+        // wording claimed the file "already sets dir = \".\"" — it sets
+        // nothing; `.` is the built-in default. Say which of the two it is.
+        if dir_from_config {
+            crate::warn::note(format!(
+                "--dir is redundant; .hyalo.toml already sets dir = \"{cwd_config_dir_str}\""
+            ));
+        } else {
+            crate::warn::note(
+                "--dir is redundant; .hyalo.toml sets no dir, and the default is `.`",
+            );
+        }
     }
 
     // Validate that the resolved dir exists and is a directory (for the

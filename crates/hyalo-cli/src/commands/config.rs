@@ -496,6 +496,24 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         None => String::new(),
     };
 
+    // BUG-22 (iter-276, DEC-315): `case_insensitive = "false"` switches off
+    // hyalo's own case-folding index, but the literal path probe that runs
+    // first is the *filesystem's* — so on macOS and Windows `[[categories/
+    // books]]` still opens `Categories/Books.md`, and the reported `path` is
+    // the link's own spelling, not the canonical one. That is weaker than
+    // `auto`, and invisible unless the report says so.
+    let case_insensitive_note = if report.case_insensitive == "false"
+        && hyalo_core::probe_case_insensitive_cached(&report.dir)
+    {
+        concat!(
+            "  note: this filesystem is case-insensitive, so a link that differs only in case ",
+            "still resolves through the OS; `false` only switches off hyalo's own folding, ",
+            "and the reported path is the link's spelling, not the canonical one (DEC-315)\n",
+        )
+    } else {
+        ""
+    };
+
     // BUG-20 (iter-276): the file parsed but `[schema]` did not, so the schema
     // is empty and validates nothing. Reported as `malformed: true` like a
     // whole-file parse error, with its own note: every *other* value on the
@@ -534,7 +552,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let mut out = format!(
         "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nsnapshot_format_version: {snapshot_format_version}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
-         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n\
+         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n{case_insensitive_note}\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
@@ -546,6 +564,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         fm_links = report.frontmatter_links,
         alias_links = report.alias_links,
         case_insensitive = report.case_insensitive,
+        case_insensitive_note = case_insensitive_note,
         fm_link_props = report
             .frontmatter_link_properties
             .as_deref()

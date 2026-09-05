@@ -131,6 +131,7 @@ pub fn resolve_file_user_ci(
     path_arg: &str,
     case_insensitive: bool,
 ) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
+    warn_if_cwd_shadows_vault_path(dir, path_arg);
     if let Some(rewritten) = discovery::strip_absolute_vault_prefix(dir, path_arg) {
         let result = discovery::resolve_file_ci(dir, &rewritten, case_insensitive);
         if result.is_ok() {
@@ -139,6 +140,71 @@ pub fn resolve_file_user_ci(
         return result;
     }
     discovery::resolve_file_ci(dir, path_arg, case_insensitive)
+}
+
+/// When the CWD is a strict subdirectory of the vault, the `(vault, cwd)` pair
+/// a shadow check needs; `None` at the vault root, outside it, or once
+/// resolution fails.
+///
+/// Computed once per run: `dir` never changes after startup, and the two
+/// `canonicalize` calls are not worth repeating per named path.
+static SHADOW_ROOTS: std::sync::OnceLock<Option<(std::path::PathBuf, std::path::PathBuf)>> =
+    std::sync::OnceLock::new();
+
+/// Warn when a bare relative path names one file in the current directory and
+/// a *different* one in the vault, and hyalo used the vault's.
+///
+/// Every path hyalo is given is vault-relative (DEC-304), which is right and
+/// stays. But from `kb/sub/` with both `kb/a.md` and `kb/sub/a.md` present,
+/// `hyalo set a.md` edited the file the caller was not looking at and exited 0
+/// (BUG-21, dogfood v0.22.0) — documented, and silent. No flag and no change
+/// of resolution: name both candidates and say which was used. The warning is
+/// `-q`-proof, because the caller is about to act on the wrong file.
+///
+/// Costs one `is_file` per *named* path, and only when the CWD is strictly
+/// inside the vault — a run from the vault root pays a single `canonicalize`
+/// pair for the whole process.
+pub fn warn_if_cwd_shadows_vault_path(dir: &std::path::Path, path_arg: &str) {
+    let rel = std::path::Path::new(path_arg);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return;
+    }
+    let roots = SHADOW_ROOTS.get_or_init(|| {
+        let cwd = dunce::canonicalize(std::env::current_dir().ok()?).ok()?;
+        let vault = dunce::canonicalize(dir).ok()?;
+        (cwd != vault && cwd.starts_with(&vault)).then_some((vault, cwd))
+    });
+    let Some((vault, cwd)) = roots else {
+        return;
+    };
+    let in_cwd = cwd.join(rel);
+    if !in_cwd.is_file() {
+        return;
+    }
+    let in_vault = vault.join(rel);
+    let same = match (
+        dunce::canonicalize(&in_cwd),
+        dunce::canonicalize(&in_vault),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        // The vault candidate does not exist, so hyalo is about to say "file
+        // not found" while a file of that name sits in the current directory.
+        // That is the shape most worth naming.
+        _ => false,
+    };
+    if same {
+        return;
+    }
+    crate::warn::warn_always(format!(
+        "`{path_arg}` is resolved against the vault root: using {}, not {} in the current \
+         directory",
+        in_vault.display(),
+        in_cwd.display(),
+    ));
 }
 
 /// Redundant leading prefixes on the deepest error message. Every caller of

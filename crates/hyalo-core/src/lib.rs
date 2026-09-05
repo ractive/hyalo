@@ -61,7 +61,7 @@ pub mod warn;
 /// Case-insensitive link resolution (was `hyalo_core::case_index`).
 pub use case_index::{
     CaseInsensitiveIndex, CaseInsensitiveMode, links_case_insensitive, mode_enabled,
-    sweep_stale_case_probes,
+    probe_case_insensitive_cached, sweep_stale_case_probes,
 };
 /// Common-word heuristic for `links auto` advisory notes.
 pub use common_words::is_common_word;

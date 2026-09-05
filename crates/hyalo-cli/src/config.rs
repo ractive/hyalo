@@ -324,6 +324,13 @@ struct ConfigFile {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedDefaults {
     pub(crate) dir: PathBuf,
+    /// `true` when [`Self::dir`] came from a `dir = "…"` line in
+    /// `.hyalo.toml` rather than the built-in `.` default.
+    ///
+    /// The `--dir is redundant` note claims the file "already sets dir";
+    /// against an empty `.hyalo.toml` that was simply false (BUG-28, dogfood
+    /// v0.22.0), so the note now says which of the two it is.
+    pub(crate) dir_from_config: bool,
     /// The directory where `.hyalo.toml` was found.  Views and types are stored
     /// in this file, so mutations must target `config_dir/.hyalo.toml` — not the
     /// vault directory (which may be a subdirectory specified via `dir = "…"`).
@@ -498,6 +505,7 @@ impl ResolvedDefaults {
     fn hardcoded() -> Self {
         Self {
             dir: PathBuf::from("."),
+            dir_from_config: false,
             config_dir: PathBuf::from("."),
             format: None,
             hints: true,
@@ -1119,6 +1127,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .unwrap_or_default();
 
     ResolvedDefaults {
+        dir_from_config: cfg.dir.is_some(),
         dir: cfg
             .dir
             .as_deref()
@@ -1460,6 +1469,9 @@ pub(crate) struct EffectiveConfig {
     pub(crate) config_path: Option<PathBuf>,
     /// `true` when `--dir` named precisely the vault the CWD config already
     /// resolves to. The config still applies; the flag was just noise.
+    ///
+    /// Pair it with [`ResolvedDefaults::dir_from_config`] before wording the
+    /// note: an empty `.hyalo.toml` "sets" nothing (BUG-28).
     pub(crate) dir_redundant: bool,
     /// `true` when `--dir` selected a *different* vault and the CWD did have a
     /// `.hyalo.toml`, so that file no longer applies to this run.

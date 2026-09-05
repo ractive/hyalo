@@ -263,8 +263,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   reports the effective mode (`auto` | `true` | `false`). `false` switches off hyalo's own
   case-folding index, but the *literal* path probe that runs first is the filesystem's: on a
   case-insensitive volume (macOS and Windows by default) `[[AidenLx]]` still opens
-  `People/aidenlx.md`, and the reported `path` is the canonical on-disk spelling. Exact-match
-  resolution is therefore only guaranteed on a case-sensitive filesystem.
+  `People/aidenlx.md`. The reported `path` is then **the link's own spelling**, not the
+  canonical on-disk one (DEC-315, iter-276 — the iteration-274 outcome claimed the opposite):
+  `false` means exact bytes, and hyalo does not re-read the directory to canonicalise what the
+  OS already opened. `hyalo config` prints a note when `false` is set on a case-insensitive
+  filesystem. Exact-match resolution is therefore only guaranteed on a case-sensitive
+  filesystem.
 - **Case plans never touch a `site_prefix` link, and a rewrite keeps its form** (DEC-295,
   iter-271): a site-absolute link carrying the configured `site_prefix`
   (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the *site's* URL convention,
