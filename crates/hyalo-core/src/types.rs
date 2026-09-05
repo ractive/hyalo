@@ -157,18 +157,24 @@ impl LinkKindLabel {
 ///   nothing in the vault;
 /// - it is not the empty self-anchor marker — `[[#Heading]]` is a jump inside
 ///   one note, not a link to another;
-/// - it carries no explicit non-`.md` extension — `![[img.png]]`,
-///   `[[Books.base]]`, `[spec](a.pdf)`. Resolution never crosses an explicit
-///   extension (DEC-266), so such a target can only ever name an attachment;
-///   whether the attachment happens to exist is a question about the vault's
-///   files, not about the note graph, and a **missing** image is still a
-///   broken link that `find --broken-links` reports.
+/// - `is_attachment` is `false` — the caller's own verdict on whether this
+///   target names an attachment rather than a note.
 ///
-/// Deliberately answerable with no filesystem access and no index, so the
-/// graph builder and the `find` filter can share it verbatim.
+/// `is_attachment` is deliberately a caller-supplied fact rather than
+/// recomputed here from `target`'s syntax alone: a dotted note stem
+/// (`Foo.v2.md`, linked as `[[Foo.v2]]`) carries what looks like a non-`.md`
+/// extension but resolves to a real note, and a syntax-only check excluded it
+/// from the graph — `backlinks Foo.v2.md` came back empty and `find --orphan`
+/// called it an orphan even with a real inbound link (iter-277 regression,
+/// caught in review). A caller with a resolved path in hand should trust
+/// it (`!has_md_extension(path)`) over the target's spelling; only when the
+/// target is unresolved does the syntactic rule apply — resolution never
+/// crosses an explicit extension (DEC-266), so `![[missing.png]]` can only
+/// ever have named an attachment, missing or not, and `find --broken-links`
+/// still reports it broken.
 #[must_use]
-pub fn is_note_graph_edge(target: &str, external: bool) -> bool {
-    !external && !target.is_empty() && !crate::discovery::has_non_md_extension(target)
+pub fn is_note_graph_edge(target: &str, external: bool, is_attachment: bool) -> bool {
+    !external && !target.is_empty() && !is_attachment
 }
 
 /// A single link with its resolution status.

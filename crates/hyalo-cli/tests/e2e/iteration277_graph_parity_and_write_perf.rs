@@ -104,6 +104,38 @@ fn a_broken_image_embed_is_not_a_graph_edge_but_is_still_broken() {
     );
 }
 
+/// Review regression (iter-277): a note whose stem itself contains what looks
+/// like a non-`.md` extension (`Foo.v2.md`, linked as `[[Foo.v2]]`) resolves
+/// fine, but a first cut of the shared edge predicate judged it purely from
+/// `target`'s spelling and misread `.v2` as a real extension — the exact
+/// misfire the predicate's own doc comment warns against. Both the link
+/// graph (`backlinks`) and the `find` filters (`--orphan`) must see the real
+/// resolution, not the syntactic guess.
+#[test]
+fn a_dotted_note_stem_stays_a_graph_edge() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "Foo.v2.md", "content\n");
+    write_md(tmp.path(), "linker.md", "see [[Foo.v2]] for details\n");
+
+    let backlinks = json(&tmp, &["backlinks", "Foo.v2.md"]);
+    assert_eq!(
+        backlinks["total"], 1,
+        "the dotted stem must still resolve as a real note edge: {backlinks}"
+    );
+
+    let orphans: Vec<String> = json(&tmp, &["find", "--orphan"])["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        !orphans.contains(&"Foo.v2.md".to_owned()),
+        "Foo.v2.md has a real inbound link and must not be an orphan: {orphans:?}"
+    );
+    assert_eq!(json(&tmp, &["summary"])["results"]["orphans"], 0);
+}
+
 /// BUG-45: `links fix` reported `broken_anchors: 0` whenever any target was
 /// broken — the normal case on a real corpus — instead of the count
 /// `find --broken-links` computes.

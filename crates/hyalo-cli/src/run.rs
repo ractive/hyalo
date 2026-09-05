@@ -2232,7 +2232,8 @@ fn run_inner() -> Result<(), AppError> {
                             // and nothing on the next, with no way to tell
                             // that a different check had spoken.
                             crate::warn::warn(
-                                "index older than vault (a directory's mtime moved since the                                  index was built); results may be stale — re-run create-index",
+                                "index older than vault (a directory's mtime moved since the \
+                                 index was built); results may be stale — re-run create-index",
                             );
                         } else if let Some(rel) =
                             // INDEX-1 (iter-273, BUG-12): the directory probe

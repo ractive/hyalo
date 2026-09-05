@@ -1297,10 +1297,24 @@ pub fn find(
         // `find --broken-links` still reports it.
         let has_real_outbound = || {
             obj.links.as_deref().unwrap_or(&[]).iter().any(|l| {
-                // `is_resolvable_vault_link() == false` is exactly the
-                // external-or-attachment case the predicate's `external` flag
-                // (and its extension rule) reject.
-                hyalo_core::types::is_note_graph_edge(&l.target, !l.kind.is_resolvable_vault_link())
+                // A resolved path settles `is_attachment` outright — trust
+                // the actual resolution over the target's spelling (review
+                // fix, iter-277): a dotted note stem (`Foo.v2.md`, linked as
+                // `[[Foo.v2]]`) must not be read as an attachment just
+                // because `v2` looks like an extension, or `backlinks` and
+                // `find --orphan` disagree with the note that link genuinely
+                // resolves. Only an unresolved target falls back to the
+                // syntactic guess, which is what still excludes a broken
+                // `![[missing.png]]`.
+                let is_attachment = match l.path.as_deref() {
+                    Some(path) => !discovery::has_md_extension(path),
+                    None => discovery::has_non_md_extension(&l.target),
+                };
+                hyalo_core::types::is_note_graph_edge(
+                    &l.target,
+                    l.kind == LinkKindLabel::External,
+                    is_attachment,
+                )
             })
         };
 
