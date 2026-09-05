@@ -172,10 +172,16 @@ pub fn links_fix(
     // directory with no nameable last path component). Telling either of
     // those users to "check site_prefix (none)" names a value they never
     // set and, in the disabled case, contradicts their own explicit choice.
+    //
+    // The warning is emitted here, *before* the fuzzy matcher is built and any
+    // scoring runs, so the reader sees the diagnosis before the wait rather
+    // than after it (iter-274, UX-3).
+    let mut site_prefix_misconfigured = false;
     if let Some(prefix) = site_prefix {
         let (site_absolute_links, plausibly_resolved) =
             hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
         if site_absolute_links > 0 && plausibly_resolved == 0 {
+            site_prefix_misconfigured = true;
             crate::warn::warn(format!(
                 "site_prefix '{prefix}' stripped 0 of {site_absolute_links} site-absolute \
                  link(s) to a plausible vault path — check --site-prefix or `site_prefix` in \
@@ -260,7 +266,34 @@ pub fn links_fix(
     };
 
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
-    let fix_report = plan_fixes(&broken, &matcher);
+    // UX-3 (iter-274): when the `site_prefix` check above found that *no*
+    // site-absolute link strips to a plausible vault path, fuzzy-scoring those
+    // links is pure waste — every candidate is a guess against a prefix the
+    // user has yet to configure, and the real fix is one line of `.hyalo.toml`.
+    // On a real MDN checkout that scoring pass was the whole 28.7 s of a
+    // read-only `links fix --dry-run`. Site-absolute targets are routed
+    // straight to `unfixable` (which is where a scored-but-unmatched link would
+    // have landed anyway) and everything else is still scored normally, so a
+    // vault that mixes a bad prefix with ordinary relative typos keeps its
+    // proposals.
+    let (fix_report, site_absolute_scoring_skipped) = if site_prefix_misconfigured {
+        let (scored, skipped): (Vec<_>, Vec<_>) = broken
+            .iter()
+            .cloned()
+            .partition(|b| !b.target.replace('\\', "/").starts_with('/'));
+        let skipped_count = skipped.len();
+        let mut report = plan_fixes(&scored, &matcher);
+        report.unfixable.extend(skipped);
+        (report, skipped_count)
+    } else {
+        (plan_fixes(&broken, &matcher), 0)
+    };
+    if site_absolute_scoring_skipped > 0 {
+        crate::warn::warn(format!(
+            "skipped fuzzy scoring for {site_absolute_scoring_skipped} site-absolute link(s) — \
+             set `site_prefix` first, then re-run"
+        ));
+    }
 
     // Split low-confidence guesses into their own bucket. Fuzzy matches are
     // guesses (a broken `[[foo]]` can "match" an unrelated `bar.md`), and so
@@ -610,6 +643,12 @@ pub struct AutoFilters<'a> {
     pub cli_no_first_only: bool,
     /// `[links.auto] exclude_titles`.
     pub config_exclude_titles: &'a [String],
+    /// Whether `[links.auto] exclude_titles` appeared in `.hyalo.toml` at all,
+    /// `exclude_titles = []` included. DEC-286 says a configured list replaces
+    /// the built-in stop-list *entirely*, so declaring an empty one is a way to
+    /// switch the stop-list off — indistinguishable from "unset" while this was
+    /// inferred from emptiness (BUG-23, iter-274).
+    pub config_exclude_titles_set: bool,
     /// `[links.auto] exclude_target_globs`.
     pub config_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only`.
@@ -632,6 +671,7 @@ impl Default for AutoFilters<'_> {
             cli_first_only: false,
             cli_no_first_only: false,
             config_exclude_titles: &[],
+            config_exclude_titles_set: false,
             config_exclude_target_globs: &[],
             config_first_only: false,
             cli_no_warn_common_titles: false,
@@ -956,8 +996,14 @@ fn render_common_title_note(
         })
         .collect();
 
+    // UX-11 (iter-274): the flag list is capped at the same `listed` count the
+    // prose admits to showing. It used to be deliberately uncapped (dogfood
+    // L-12, so one paste-back extinguished the note), but a note that says
+    // "showing the 5 noisiest of 40" and then emits 40 flags is a wall of text
+    // contradicting its own sentence — and the note re-fires with the next
+    // batch anyway, since the flags only silence what they name.
     let mut flags = String::new();
-    for o in offenders {
+    for o in &offenders[..listed] {
         use std::fmt::Write as _;
         // Writing into a String is infallible; the Result only exists to satisfy
         // the `fmt::Write` signature. Reuse the same shell-quoting the other
@@ -977,14 +1023,15 @@ fn render_common_title_note(
     let tail = match mode {
         NoteMode::Advisory => format!(
             "If those are prose mentions rather than deliberate references, skip them with{flags} \
-             — or persist them once under [links.auto] exclude_titles in .hyalo.toml. \
-             Silence this note with --no-warn-common-titles."
+             — those flags ADD to the built-in stop-list, while [links.auto] exclude_titles in \
+             .hyalo.toml REPLACES it entirely (an empty list switches it off). Silence this note \
+             with --no-warn-common-titles."
         ),
         NoteMode::Excluded => format!(
-            "Those mentions were NOT proposed. Make the choice explicit with{flags} — or \
-             persist it once under [links.auto] exclude_titles in .hyalo.toml, which replaces \
-             the built-in list entirely. To propose them after all, pass \
-             --no-warn-common-titles."
+            "Those mentions were NOT proposed. Make the choice explicit with{flags} — those \
+             flags ADD to the built-in stop-list, while [links.auto] exclude_titles in \
+             .hyalo.toml REPLACES it entirely (an empty list switches it off). To propose them \
+             after all, pass --no-warn-common-titles."
         ),
     };
     let verb = match mode {
@@ -1077,10 +1124,11 @@ pub fn links_auto(
     // suspicious titles, and the run that counts holds them back.
     //
     // Off when `[links.auto] exclude_titles` is configured (the user's list
-    // replaces the default) or `warn_common_titles = false` /
+    // replaces the default — an explicitly empty list therefore switches the
+    // stop-list off entirely, BUG-23) or `warn_common_titles = false` /
     // `--no-warn-common-titles` (the heuristic itself is switched off).
     let stop_list_active =
-        filters.effective_warn_common_titles() && filters.config_exclude_titles.is_empty();
+        filters.effective_warn_common_titles() && !filters.config_exclude_titles_set;
     let mut default_excluded_titles: Vec<String> = Vec::new();
     let mut default_excluded_mentions: usize = 0;
     let mut offenders: Vec<Offender> = Vec::new();
@@ -1808,11 +1856,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // iter-205 / L-12: honest truncation, complete flag list
+    // iter-205 / L-12, amended by iter-274 / UX-11: honest truncation, and a
+    // flag list capped at the same count the prose admits to showing.
     // -----------------------------------------------------------------------
 
     #[test]
-    fn long_offender_lists_are_truncated_in_prose_but_not_in_flags() {
+    fn long_offender_lists_are_truncated_in_prose_and_in_flags() {
         let matches = matches_for(&[
             "access", "account", "action", "active", "address", "agree", "answer",
         ]);
@@ -1829,8 +1878,16 @@ mod tests {
         );
         assert_eq!(
             note.matches("--exclude-title ").count(),
-            7,
-            "every offender gets a flag so one paste-back extinguishes the note: {note}"
+            COMMON_TITLE_NOTE_MAX_LISTED,
+            "the flag list is capped at the count the prose says it shows: {note}"
+        );
+        assert!(
+            note.contains("those flags ADD to the built-in stop-list"),
+            "the note must say flags add while the config list replaces: {note}"
+        );
+        assert!(
+            note.contains("REPLACES it entirely (an empty list switches it off)"),
+            "the note must document the empty-list opt-out (BUG-23): {note}"
         );
         assert_eq!(
             note.matches('"').count(),
@@ -2120,6 +2177,7 @@ pub(crate) fn run(
                         cli_first_only: first_only,
                         cli_no_first_only: no_first_only,
                         config_exclude_titles: ctx.auto_link_exclude_titles,
+                        config_exclude_titles_set: ctx.auto_link_exclude_titles_set,
                         config_exclude_target_globs: ctx.auto_link_exclude_target_globs,
                         config_first_only: ctx.auto_link_first_only,
                         cli_no_warn_common_titles: no_warn_common_titles,

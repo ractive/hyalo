@@ -2140,6 +2140,7 @@ fn run_inner() -> Result<(), AppError> {
     let changelog_path = config.changelog_path;
     let case_insensitive_mode = config.case_insensitive_mode;
     let case_insensitive_resolve = config.case_insensitive_resolve;
+    let auto_link_exclude_titles_set = config.auto_link_exclude_titles_set;
     let auto_link_exclude_titles = config.auto_link_exclude_titles;
     let auto_link_exclude_target_globs = config.auto_link_exclude_target_globs;
     let auto_link_first_only = config.auto_link_first_only;
@@ -2335,6 +2336,7 @@ fn run_inner() -> Result<(), AppError> {
         case_insensitive_mode,
         case_insensitive_resolve,
         auto_link_exclude_titles: &auto_link_exclude_titles,
+        auto_link_exclude_titles_set,
         auto_link_exclude_target_globs: &auto_link_exclude_target_globs,
         auto_link_first_only,
         config_fuzzy_min_confidence,

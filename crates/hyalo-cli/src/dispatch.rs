@@ -206,6 +206,9 @@ pub(crate) struct CommandContext<'a> {
     /// `[links.auto]` in `.hyalo.toml` (iter-195a). Unioned with the CLI flags
     /// in the `links auto` dispatch arm.
     pub auto_link_exclude_titles: &'a [String],
+    /// Whether `[links.auto] exclude_titles` was declared at all (an explicit
+    /// `[]` included) — see [`crate::commands::links::AutoFilters`].
+    pub auto_link_exclude_titles_set: bool,
     /// See [`CommandContext::auto_link_exclude_titles`].
     pub auto_link_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only` — `--first-only` for every run.

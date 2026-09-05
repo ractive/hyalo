@@ -320,17 +320,25 @@ pub fn site_prefix_plausible_resolution_stats(
     // PR #251 review N13: `split('/').next()` on any `&str` (including
     // empty) always yields `Some`, so `filter_map` never actually filters
     // anything here — `map` says that plainly.
-    let top_level: std::collections::HashSet<String> = index
-        .entries()
-        .iter()
-        .map(|e| {
-            e.rel_path
-                .split('/')
-                .next()
-                .unwrap_or_default()
-                .to_lowercase()
-        })
-        .collect();
+    let mut top_level: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in index.entries() {
+        let first = entry
+            .rel_path
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
+        // UX-22 (iter-274): a site-absolute link is written without the `.md`
+        // extension — `[[/a]]` for a root-level `a.md` — so comparing the
+        // stripped first segment against the raw filename never matched and a
+        // vault whose site-absolute links all *resolve* was still told its
+        // `site_prefix` "stripped 0 of 1". Index the stem alongside the
+        // filename so an extensionless top-level link is recognised.
+        if let Some(stem) = first.strip_suffix(".md") {
+            top_level.insert(stem.to_owned());
+        }
+        top_level.insert(first);
+    }
 
     let mut absolute = 0usize;
     let mut plausible = 0usize;

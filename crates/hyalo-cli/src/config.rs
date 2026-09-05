@@ -126,8 +126,14 @@ struct CaseInsensitiveTable {
 struct AutoLinksConfig {
     /// Titles never auto-linked (case-insensitive), same semantics as
     /// `--exclude-title`.
+    ///
+    /// `Option` rather than a plain `Vec` so that an explicit
+    /// `exclude_titles = []` is distinguishable from an absent key: per
+    /// DEC-286 the configured list *replaces* the built-in stop-list entirely,
+    /// and an empty list therefore switches the stop-list off (BUG-23,
+    /// iter-274) rather than silently meaning "unset".
     #[serde(default)]
-    exclude_titles: Vec<String>,
+    exclude_titles: Option<Vec<String>>,
     /// Vault-relative globs whose pages are never auto-link *targets*, same
     /// semantics as `--exclude-target-glob`.
     #[serde(default)]
@@ -391,6 +397,10 @@ pub(crate) struct ResolvedDefaults {
     /// Titles `hyalo links auto` never links, from `[links.auto] exclude_titles`.
     /// Unioned with `--exclude-title` (flags extend, never replace).
     pub(crate) auto_link_exclude_titles: Vec<String>,
+    /// Whether `[links.auto] exclude_titles` was present in the config at all,
+    /// empty list included. Declaring it hands the choice to the user's own
+    /// list and stands the built-in stop-list down (DEC-286 / BUG-23).
+    pub(crate) auto_link_exclude_titles_set: bool,
     /// Target-page globs `hyalo links auto` never links to, from
     /// `[links.auto] exclude_target_globs`. Unioned with `--exclude-target-glob`.
     pub(crate) auto_link_exclude_target_globs: Vec<String>,
@@ -508,6 +518,7 @@ impl ResolvedDefaults {
             case_insensitive_mode: CaseInsensitiveMode::Auto,
             case_insensitive_resolve: false,
             auto_link_exclude_titles: Vec::new(),
+            auto_link_exclude_titles_set: false,
             auto_link_exclude_target_globs: Vec::new(),
             auto_link_first_only: false,
             auto_link_warn_common_titles: true,
@@ -1151,7 +1162,8 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         default_limit: cfg.default_limit,
         case_insensitive_mode,
         case_insensitive_resolve,
-        auto_link_exclude_titles: links_auto.exclude_titles,
+        auto_link_exclude_titles_set: links_auto.exclude_titles.is_some(),
+        auto_link_exclude_titles: links_auto.exclude_titles.unwrap_or_default(),
         auto_link_exclude_target_globs: links_auto.exclude_target_globs,
         auto_link_first_only: links_auto.first_only.unwrap_or(false),
         auto_link_warn_common_titles: links_auto.warn_common_titles.unwrap_or(true),
