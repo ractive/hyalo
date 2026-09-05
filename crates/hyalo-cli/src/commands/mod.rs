@@ -556,6 +556,45 @@ pub fn require_file_or_glob(
     }
 }
 
+/// Reject a frontmatter property key that cannot name a real property
+/// (iter-271 Part B).
+///
+/// `hyalo properties rename --from title --to ''` used to exit 0 after giving
+/// every file a `"": Note 2` key; because `title` falls back to the filename
+/// stem, the loss was invisible in `find`. The same shape is already rejected
+/// by `set --property '=v'` and `types set ''`, so a rename must reject it
+/// too. `flag` names the offending option (`--from` / `--to`) so the message
+/// points at the argument the user typed.
+///
+/// Returns `Some(CommandOutcome::UserError(...))` when the key is unusable,
+/// `None` when it is fine.
+#[must_use]
+pub fn reject_invalid_property_key(
+    key: &str,
+    flag: &str,
+    format: Format,
+) -> Option<CommandOutcome> {
+    let reason = if key.is_empty() {
+        "property name cannot be empty"
+    } else if key.trim().is_empty() {
+        "property name cannot be whitespace only"
+    } else if key.contains(['\n', '\r']) {
+        "property name cannot contain a line break"
+    } else if key.chars().any(char::is_control) {
+        "property name cannot contain control characters"
+    } else {
+        return None;
+    };
+    let out = crate::output::format_error(
+        format,
+        &format!("invalid {flag} value: {reason}"),
+        None,
+        Some("pass a property name, e.g. --from rating --to score"),
+        None,
+    );
+    Some(CommandOutcome::UserError(out))
+}
+
 /// Characters that form the start of comparison operators in filter syntax (`>=`, `<=`,
 /// `!=`, `~=`).  When a `--property` key ends with one of these in a mutation command
 /// (`set`, `remove`, `append`), it almost certainly means the user intended

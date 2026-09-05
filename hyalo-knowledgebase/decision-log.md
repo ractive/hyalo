@@ -5009,3 +5009,131 @@ neither is worth carrying for a hypothetical one.
 **Where:** no code. `hyalo --help` and the skill file may state "run mutations
 sequentially; concurrent writers to one file are not serialised" if the
 question comes up again; not added pre-emptively.
+
+## DEC-293: the frontmatter closing fence is strict column-0, and hyalo never emits a block scalar that trips a lenient one (2026-09-05)
+
+**Decision:** A frontmatter block closes on a line that is exactly `---` at
+**column 0**, with trailing whitespace (a `\r`, spaces, tabs) allowed and
+leading whitespace disqualifying — the same policy the opening delimiter has
+always had. An indented `  ---` is content, not a delimiter.
+
+Additionally, the frontmatter emitter never writes a **block scalar** whose
+content carries a line that trims to `---` or `...`: such a value is written as
+a double-quoted scalar (`k: "a\n---\nb"`) instead. The choice is made per
+serialized value, so a document with no such string is emitted byte-identically
+to before.
+
+**Why the leniency existed.** iter-183 L-4 consolidated five parse paths
+(`read_frontmatter_from_reader`, `find_body_offset`, `skip_frontmatter`, the
+multi-visitor scanner, the body-scan loops) that had each independently closed
+on `line.trim() == "---"`. Unifying them on one helper was right; keeping the
+lenient predicate was the path of least resistance and was documented as
+deliberate.
+
+**Why it loses.** YAML and Obsidian both close only at column 0, so the
+leniency was hyalo disagreeing with every other reader of the same bytes — and
+disagreeing *destructively*. Given
+
+```yaml
+---
+title: Ind
+k: |-
+  a
+  ---
+  b
+after: 1
+---
+REALBODY
+```
+
+`read --frontmatter` returned `{"k": "a", "title": "Ind"}` — `after` gone — and
+the next `set`/`append` spliced its new key over the block scalar's own text,
+destroying the body. hyalo **produced this shape itself**: `set --property
+"k=$(printf 'a\n---\nb')"` emitted exactly that block scalar, so the next
+mutation corrupted a file hyalo had just written. `lint` reported nothing.
+
+**Census (the cost of strictness).** Over five testbeds — the hyalo
+knowledgebase (459 files with frontmatter), `obsidian-hub` (6509),
+`kepano-obsidian` (98), `mdn/files/en-us` (14375) and `docs/content` (3707),
+25148 files in total — the number of files whose frontmatter parses differently
+under the lenient and the strict rule is **zero**. The leniency never rescued a
+real file; it only mis-parsed the ones it broke. A file that closes only under
+the lenient rule is malformed and now surfaces as "unclosed frontmatter" /
+`HYALO005`, which is the honest verdict.
+
+**Where:** `frontmatter::is_closing_delimiter` (the single canonical
+predicate every path routes through), `hyalo_serializer_options_for` +
+`has_document_marker_line` for the emitter guard. See
+[[iterations/iteration-271-write-and-rewrite-safety]].
+
+## DEC-294: `<!-- markdownlint-disable … -->` comments are honoured (2026-09-05)
+
+**Decision:** `lint` and `lint --fix` honour markdownlint's own suppression
+comments: `markdownlint-disable`, `-enable`, `-disable-line`,
+`-disable-next-line`, `-disable-file` and `-enable-file`, each optionally
+followed by whitespace- or comma-separated rule **ids** (`MD010`) or **aliases**
+(`no-hard-tabs`), matched case-insensitively; with no ids the directive covers
+every rule. It applies to the HYALO rules as well as the stock MD ones. A
+directive inside a code fence is a sample, not a directive.
+
+`markdownlint-capture` / `-restore` are **not** supported — they exist to save
+and restore a configuration stack that hyalo does not model, and no corpus in
+the testbeds uses them. MDN's `-nolint` info-string suffix
+(```` ```html-nolint ````) is **not** supported either: it is an MDN build-system
+convention, not markdownlint syntax, and reading fence info strings as lint
+directives would silently change behaviour for every corpus that happens to use
+a hyphenated language tag.
+
+**Why.** MDN's whitespace guide wraps a deliberately tab-laden fence in
+`<!-- markdownlint-disable no-hard-tabs -->`; hyalo recognised neither form and
+`lint --fix` replaced the tabs in a page whose subject is tabs. Every markdown
+corpus large enough to be worth linting has some region that is deliberately
+"wrong", and the standard, portable way to say so is the comment markdownlint
+itself defines. Inventing a hyalo-specific mechanism would have been a second
+dialect for the same need.
+
+It is cheap because iteration 271 Part D already computes HTML-comment spans
+per line for the code-block exemption; the directive parser rides along on that
+pass.
+
+**Where:** `hyalo-mdlint`'s `rules::spans::BodySpans` (parsing and per-line
+resolution) and the final `retain` in `HyaloLintEngine::lint_body`. See
+[[iterations/iteration-271-write-and-rewrite-safety]].
+
+## DEC-295: `links fix` does not report a case mismatch for a link that resolved through `site_prefix` (2026-09-05) — amends DEC-267
+
+**Decision:** A `link-case-mismatch` plan is **not** produced for a link whose
+target is site-absolute and carries the configured `site_prefix`
+(`/en-US/docs/Web/CSS/Guides/Anchor_positioning` under
+`site_prefix = "en-US/docs/Web/CSS"`). Such a link is correct *for the site*
+and is left exactly as written. This is option (b) of the two the iteration
+weighed; (a), "keep producing the plans with a corrected rewrite", is not taken.
+
+Separately, and for every remaining strategy: **a rewrite keeps the incoming
+form.** A directory link stays a directory link (trailing slash included), an
+authored `.md` stays `.md`, and neither `/index` nor `.md` is ever appended to a
+form that did not have it. The round-trip guard accepts the directory form of a
+directory-index target, which is what lets the emitter keep it.
+
+**Why.** DEC-267 folded case on every platform and called the resulting
+`link-case-mismatch` rule cosmetic. On a copy of `mdn/files/en-us/web/css` the
+cosmetic rule proposed **5096 rewrites across 1049 files** — a corpus whose URL
+convention is deliberately Title-case over lowercase folders, so every one of
+those "mismatches" was the site's own spelling. Worse, the written URL came out
+as `/en-US/docs/Web/CSS/guides/anchor_positioning/index`: the directory-index
+fallback's `/index` leaked into a published URL. A rule that is cosmetic by its
+own description does not get to rewrite five thousand links, and a rewrite that
+changes the *form* of a link is not a casing fix at all.
+
+Option (a) was rejected because even a correctly-formed case rewrite of a
+site-absolute link asserts that the on-disk folder casing is authoritative over
+the site's URL convention. For a static-site corpus that is simply false, and
+hyalo has no way to know which of the two the author meant. Doing nothing is
+the only answer that cannot be wrong. Vaults that *do* want their site-absolute
+links case-normalised can rename the files; `links fix` still fixes genuinely
+broken ones.
+
+**Where:** `link_fix::resolved_through_site_prefix` (the skip),
+`emit_markdown_fix_target` + `raw_target_names_index` / `strip_directory_index`
+(form preservation), `markdown_fix_round_trips` (the guard that accepts it). See
+[[iterations/iteration-271-write-and-rewrite-safety]].

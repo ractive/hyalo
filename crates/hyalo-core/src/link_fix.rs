@@ -18,6 +18,7 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+use crate::discovery::DIRECTORY_INDEX_FILE;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
@@ -423,6 +424,19 @@ pub fn detect_broken_links_from_index(
                 LinkResolution::Resolved(None) | LinkResolution::ShortFormValid => {}
                 LinkResolution::Resolved(Some(canonical_str))
                 | LinkResolution::CaseMismatch(canonical_str) => {
+                    // BUG-4 (dogfood v0.22.0), iter-271 Part F / DEC-267
+                    // amendment: a link written in the site's own URL form
+                    // (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is
+                    // *correct for the site*. Its casing follows the published
+                    // URL convention, not the on-disk folder names, and the
+                    // rule that reports it is explicitly cosmetic — yet on a
+                    // copy of MDN's CSS tree it proposed 5096 rewrites across
+                    // 1049 files. A cosmetic rule does not get to rewrite a
+                    // corpus. Site-prefixed links are simply not case
+                    // mismatches.
+                    if resolved_through_site_prefix(&link.target, site_prefix) {
+                        continue;
+                    }
                     case_mismatches.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
@@ -447,6 +461,27 @@ pub fn detect_broken_links_from_index(
                     // bucket, not `case_mismatches` — a relocation is not a
                     // cosmetic casing fix, and lumping the two made the "Case
                     // mismatches" count lie about what changed.
+                    //
+                    // iter-271 Part F, found by CI on a case-sensitive
+                    // filesystem: `classify_link`'s exact-match probe uses
+                    // `Path::is_file()`, which is case-insensitive on macOS/
+                    // APFS but case-sensitive on Linux/Windows-case-sensitive
+                    // volumes. On a case-sensitive filesystem a site-absolute
+                    // link that differs from disk *only* by case fails the
+                    // exact probe and falls through to the case-index
+                    // fallback, where `is_case_only_variant` compares the
+                    // *un-stripped* site-absolute text against the
+                    // *site-prefix-stripped* canonical path — never equal
+                    // beyond case alone — so it is misclassified as a
+                    // relocation instead of a case mismatch. The same
+                    // `resolved_through_site_prefix` guard applies here for
+                    // the same reason DEC-295 gives for `case_mismatches`: a
+                    // site-absolute link is correct for the site regardless
+                    // of which internal bucket a case-sensitive-filesystem
+                    // quirk sorts it into.
+                    if resolved_through_site_prefix(&link.target, site_prefix) {
+                        continue;
+                    }
                     relocations.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
@@ -1231,6 +1266,30 @@ fn strip_md_suffix(target: &str) -> &str {
     }
 }
 
+/// Whether `raw_target` is a site-absolute destination that carries the
+/// configured `site_prefix` — that is, whether it resolved *through* the
+/// prefix rather than as a plain vault path (iter-271 Part F).
+fn resolved_through_site_prefix(raw_target: &str, site_prefix: Option<&str>) -> bool {
+    let Some(prefix) = site_prefix else {
+        return false;
+    };
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return false;
+    }
+    raw_target
+        .strip_prefix('/')
+        .and_then(|rest| {
+            // The prefix comparison folds case for the same reason link
+            // resolution does (DEC-267): a site prefix written `/en-us/...`
+            // still names the `en-US` site.
+            rest.get(..prefix.len())
+                .filter(|head| head.eq_ignore_ascii_case(prefix))
+                .map(|_| &rest[prefix.len()..])
+        })
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
 /// Compute the destination text to write for a fixed **markdown** link.
 ///
 /// [`FixPlan::new_target`] is always *vault-relative*, but the read-side
@@ -1253,13 +1312,30 @@ fn emit_markdown_fix_target(
 ) -> String {
     let had_md = raw_target.len() > 3
         && raw_target.as_bytes()[raw_target.len() - 3..].eq_ignore_ascii_case(b".md");
+    // iter-271 CASE-1: never *add* a `/index` segment the author did not
+    // write. A directory link (`…/anchor_positioning`, or with a trailing
+    // slash) resolves through the directory-index fallback to
+    // `…/anchor_positioning/index.md`; emitting that path verbatim turned a
+    // clean URL into `…/anchor_positioning/index`. The rewrite keeps the
+    // incoming form and changes only what the fix is about.
+    let new_vault_rel = if had_md || raw_target_names_index(raw_target) {
+        new_vault_rel
+    } else {
+        strip_directory_index(new_vault_rel)
+    };
+    let had_trailing_slash = raw_target.ends_with('/');
+    // The incoming form's trailing slash is part of the form, so it is kept.
+    let keep_form = |path: &str| -> String {
+        let body = if had_md { path } else { strip_md_suffix(path) };
+        if had_trailing_slash && !body.ends_with('/') {
+            format!("{body}/")
+        } else {
+            body.to_owned()
+        }
+    };
 
     if raw_target.starts_with('/') {
-        let body = if had_md {
-            new_vault_rel
-        } else {
-            strip_md_suffix(new_vault_rel)
-        };
+        let body = keep_form(new_vault_rel);
         // Re-attach the site prefix only when the *original* link carried it.
         // `site_prefix` is auto-derived from the vault directory name when
         // nothing is configured, so injecting it unconditionally would invent
@@ -1277,12 +1353,31 @@ fn emit_markdown_fix_target(
         };
     }
 
-    let rel = relative_path_between(source_rel, new_vault_rel);
-    if had_md {
-        rel
-    } else {
-        strip_md_suffix(&rel).to_string()
-    }
+    keep_form(&relative_path_between(source_rel, new_vault_rel))
+}
+
+/// Whether the author's own target already names a directory index —
+/// `.../index`, `.../index.md`, or the bare `index` at the vault root — so
+/// keeping the `/index.md` tail preserves the form rather than inventing it.
+fn raw_target_names_index(raw_target: &str) -> bool {
+    let path = raw_target.trim_end_matches('/');
+    let path = strip_md_suffix(path);
+    let stem = path.rsplit('/').next().unwrap_or(path);
+    stem.eq_ignore_ascii_case(strip_md_suffix(DIRECTORY_INDEX_FILE))
+}
+
+/// Drop a trailing `/index.md` (or a bare `index.md`) so a vault-relative path
+/// that came from the directory-index fallback is written back as the
+/// directory the author actually linked to.
+fn strip_directory_index(new_vault_rel: &str) -> &str {
+    new_vault_rel
+        .strip_suffix(DIRECTORY_INDEX_FILE)
+        .map_or(new_vault_rel, |head| {
+            let head = head.strip_suffix('/').unwrap_or(head);
+            // A vault-root `index.md` has no directory to fall back to; the
+            // only faithful rendering of it is the file itself.
+            if head.is_empty() { new_vault_rel } else { head }
+        })
 }
 
 /// Whether the emitted markdown destination reads back — through the exact
@@ -1303,7 +1398,18 @@ fn markdown_fix_round_trips(
     } else {
         normalize_target(Path::new(source_rel), emitted)
     };
-    strip_md_suffix(&normalized) == strip_md_suffix(new_vault_rel)
+    let normalized = strip_md_suffix(normalized.trim_end_matches('/'));
+    let target = strip_md_suffix(new_vault_rel);
+    // iter-271 CASE-1: a directory link is *the* form of a directory-index
+    // target, so `guides/anchor_positioning` reads back as
+    // `guides/anchor_positioning/index.md` through the same directory-index
+    // fallback the resolver applies. Accepting it here is what lets the
+    // emitter keep the incoming form instead of appending `/index`.
+    normalized == target
+        || target
+            .strip_suffix(strip_md_suffix(DIRECTORY_INDEX_FILE))
+            .and_then(|head| head.strip_suffix('/'))
+            .is_some_and(|dir| dir == normalized)
 }
 
 /// Whether the emitted wikilink target reads back as `new_vault_rel`.
@@ -2282,6 +2388,77 @@ See [broken](old-name.md) here.
             emit_markdown_fix_target("wrong.md", "sub/right.md", "index.md", None),
             "sub/right.md"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // iter-271 Part F / CASE-1 — the rewrite keeps the incoming form
+    // ------------------------------------------------------------------
+
+    /// BUG-4 (dogfood v0.22.0): a directory link resolved through the
+    /// directory-index fallback used to be written back with the resolver's
+    /// `/index` tail — `/en-US/docs/Web/CSS/Guides/Anchor_positioning` became
+    /// `/en-US/docs/Web/CSS/guides/anchor_positioning/index`.
+    #[test]
+    fn emit_never_appends_a_directory_index_the_author_did_not_write() {
+        let emitted = emit_markdown_fix_target(
+            "/en-US/docs/Web/CSS/Guides/Anchor_positioning",
+            "guides/anchor_positioning/index.md",
+            "web/css/page.md",
+            Some("en-US/docs/Web/CSS"),
+        );
+        assert_eq!(emitted, "/en-US/docs/Web/CSS/guides/anchor_positioning");
+        assert!(
+            markdown_fix_round_trips(
+                &emitted,
+                "guides/anchor_positioning/index.md",
+                "web/css/page.md",
+                Some("en-US/docs/Web/CSS"),
+            ),
+            "the directory form must read back through the directory-index fallback"
+        );
+    }
+
+    #[test]
+    fn emit_keeps_a_trailing_slash_and_an_authored_index() {
+        assert_eq!(
+            emit_markdown_fix_target("Guides/Anchor/", "guides/anchor/index.md", "page.md", None),
+            "guides/anchor/"
+        );
+        // An author who wrote the index file keeps it.
+        assert_eq!(
+            emit_markdown_fix_target(
+                "Guides/Anchor/index.md",
+                "guides/anchor/index.md",
+                "page.md",
+                None
+            ),
+            "guides/anchor/index.md"
+        );
+        // A vault-root `index.md` has no directory to fall back to.
+        assert_eq!(
+            emit_markdown_fix_target("Index", "index.md", "sub/page.md", None),
+            "../index"
+        );
+    }
+
+    #[test]
+    fn site_prefixed_links_are_recognised_case_insensitively() {
+        assert!(resolved_through_site_prefix(
+            "/en-US/docs/Web/CSS/Guides/Anchor_positioning",
+            Some("en-US/docs/Web/CSS")
+        ));
+        assert!(resolved_through_site_prefix(
+            "/en-us/docs/web/css/guides",
+            Some("en-US/docs/Web/CSS")
+        ));
+        assert!(!resolved_through_site_prefix(
+            "/other/docs/page",
+            Some("en-US/docs/Web/CSS")
+        ));
+        assert!(!resolved_through_site_prefix("guides/anchor", Some("docs")));
+        assert!(!resolved_through_site_prefix("/docs/page", None));
+        // A prefix must end at a path boundary, not mid-segment.
+        assert!(!resolved_through_site_prefix("/docsy/page", Some("docs")));
     }
 
     #[test]

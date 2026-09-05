@@ -200,6 +200,30 @@ Prefer `hyalo` CLI for operations on files in this directory:
   on every platform, not only on a case-insensitive filesystem. Opt out with
   `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the
   cosmetic `link-case-mismatch` rewrite plans.
+- **Case plans never touch a `site_prefix` link, and a rewrite keeps its form** (DEC-295,
+  iter-271): a site-absolute link carrying the configured `site_prefix`
+  (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the *site's* URL convention,
+  which the on-disk folder casing does not govern — no `link-case-mismatch` plan is produced for
+  it. Broken site-absolute links are still fixed. For every strategy, the rewrite keeps the
+  incoming form: a directory link stays a directory link (trailing slash included), an authored
+  `.md` stays `.md`, and neither `/index` nor `.md` is appended to a form that lacked it.
+- **`lint` respects code blocks and markdownlint-disable comments** (iter-271, DEC-294): a rule
+  that lints prose does not fire inside a fenced (``` / `~~~`) or indented code block or an HTML
+  comment. The exceptions are the rules whose subject IS the block — MD031/MD040/MD046/MD048
+  (the fence), MD047 (the final newline) and MD010 (a hard tab in a sample is a real problem,
+  as markdownlint also holds). MD031 additionally stays quiet at the opener of a fence that
+  never closes. Silence a region the standard way:
+  `<!-- markdownlint-disable no-hard-tabs -->` … `<!-- markdownlint-enable no-hard-tabs -->`,
+  plus `-disable-line`, `-disable-next-line`, `-disable-file` and `-enable-file`, taking rule
+  ids or aliases; with no ids a directive covers every rule, HYALO ones included.
+- **Frontmatter closes only at column 0** (DEC-293, iter-271): an indented `  ---` inside a
+  block scalar is content, not a delimiter — it used to truncate the block, dropping every key
+  after it and letting the next `set` overwrite the body. A block that never closes at column 0
+  is reported as unclosed (`HYALO005`). `set`/`append` also never emit a block scalar containing
+  a `---`/`...` line: such a value is written double-quoted so it round-trips.
+- **`mv` guards ambiguous frontmatter links** (iter-271): a bare `related: "[[a]]"` whose stem
+  matches two files is skipped and listed in `skipped_ambiguous` with the `property` it came
+  from, exactly as a body `[[a]]` is; `--allow-ambiguous` rewrites both.
 - **Attachments resolve like Obsidian**: `![[img.png]]` matches a unique basename anywhere in
   the vault, `![[sub/img.png]]` also resolves against the source folder, and
   `[[Templates/Bases/Books.base]]` resolves by path. `links fix` never matches across an

@@ -757,6 +757,11 @@ impl HyaloLintEngine {
 
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
+        // One pass over the body answers "is this line code?", "does this
+        // fence ever close?" and "did a `markdownlint-…` comment switch this
+        // rule off here?" for every filter below (iter-271 Parts C/D/E).
+        let spans = crate::rules::spans::BodySpans::new(body_content);
+
         // --- Stock MD rules (through mdbook-lint-core) ---
         let enabled_stock_ids: Vec<&str> = self
             .catalog
@@ -811,6 +816,25 @@ impl HyaloLintEngine {
                             .checked_sub(1)
                             .and_then(|i| doc.lines.get(i))
                             .is_some_and(|line| crate::rules::obsidian::is_obsidian_tag_line(line))
+                    {
+                        continue;
+                    }
+                    // BUG-3 (dogfood v0.22.0), iter-271 Part C: at the opener
+                    // of a fence that never closes, MD031's "blank line after
+                    // this fence" proposal lands *inside* the code sample.
+                    // markdownlint reports nothing there; six GitHub Docs
+                    // files have an odd fence count and hyalo rewrote them.
+                    if *rule_id == "MD031" && spans.opens_unterminated_fence(v.line) {
+                        continue;
+                    }
+                    // BUG-28 (dogfood v0.22.0), iter-271 Part D: a rule that
+                    // lints prose must not fire on a line that *is* the prose
+                    // being documented. MD019 rewrote `#   three` inside a
+                    // ```text fence — and it was not alone. The exceptions in
+                    // `CODE_BLOCK_AWARE_RULE_IDS` are the rules whose subject
+                    // is the code block itself.
+                    if !CODE_BLOCK_AWARE_RULE_IDS.contains(rule_id)
+                        && (spans.line_is_code(v.line) || spans.line_is_html_comment(v.line))
                     {
                         continue;
                     }
@@ -936,9 +960,49 @@ impl HyaloLintEngine {
             }
         }
 
+        // iter-271 Part E / DEC-294: `<!-- markdownlint-disable … -->` and
+        // friends. Applied last so it covers the HYALO rules too — a vault
+        // that switches HYALO001 off around a deliberate `[]` sample gets the
+        // same escape hatch as one silencing MD010 around a tab table. Gated
+        // on the cheap "any directive at all?" check so the common file pays
+        // nothing.
+        if spans.has_disable_directives() {
+            diagnostics.retain(|d| {
+                !spans.rule_disabled_at(d.line, |token| self.token_names_rule(token, &d.rule_id))
+            });
+        }
+
         Ok(diagnostics)
     }
+
+    /// Whether a `markdownlint-disable` token names the rule `rule_id`.
+    ///
+    /// markdownlint accepts either the id (`MD010`) or the alias
+    /// (`no-hard-tabs`), case-insensitively; hyalo's catalog carries both, and
+    /// the aliases are the upstream markdownlint ones.
+    fn token_names_rule(&self, token: &str, rule_id: &str) -> bool {
+        token.eq_ignore_ascii_case(rule_id)
+            || self
+                .catalog
+                .iter()
+                .any(|e| e.id == rule_id && e.name.eq_ignore_ascii_case(token))
+    }
 }
+
+/// Rules exempt from the code-block suppression of iter-271 Part D, because a
+/// code block is exactly what they are about.
+///
+/// - `MD031`/`MD040`/`MD046`/`MD048` lint the fence itself (blank lines around
+///   it, its info string, its style) — suppressing them inside the block they
+///   delimit would switch them off entirely.
+/// - `MD047` is about the file's final newline; a file that ends inside an
+///   unterminated fence still needs one.
+/// - `MD010` (no-hard-tabs) deliberately checks code blocks, matching
+///   markdownlint's own `code_blocks: true` default: a hard tab in a sample is
+///   a real portability problem. A page whose *point* is showing tabs silences
+///   it with `<!-- markdownlint-disable no-hard-tabs -->` (Part E), which is
+///   the escape hatch markdownlint itself offers.
+const CODE_BLOCK_AWARE_RULE_IDS: &[&str] = &["MD010", "MD031", "MD040", "MD046", "MD047", "MD048"];
 
 /// Rule IDs whose upstream `Violation.column` (the *reported* diagnostic
 /// position, distinct from the `Fix` range `convert_fix` handles above) is

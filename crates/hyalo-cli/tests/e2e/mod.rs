@@ -49,6 +49,7 @@ mod iteration265_scan_exclude_and_skips;
 mod iteration266_metadata_mutations;
 mod iteration267_help_hints_text;
 mod iteration269_carry_over_fixes;
+mod iteration271_write_rewrite_safety;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

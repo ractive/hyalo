@@ -1978,6 +1978,18 @@ Repeatable (AND).\n\
             left unfixed, not the whole-run count those keys mean on plain lint) so a script\n\
             reading the same key off both shapes never silently answers two different\n\
             questions.\n\n\
+            CODE BLOCKS AND SUPPRESSION: a rule that lints prose does not fire on a line inside a\n\
+            fenced (``` or ~~~) or indented code block, or inside an HTML comment — the sample is\n\
+            the content, not a defect. The exceptions are the rules whose subject IS the block:\n\
+            MD031/MD040/MD046/MD048 (the fence itself), MD047 (the file's final newline), and\n\
+            MD010 (a hard tab in a sample is a real portability problem — markdownlint checks\n\
+            code blocks for it too). MD031 also stays quiet at the opener of a fence that never\n\
+            closes, where a \"blank line after\" would land inside the sample.\n\
+            markdownlint's own suppression comments are honoured, with rule ids or aliases and\n\
+            case-insensitively: `<!-- markdownlint-disable no-hard-tabs -->` … \n\
+            `<!-- markdownlint-enable no-hard-tabs -->`, plus `-disable-line`,\n\
+            `-disable-next-line`, `-disable-file` and `-enable-file`; with no ids a directive\n\
+            covers every rule, HYALO ones included. `-capture`/`-restore` are not supported.\n\n\
             EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
             EXAMPLES:\n\
             hyalo lint\n\
@@ -2829,7 +2841,13 @@ pub(crate) enum LinksAction {
             \"auto\" (the default) enables this automatically. A bare-stem link whose exact path\n\
             fails but whose stem resolves in a *different directory* is a relocation, not a\n\
             casing fix — reported separately as relocations/relocation_fixes, also written by\n\
-            plain --apply.")]
+            plain --apply.\n\
+            A **site-absolute link carrying the configured `site_prefix`** is never reported as a\n\
+            case mismatch (DEC-295): it is written in the site's own URL convention, which the\n\
+            on-disk folder casing does not govern. Genuinely broken site-absolute links are still\n\
+            fixed. Every rewrite also keeps the form it found — a directory link stays a\n\
+            directory link (trailing slash included), an authored `.md` stays `.md`, and neither\n\
+            `/index` nor `.md` is ever appended to a form that did not have it.")]
     Fix {
         /// Preview changes without writing any files (the default; --apply writes)
         #[arg(long)]

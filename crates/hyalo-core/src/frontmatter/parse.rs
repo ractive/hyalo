@@ -159,11 +159,55 @@ fn describe_budget_breach(
     }
 }
 
-/// Build `SerializerOptions` that preserve the detected list indentation style.
-fn hyalo_serializer_options(compact_list_indent: bool) -> SerializerOptions {
+/// Serializer options that preserve the detected list indentation style, and
+/// guard against emitting a hazardous block scalar (iter-271 FENCE-2, DEC-293).
+///
+/// The stock options, except when the value contains a
+/// string whose lines include a YAML document marker (`---` or `...`). The
+/// serializer's default `prefer_block_scalars` would render such a string as
+///
+/// ```yaml
+/// k: |-
+///   a
+///   ---
+///   b
+/// ```
+///
+/// which is valid YAML but a well-known trap: any reader that closes
+/// frontmatter on a *trimmed* `---` (hyalo itself did until Part A of this
+/// iteration; Obsidian-adjacent tooling still does) truncates the block there
+/// and silently drops every key after it. Turning `prefer_block_scalars` off
+/// for exactly those values routes them through the quoting path instead, so
+/// the value is written as a double-quoted scalar with escaped newlines
+/// (`k: "a\n---\nb"`). That round-trips byte-for-byte through
+/// `read_frontmatter` and asks nothing of the user.
+///
+/// The flag is decided per serialized value, not globally: a document with no
+/// such string is emitted exactly as before, so this cannot churn formatting
+/// on unrelated files.
+pub(super) fn hyalo_serializer_options_for<'a>(
+    compact_list_indent: bool,
+    values: impl IntoIterator<Item = &'a Value>,
+) -> SerializerOptions {
+    let safe = !values.into_iter().any(has_document_marker_line);
     SerializerOptions {
         compact_list_indent,
+        prefer_block_scalars: safe,
         ..SerializerOptions::default()
+    }
+}
+
+/// Whether any string inside `value` has a line that YAML would read as a
+/// document marker (`---` or `...`) once block-scalar indentation is stripped.
+///
+/// The trailing-whitespace-tolerant `trim` matches the readers this guards
+/// against, which are the lenient ones.
+pub(super) fn has_document_marker_line(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s.lines().any(|line| matches!(line.trim(), "---" | "...")),
+        Value::Array(items) => items.iter().any(has_document_marker_line),
+        Value::Object(map) => map.values().any(has_document_marker_line),
+        _ => false,
     }
 }
 
@@ -295,25 +339,45 @@ pub(crate) fn is_opening_delimiter(line: &str) -> bool {
     opening_delimiter(line).is_some()
 }
 
-/// Canonical **closing** frontmatter delimiter policy (iter-183 L-4).
+/// Canonical **closing** frontmatter delimiter policy (iter-183 L-4,
+/// tightened in iter-271 / DEC-293).
 ///
-/// A closing `---` is recognized **leniently**: the line is a closing
-/// delimiter when, after trimming leading and trailing ASCII whitespace, it
-/// is exactly `---`. This is deliberately more permissive than the *opening*
-/// delimiter ([`opening_delimiter`], which is strict-column-0) because every
-/// streaming reader in the crate (`read_frontmatter_from_reader`,
-/// `find_body_offset`, `skip_frontmatter`, and the multi-visitor `scanner`)
-/// has always closed frontmatter on `line.trim() == "---"`. Consolidating the
-/// three lenient sites (plus the scanner and the body-scan loops) onto this
-/// single helper guarantees they can never drift, and documents the choice in
-/// one place so `find` / `read` / `lint` / `mv` all agree on where a
-/// frontmatter block ends — including the indented `  ---` edge case.
+/// A closing `---` must sit at **column 0**, exactly like the opening
+/// delimiter ([`opening_delimiter`]): the line is a closing delimiter when,
+/// after trimming *trailing* ASCII whitespace (which absorbs a `\r`, a
+/// `\r\n`, and any trailing spaces or tabs), it is exactly `---`. Leading
+/// whitespace disqualifies it.
 ///
-/// The `line` passed here must already have any trailing `\n` / `\r` stripped
-/// (all callers pass a trimmed-of-line-ending slice), but a defensive
-/// `trim()` also tolerates raw lines.
+/// Until iter-271 this was deliberately lenient (`line.trim() == "---"`), so
+/// an indented `  ---` closed the block. That leniency loses: YAML and
+/// Obsidian both close only at column 0, so an indented `  ---` *inside* a
+/// block scalar
+///
+/// ```yaml
+/// k: |-
+///   a
+///   ---
+///   b
+/// after: 1
+/// ```
+///
+/// silently truncated the block — `after` vanished from every read, and the
+/// next `set`/`append` spliced a new key over the block scalar's own text.
+/// hyalo produced that shape itself (a multi-line value containing `---` was
+/// emitted as a block scalar), so the leniency corrupted files hyalo wrote.
+/// Strictness costs only genuinely malformed input, which now surfaces as
+/// "unclosed frontmatter" / `HYALO005` instead of being silently truncated.
+///
+/// Every parse path in the crate (`read_frontmatter_from_reader`,
+/// `find_body_offset`, `skip_frontmatter`, the multi-visitor `scanner`, the
+/// body-scan loops and the splicer) routes through this single helper, so
+/// `find` / `read` / `lint` / `mv` can never drift apart on where a
+/// frontmatter block ends.
+///
+/// Callers normally pass a slice with the line ending already stripped, but
+/// the trailing-whitespace trim also tolerates a raw line.
 pub(crate) fn is_closing_delimiter(line: &str) -> bool {
-    line.trim() == "---"
+    line.trim_end() == "---"
 }
 
 /// Represents parsed frontmatter and the remaining body content.
@@ -376,7 +440,7 @@ impl Document {
             out.push_str("---\n");
             let yaml = serde_saphyr::to_string_with_options(
                 &self.properties,
-                hyalo_serializer_options(self.compact_list_indent),
+                hyalo_serializer_options_for(self.compact_list_indent, self.properties.values()),
             )
             .context("failed to serialize YAML")?;
             out.push_str(&yaml);
@@ -660,7 +724,7 @@ fn write_frontmatter_impl(
                 Some(yaml) => yaml,
                 None => serde_saphyr::to_string_with_options(
                     props,
-                    hyalo_serializer_options(compact_list_indent),
+                    hyalo_serializer_options_for(compact_list_indent, props.values()),
                 )
                 .context("failed to serialize YAML")?,
             })
@@ -1069,14 +1133,14 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
     }
 
     // Find the closing `---` line. `pos` is the byte offset of the start of
-    // the delimiter line (which may carry leading whitespace for an indented
-    // `  ---`, per the lenient `is_closing_delimiter` policy).
+    // the delimiter line, which under the strict column-0 policy
+    // (`is_closing_delimiter`, DEC-293) always begins with `---`.
     if let Some(pos) = find_closing_delimiter(after_opening) {
         let yaml = &after_opening[..pos];
         // The body starts just after the delimiter line's terminator. Find the
         // end of the delimiter line rather than assuming it is exactly `---`
-        // at `pos`, so an indented `  ---` (or a trailing-space `--- `) does
-        // not leave delimiter bytes in the returned body.
+        // at `pos`, so a trailing-space `--- ` does not leave delimiter bytes
+        // in the returned body.
         let delim_line = &after_opening[pos..];
         let body = match delim_line.find('\n') {
             Some(nl) => &delim_line[nl + 1..],
@@ -1094,17 +1158,16 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
 /// Find the byte offset of the closing `---` line in the given string.
 ///
 /// Shares the closing-delimiter policy with the streaming readers via
-/// [`is_closing_delimiter`] (iter-183 L-4): a line is a closing delimiter when
-/// its trimmed content is exactly `---`, so an indented `  ---` closes the
-/// block here just as it does in `read_frontmatter_from_reader` /
-/// `skip_frontmatter` / the scanner. The returned offset points at the first
-/// byte of that line (after any leading whitespace is *not* stripped — the
-/// caller slices from the line start), and `extract_frontmatter` slices the
-/// YAML up to it.
+/// [`is_closing_delimiter`] (iter-183 L-4, DEC-293): a line is a closing
+/// delimiter when it is exactly `---` at column 0 (trailing whitespace
+/// allowed), so an indented `  ---` inside a block scalar closes nothing here,
+/// just as in `read_frontmatter_from_reader` / `skip_frontmatter` / the
+/// scanner. The returned offset points at the first byte of that line, and
+/// `extract_frontmatter` slices the YAML up to it.
 #[allow(dead_code)] // Called by extract_frontmatter, which is used in tests only
 fn find_closing_delimiter(s: &str) -> Option<usize> {
-    // Walk each line, tracking its start offset, and return the first whose
-    // trimmed content is exactly `---`.
+    // Walk each line, tracking its start offset, and return the first that is
+    // a column-0 `---`.
     let mut line_start = 0usize;
     loop {
         let line_end = s[line_start..]

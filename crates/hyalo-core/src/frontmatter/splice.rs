@@ -29,7 +29,7 @@
 
 use indexmap::IndexMap;
 use serde_json::Value;
-use serde_saphyr::{Options, SerializerOptions};
+use serde_saphyr::Options;
 
 use super::MAX_FRONTMATTER_BYTES;
 use super::parse::{hyalo_options, is_closing_delimiter};
@@ -431,10 +431,9 @@ fn map_eq(a: &IndexMap<String, Value>, b: &IndexMap<String, Value>) -> bool {
 fn serialize_one(key: &str, value: &Value, compact_list_indent: bool) -> Option<String> {
     let mut single: IndexMap<&str, &Value> = IndexMap::with_capacity(1);
     single.insert(key, value);
-    let opts = SerializerOptions {
-        compact_list_indent,
-        ..SerializerOptions::default()
-    };
+    // FENCE-2 (DEC-293): never emit a block scalar whose content carries a
+    // `---`/`...` line — it is a trap for every lenient frontmatter reader.
+    let opts = super::parse::hyalo_serializer_options_for(compact_list_indent, [value]);
     let mut yaml = serde_saphyr::to_string_with_options(&single, opts).ok()?;
     if !yaml.ends_with('\n') {
         yaml.push('\n');
@@ -644,10 +643,9 @@ fn is_unmodellable_block_list(body: &str, item_count: usize) -> bool {
 /// scalar), which rules out both block and flow inlining.
 fn render_scalar_item(value: &Value) -> Option<String> {
     let seq = [value];
-    let opts = SerializerOptions {
-        compact_list_indent: true,
-        ..SerializerOptions::default()
-    };
+    // FENCE-2 (DEC-293): a list item carrying a `---` line is written as a
+    // quoted scalar, never as a block scalar.
+    let opts = super::parse::hyalo_serializer_options_for(true, [value]);
     let mut yaml = serde_saphyr::to_string_with_options(&seq, opts).ok()?;
     if !yaml.ends_with('\n') {
         yaml.push('\n');
@@ -1691,7 +1689,7 @@ mod tests {
             // Whichever fallback fired, the caller re-serializes the whole
             // block from `p` directly — simulate that here.
             SpliceOutcome::Fallback(_) => {
-                serde_saphyr::to_string_with_options(&p, SerializerOptions::default())
+                serde_saphyr::to_string_with_options(&p, serde_saphyr::SerializerOptions::default())
                     .expect("full re-serialize must succeed")
             }
         };
