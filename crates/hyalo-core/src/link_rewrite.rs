@@ -94,6 +94,13 @@ pub struct SkippedAmbiguous {
     /// a list item as well as a scalar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<String>,
+    /// `true` when the link sits in the **moved file itself** (iter-275, MV-2 /
+    /// BUG-8). A self-link written as a bare stem is the one ambiguous link a
+    /// move can silently repoint at somebody else's note: it kept resolving
+    /// after the rename, just to a different file. Omitted when `false`, so
+    /// the ordinary inbound entry is shaped exactly as before.
+    #[serde(rename = "self", skip_serializing_if = "std::ops::Not::not")]
+    pub is_self: bool,
 }
 
 /// A frontmatter wikilink `mv` refused to rewrite because its `[[…]]` spans a
@@ -345,7 +352,7 @@ pub fn plan_mv(
     let content = std::fs::read_to_string(&old_abs)
         .with_context(|| format!("reading {}", old_abs.display()))?;
 
-    let outbound_replacements = plan_outbound_rewrites(
+    let (outbound_replacements, outbound_skipped) = plan_outbound_rewrites(
         &content,
         old_rel,
         old_stem,
@@ -354,7 +361,9 @@ pub fn plan_mv(
         dir_changed,
         site_prefix,
         &case_index,
+        allow_ambiguous,
     );
+    all_skipped_ambiguous.extend(outbound_skipped);
 
     if !outbound_replacements.is_empty() {
         let moved_key = PathBuf::from(old_rel.replace('\\', "/"));
@@ -824,6 +833,7 @@ fn plan_inbound_rewrites(
                                     target: t.clone(),
                                     candidates: candidates.clone(),
                                     property: None,
+                                    is_self: false,
                                 });
                                 continue;
                             }
@@ -906,9 +916,11 @@ fn plan_outbound_rewrites(
     dir_changed: bool,
     site_prefix: Option<&str>,
     case_index: &CaseInsensitiveIndex,
-) -> Vec<Replacement> {
+    allow_ambiguous: bool,
+) -> (Vec<Replacement>, Vec<SkippedAmbiguous>) {
     let link_resolver = LinkResolver::new(case_index, site_prefix);
     let mut replacements = Vec::new();
+    let mut skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
     let mut scanner = LineScanner::new();
 
@@ -949,7 +961,31 @@ fn plan_outbound_rewrites(
             // file (self-link). In that case we rewrite it via LinkWriter so
             // the form is preserved and the target points to new_rel.
             if span.kind == LinkKind::Wikilink {
-                if link_resolver.matches_target(&span, old_rel, old_rel, old_stem)
+                // BUG-8 (dogfood v0.22.0), iter-275 MV-2: `matches_target`
+                // answers `false` for a bare stem two files share, so the
+                // moved file's own `[[a]]` was left untouched *and* unreported
+                // — and after the move it quietly resolved to the twin. The
+                // guard inbound links get since NEW-3 applies here too; the
+                // entry is marked `self` so the report says whose link it is.
+                let mut self_ambiguous = false;
+                if let Some(candidates) =
+                    ambiguous_self_link_candidates(&span.link.target, old_rel, case_index)
+                {
+                    if !allow_ambiguous {
+                        skipped_ambiguous.push(SkippedAmbiguous {
+                            source: old_rel.to_owned(),
+                            line: line_num,
+                            target: span.link.target.clone(),
+                            candidates,
+                            property: None,
+                            is_self: true,
+                        });
+                        continue;
+                    }
+                    self_ambiguous = true;
+                }
+                if (self_ambiguous
+                    || link_resolver.matches_target(&span, old_rel, old_rel, old_stem))
                     && let Some(SpanReplacement {
                         byte_offset,
                         old_text,
@@ -1037,7 +1073,7 @@ fn plan_outbound_rewrites(
         }
     }
 
-    replacements
+    (replacements, skipped_ambiguous)
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,6 +1237,15 @@ pub fn plan_batch_mv(
                     new_stem.clone(),
                 ));
         }
+    }
+
+    // BUG-39 (dogfood v0.22.0), iter-275 MV-6: `backlinks_ci` returns one
+    // entry per *link*, so a file naming the same move twice pushed the same
+    // rename pair twice and every warning it produced was printed twice. The
+    // replacements were deduplicated further down; the stderr notes were not.
+    for move_pairs in source_to_renames.values_mut() {
+        move_pairs.sort();
+        move_pairs.dedup();
     }
 
     // Now process each source file once, computing all its inbound replacements.
@@ -1439,6 +1484,17 @@ pub(crate) fn find_frontmatter_wikilinks(line: &str) -> Vec<FrontmatterWikilinkO
     let mut search = line;
     let mut base_offset = 0usize;
     while let Some(open) = search.find("[[") {
+        // BUG-9 (dogfood v0.22.0), iter-275 MV-3: a YAML **flow list** of
+        // wikilinks is written `related: [[[a]], [[b]]]` — the list's own `[`
+        // touching the link's `[[`. Reading the opener as the first two
+        // brackets captured `[a` as the target, which matches no file, so
+        // `mv` neither rewrote nor reported the link even though `find` and
+        // `backlinks` both count it (`links.rs` already applies this rule,
+        // BOUND-2: `[[[x]]` opens at the *second* bracket).
+        let mut open = open;
+        while search.as_bytes().get(open + 2) == Some(&b'[') {
+            open += 1;
+        }
         let after_open = open + 2;
         if after_open >= search.len() {
             break;
@@ -1534,7 +1590,11 @@ fn split_frontmatter_wikilink(
                 });
             canonical == Some(old_rel) || canonical == Some(old_stem)
         });
-    matches.then_some(joined)
+    // BUG-31 (iter-275, MV-7): the reconstruction pushes a space for the line
+    // break before it discovers the `]]`, so a target closed on its own line
+    // was reported as `"t1 "`. The trailing byte is an artefact of the join,
+    // never something the author wrote.
+    matches.then(|| joined.trim().to_owned())
 }
 
 /// Sweep the vault for frontmatter wikilinks that name the moved file but span
@@ -1667,6 +1727,20 @@ fn plan_frontmatter_wikilink_rewrites(
             true
         } else if let Some(idx) = case_index {
             let t_norm = target_path.replace('\\', "/").to_ascii_lowercase();
+            // BUG-3 (dogfood v0.22.0), iter-275 MV-1: a bare frontmatter stem
+            // shared by two files resolves to neither, so every lookup below
+            // answers `None` and the link used to be dropped before it could
+            // reach the ambiguity guard. It reached the guard only when the
+            // moved file sat at the vault root, because then — and only then —
+            // `old_stem` *is* the bare stem and the first comparison above
+            // matched. `--allow-ambiguous` therefore rewrote the body link and
+            // silently left the frontmatter one dangling for every other
+            // layout. An ambiguous stem the moved file is one of the
+            // candidates for is this move's business; what happens next is the
+            // guard's decision, not this filter's.
+            if ambiguous_stem_includes(&t_norm, old_rel, idx) {
+                true
+            } else {
             let canonical = idx
                 .lookup_unique(&t_norm)
                 .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
@@ -1684,6 +1758,7 @@ fn plan_frontmatter_wikilink_rewrites(
                         .then(|| idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm)))?
                 });
             canonical == Some(old_rel) || canonical == Some(old_stem)
+            }
         } else {
             false
         };
@@ -1708,6 +1783,7 @@ fn plan_frontmatter_wikilink_rewrites(
                 target: target.to_owned(),
                 candidates,
                 property: guard.property.clone(),
+                is_self: false,
             });
             continue;
         }
@@ -1738,6 +1814,50 @@ struct FrontmatterAmbiguityGuard<'a> {
     /// attributed to the property that owns it.
     property: Option<String>,
     skipped: &'a mut Vec<SkippedAmbiguous>,
+}
+
+/// The candidates a **self-link's** bare wikilink target is ambiguous between,
+/// when the moved file is one of them (iter-275, MV-2 / BUG-8).
+///
+/// `None` — meaning "not this guard's business" — for a path-form target
+/// (which asserts a location and stays correct), for a unique stem (the
+/// ordinary rewrite path handles it), and for a stem the moved file does not
+/// share.
+fn ambiguous_self_link_candidates(
+    target: &str,
+    old_rel: &str,
+    case_index: &CaseInsensitiveIndex,
+) -> Option<Vec<String>> {
+    let target = target.trim();
+    if target.contains('/') || target.contains('\\') {
+        return None;
+    }
+    let t_norm = target.to_ascii_lowercase();
+    let stem = t_norm.strip_suffix(".md").unwrap_or(&t_norm);
+    if stem.is_empty() {
+        return None;
+    }
+    let candidates = case_index.lookup_stem_all(stem);
+    (candidates.len() > 1 && candidates.iter().any(|c| c == old_rel))
+        .then(|| candidates.to_vec())
+}
+
+/// Whether `t_norm` (a lower-cased, forward-slashed frontmatter target) is a
+/// **bare stem shared by two or more vault files**, one of which is the file
+/// being moved (iter-275, MV-1 / BUG-3).
+///
+/// This is the frontmatter twin of the body rewriter's
+/// `Resolution::Ambiguous` arm. Neither rewrites on its own — the caller's
+/// ambiguity guard decides — but both have to *see* the link first, and the
+/// frontmatter side used to see it only when the moved file happened to sit at
+/// the vault root.
+fn ambiguous_stem_includes(t_norm: &str, old_rel: &str, idx: &CaseInsensitiveIndex) -> bool {
+    if t_norm.contains('/') {
+        return false;
+    }
+    let stem = t_norm.strip_suffix(".md").unwrap_or(t_norm);
+    let candidates = idx.lookup_stem_all(stem);
+    candidates.len() > 1 && candidates.iter().any(|c| c == old_rel)
 }
 
 /// The candidate paths a bare frontmatter target is ambiguous between, or
