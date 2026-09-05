@@ -324,6 +324,13 @@ struct ConfigFile {
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedDefaults {
     pub(crate) dir: PathBuf,
+    /// `true` when [`Self::dir`] came from a `dir = "…"` line in
+    /// `.hyalo.toml` rather than the built-in `.` default.
+    ///
+    /// The `--dir is redundant` note claims the file "already sets dir";
+    /// against an empty `.hyalo.toml` that was simply false (BUG-28, dogfood
+    /// v0.22.0), so the note now says which of the two it is.
+    pub(crate) dir_from_config: bool,
     /// The directory where `.hyalo.toml` was found.  Views and types are stored
     /// in this file, so mutations must target `config_dir/.hyalo.toml` — not the
     /// vault directory (which may be a subdirectory specified via `dir = "…"`).
@@ -498,6 +505,7 @@ impl ResolvedDefaults {
     fn hardcoded() -> Self {
         Self {
             dir: PathBuf::from("."),
+            dir_from_config: false,
             config_dir: PathBuf::from("."),
             format: None,
             hints: true,
@@ -1119,6 +1127,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
         .unwrap_or_default();
 
     ResolvedDefaults {
+        dir_from_config: cfg.dir.is_some(),
         dir: cfg
             .dir
             .as_deref()
@@ -1188,6 +1197,33 @@ fn extract_schema_validate_on_write(raw: Option<&toml::Value>) -> Option<bool> {
     raw?.get("validate_on_write")?.as_bool()
 }
 
+/// Render a `[schema]` deserialization failure, adding the fix path for the
+/// one mis-nesting that produces it most often.
+///
+/// `[schema.note]` instead of `[schema.types.note]` is a table that looks
+/// exactly like a type declaration and binds nothing (BUG-20, iter-276). serde
+/// reports it as an unknown field of `[schema]` with no `in \`…\`` suffix —
+/// that suffix is what marks an error raised *inside* a nested table — so the
+/// two cases are distinguishable and only the outer one gets the note.
+fn schema_parse_error(detail: &str) -> String {
+    let detail = detail.trim_end();
+    let base = format!("malformed [schema] in .hyalo.toml: {detail}");
+    if detail.contains("in `") {
+        return base;
+    }
+    let Some(field) = detail
+        .split("unknown field `")
+        .nth(1)
+        .and_then(|s| s.split('`').next())
+    else {
+        return base;
+    };
+    format!(
+        "{base}\n  note: type schemas live under [schema.types.{field}] — create one with \
+         `hyalo types set {field} --required title`"
+    )
+}
+
 /// Parse a `SchemaConfig` from the raw `[schema]` TOML value, or a
 /// human-readable diagnostic naming what's wrong (which key, which value).
 ///
@@ -1206,7 +1242,7 @@ pub(crate) fn try_parse_schema_from_toml(
     let raw_cfg: RawSchemaConfig = val
         .clone()
         .try_into()
-        .map_err(|e| format!("malformed [schema] in .hyalo.toml: {e}"))?;
+        .map_err(|e: toml::de::Error| schema_parse_error(&e.to_string()))?;
     let cfg = SchemaConfig::try_from(raw_cfg)
         .map_err(|e| format!("invalid [schema] in .hyalo.toml: {e}"))?;
     Ok(Some(cfg))
@@ -1433,6 +1469,9 @@ pub(crate) struct EffectiveConfig {
     pub(crate) config_path: Option<PathBuf>,
     /// `true` when `--dir` named precisely the vault the CWD config already
     /// resolves to. The config still applies; the flag was just noise.
+    ///
+    /// Pair it with [`ResolvedDefaults::dir_from_config`] before wording the
+    /// note: an empty `.hyalo.toml` "sets" nothing (BUG-28).
     pub(crate) dir_redundant: bool,
     /// `true` when `--dir` selected a *different* vault and the CWD did have a
     /// `.hyalo.toml`, so that file no longer applies to this run.

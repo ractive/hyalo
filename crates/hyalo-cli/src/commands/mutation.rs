@@ -25,3 +25,44 @@ pub fn unwrap_single_result(mut results: Vec<Value>) -> Value {
         serde_json::json!(results)
     }
 }
+
+/// One file a bulk mutation scanned but did not write, with why (UX-1,
+/// iter-276).
+///
+/// `skipped` / `skipped_count` have always meant one specific thing — the
+/// property or tag was already at its target value — while a file the run
+/// *refused* (its frontmatter would not parse) did not appear in the envelope
+/// at all. A caller reading `modified: []` could not tell "nothing needed
+/// changing" from "nothing could be changed". `skipped_detail` lists both,
+/// each with its reason, and is a superset of `skipped`.
+#[derive(Debug, serde::Serialize)]
+pub struct SkippedFile {
+    /// Vault-relative path.
+    pub file: String,
+    /// Why the file was not written: `unchanged` (already at the requested
+    /// value — the `skipped` set) or `unparsable` (the YAML frontmatter would
+    /// not parse, so the file was refused; see `hyalo lint --rule HYALO005`).
+    pub reason: &'static str,
+}
+
+/// Reason string for a file whose value already matched.
+pub const SKIP_UNCHANGED: &str = "unchanged";
+/// Reason string for a file whose frontmatter would not parse.
+pub const SKIP_UNPARSABLE: &str = "unparsable";
+
+/// Build the `skipped_detail` array from the two sets every bulk mutation
+/// already tracks, in stable (unchanged-then-unparsable) order.
+#[must_use]
+pub fn skipped_detail(unchanged: &[String], unparsable: &[String]) -> Vec<SkippedFile> {
+    unchanged
+        .iter()
+        .map(|f| SkippedFile {
+            file: f.clone(),
+            reason: SKIP_UNCHANGED,
+        })
+        .chain(unparsable.iter().map(|f| SkippedFile {
+            file: f.clone(),
+            reason: SKIP_UNPARSABLE,
+        }))
+        .collect()
+}

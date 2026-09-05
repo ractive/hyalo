@@ -330,6 +330,14 @@ pub struct VaultSummary {
     /// Schema lint counts — `None` when no `[schema]` block is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<LintSummary>,
+    /// Format version of the snapshot this summary was computed from
+    /// (G4 / BUG-12, iter-276), or `None` for a disk scan.
+    ///
+    /// An agent comparing it against `hyalo config`'s
+    /// `snapshot_format_version` can tell an index this binary would refuse
+    /// from a fresh one *before* the numbers disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_format_version: Option<u32>,
 }
 
 /// Vault-wide link health: total links and broken count.

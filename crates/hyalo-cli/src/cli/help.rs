@@ -631,7 +631,7 @@ OUTPUT SHAPES (JSON, default):
   # drop-index
   {\"results\": {\"deleted\": \".hyalo-index\"}, \"hints\": [...]}
 
-  # errors (stderr, exit code 1 for user errors, 2 for internal)
+  # errors (stderr, exit code 1 for user errors, 2 for usage or internal errors)
   {\"error\": \"property not found\", \"path\": \"notes/todo.md\"}
 
   # --format text produces human-readable output on all commands";

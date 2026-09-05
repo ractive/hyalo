@@ -1050,6 +1050,25 @@ fn validate_target_single(
         trimmed.to_owned()
     };
 
+    // UX (BUG-21, iter-276): a destination carrying `..` is refused for the
+    // same reason a source is — every path is vault-relative (DEC-304) — so it
+    // must say the same thing. `--to ../deep/` used to be answered with
+    // "destination directory does not exist", which invites the reader to go
+    // and create a directory outside the vault.
+    if normalized.split('/').any(|seg| seg == "..") {
+        let out = crate::output::format_error(
+            format,
+            "path contains '..' and is rejected",
+            Some(&normalized),
+            Some(
+                "destinations are vault-relative, like sources — drop the '..' and name the path \
+from the vault root, e.g. \"sub/note.md\"",
+            ),
+            None,
+        );
+        return Err(CommandOutcome::UserError(out));
+    }
+
     // Must end with .md
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if !normalized.ends_with(".md") {

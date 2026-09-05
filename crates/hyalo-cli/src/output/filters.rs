@@ -130,8 +130,9 @@ pub(super) const CONTENT_MATCH_FILTER: &str = r#""  line \(.line) (\(.section)):
 
 /// Mutation result with `property` + `value` fields:
 /// covers `SetPropertyResult`, `AppendPropertyResult`, and `RemovePropertyResult` (with value).
-/// Key signature: `dry_run,modified,property,scanned,skipped,total,value` (without note)
-/// or `dry_run,modified,note,property,scanned,skipped,total,value` (with note, alphabetically sorted).
+/// Key signature: `dry_run,modified,property,scanned,skipped,skipped_count,skipped_detail,total,value`
+/// (without note) or the same with `note` inserted alphabetically. `skipped_detail` was added
+/// by iter-276 (UX-1).
 /// Format: `[dry-run] property=value: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 /// Appends `  note: <msg>` when a `note` field is present.
@@ -139,14 +140,14 @@ pub(super) const PROPERTY_VALUE_MUTATION_FILTER: &str = r#""\(if .dry_run then "
 
 /// Mutation result with `property` only (no value field):
 /// covers `RemovePropertyResult` (without value).
-/// Key signature: `dry_run,modified,property,scanned,skipped,total`
+/// Key signature: `dry_run,modified,property,scanned,skipped,skipped_count,skipped_detail,total`
 /// Format: `[dry-run] property: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 pub(super) const PROPERTY_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.property): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
 
 /// Mutation result with `tag` field:
 /// covers `SetTagResult` and `RemoveTagResult`.
-/// Key signature: `dry_run,modified,scanned,skipped,tag,total`
+/// Key signature: `dry_run,modified,scanned,skipped,skipped_count,skipped_detail,tag,total`
 /// Format: `[dry-run] tag: N/T modified (S scanned)` when dry-run; omits prefix otherwise.
 /// Appends `(S scanned)` when not all scanned files were processed (e.g. where-filters).
 pub(super) const TAG_MUTATION_FILTER: &str = r#""\(if .dry_run then "[dry-run] " else "" end)\(.tag): \(.modified | length)/\(.total) modified\(if .scanned != .total then " (\(.scanned) scanned)" else "" end)\(if (.modified | length) > 0 then "\n\(.modified | map("  \"\(.)\"") | join("\n"))" else "" end)""#;
@@ -332,18 +333,20 @@ pub(super) fn lookup_filter(key_sig: &str) -> Option<&'static str> {
         // (iter-216 D-1 added `skipped_count` to all three shapes.)
         // iter-262 adds `list_collapsed`, present only when a `set` replaced a
         // list value with a scalar — hence the two extra signatures.
-        "dry_run,modified,property,scanned,skipped,skipped_count,total,value"
-        | "dry_run,modified,note,property,scanned,skipped,skipped_count,total,value"
-        | "dry_run,list_collapsed,modified,property,scanned,skipped,skipped_count,total,value"
-        | "dry_run,list_collapsed,modified,note,property,scanned,skipped,skipped_count,total,value" => {
+        "dry_run,modified,property,scanned,skipped,skipped_count,skipped_detail,total,value"
+        | "dry_run,modified,note,property,scanned,skipped,skipped_count,skipped_detail,total,value"
+        | "dry_run,list_collapsed,modified,property,scanned,skipped,skipped_count,skipped_detail,total,value"
+        | "dry_run,list_collapsed,modified,note,property,scanned,skipped,skipped_count,skipped_detail,total,value" => {
             Some(PROPERTY_VALUE_MUTATION_FILTER)
         }
         // Mutation results with property only (RemovePropertyResult without value)
-        "dry_run,modified,property,scanned,skipped,skipped_count,total" => {
+        "dry_run,modified,property,scanned,skipped,skipped_count,skipped_detail,total" => {
             Some(PROPERTY_MUTATION_FILTER)
         }
         // Mutation results with tag (SetTagResult, RemoveTagResult)
-        "dry_run,modified,scanned,skipped,skipped_count,tag,total" => Some(TAG_MUTATION_FILTER),
+        "dry_run,modified,scanned,skipped,skipped_count,skipped_detail,tag,total" => {
+            Some(TAG_MUTATION_FILTER)
+        }
         // RenamePropertyResult (`properties rename`)
         "conflicts,dry_run,from,modified,scanned,skipped_count,to,total" => {
             Some(PROPERTY_RENAME_FILTER)

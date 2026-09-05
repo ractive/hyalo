@@ -159,9 +159,13 @@ pub(crate) struct IndexFlags {
     /// that probe finds nothing, a second pass compares each indexed file's
     /// recorded mtime against disk and stops at the first drift, so an
     /// in-place overwrite (which moves no directory mtime) is named in the
-    /// warning rather than silently served. Remaining blind spot: an edit
-    /// within the same whole second as the snapshot. The warning never stops
-    /// the run: stale results are still served.
+    /// warning rather than silently served. Remaining blind spot: **up to
+    /// about two seconds** — mtimes are compared as whole seconds and a
+    /// one-second tolerance is applied on top, so an edit made within the
+    /// snapshot's own second or the one after it is invisible (BUG-30,
+    /// iter-276: the old wording said "the same whole second", which
+    /// understated it by half). The warning never stops the run: stale
+    /// results are still served.
     #[arg(long)]
     pub index: bool,
 
@@ -303,7 +307,7 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         scanned-but-unchanged set. task toggle/task set return an array of per-task records with \
         no top-level object; their dry-run records carry old_status, applied records do not.\n\
         Use --format text for human-readable output, --format json for machine-readable output. \
-        Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
+        Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (usage error from the argument parser, or an internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
         Override with --site-prefix <PREFIX>, or --site-prefix \"\" to resolve absolute links from the vault/bundle root (strip only the leading `/`). Also settable in .hyalo.toml. \
@@ -370,6 +374,9 @@ pub(crate) struct Cli {
     /// The filtered result is printed as plain text. Incompatible with --format text
     /// (combining them is a user error and exits 1).
     /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
+    /// HINTS: --jq computes none, so `.hints` is always [] under a filter (DEC-313) — it is
+    /// the machine path, and hint generation is a second pass over the results. Read hints
+    /// from plain --format json instead.
     /// LIMITS: a filter is given 3 seconds of wall-clock time (a pathological filter —
     /// infinite recursion with no output, or building a huge intermediate array before
     /// ever yielding a value, e.g. '[range(3e8)]' — errors out instead of hanging or
@@ -1303,7 +1310,10 @@ pub(crate) enum Commands {
             exit 0. A batch DRY RUN never aborts on a collision: it lists each one under\n\
             `collisions` as {source, destination} and still plans every move that does not\n\
             collide. `--apply` refuses, distinguishing two sources mapping to one destination\n\
-            from a destination that is already taken.\n\n\
+            from a destination that is already taken. There is deliberately no `overwrite`\n\
+            (UX-3, iter-276): a move that silently replaces a note destroys content `mv` was\n\
+            never asked to touch, and it is unrecoverable — delete the destination yourself\n\
+            first if that is what you mean.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
@@ -1432,6 +1442,15 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            COERCION (K=V): the value's YAML type is inferred from the text, in this order — \
+integer (`3`), float (`3.5`; scientific notation counts, so `1e3` is written as `1000.0`), \
+boolean (exactly `true` / `false`), `[[wikilink]]`, bracket list (`[a, b]`, `[]`), else string. \
+Everything else stays a string, including `null` and `~` (the four-character and one-character \
+*strings*, not a YAML null) and `K=` (the empty string). A date is a string too — \
+`due=2026-12-31` is written unquoted and re-reads as a YAML date, but hyalo only parses it as one \
+when the schema declares the property `date`/`datetime`. YAML-1.1 keys that would otherwise read \
+as booleans (`y`, `n`, `yes`, `no`, `on`, `off`) are quoted on output. There is no form that \
+writes a YAML null (DEC-314): `hyalo remove --property K` takes the key out instead.\n\
             FORMATTING: only the lines of the keys you change are rewritten. Every other \
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \
@@ -2093,7 +2112,7 @@ Repeatable (AND).\n\
             `<!-- markdownlint-enable no-hard-tabs -->`, plus `-disable-line`,\n\
             `-disable-next-line`, `-disable-file` and `-enable-file`; with no ids a directive\n\
             covers every rule, HYALO ones included. `-capture`/`-restore` are not supported.\n\n\
-            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
+            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = usage or internal error (DEC-307).\n\n\
             EXAMPLES:\n\
             hyalo lint\n\
             hyalo lint --detailed\n\

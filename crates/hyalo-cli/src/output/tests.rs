@@ -767,6 +767,7 @@ fn property_value_mutation_via_format_value_as_text() {
         "scanned": 1,
         "skipped": [],
         "skipped_count": 0,
+        "skipped_detail": [],
         "total": 1,
         "value": "done"
     });
@@ -868,6 +869,7 @@ fn tag_mutation_via_format_value_as_text() {
         "scanned": 1,
         "skipped": ["note.md"],
         "skipped_count": 1,
+        "skipped_detail": [],
         "tag": "cli",
         "total": 1
     });
@@ -887,6 +889,7 @@ fn property_value_mutation_dry_run_prefix() {
         "scanned": 1,
         "skipped": [],
         "skipped_count": 0,
+        "skipped_detail": [],
         "total": 1,
         "value": "done"
     });
@@ -905,6 +908,7 @@ fn tag_mutation_dry_run_prefix() {
         "scanned": 1,
         "skipped": [],
         "skipped_count": 0,
+        "skipped_detail": [],
         "tag": "rust",
         "total": 1
     });

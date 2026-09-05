@@ -5017,6 +5017,17 @@ question comes up again; not added pre-emptively.
 leading whitespace disqualifying — the same policy the opening delimiter has
 always had. An indented `  ---` is content, not a delimiter.
 
+**Amended 2026-09-05 (iter-276, BUG-33/BUG-34).** "The same policy the opening
+delimiter has always had" was not true of trailing whitespace: `is_closing_
+delimiter` trimmed it and `opening_delimiter` did not, so a file whose line 1
+was `--- ` read as having **no frontmatter at all** and `set` prepended a second
+block above the one already there. The opener now tolerates trailing ASCII
+whitespace, matching the closer and matching YAML (`--- ` is a valid
+directives-end marker). Both fences' trailing bytes are also captured and
+re-emitted verbatim, so a rewrite touches only the lines the caller addressed —
+`--- ` no longer silently becomes `---`. Because `--- ` is now a valid opener,
+HYALO005 has no separate shape to name (UX-14 is moot).
+
 Additionally, the frontmatter emitter never writes a **block scalar** whose
 content carries a line that trims to `---` or `...`: such a value is written as
 a double-quoted scalar (`k: "a\n---\nb"`) instead. The choice is made per
@@ -5324,9 +5335,14 @@ the pass runs to completion). Measured on MDN's 14,375 files: `find --index
 and paid only by runs the cheap probe already declared clean. A dirty vault
 short-circuits at the first drifted file.
 
-**Residual blind spot.** An edit landing in the same whole second as the
-snapshot: mtimes are compared in whole seconds with a one-second tolerance
+**Residual blind spot.** Up to **about two seconds**: mtimes are compared in
+whole seconds (losing up to one) *and* a one-second tolerance is applied on top
 (`STALENESS_TOLERANCE_SECS`), unchanged from DEC-280.
+
+**Amended 2026-09-05 (iter-276, BUG-30).** The line above originally read "an
+edit landing in the same whole second as the snapshot", which understates the
+window by half — the truncation and the tolerance stack. `--index --help` and
+`STALENESS_TOLERANCE_SECS`'s own doc comment now say ~2 s too.
 
 **Where:** `hyalo_core::index::first_file_modified_since_snapshot`, called from
 `run.rs`'s snapshot-load path. See
@@ -5566,3 +5582,106 @@ report unreadable as well as wrong.
 
 **Where:** `anchor::heading_path_matches`, `anchor::segment_matches_heading`.
 See [[iterations/iteration-275-alias-semantics-and-mv-guards]].
+
+## DEC-312: `required` means present and non-empty, never a type (2026-09-05) — amends DEC-094
+
+**Decision:** A property listed in a type's `required = [...]` with no
+`[schema.types.<t>.properties.<k>]` block of its own carries **no type
+constraint**. `title: 2024` and `title: 2026-09-05` pass `lint`, `lint
+--strict` and `set --validate` under `required = ["title"]`. `type = "string"`
+is the explicit opt-in. The undeclared-property warning still skips required
+properties by name, so dropping the synthetic constraint does not make them
+look undeclared.
+
+**Why.** `merged_schema_for_type` auto-added `PropertyConstraint::String` for
+every required property without one, so `required` silently meant "required
+*and* a string" — a constraint the vault owner never wrote and could not see in
+`types show`. A vault whose `title` is a year got `property "title" expected
+string, got 2024` from a schema that says nothing about types (BUG-42, dogfood
+v0.22.0). "Must be there" and "must be a string" are two decisions; a config
+that states one must not imply the other. The `type` discriminator keeps its
+own DEC-281 shape checks, which never depended on this.
+
+**Where:** `hyalo_core::schema::SchemaConfig::merged_schema_for_type`. See
+[[iterations/iteration-276-autofix-config-and-index-honesty]].
+
+## DEC-313: `--jq` computes no hints (2026-09-05)
+
+**Decision:** Hint generation is skipped entirely when `--jq` is given, so
+`.hints` under a filter is always `[]`. Documented in `--jq`'s help and in the
+shipped skill; the recipe that read `.hints[]` through `--jq` is replaced with
+one that reads plain `--format json`.
+
+**Why.** `--jq` is the machine path and hints are a second pass over the
+results, computed for a human to read. Paying for them so a filter can discard
+them costs every scripted call. The bug was that the skill *shipped* a
+`--jq '[.hints[] | …]'` recipe that could only ever return `[]` (UX-4, dogfood
+v0.22.0) — a documentation defect, not a missing feature. Keeping hints under
+`--jq` was the alternative; it was rejected because it makes every filtered
+call pay for output no filter in the shipped set reads.
+
+**Where:** `run::hint_ctx` (`hints_flag && jq_filter.is_none()`),
+`cli::args::Cli::jq`. See
+[[iterations/iteration-276-autofix-config-and-index-honesty]].
+
+## DEC-314: `set` has no form that writes a YAML null (2026-09-05)
+
+**Decision:** Won't do. `--property K=null` and `--property K=~` write the
+four-character and one-character *strings*; `--property K=` writes the empty
+string. To make a key absent, use `hyalo remove --property K`. `set --help`
+now carries the whole coercion table (integer → float → boolean → wikilink →
+bracket list → string, with the YAML-1.1 boolean-lookalike keys quoted on
+output) so none of this has to be discovered by experiment.
+
+**Why.** DEC-274 already separates absent, null and empty-list for *filters*,
+so the read side can ask the question. On the write side a YAML null is a value
+that reads as "explicitly nothing", which no hyalo workflow has needed — and
+every spelling that could mean it (`K=null`, `K=~`, `K=`) is also a legitimate
+literal string somebody's vault uses. A new flag to disambiguate is exactly the
+CLI-surface growth this project refuses. The gap was reported as G5/BUG-41
+(dogfood v0.22.0); the answer is documentation, not syntax.
+
+**Where:** `hyalo_core::frontmatter::types::infer_value`, `set --help`. See
+[[iterations/iteration-276-autofix-config-and-index-honesty]].
+
+## DEC-315: `[links] case_insensitive = "false"` means exact bytes, and reports the link's own spelling (2026-09-05) — corrects the iteration-274 outcome
+
+**Decision:** With `false`, hyalo's case-folding index is off and the reported
+`path` is **the spelling the link used**, not the canonical on-disk one. On a
+case-insensitive volume the OS still opens the file, so `[[categories/books]]`
+resolves and reports `categories/books.md` for an on-disk `Categories/Books.md`.
+`hyalo config` prints a note saying so whenever `false` is set on a
+case-insensitive filesystem. The iteration-274 outcome's claim that the path
+was "already canonical" is withdrawn.
+
+**Why.** Canonicalising would mean a directory read per resolved link purely to
+correct the spelling of a path that already opened — on MDN that is tens of
+thousands of extra `readdir`s to produce a cosmetic difference, and it would
+make `false` behave like `auto` in the one respect the user turned `auto` off
+for. `false` is an assertion about the vault ("my links match the files
+exactly"); when it is not true, the honest answer is to say the mode is weaker
+than it sounds, not to quietly repair the difference.
+
+**Where:** `commands::config` (the note), `case_index::links_case_insensitive`.
+See [[iterations/iteration-276-autofix-config-and-index-honesty]].
+
+## DEC-316: MD010's `code_blocks` option is not exposed; the disable comment is the answer (2026-09-05)
+
+**Decision:** Won't do. `lint-rules set` takes `--enabled` and `--severity` and
+no per-rule option map, and adding one to carry a single upstream option is not
+worth the config surface. A page whose samples legitimately contain hard tabs
+silences the rule the standard way — `<!-- markdownlint-disable no-hard-tabs -->`
+… `<!-- markdownlint-enable no-hard-tabs -->`, or `-disable-file` — which
+iteration 271 (DEC-294) shipped precisely for this, and which iteration 276
+made both scope-correct and typo-loud.
+
+**Why.** The motivating case is GitHub Docs, where `lint --fix` proposed 215
+tab replacements inside Go samples that gofmt mandates (UX-7, dogfood v0.22.0).
+That is one repository-wide policy expressed once per file, not a per-run flag —
+and MD010 deliberately checks code blocks because a hard tab in a sample is a
+real portability problem for everyone who copies it. Exposing `code_blocks =
+false` vault-wide would switch the rule off in the one place it earns its keep.
+
+**Where:** `CODE_BLOCK_AWARE_RULE_IDS` in `hyalo_mdlint::engine`,
+`rules::spans`. See
+[[iterations/iteration-276-autofix-config-and-index-honesty]].

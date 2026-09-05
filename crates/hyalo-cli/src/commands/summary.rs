@@ -61,7 +61,10 @@ fn warn_rare_values(
             // (`hero-6` vs `hero-4`, `v2` vs `v3`): these are distinct
             // enumerated values (asset indices, versions), not typos of one
             // another (BUG: `hero-6`/`hero-4` false-positive did-you-mean).
-            if dist <= max_distance && !differ_only_in_numeric_suffix(rare_val, dominant_val) {
+            if dist <= max_distance
+                && values_are_plausible_typos(rare_val, dominant_val, dist)
+                && !differ_only_in_numeric_suffix(rare_val, dominant_val)
+            {
                 let file_word = if *rare_count == 1 { "file" } else { "files" };
                 crate::warn::warn(format!(
                     "property \"{prop_name}\" value \"{rare_val}\" appears in {rare_count} {file_word} — did you mean \"{dominant_val}\" ({dominant_count} files)?"
@@ -69,6 +72,24 @@ fn warn_rare_values(
             }
         }
     }
+}
+
+/// Whether two values are close enough that one plausibly *is* a typo of the
+/// other (BUG-44, iter-276).
+///
+/// A raw Levenshtein cap of 2 says `a` and `bc` are near-duplicates — they
+/// share no character at all — so a twelve-file vault got a confident
+/// "did you mean" between unrelated values. Similarity has to be relative to
+/// how long the values are: at most a third of the shorter value may differ,
+/// and both must be long enough for an edit distance to mean anything.
+fn values_are_plausible_typos(a: &str, b: &str, distance: usize) -> bool {
+    const MIN_COMPARABLE_LEN: usize = 4;
+    let a_len = a.chars().count();
+    let b_len = b.chars().count();
+    if a_len < MIN_COMPARABLE_LEN || b_len < MIN_COMPARABLE_LEN {
+        return false;
+    }
+    distance * 3 <= a_len.min(b_len)
 }
 
 /// True when `a` and `b` are identical once their trailing ASCII-digit runs are
@@ -90,6 +111,10 @@ fn differ_only_in_numeric_suffix(a: &str, b: &str) -> bool {
 /// collected during a summary scan.
 ///
 /// `string_prop_values` maps `property_name -> (value -> file_count)`.
+/// Minimum number of files carrying a property before its value
+/// distribution is treated as one (BUG-44, iter-276).
+const MIN_CARRIERS: usize = 10;
+
 fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<String, usize>>) {
     for (prop_name, value_counts) in string_prop_values {
         // Skip properties where no value reaches the dominant threshold —
@@ -97,6 +122,12 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
         let dominant_min = 3;
         let max_count = value_counts.values().copied().max().unwrap_or(0);
         if max_count < dominant_min {
+            continue;
+        }
+        // BUG-44 (iter-276): a handful of files is not a distribution. Below
+        // this many carriers there is no "dominant" value to be a typo *of* —
+        // three files out of twelve is a vocabulary, not a consensus.
+        if value_counts.values().sum::<usize>() < MIN_CARRIERS {
             continue;
         }
         warn_rare_values(
@@ -481,6 +512,7 @@ pub fn summary(
         tasks,
         recent_files,
         schema: lint_summary,
+        index_format_version: index.snapshot_format_version(),
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;

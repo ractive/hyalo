@@ -366,7 +366,14 @@ pub(crate) fn run(
             // sentinel must mean "unlimited" in both paths.
             usize::MAX
         } else {
-            max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule())
+            // `--max-per-rule 0` is documented as "unlimited", exactly as
+            // `--limit 0` is, and mapped to the same `usize::MAX` sentinel the
+            // GitHub path uses (BUG-19, dogfood v0.22.0: `0` truncated every
+            // rule group to `shown: 0, truncated: true` instead).
+            match max_per_rule.unwrap_or_else(|| ctx.md_lint.max_violations_per_rule()) {
+                0 => usize::MAX,
+                n => n,
+            }
         };
         // CLI --limit overrides the config max_files when provided.
         // `--limit 0` is documented as "unlimited" (matches `--count

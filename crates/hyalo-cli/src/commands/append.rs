@@ -26,6 +26,12 @@ pub(crate) struct AppendPropertyResult {
     /// mutation family exposes this key so one query answers "how many were
     /// skipped" regardless of which command produced the result.
     pub(crate) skipped_count: usize,
+    /// Every scanned file this mutation did not write, with why (UX-1,
+    /// iter-276): `unchanged` for the ones in [`Self::skipped`], `unparsable`
+    /// for a file whose YAML frontmatter was refused. A superset of
+    /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
+    /// needed changing" and "nothing could be changed".
+    pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -287,6 +293,9 @@ pub fn append(
 
     // L-2: relative paths skipped because their frontmatter would not parse.
     let mut skipped_unparseable: Vec<String> = Vec::new();
+    // BUG-35 (iter-276): the YAML diagnostic for a single named file rides
+    // in the error envelope's `cause` instead of a bare stderr line.
+    let mut unparseable_cause: Option<String> = None;
 
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
@@ -294,7 +303,10 @@ pub fn append(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                super::report_unparseable_skip(files_arg, globs, rel_path, &e);
+                if let Some(detail) = super::report_unparseable_skip(files_arg, globs, rel_path, &e)
+                {
+                    unparseable_cause = Some(detail);
+                }
                 skipped_unparseable.push(rel_path.clone());
                 continue;
             }
@@ -353,9 +365,13 @@ pub fn append(
 
     // L-2: the single file the user named by hand was unparseable — report it
     // as an error rather than a 0-modified success.
-    if let Some(outcome) =
-        super::single_named_file_unparseable(files_arg, globs, &skipped_unparseable, format)
-    {
+    if let Some(outcome) = super::single_named_file_unparseable(
+        files_arg,
+        globs,
+        &skipped_unparseable,
+        unparseable_cause.as_deref(),
+        format,
+    ) {
         return Ok(outcome);
     }
 
@@ -369,6 +385,10 @@ pub fn append(
         let total = modified.len() + skipped.len();
         let skipped_count = skipped.len();
         let result = AppendPropertyResult {
+            skipped_detail: crate::commands::mutation::skipped_detail(
+                &skipped,
+                &skipped_unparseable,
+            ),
             property: (*name).to_owned(),
             value: (*raw_value).to_owned(),
             modified,

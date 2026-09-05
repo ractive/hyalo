@@ -263,8 +263,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   reports the effective mode (`auto` | `true` | `false`). `false` switches off hyalo's own
   case-folding index, but the *literal* path probe that runs first is the filesystem's: on a
   case-insensitive volume (macOS and Windows by default) `[[AidenLx]]` still opens
-  `People/aidenlx.md`, and the reported `path` is the canonical on-disk spelling. Exact-match
-  resolution is therefore only guaranteed on a case-sensitive filesystem.
+  `People/aidenlx.md`. The reported `path` is then **the link's own spelling**, not the
+  canonical on-disk one (DEC-315, iter-276 — the iteration-274 outcome claimed the opposite):
+  `false` means exact bytes, and hyalo does not re-read the directory to canonicalise what the
+  OS already opened. `hyalo config` prints a note when `false` is set on a case-insensitive
+  filesystem. Exact-match resolution is therefore only guaranteed on a case-sensitive
+  filesystem.
 - **Case plans never touch a `site_prefix` link, and a rewrite keeps its form** (DEC-295,
   iter-271): a site-absolute link carrying the configured `site_prefix`
   (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the *site's* URL convention,
@@ -317,7 +321,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **A wikilink target is trimmed, and `.` segments are dropped** (DEC-310, iter-275):
   `[[ a ]]`, `[[a ]]`, `[[a #Heading]]` and `[[./a]]` all resolve to `a.md` and report
   `path: "a.md"`. `target` still carries what the author wrote; `mv` rewrites the trimmed form.
-- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
+- **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)#\(.fragment // "")"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: HYALO006 does not check anchors (see above), so use `hyalo find --broken-links --strict` instead — exits 1 if any file has a broken target or broken anchor, 0 otherwise. `--strict` is a general `find` flag (works with any filter, e.g. `find --property status=draft --strict`), not anchor-specific. `hyalo links fix` also gets a one-line stderr-adjacent note ("N broken anchor(s) — see `find --broken-links`") when anchors are broken but targets are not, and `hyalo summary`'s `links.broken_anchors` figure is distinct from `links.broken` (link-count vs file-count units, so don't expect the raw numbers to match).
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`
 
@@ -325,10 +329,52 @@ Prefer `hyalo` CLI for operations on files in this directory:
   probe finds nothing, hyalo compares each indexed file's recorded mtime against disk and names
   the first drift in `index older than vault (<file> changed on disk …)` — this is what catches
   an in-place overwrite, which moves no directory's mtime. It costs one `stat` per indexed file
-  (~0.03 s over MDN's 14,375) and only runs on a vault the cheap probe called clean; an edit
-  inside the same whole second as the snapshot is still invisible. A snapshot also records how
+  (~0.03 s over MDN's 14,375) and only runs on a vault the cheap probe called clean. The blind
+  spot is **up to ~2 s** (whole-second mtimes plus a one-second tolerance), not one second. A snapshot also records how
   many files `[scan] exclude` dropped when it was built, so `summary --index` reports the same
   `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
+
+- **Suppression comments are scope-correct and typo-loud** (iter-276):
+  `markdownlint-disable-next-line` protects the line *after* the comment and never its own — a
+  *trailing* directive no longer makes its heading invisible to prose rules — and no autofix may
+  insert a blank line between the directive and the line it guards. A fenced block indented
+  inside a list item (a 4-space ```` ``` ```` under `1.`, a bullet, a blockquoted list) is code,
+  so MD009/011/012/019/022/023/034/042 stay silent there. An unknown rule id or alias in a
+  directive warns (`-q`-proof) instead of suppressing nothing. `--max-per-rule 0` means
+  unlimited. MD010's `code_blocks` option is deliberately not exposed (DEC-316) — silence a
+  tab-laden page with `<!-- markdownlint-disable no-hard-tabs -->`.
+- **A schema typo is a config error** (iter-276): an unknown key under `[schema]`,
+  `[schema.types.<t>]`, or the wrong nesting `[schema.<t>]`, is refused with the same
+  "unknown field `x`, expected one of …" diagnostic `[scan]` gives. `hyalo config` reports
+  `malformed: true` and `schema_error`; `lint`, `find --strict` and `set --validate` refuse per
+  DEC-290. A mis-nested `[schema.note]` is answered with the `hyalo types set note` command that
+  creates it properly.
+- **`required` is presence, not type** (DEC-312, iter-276): `required = ["title"]` means present
+  and non-empty; `title: 2024` passes `lint` and `set --validate`. Declare
+  `[schema.types.<t>.properties.title] type = "string"` to require a string. `set` has no form
+  that writes a YAML null (DEC-314) — `hyalo remove --property K` takes the key out; `set --help`
+  documents the whole scalar coercion table.
+- **The snapshot says which format it is** (iter-276): an index written by an older binary is
+  refused with a warning naming both versions and the run falls back to disk. `hyalo config`
+  reports `snapshot_format_version` (what this binary writes); `summary --index` reports the
+  snapshot's own `index_format_version`. `--index-file <unreadable>` exits 1 with an error
+  envelope — a *named* path is a promise (DEC-301) — while a missing in-vault `.hyalo-index`
+  under bare `--index` still falls back to disk, with a `-q`-proof warning.
+- **A bare path is vault-relative, and says when that surprises** (iter-276, BUG-21): running
+  from `kb/sub/` with both `kb/a.md` and `kb/sub/a.md` present, `set a.md` still acts on the
+  vault-root file (DEC-304 stays) but now warns (`-q`-proof) naming both candidates and the one
+  it used. `mv --to ../deep/` reports "path contains `..`" exactly like the source check.
+- **Frontmatter fences round-trip byte for byte** (DEC-293 amended, iter-276): `--- ` with
+  trailing whitespace **opens** frontmatter, matching the closer and YAML, so `set` never
+  prepends a second block above an existing one; and both fences keep their own trailing bytes
+  through `set`/`append`/`remove`. A JSON-mode write against an unparsable file is a single
+  envelope with the YAML diagnostic in `cause` — no bare `error:` line ahead of it.
+- **Small write-side truths** (iter-276): `tags rename` keeps a flow-style `tags: [a, b]` in flow
+  style (and a block list's own indentation); `1. [ ]`, `2) [x]` and `-  [ ]` are tasks for
+  `--fields tasks`, `summary` and `task toggle`; bulk `set`/`append`/`remove` carry
+  `skipped_detail` (`{file, reason}` with `unchanged` or `unparsable`), so a same-value write is
+  distinguishable from a refusal; and `summary`'s near-duplicate-value warning needs a real
+  similarity and at least ten files carrying the property before it speaks.
 
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).

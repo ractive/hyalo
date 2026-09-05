@@ -1636,12 +1636,20 @@ fn set_single_named_unparseable_file_exits_1() {
     // iter-213 (UX-5): the diagnostic that explains the exit must not be
     // prefixed `warning:` — that prefix promises the run continued.
     assert!(
-        stderr.contains("error: bad.md:"),
-        "the fatal parse diagnostic must be labelled error: {stderr}"
-    );
-    assert!(
         !stderr.contains("warning: skipping bad.md"),
         "the warning-prefixed spelling must be gone: {stderr}"
+    );
+    // iter-276 (BUG-35): under `--format json` the diagnostic rides in the
+    // envelope's `cause` instead of a bare `error:` line printed ahead of it —
+    // a leading non-JSON line made stderr unparseable for the consumer the
+    // format exists to serve, and the hint then said "see the error above".
+    let json: serde_json::Value =
+        serde_json::from_str(&stderr).expect("stderr is a single JSON envelope");
+    assert!(
+        json["cause"]
+            .as_str()
+            .is_some_and(|c| c.contains("frontmatter")),
+        "the parse diagnostic rides in `cause`: {json}"
     );
 }
 

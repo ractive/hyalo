@@ -47,6 +47,14 @@ pub(crate) struct ConfigReport {
     /// `hyalo config` is the one place it is safe to show and continue,
     /// because showing it is the whole point.
     pub dir_out_of_bounds: Option<String>,
+    /// Diagnostic when the file parsed but its `[schema]` section did not
+    /// (BUG-20, iter-276) — an unknown key such as `requried`, or a wrong
+    /// nesting like `[schema.note]`. The schema is dropped, so every
+    /// validating command refuses per DEC-290 while the rest of the config
+    /// stays in effect. Reported as `malformed: true` alongside
+    /// [`Self::malformed`], because "my schema validates nothing" is exactly
+    /// the state `malformed` exists to make visible.
+    pub schema_error: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
     /// Resolved vault directory: the effective directory the CLI would use —
@@ -206,6 +214,7 @@ pub(crate) fn collect_config_report(
         config_path,
         raw_contents,
         malformed: resolved.malformed,
+        schema_error: resolved.schema_invalid.clone(),
         dir_salvaged: resolved.dir_salvaged,
         dir_out_of_bounds: resolved.dir_out_of_bounds,
         cwd: cwd.to_path_buf(),
@@ -306,8 +315,18 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             // config file exists but could not be parsed, so every sibling
             // value below is a built-in default; `parse_error` carries the
             // diagnostic that was previously stderr-only.
-            "malformed": report.malformed.is_some(),
-            "parse_error": report.malformed,
+            // A `[schema]` that did not parse counts too (BUG-20, iter-276):
+            // the schema is dropped and validates nothing, which is the same
+            // silent-default state `malformed` exists to expose.
+            // `schema_error` says which of the two it was.
+            "malformed": report.malformed.is_some() || report.schema_error.is_some(),
+            "parse_error": report.malformed.clone().or_else(|| report.schema_error.clone()),
+            "schema_error": report.schema_error,
+            // G4 (iter-276): the snapshot format this binary writes and
+            // accepts. `summary --index` reports the loaded snapshot's own
+            // `index_format_version`; a lower number there means the index
+            // predates this binary and is refused with a fallback to disk.
+            "snapshot_format_version": hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
             // `true` when `dir` below was salvaged from an otherwise
             // unusable file rather than defaulted (NEW-17, dogfood pre3) —
             // meaningful only alongside `malformed: true`.
@@ -477,6 +496,37 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         None => String::new(),
     };
 
+    // BUG-22 (iter-276, DEC-315): `case_insensitive = "false"` switches off
+    // hyalo's own case-folding index, but the literal path probe that runs
+    // first is the *filesystem's* — so on macOS and Windows `[[categories/
+    // books]]` still opens `Categories/Books.md`, and the reported `path` is
+    // the link's own spelling, not the canonical one. That is weaker than
+    // `auto`, and invisible unless the report says so.
+    let case_insensitive_note = if report.case_insensitive == "false"
+        && hyalo_core::probe_case_insensitive_cached(&report.dir)
+    {
+        concat!(
+            "  note: this filesystem is case-insensitive, so a link that differs only in case ",
+            "still resolves through the OS; `false` only switches off hyalo's own folding, ",
+            "and the reported path is the link's spelling, not the canonical one (DEC-315)\n",
+        )
+    } else {
+        ""
+    };
+
+    // BUG-20 (iter-276): the file parsed but `[schema]` did not, so the schema
+    // is empty and validates nothing. Reported as `malformed: true` like a
+    // whole-file parse error, with its own note: every *other* value on the
+    // report is the file's, only the schema is gone.
+    let schema_error_str = match report.schema_error.as_deref() {
+        Some(diagnostic) => format!(
+            "malformed: true\n  {}\n  note: only [schema] was dropped — the rest of the config \
+             is in effect, but lint, find --strict and set --validate refuse until it parses\n",
+            diagnostic.trim_end().replace('\n', "\n  "),
+        ),
+        None => String::new(),
+    };
+
     // H-1 (iter-221): a `dir` refused for resolving outside its own config
     // directory. Distinct from `malformed_str` above — the file parsed fine,
     // but this specific value was refused as a scope-widening attempt, and
@@ -500,19 +550,21 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "{dir_out_of_bounds_str}{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+        "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nsnapshot_format_version: {snapshot_format_version}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
-         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n\
+         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n{case_insensitive_note}\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
+        snapshot_format_version = hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
         scan_include = list_or_none(&report.scan.include),
         scan_exclude = list_or_none(&report.scan.exclude),
         scan_verbose_skips = report.scan.verbose_skips,
         fm_links = report.frontmatter_links,
         alias_links = report.alias_links,
         case_insensitive = report.case_insensitive,
+        case_insensitive_note = case_insensitive_note,
         fm_link_props = report
             .frontmatter_link_properties
             .as_deref()

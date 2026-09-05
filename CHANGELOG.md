@@ -22,6 +22,12 @@ and this project adheres to
   section, is 399 ms → 402 ms — inside run-to-run noise. The on-disk format is
   unchanged: indexes written before this release load unchanged, and indexes
   written after it are read by the previous release, verified both directions.
+  (Superseded later in this same release: the snapshot header now carries a
+  format version, and one written before it is *refused* with a warning and a
+  fall back to disk — see the format-version entry below. The wire format is
+  still additive; the refusal is a deliberate correctness gate, because the
+  272/273 link and header changes make an older snapshot answer differently
+  from a disk scan of the same vault.)
   Mutating commands (`set`, `remove`, `append`, `task toggle`, `mv`,
   `lint --fix --index`) force the section before re-saving, so none of them can
   drop the search index from a snapshot they only meant to patch.
@@ -198,6 +204,8 @@ and this project adheres to
 - The `links auto` stop-list note caps its `--exclude-title` list at the five titles it says it shows and states that flags ADD to the built-in list while `[links.auto] exclude_titles` REPLACES it — an empty list now switches the stop-list off (UX-11, BUG-23).
 - Exit codes are now a documented taxonomy (DEC-307): 0 answered, 1 every hyalo-own user error rendered through the JSON envelope, 2 clap usage and internal errors. `find a b`, a bad `--glob`, an unreadable `--files-from` list, `create-index --output` into a missing directory, an unknown `init --profile` and `deinit --dir <nonexistent>` all exit 1; `okf index` without `--apply` exits 0 and reports drift as `results.changed` (UX-1, BUG-25, UX-18, UX-20).
 - A bare `[[alias]]` naming a note's frontmatter `aliases:` is now reported **broken** by default, the way Obsidian renders it (DEC-308, amends DEC-296) — `[links] aliases` defaults to `false`; set it `true` for vaults running the Alias Linker plugin to restore iteration 272's resolution. `links fix` gains an `alias_fixes` bucket that plans Obsidian's own suggester rewrite (`[[Leah]]` → `[[Leah Ferguson|Leah]]`, confidence 1.0, written by plain `--apply`, never fuzzy), `find` labels such links `via: "alias"` whether or not they resolved (BUG-32), an ambiguous stem is never tie-broken by an alias (BUG-2), and an alias collision reports its `candidates` in `links fix` and in HYALO006's message (BUG-26).
+- `cargo run -p xtask -- check-jq-recipes` now FAILS on a shipped mutating recipe that lacks `--dry-run` instead of appending one before running it; every mutating example in the shipped skill and rule templates carries `--dry-run` in its text (BUG-6)
+- `required = ["title"]` means present and non-empty, not `string` — `title: 2024` passes `lint` and `set --validate` under a required-only schema; `type = "string"` is the explicit opt-in (DEC-312, BUG-42)
 
 ### Removed
 
@@ -388,6 +396,21 @@ and this project adheres to
 - `mv`'s frontmatter ambiguity guard now fires for every directory layout, not only when the moved file sits at the vault root — a bare `[[Books]]` in `categories:` was silently left dangling by the default and silently skipped by `--allow-ambiguous` (BUG-3). The moved file's own body self-links go through the same guard and are reported with `self: true` (BUG-8), a `[[[x]], [[y]]]` frontmatter flow list is rewritten instead of ignored (BUG-9), and a split-link target no longer carries the join's trailing space (BUG-31). Text mode prints the `property` a skipped link came from (UX-2).
 - `mv` destinations resolve exactly like sources: an absolute path inside the vault is accepted with the same "prefer relative" note, and `--to .`, `--to ./` and `--to <vault-dir>/` all name the vault root instead of being refused or suggesting you create the vault you are already in (BUG-10). A batch `mv` dry run lists destination collisions under `collisions: [{source, destination}]` and still plans every non-colliding move rather than aborting, and batch JSON answers `total_files_updated`/`total_links_updated` like single-file mode (BUG-25); each ambiguous-link warning is printed once (BUG-39).
 - Anchor resolution folds `-`, `_` and a space into one word separator (DEC-309), so `#Browser_compatibility` resolves to `## Browser compatibility` — MDN's broken-anchor count drops from 10 929 to 529 — and a fragment covering a whole heading is now suggested instead of skipped (BUG-7). A nested heading path `[[note#Heading One#Sub Two]]` resolves by walking the outline (DEC-311, BUG-36), wikilink targets are trimmed before resolution so `[[ a ]]` and `[[a #h]]` stop being reported broken (BUG-23), and `[[./a]]` reports the canonical `a.md` (DEC-310, BUG-37).
+- `lint --fix` no longer rewrites a line protected by `markdownlint-disable-next-line`: a trailing directive comment no longer makes its own line invisible to prose rules, and no autofix may insert a blank line between the directive and the line it guards (BUG-4)
+- fenced code blocks indented inside list items (a 4-space ```` ``` ```` under `1.`, a bullet, or a blockquote) are recognised as code, so MD009/011/012/019/022/023/034/042 no longer fire — or autofix — inside them (BUG-5)
+- a `markdownlint-` suppression comment naming an unknown rule id or alias now warns (`-q`-proof) instead of silently suppressing nothing (BUG-43)
+- `lint --max-per-rule 0` means unlimited, as its help says and `--limit 0` already did (BUG-19)
+- the shipped `hints` recipe no longer reads `.hints[]` through `--jq`, which computes none (DEC-313), and the broken-links recipe prints the `#fragment` so anchor-only breaks are readable (UX-4, UX-5)
+- an unknown key in `[schema]`, `[schema.types.<t>]` or the wrong nesting `[schema.<t>]` is rejected with the same "unknown field" diagnostic `[scan]` gives; `hyalo config` reports `malformed: true` with `schema_error`, and a mis-nested type table is answered with the `hyalo types set` command that creates it (BUG-20)
+- `--index-file <unreadable>` exits 1 with an error envelope instead of silently running a full disk scan; a missing in-vault `.hyalo-index` under bare `--index` keeps the fallback and its warning is now `-q`-proof (BUG-11)
+- a bare path that names one file in the current directory and a different one at the vault root now warns (`-q`-proof) naming both candidates and the one used; `mv --to ../deep/` reports "path contains `..`" like the source check (BUG-21)
+- the `--dir is redundant` note says "the default is `.`" when `.hyalo.toml` sets no `dir` (BUG-28), and `hyalo config` notes that `[links] case_insensitive = "false"` is weaker than `auto` on a case-folding filesystem (DEC-315, BUG-22)
+- `set`/`append`/`remove` leave a frontmatter fence with trailing whitespace byte-identical, and `--- ` on line 1 opens frontmatter instead of making `set` prepend a second block (DEC-293 amended, BUG-33/BUG-34)
+- `set`/`append`/`remove` on an unparsable file put the YAML diagnostic in the error envelope`s `cause` and print no bare `error:` line ahead of the JSON (BUG-35)
+- `tags rename` keeps a flow-style `tags: [a, b]` in flow style, and a block list keeps its own indentation (BUG-38)
+- ordered-list tasks (`1. [ ]`, `2) [x]`) and markers followed by more than one space (`-  [ ]`) are tasks for `--fields tasks`, `summary` and `task toggle` (BUG-40)
+- `summary`s near-duplicate-value warning requires a real similarity (at most a third of the shorter value differing, both at least four characters) and at least ten files carrying the property, so unrelated short values no longer get a confident "did you mean" (BUG-44)
+- `lint-rules show SCHEMA` prints no `lint-rules set` hint for a non-configurable rule (BUG-27); `--help` describes exit 2 as a usage or internal error per DEC-307 (BUG-29); `--index --help` and DEC-302 put the stale-index blind spot at ~2 s (BUG-30); `mv --help` says why `--on-conflict` has no `overwrite` (UX-3); `set --help` documents the scalar coercion table (G5)
 
 ### Added
 
@@ -417,6 +440,8 @@ and this project adheres to
 - Frontmatter `aliases:` resolve wikilinks (DEC-296): `[[Leah]]` finds the note declaring `aliases: [Leah]`, reported as `via: "alias"`. A filename always wins, a shared alias is ambiguous, matching folds case, and alias links are real graph edges. Opt out with `[links] aliases = false`.
 - `links fix` reports `emitted_target` — the exact link text `--apply` writes — on every fix bucket, filled by the same planning pass in both modes so a `--dry-run` preview is byte-accurate (`new_target` stays vault-relative).
 - `hyalo lint --rule SCHEMA` / `--rule-prefix SCHEMA` run the frontmatter schema pass alone, and `lint-rules list`/`show` carry a non-configurable `SCHEMA` row (UX-5). `lint --fix` JSON gains `rules_fixed: {rule: n}` (UX-13).
+- the snapshot index carries a format version; one written by an older binary is refused with a warning naming both versions and the run falls back to disk. `hyalo config` reports `snapshot_format_version` and `summary --index` reports the snapshot`s own `index_format_version` (BUG-12, G4)
+- bulk `set`/`append`/`remove` envelopes carry `skipped_detail`, listing every scanned-but-unwritten file with a reason (`unchanged`, `unparsable`), so a same-value write is distinguishable from a refusal (UX-1)
 
 ## [0.21.0] - 2026-08-28
 

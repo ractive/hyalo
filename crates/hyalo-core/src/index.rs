@@ -109,6 +109,15 @@ pub trait VaultIndex {
     fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
         None
     }
+
+    /// The format version of the snapshot backing this index (G4, iter-276),
+    /// or `None` for a live disk scan.
+    ///
+    /// `summary` surfaces it so an agent can tell a snapshot this binary would
+    /// refuse from a fresh one before the two disagree on the numbers.
+    fn snapshot_format_version(&self) -> Option<u32> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,9 +322,33 @@ impl VaultIndex for ScannedIndex {
 // SnapshotIndex — MessagePack-serialized snapshot
 // ---------------------------------------------------------------------------
 
+/// Snapshot format version stamped into every header written by this binary.
+///
+/// Bumped whenever a *semantic* change makes an older snapshot answer
+/// differently from a disk scan of the same vault — not when a field is merely
+/// added with a `serde(default)`. A snapshot whose version is below this is
+/// refused and the run falls back to disk (BUG-12, dogfood v0.22.0: MDN's Sep 3
+/// index, written before iter-272's `SelfAnchor` links and iter-273's header
+/// fields, answered `summary --index` with `links.total 49774` against disk's
+/// `51075` and said nothing).
+///
+/// | version | shipped in | what changed |
+/// |---|---|---|
+/// | 0 | ≤ iter-275 | no stamp; every pre-276 snapshot reads as 0 |
+/// | 1 | iter-276 | iter-272 self-anchor links + iter-273 `scan_excluded` /
+/// |   |          | `scan_exclude` / `attachments` header fields |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
 struct SnapshotHeader {
+    /// Snapshot format version — see [`SNAPSHOT_FORMAT_VERSION`].
+    ///
+    /// Defaulted to `0` on load so a snapshot written before iter-276 still
+    /// *decodes*; the version check then refuses it with a named version pair
+    /// rather than serving stale answers.
+    #[serde(default)]
+    format_version: u32,
     /// Canonical vault directory path (informational; not re-validated on load).
     vault_dir: String,
     /// Site prefix used when building the index (informational).
@@ -1252,9 +1285,11 @@ impl SnapshotIndex {
                 }
                 Err(e) => {
                     if warn {
-                        eprintln!(
-                            "warning: index file is incompatible ({e}); falling back to disk scan"
-                        );
+                        // The caller decides what happens next — a named
+                        // `--index-file` now fails the run (BUG-11, iter-276)
+                        // rather than falling back, so this line must not
+                        // promise a fallback it cannot deliver.
+                        eprintln!("warning: index file is incompatible ({e})");
                     }
                     return None;
                 }
@@ -1509,6 +1544,23 @@ impl SnapshotIndex {
         self.bm25.is_deferred()
     }
 
+    /// The snapshot's format version — `0` for anything written before
+    /// iter-276, which stamped none.
+    pub fn format_version(&self) -> u32 {
+        self.header.format_version
+    }
+
+    /// Whether this snapshot was written by a binary whose format this one can
+    /// still answer from.
+    ///
+    /// A *newer* snapshot is accepted: forward fields decode as unknown keys
+    /// and are skipped, and refusing one would break a mixed-version team for
+    /// no gain. An *older* one is refused (BUG-12) — the fields it lacks are
+    /// exactly the ones that make its answers differ from disk.
+    pub fn format_is_current(&self) -> bool {
+        self.header.format_version >= SNAPSHOT_FORMAT_VERSION
+    }
+
     /// Return header metadata: `(vault_dir, site_prefix, created_at_secs, pid)`.
     pub fn header_info(&self) -> (&str, Option<&str>, u64, u32) {
         (
@@ -1573,6 +1625,7 @@ fn write_snapshot(
     attachments: &[String],
 ) -> Result<()> {
     let header = SnapshotHeader {
+        format_version: SNAPSHOT_FORMAT_VERSION,
         vault_dir: vault_dir.to_owned(),
         site_prefix: site_prefix.map(str::to_owned),
         created_at: SystemTime::now()
@@ -1668,6 +1721,10 @@ impl VaultIndex for SnapshotIndex {
     fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
         self.bm25.get()
     }
+
+    fn snapshot_format_version(&self) -> Option<u32> {
+        Some(self.header.format_version)
+    }
 }
 
 /// Check whether a PID corresponds to a running process.
@@ -1722,6 +1779,11 @@ fn is_pid_alive(pid: u32) -> bool {
 /// mtimes are not, so a directory touched in the same second the snapshot was
 /// written can read as up to one second newer. One second of slack keeps the
 /// probe from crying stale about the index's own creation.
+///
+/// The cost is the probe's blind spot, which is therefore **up to ~2 s**, not
+/// one: the truncation loses up to a second and this tolerance adds another
+/// (BUG-30, iter-276 — DEC-302's original wording said "the same whole
+/// second"). `--index --help` says the same.
 pub const STALENESS_TOLERANCE_SECS: u64 = 1;
 
 /// Depth to which [`newest_dir_mtime`] descends below the vault root.
@@ -3139,6 +3201,7 @@ Content.
         let graph = LinkGraph::default();
         let data = SnapshotDataRef {
             header: SnapshotHeader {
+                format_version: SNAPSHOT_FORMAT_VERSION,
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,
@@ -3436,6 +3499,7 @@ Content.
         let graph = LinkGraph::default();
         let bytes = rmp_serde::to_vec_named(&Reordered {
             header: SnapshotHeader {
+                format_version: SNAPSHOT_FORMAT_VERSION,
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,
