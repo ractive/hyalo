@@ -9,10 +9,16 @@
 //!
 //! This gate extracts every backtick-quoted `hyalo … --jq '…'` command from
 //! those documents and runs it against this repo's own knowledgebase, failing
-//! on a non-zero exit or a `jq filter failed` envelope. Recipes that name a
-//! mutating subcommand are run with `--dry-run` appended; a shipped recipe that
-//! carries `--apply` fails the gate outright, because documentation must never
-//! invite a reader to paste a write.
+//! on a non-zero exit or a `jq filter failed` envelope.
+//!
+//! **Documentation must never invite a reader to paste a write.** A shipped
+//! recipe naming a mutating subcommand therefore has to carry `--dry-run` in
+//! the shipped text, and one carrying `--apply` fails outright. Until iter-276
+//! the gate quietly *appended* `--dry-run` before running, so the header's
+//! promise held for the gate and not for the reader: two dogfood explorers
+//! pasted `hyalo set --glob '**/*.md' --property status=draft --jq …` verbatim
+//! and rewrote 461 and 10 530 files (BUG-6, dogfood v0.22.0). The gate now
+//! fails on the missing `--dry-run` instead of hiding it.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -200,11 +206,16 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
                 ));
                 continue;
             }
-            let mut args: Vec<String> = argv[1..].to_vec();
+            let args: Vec<String> = argv[1..].to_vec();
             if subcommand_of(&argv).is_some_and(|s| MUTATING_SUBCOMMANDS.contains(&s))
                 && !args.iter().any(|a| a == "--dry-run")
             {
-                args.push("--dry-run".to_owned());
+                failures.push(format!(
+                    "{label}: a documented `{}` recipe has no --dry-run — a reader who pastes it \
+                     writes to their vault. Put --dry-run in the shipped text:\n    {recipe}",
+                    subcommand_of(&argv).unwrap_or("?")
+                ));
+                continue;
             }
             match run_recipe(root, &args) {
                 Ok(RecipeOutcome::Ran) => checked += 1,

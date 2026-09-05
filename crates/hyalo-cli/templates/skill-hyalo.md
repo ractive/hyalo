@@ -232,23 +232,28 @@ hyalo summary --jq '.results.tasks.total'                  # tasks count from su
   per-task records, and the dry-run records are the ones carrying `old_status`.
 - `skipped_count` is reported by the bulk-mutation family only — `set`, `remove`, `append`,
   `properties rename`, `tags rename`:
-  `hyalo set --glob '**/*.md' --property status=draft --jq '.results.skipped_count'`. A
-  single-target command has no scanned-but-unchanged set, so it reports no count.
+  `hyalo set --glob '**/*.md' --property status=draft --dry-run --jq '.results.skipped_count'`.
+  A single-target command has no scanned-but-unchanged set, so it reports no count.
+  (Every mutating example in this document carries `--dry-run` in its shipped text, and
+  `cargo run -p xtask -- check-jq-recipes` fails if one does not: a recipe is meant to be
+  pasted, so it must never be a write.)
 - `links fix` pairs each bucket count with a list whose suffix names the record type:
   `…_fixes` holds fix proposals (`old_target`/`new_target`/`strategy`/`confidence`),
   `…_links` holds links with no proposal.
 
 **Hints are enabled by default.** Every query appends drill-down suggestions (`-> hyalo ...`
 lines in text mode, a `"hints"` array in the JSON envelope). Read and follow these hints — they show
-concrete next commands to explore deeper. Use `--no-hints` to suppress them, or `--jq` which
-suppresses hints automatically.
+concrete next commands to explore deeper. Use `--no-hints` to suppress them. **`--jq` computes
+no hints at all** (DEC-313): it is the machine path, and hint generation is a second pass over
+the results. `.hints` under `--jq` is therefore always `[]` — read hints from plain
+`--format json`, not through a filter.
 
 **Check the `writes` marker before running a hint.** Read-only suggestions are prefixed `->`;
 a suggestion that modifies the vault or `.hyalo.toml` is prefixed `=>` and tagged `[writes]`
 (JSON: `"writes": true` on the hint object). Only the `->` ones are safe to run unattended:
 
 ```bash
-hyalo find --tag rust --jq '[.hints[] | select(.writes | not) | .cmd]'
+hyalo find --tag rust --format json    # read `.hints[]`; each carries `cmd` and `writes`
 ```
 
 Pipe through `--jq` to reshape output into anything — dashboards, burndowns, reports.

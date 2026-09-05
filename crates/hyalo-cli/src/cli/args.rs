@@ -370,6 +370,9 @@ pub(crate) struct Cli {
     /// The filtered result is printed as plain text. Incompatible with --format text
     /// (combining them is a user error and exits 1).
     /// Example: --jq '.results[].file' or --jq '.results | map(.properties.status) | unique'.
+    /// HINTS: --jq computes none, so `.hints` is always [] under a filter (DEC-313) — it is
+    /// the machine path, and hint generation is a second pass over the results. Read hints
+    /// from plain --format json instead.
     /// LIMITS: a filter is given 3 seconds of wall-clock time (a pathological filter —
     /// infinite recursion with no output, or building a huge intermediate array before
     /// ever yielding a value, e.g. '[range(3e8)]' — errors out instead of hanging or
