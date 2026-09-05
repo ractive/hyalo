@@ -219,7 +219,10 @@ fn text_errors_use_a_lowercase_error_prefix() {
 fn unquoted_second_positional_suggests_quoting_the_query() {
     let tmp = vault();
     let (code, _, stderr) = run(tmp.path(), &["find", "dataview", "plugin"]);
-    assert_eq!(code, 2, "an argv-shape mistake exits 2: {stderr}");
+    // iter-274 (UX-1, DEC-307): hyalo's own did-you-mean is a user error, so it
+    // exits 1 like `--sort nope` — 2 is reserved for clap usage and internal
+    // errors.
+    assert_eq!(code, 1, "a hyalo-own user error exits 1: {stderr}");
     assert!(
         stderr.contains("'plugin' is not a file"),
         "the message should name the offending word: {stderr}"

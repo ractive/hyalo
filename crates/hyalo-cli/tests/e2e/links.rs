@@ -5209,9 +5209,11 @@ fn links_auto_stays_silent_when_no_title_clears_the_frequency_floor() {
 }
 
 #[test]
-fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
-    // Dogfood L-12: with more offenders than the note lists, the flag list
-    // still has to cover all of them, and the note has to admit it truncated.
+fn links_auto_note_truncates_the_prose_list_and_the_flags() {
+    // Dogfood L-12, amended by iter-274 (UX-11): the note admits it truncated,
+    // and the flag list is capped at the same count the prose says it shows —
+    // a sentence reading "showing the 5 noisiest of 40" followed by 40 flags
+    // contradicted itself.
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     let words = [
         "access", "account", "action", "active", "address", "agree", "answer",
@@ -5236,8 +5238,12 @@ fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
     );
     assert_eq!(
         stderr.matches("--exclude-title ").count(),
-        7,
-        "every offender needs a flag so one paste-back extinguishes the note: {stderr}"
+        5,
+        "the flag list is capped at the count the prose says it shows: {stderr}"
+    );
+    assert!(
+        stderr.contains("those flags ADD to the built-in stop-list"),
+        "the note must say flags add while [links.auto] exclude_titles replaces: {stderr}"
     );
 }
 

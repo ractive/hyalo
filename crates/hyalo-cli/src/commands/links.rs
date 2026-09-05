@@ -126,6 +126,16 @@ fn find_column(dir: &Path, source: &str, line: usize, needle: &str) -> Option<us
     Some(text.get(..byte_offset)?.chars().count() + 1)
 }
 
+/// How many broken site-absolute links it takes before `links fix` stops
+/// fuzzy-scoring them on a vault whose `site_prefix` demonstrably resolves
+/// none of them (iter-274, UX-3).
+///
+/// Matches the threshold the `summary` site-URL diagnostic uses: below it the
+/// scoring pass costs nothing and its proposals are usually genuine
+/// relocations; above it the pass is tens of seconds of guessing at links
+/// whose real fix is one line of `.hyalo.toml`.
+const SITE_ABSOLUTE_SCORING_SKIP_MIN: usize = 500;
+
 #[allow(clippy::too_many_arguments)]
 pub fn links_fix(
     index: &dyn VaultIndex,
@@ -276,7 +286,19 @@ pub fn links_fix(
     // have landed anyway) and everything else is still scored normally, so a
     // vault that mixes a bad prefix with ordinary relative typos keeps its
     // proposals.
-    let (fix_report, site_absolute_scoring_skipped) = if site_prefix_misconfigured {
+    //
+    // The skip is gated on volume as well as on the misconfiguration: below
+    // `SITE_ABSOLUTE_SCORING_SKIP_MIN` links the scoring pass is free, and a
+    // handful of site-absolute links in an otherwise ordinary vault are far
+    // more likely to be genuine relocations a basename fallback can repair
+    // than the symptom of a wrong prefix.
+    let site_absolute_broken = broken
+        .iter()
+        .filter(|b| b.target.replace('\\', "/").starts_with('/'))
+        .count();
+    let skip_site_absolute_scoring =
+        site_prefix_misconfigured && site_absolute_broken >= SITE_ABSOLUTE_SCORING_SKIP_MIN;
+    let (fix_report, site_absolute_scoring_skipped) = if skip_site_absolute_scoring {
         let (scored, skipped): (Vec<_>, Vec<_>) = broken
             .iter()
             .cloned()

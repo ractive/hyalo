@@ -446,11 +446,42 @@ mod tests {
         assert_scalar(&f, "status", FilterOp::Exists, None);
     }
 
+    /// iter-274 (UX-21): a second `=` used to be read as part of the value and
+    /// matched nothing without saying why. It is a usage error now, and the
+    /// message names the regex spelling that does express a literal `=`.
     #[test]
-    fn parse_value_contains_equals() {
-        // Value itself contains `=`; only the first `=` is the delimiter.
-        let f = parse_property_filter("key=a=b").unwrap();
-        assert_scalar(&f, "key", FilterOp::Eq, Some("a=b"));
+    fn parse_value_contains_equals_is_rejected() {
+        let err = parse_property_filter("key=a=b").expect_err("must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("more than one '='"), "{msg}");
+        assert!(msg.contains("key~=/a=b/"), "names the regex spelling: {msg}");
+        // A regex filter is still the way to match a literal `=`.
+        assert!(parse_property_filter("key~=/a=b/").is_ok());
+        // An inequality keeps its value verbatim — only `=` is ambiguous.
+        assert_scalar(
+            &parse_property_filter("key!=a=b").unwrap(),
+            "key",
+            FilterOp::NotEq,
+            Some("a=b"),
+        );
+    }
+
+    /// iter-274 (UX-21): an empty operand is a typo, not a query.
+    #[test]
+    fn parse_empty_value_is_rejected() {
+        for input in ["a=", "a>=", "a<=", "a>", "a<"] {
+            let err = parse_property_filter(input)
+                .err()
+                .unwrap_or_else(|| panic!("{input} must be rejected"));
+            assert!(
+                err.to_string().contains("empty value"),
+                "{input}: {err}"
+            );
+        }
+        // The spellings that DO express those intents keep working.
+        assert!(parse_property_filter("a").is_ok());
+        assert!(parse_property_filter("a=null").is_ok());
+        assert!(parse_property_filter("!a").is_ok());
     }
 
     #[test]

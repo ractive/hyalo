@@ -129,6 +129,29 @@ fn json_value_type_name(v: &serde_json::Value) -> &'static str {
     }
 }
 
+/// Record the JSON type of `entry`'s `--sort property:<key>` value, for the
+/// mixed-type warning (iter-274, UX-4). No-op unless the active sort is a
+/// property sort and the entry carries a non-null value for that key.
+fn record_sort_property_type(
+    seen: &mut Vec<&'static str>,
+    sort: Option<&SortField>,
+    entry: &hyalo_core::index::IndexEntry,
+) {
+    let Some(SortField::Property(key)) = sort else {
+        return;
+    };
+    let Some(value) = entry.properties.get(key.as_str()) else {
+        return;
+    };
+    if value.is_null() {
+        return;
+    }
+    let name = json_value_type_name(value);
+    if !seen.contains(&name) {
+        seen.push(name);
+    }
+}
+
 /// Find files matching the given filters and return them as a JSON array.
 ///
 /// Uses pre-scanned index data for all metadata (properties, tags, sections,
@@ -764,6 +787,10 @@ pub fn find(
 
     let mut results: Vec<FileObject> = Vec::new();
     let mut total_matching: usize = 0;
+    // Distinct JSON types of the `--sort property:<key>` key, recorded for
+    // matches the pre-sorted `--limit` fast path never builds a result for
+    // (iter-274, UX-4).
+    let mut sort_property_types: Vec<&'static str> = Vec::new();
 
     for entry in &scoped_entries {
         // ---------------------------------------------------------------------------
@@ -922,6 +949,13 @@ pub fn find(
             && !dead_end
         {
             total_matching += 1;
+            // iter-274 (UX-4): the mixed-type sort warning describes the SORT,
+            // and the sort ranks every match — not the `--limit` slice the
+            // caller happens to be shown. Recording the type here keeps
+            // `--limit 2` warning exactly when `--limit 0` does; without it, a
+            // vault whose `priority` mixes `9` and `"10"` was silent on a
+            // narrow limit and loud on a wide one, for one identical ordering.
+            record_sort_property_type(&mut sort_property_types, effective_sort_ref, entry);
             continue;
         }
 
@@ -1334,7 +1368,9 @@ pub fn find(
     if let Some(SortField::Property(key)) = effective_sort_ref
         && !results.is_empty()
     {
-        let mut distinct_types: Vec<&'static str> = Vec::new();
+        // Start from the types recorded for matches the `--limit` slice never
+        // materialised (UX-4), then add the ones that did.
+        let mut distinct_types: Vec<&'static str> = sort_property_types.clone();
         for r in &results {
             if let Some(v) = r.properties.as_ref().and_then(|p| p.get(key.as_str()))
                 && !v.is_null()
