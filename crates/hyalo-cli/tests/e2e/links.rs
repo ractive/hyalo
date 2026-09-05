@@ -6092,7 +6092,17 @@ fn links_text_and_json_buckets_sum_to_broken() {
     };
     let broken = count_line("Broken links:");
     let fixable = count_line("Fixable:");
-    let fuzzy = count_line("Low-confidence matches (excluded from plain --apply):");
+    // iter-274 (UX-10): the header now reports the candidate count and how
+    // many clear the floor, so read the leading number off it.
+    let fuzzy: u64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Low-confidence matches:"))
+        .unwrap_or_else(|| panic!("text output has no low-confidence line:\n{text}"))
+        .trim()
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("low-confidence line has no leading count in:\n{text}"));
     let unfixable = count_line("Unfixable:");
     assert_eq!(
         broken,
@@ -6125,30 +6135,41 @@ fn links_text_lists_unfixable_links() {
 /// `--dry-run`/plain-`--apply` wording that describes matches left on the
 /// table.
 #[test]
-fn links_text_apply_fuzzy_summary_says_applied_not_excluded() {
+fn links_text_apply_fuzzy_summary_counts_candidates_and_the_floor() {
     let tmp = setup_bucket_vault();
 
     let text = links_fix_text(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    // iter-274 (UX-10): the header states how many candidates there are and
+    // how many cleared the floor. "applied: N" was ambiguous — N counted every
+    // candidate, including the ones the floor suppressed.
     assert!(
-        text.contains("Low-confidence matches (applied via --apply-fuzzy):"),
-        "summary line must say the fuzzy matches were applied, not excluded:\n{text}"
+        text.contains("at or above the confidence floor"),
+        "the summary must name the floor and how many cleared it:\n{text}"
     );
     assert!(
-        !text.contains("Low-confidence matches (excluded from plain --apply):"),
-        "the plain---apply wording must not appear once --apply-fuzzy is active:\n{text}"
+        text.contains("(written — --apply-fuzzy)"),
+        "under --apply-fuzzy the summary must say the matches were written:\n{text}"
+    );
+    assert!(
+        !text.contains("not written — pass --apply-fuzzy"),
+        "the not-written wording must not appear once --apply-fuzzy is active:\n{text}"
     );
 }
 
 /// Without `--apply-fuzzy` the original wording still applies — fuzzy
 /// matches really are excluded from what gets written.
 #[test]
-fn links_text_apply_without_fuzzy_summary_says_excluded() {
+fn links_text_apply_without_fuzzy_summary_says_not_written() {
     let tmp = setup_bucket_vault();
 
     let text = links_fix_text(tmp.path(), &["--apply"]);
     assert!(
-        text.contains("Low-confidence matches (excluded from plain --apply):"),
-        "without --apply-fuzzy, fuzzy matches are genuinely excluded:\n{text}"
+        text.contains("(not written — pass --apply-fuzzy)"),
+        "without --apply-fuzzy, fuzzy matches are genuinely not written:\n{text}"
+    );
+    assert!(
+        text.contains("at or above the confidence floor"),
+        "the floor is named in both modes:\n{text}"
     );
 }
 

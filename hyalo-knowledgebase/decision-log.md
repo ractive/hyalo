@@ -5415,3 +5415,38 @@ which spelling of the command you used is not a guarantee.
 `plan_batch_mv` → `BatchMvPlanResult`. Closes
 [[backlog/done/mv-batch-frontmatter-link-scan-gap]]. See
 [[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-307: the exit-code taxonomy is 0 / 1 / 2, and every hyalo-own user error is 1 (2026-09-05) — amends DEC-276
+
+**Decision:** hyalo has exactly three exit codes, and each means one thing:
+
+- **0** — the command answered. A dry run has answered; so has a query that
+  matched nothing. Drift, findings and "there is work to do" are reported in
+  the payload, never in the exit code, unless a `--strict`-style gate flag was
+  passed explicitly.
+- **1** — a *hyalo-own user error*: the invocation was understood but wrong.
+  A bad `--sort` key, an unparseable `--glob`, an unreadable `--files-from`
+  list, an unknown `init --profile`, a `create-index --output` into a directory
+  that does not exist, `find a b` (hyalo's own did-you-mean-quotes error),
+  `deinit --dir <nonexistent>`, a broken `.hyalo.toml` under a gate command.
+  Every one of these renders through the standard error envelope, so
+  `--format json` stays parseable.
+- **2** — clap usage errors (an unknown flag, a missing required argument) and
+  internal errors (a panic-equivalent I/O or serialization failure).
+
+**Why.** The line that matters to a caller is 1 vs 2: "I typed it wrong" versus
+"hyalo broke". Several user errors reached the top of the process as plain
+`anyhow` values and were therefore reported as internal — bare text on stderr
+and exit 2 *even under `--format json`* — so a script could neither parse the
+message nor tell a typo from a crash. Two commands went the other way and
+signalled a *finding* through the exit code: `okf index`'s dry run exited 1 on
+drift, which made the safe habit of previewing first look like a failure to
+every wrapper that checks `$?`.
+
+**Where:** `hyalo_core::user_error` / `user_error_with` build the
+`UserFacingError` marker; it survives `?` and added `.context(...)`, and the
+handlers in `run::run` and `output_pipeline` re-render it through
+`format_error` at the effective `--format` and exit 1. `okf index --dry-run`
+now exits 0 and reports drift as `results.changed` (amending the
+iteration-176 choice). See
+[[iterations/iteration-274-hints-help-and-contract-polish]].

@@ -228,7 +228,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
   on every platform, not only on a case-insensitive filesystem. Opt out with
   `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the
-  cosmetic `link-case-mismatch` rewrite plans.
+  cosmetic `link-case-mismatch` rewrite plans. `hyalo config --jq '.results.links.case_insensitive'`
+  reports the effective mode (`auto` | `true` | `false`). `false` switches off hyalo's own
+  case-folding index, but the *literal* path probe that runs first is the filesystem's: on a
+  case-insensitive volume (macOS and Windows by default) `[[AidenLx]]` still opens
+  `People/aidenlx.md`, and the reported `path` is the canonical on-disk spelling. Exact-match
+  resolution is therefore only guaranteed on a case-sensitive filesystem.
 - **Case plans never touch a `site_prefix` link, and a rewrite keeps its form** (DEC-295,
   iter-271): a site-absolute link carrying the configured `site_prefix`
   (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the *site's* URL convention,

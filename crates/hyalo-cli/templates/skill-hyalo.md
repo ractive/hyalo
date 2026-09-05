@@ -481,7 +481,11 @@ What follows is only what those pages do not say — the behaviour that surprise
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
-  cosmetic `link-case-mismatch` rewrite plans.
+  cosmetic `link-case-mismatch` rewrite plans. `hyalo config --jq
+  '.results.links.case_insensitive'` reports the effective mode. `false` disables hyalo's
+  case-folding index only: the literal path probe that runs first belongs to the filesystem, so
+  on a case-insensitive volume the link still resolves — to the canonical on-disk path.
+  Exact-match resolution is guaranteed only on a case-sensitive filesystem.
 - **A `site_prefix` link is never a case mismatch** (DEC-295): a site-absolute target carrying
   the configured prefix (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the
   site's own URL convention, not the on-disk folder casing, so `links fix` produces no case plan
