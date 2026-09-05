@@ -255,7 +255,23 @@ impl ScannedIndex {
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
         let graph = if options.scan_body {
-            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix);
+            // iter-272 Part B (DEC-288): every entry's frontmatter is already
+            // parsed, so the declared `aliases:` come for free — the graph
+            // resolves an alias-named wikilink to the same file
+            // `find --fields links` reports, and `backlinks` / `--orphan` /
+            // `--dead-end` / `summary.links` all agree with it.
+            let aliases: Vec<(String, Vec<String>)> = if crate::discovery::link_aliases_enabled() {
+                entries
+                    .iter()
+                    .filter_map(|e| {
+                        let declared = crate::filter::extract_aliases(&e.properties);
+                        (!declared.is_empty()).then(|| (e.rel_path.clone(), declared))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix, &aliases);
             graph_build.graph
         } else {
             LinkGraph::default()

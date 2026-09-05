@@ -964,6 +964,14 @@ pub fn find(
                                 .map(str::to_owned),
                             _ => None,
                         };
+                        // iter-272 Part B (DEC-288): say so when the target
+                        // only resolved because a note declares it as a
+                        // frontmatter alias — the reader otherwise has no way
+                        // to tell `[[Leah]]` from a filename match.
+                        let via = (path.is_some()
+                            && !link.external
+                            && discovery::resolves_via_alias(&link.target, case_index))
+                        .then(|| hyalo_core::types::LINK_VIA_ALIAS.to_owned());
                         LinkInfo {
                             target: link.target.clone(),
                             path,
@@ -981,6 +989,7 @@ pub fn find(
                             broken_anchor,
                             suggested_fragment,
                             out_of_vault,
+                            via,
                         }
                     })
                     // iter-211 / BUG-8: same-file anchors (`[b](#nope)`,
@@ -1034,6 +1043,8 @@ pub fn find(
                                 .flatten()
                                 .map(str::to_owned),
                             out_of_vault: false,
+                            // A same-file anchor names no target to alias.
+                            via: None,
                         }
                     }))
                     .collect::<Vec<_>>(),

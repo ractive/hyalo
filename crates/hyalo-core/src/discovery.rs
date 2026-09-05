@@ -216,6 +216,27 @@ fn glob_dir_prefix(glob: &str) -> String {
     kept.join("/")
 }
 
+/// Process-wide switch for frontmatter-`aliases:` link resolution
+/// (iter-272 Part B, DEC-288). Default **on**, like DEC-267 case folding.
+static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
+
+/// Install the effective `[links] aliases` setting for this process.
+///
+/// Idempotent-once, exactly like [`set_scan_include`]: the CLI calls it once
+/// after config resolution, before any command runs. Following that pattern
+/// keeps the setting off the signature of every resolver, index builder and
+/// graph pass that would otherwise have to forward it.
+pub fn set_link_aliases(enabled: bool) {
+    let _ = LINK_ALIASES.set(enabled);
+}
+
+/// Whether frontmatter `aliases:` resolve links in this process. Defaults to
+/// `true` when nothing configured it (library callers, tests).
+#[must_use]
+pub fn link_aliases_enabled() -> bool {
+    LINK_ALIASES.get().copied().unwrap_or(true)
+}
+
 /// Install the `[scan] include` glob set for this process.
 ///
 /// Idempotent-once: only the first call takes effect (the walker reads it
@@ -1551,6 +1572,23 @@ fn classify_short_form_wikilink(
         stem_index.lookup(target)
     };
 
+    // iter-272 Part B (DEC-288): no file carries that stem — but a note may
+    // declare it as a frontmatter alias, which is how Obsidian resolves
+    // `[[Leah]]` to `Leah Ferguson.md`. An alias-resolved link is *valid as
+    // written*: it needs no rewrite, so it is `ShortFormValid` rather than a
+    // relocation, and it never reaches the fuzzy matcher — which used to offer
+    // `Leah → Lewuathe.md` at confidence 0.87 on the Obsidian Hub. Two notes
+    // claiming one alias is ambiguous, exactly like two files sharing a stem.
+    if matches.is_empty()
+        && let Some(idx) = case_index
+    {
+        match idx.lookup_alias_all(target).len() {
+            0 => {}
+            1 => return Some(LinkResolution::ShortFormValid),
+            _ => return Some(LinkResolution::ShortFormAmbiguous),
+        }
+    }
+
     match matches.len() {
         0 => Some(LinkResolution::Broken),
         1 => {
@@ -2072,9 +2110,107 @@ pub fn resolve_target(
                 return Some(canonical_path.to_owned());
             }
         }
+        // iter-272 Part B (DEC-288): last resort — a frontmatter `aliases:`
+        // entry. Obsidian resolves `[[Leah]]` to the note declaring
+        // `aliases: [Leah]`, and 7 of the Obsidian Hub's 47 genuinely-broken
+        // targets were exactly that. Deliberately *after* every path and stem
+        // attempt, so a real filename always wins over someone else's alias;
+        // `lookup_alias` answers `None` when two notes claim the same alias,
+        // which keeps the link ambiguous rather than resolving it to whichever
+        // note happened to be scanned first.
+        if let Some(canonical_path) = idx.lookup_alias(stem) {
+            let full_resolved = canonical_dir.join(canonical_path);
+            if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+                return Some(canonical_path.to_owned());
+            }
+        }
     }
 
     None
+}
+
+/// Visitor that reads a file's frontmatter `aliases:` and stops before the
+/// body — the cheapest scan the scanner offers (iter-272 Part B).
+struct AliasVisitor {
+    aliases: Vec<String>,
+}
+
+impl crate::scanner::FileVisitor for AliasVisitor {
+    fn on_frontmatter(
+        &mut self,
+        props: indexmap::IndexMap<String, serde_json::Value>,
+    ) -> crate::scanner::ScanAction {
+        self.aliases = crate::filter::extract_aliases(&props);
+        // Nothing below the frontmatter matters, so the body is never read.
+        crate::scanner::ScanAction::Stop
+    }
+}
+
+/// Read one file's declared frontmatter `aliases:` without reading its body.
+///
+/// Returns an empty vec for a file with no frontmatter, no `aliases:` key, or
+/// unparseable YAML — an alias map is an optimisation of resolution, never a
+/// reason to fail a command.
+#[must_use]
+pub fn read_aliases(path: &Path) -> Vec<String> {
+    let mut visitor = AliasVisitor {
+        aliases: Vec::new(),
+    };
+    match crate::scanner::scan_file_multi(path, &mut [&mut visitor]) {
+        Ok(()) => visitor.aliases,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Populate `idx` with every note's declared frontmatter `aliases:` by
+/// scanning the vault's frontmatter (iter-272 Part B, DEC-288).
+///
+/// Only the frontmatter of each file is read — the visitor stops the scan the
+/// moment the properties are parsed — so the pass costs one `open` + one short
+/// `read` per note and touches no body bytes.
+pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
+    if !link_aliases_enabled() {
+        return;
+    }
+    let Ok(files) = discover_files(dir) else {
+        return;
+    };
+    for file in &files {
+        let aliases = read_aliases(file);
+        if aliases.is_empty() {
+            continue;
+        }
+        idx.insert_aliases(&relative_path(dir, file), aliases);
+    }
+}
+
+/// Whether `target`, written in `source_rel`, resolves only because some note
+/// declares it as a frontmatter alias (iter-272 Part B).
+///
+/// Used to label a resolved link with `via: "alias"` and to stop `links fix`
+/// from fuzzy-rewriting a target that is a perfectly good alias. Answers
+/// `false` for every target that a path or stem lookup would have resolved.
+#[must_use]
+pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> bool {
+    let Some(idx) = case_index else {
+        return false;
+    };
+    // Only a bare, non-site-absolute target can name an alias — the same guard
+    // `resolve_target` applies before its stem and alias lookups.
+    if target.is_empty() || target.contains('/') || target.contains('\\') {
+        return false;
+    }
+    let stem = target
+        .strip_suffix(".md")
+        .or_else(|| target.strip_suffix(".MD"))
+        .unwrap_or(target);
+    let stem = stem.split('#').next().unwrap_or(stem);
+    if stem.is_empty() || !idx.has_alias(stem) {
+        return false;
+    }
+    // A filename always beats an alias, so a target the stem map already
+    // answers did not resolve "via alias" even when an alias also matches.
+    idx.lookup_stem(stem).is_none() && idx.lookup_alias(stem).is_some()
 }
 
 #[cfg(test)]

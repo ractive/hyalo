@@ -90,6 +90,9 @@ pub(crate) struct ConfigReport {
     /// allow-list, when one is configured. `None` means whatever
     /// [`Self::frontmatter_links`] implies.
     pub frontmatter_link_properties: Option<Vec<String>>,
+    /// Effective `[links] aliases` (iter-272, DEC-288): whether a frontmatter
+    /// `aliases:` value resolves a `[[wikilink]]`.
+    pub alias_links: bool,
     /// Effective `[scan]` settings (iter-265): the vault-wide exclusion globs
     /// and whether per-file skip diagnostics are streamed.
     pub scan: ScanReport,
@@ -211,6 +214,7 @@ pub(crate) fn collect_config_report(
         site_prefix_source,
         exempt: resolved.schema.exempt.patterns().to_vec(),
         frontmatter_links: resolved.frontmatter_links_enabled,
+        alias_links: resolved.alias_links_enabled,
         frontmatter_link_properties: resolved.frontmatter_link_props.clone(),
         scan: ScanReport {
             include: resolved.scan_include.clone(),
@@ -331,6 +335,7 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "links": {
                 "frontmatter": report.frontmatter_links,
                 "frontmatter_properties": report.frontmatter_link_properties,
+                "aliases": report.alias_links,
             },
             // Effective `[links.auto]` baseline for `hyalo links auto`
             // (iter-195a). Always present, empty lists / false when unset, so
@@ -486,7 +491,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let mut out = format!(
         "{dir_out_of_bounds_str}{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
-         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\n\
+         links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
@@ -495,6 +500,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         scan_exclude = list_or_none(&report.scan.exclude),
         scan_verbose_skips = report.scan.verbose_skips,
         fm_links = report.frontmatter_links,
+        alias_links = report.alias_links,
         fm_link_props = report
             .frontmatter_link_properties
             .as_deref()

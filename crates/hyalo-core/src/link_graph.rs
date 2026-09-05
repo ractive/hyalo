@@ -126,8 +126,22 @@ impl LinkGraph {
         // First pass: fully populate the case index so that bare-basename
         // wikilink resolution in `insert_file_links` can see every vault file
         // regardless of scan order.
-        for (_full_path, rel) in files {
+        //
+        // iter-272 Part B: the same pass reads each file's frontmatter
+        // `aliases:`, for the same reason — an alias declared in the last file
+        // scanned has to resolve a link written in the first. Only the
+        // frontmatter is read (the visitor stops before the body), and the
+        // second pass below re-opens the same files while they are still warm
+        // in the page cache.
+        let aliases = crate::discovery::link_aliases_enabled();
+        for (full_path, rel) in files {
             let rel_fwd = rel.to_string_lossy().replace('\\', "/");
+            if aliases {
+                let declared = crate::discovery::read_aliases(full_path);
+                if !declared.is_empty() {
+                    case_index.insert_aliases(&rel_fwd, declared);
+                }
+            }
             case_index.insert(&rel_fwd);
         }
 
@@ -174,6 +188,7 @@ impl LinkGraph {
     pub(crate) fn from_file_links(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
+        aliases: &[(String, Vec<String>)],
     ) -> LinkGraphBuild {
         let mut index: HashMap<String, Vec<BacklinkEntry>> =
             HashMap::with_capacity(file_links.len());
@@ -182,6 +197,14 @@ impl LinkGraph {
         for fl in &file_links {
             let rel_fwd = fl.source.to_string_lossy().replace('\\', "/");
             case_index.insert(&rel_fwd);
+        }
+        // iter-272 Part B: the caller already parsed every file's frontmatter
+        // during its own scan, so the alias map costs one pass over data in
+        // hand — no second read of any file.
+        if crate::discovery::link_aliases_enabled() {
+            for (rel_path, declared) in aliases {
+                case_index.insert_aliases(rel_path, declared);
+            }
         }
         for fl in file_links {
             insert_file_links(&mut index, fl, site_prefix, &case_index);
@@ -685,6 +708,13 @@ fn insert_file_links(
         // query forms naturally. We skip insertion when the resolved key would
         // equal the raw target (only `.md`-suffix difference) to avoid
         // double-counting via the toggle.
+        //
+        // iter-272 Part B (DEC-288): when no file has that stem, a frontmatter
+        // `aliases:` entry can still name one — and an alias-resolved link is
+        // a real graph edge, so `backlinks`, `--orphan`, `--dead-end` and
+        // `summary.links` all agree with what `find --fields links` reports.
+        // A filename always wins: the alias lookup runs only after
+        // `lookup_stem` comes up empty.
         let resolved_key = (link.kind == LinkKind::Wikilink
             && !link.target.contains('/')
             && !link.target.contains('\\'))
@@ -692,6 +722,7 @@ fn insert_file_links(
             let stem = strip_md_extension(&link.target);
             case_index
                 .lookup_stem(stem)
+                .or_else(|| case_index.lookup_alias(stem))
                 .map(|canon| strip_md_extension(canon).to_owned())
         })
         .flatten()
@@ -1790,7 +1821,7 @@ mod tests {
                 visitor.into_file_links()
             })
             .collect();
-        let build2 = LinkGraph::from_file_links(file_links, None);
+        let build2 = LinkGraph::from_file_links(file_links, None, &[]);
         let graph2 = build2.graph;
 
         // Verify warnings from from_file_links are always empty
@@ -2458,7 +2489,7 @@ mod tests {
             })
             .collect();
 
-        let build = LinkGraph::from_file_links(file_links, None);
+        let build = LinkGraph::from_file_links(file_links, None, &[]);
         assert_eq!(build.case_index.lookup_unique("a.md"), Some("a.md"));
         assert_eq!(build.case_index.lookup_unique("b.md"), Some("b.md"));
         assert_eq!(build.case_index.len(), 2);

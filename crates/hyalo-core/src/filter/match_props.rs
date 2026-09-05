@@ -38,6 +38,44 @@ pub fn extract_tags(props: &IndexMap<String, Value>) -> Vec<String> {
     }
 }
 
+/// The frontmatter property Obsidian reads alternative note names from.
+pub const ALIASES_PROPERTY: &str = "aliases";
+
+/// Extract the declared `aliases:` of a note from its parsed frontmatter
+/// (iter-272 Part B, DEC-288).
+///
+/// Obsidian accepts both shapes its property editor can write:
+/// - a list — `aliases:\n  - Leah\n  - L. Ferguson`
+/// - a bare string — `aliases: Leah`
+///
+/// Non-string list items (a number, a nested map) are skipped, as are empty
+/// and whitespace-only entries: neither can be typed inside `[[…]]`. No other
+/// property is read — `alias:` (singular) and `title:` are deliberately not
+/// alias sources.
+#[must_use]
+pub fn extract_aliases(props: &IndexMap<String, Value>) -> Vec<String> {
+    match props.get(ALIASES_PROPERTY) {
+        Some(Value::Array(seq)) => seq
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => Some(s.trim()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            if s.is_empty() {
+                vec![]
+            } else {
+                vec![s.to_owned()]
+            }
+        }
+        _ => vec![],
+    }
+}
+
 /// Returns true if `tag` matches the query under Obsidian's nested tag rules.
 /// A tag matches if it equals the query or starts with `query/` (case-insensitive,
 /// using ASCII-only case folding via `eq_ignore_ascii_case`).

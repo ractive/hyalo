@@ -52,6 +52,14 @@ struct LinksConfig {
     /// Persistent `hyalo links auto` preferences (`[links.auto]`).
     #[serde(default)]
     auto: Option<AutoLinksConfig>,
+    /// Whether a frontmatter `aliases:` value resolves a `[[wikilink]]`
+    /// (iter-272, DEC-288). Default `true`.
+    ///
+    /// `false` restores the pre-iter-272 behaviour: only filenames and paths
+    /// resolve, and `[[Leah]]` is broken even when a note declares
+    /// `aliases: [Leah]`.
+    #[serde(default)]
+    aliases: Option<bool>,
     /// Default confidence floor for `hyalo links fix --apply-fuzzy`
     /// (`[links] fuzzy_min_confidence`, iter-212).
     ///
@@ -327,6 +335,9 @@ pub(crate) struct ResolvedDefaults {
     /// link source. Reported by `hyalo config`; the scan itself is driven by
     /// [`Self::frontmatter_link_props`], which this value resolves into.
     pub(crate) frontmatter_links_enabled: bool,
+    /// Effective `[links] aliases` — whether a frontmatter `aliases:` value
+    /// resolves a wikilink (iter-272, DEC-288). Default `true`.
+    pub(crate) alias_links_enabled: bool,
     /// When `true`, schema validation is applied on every `set`/`append` operation.
     /// From `validate_on_write = true` in `.hyalo.toml`.
     pub(crate) validate_on_write: bool,
@@ -459,6 +470,7 @@ impl PartialEq for ResolvedDefaults {
             && self.search_language == other.search_language
             && self.frontmatter_link_props == other.frontmatter_link_props
             && self.frontmatter_links_enabled == other.frontmatter_links_enabled
+            && self.alias_links_enabled == other.alias_links_enabled
             && self.validate_on_write == other.validate_on_write
             && self.lint_ignore == other.lint_ignore
             && self.default_limit == other.default_limit
@@ -480,6 +492,7 @@ impl ResolvedDefaults {
             search_language: None,
             frontmatter_link_props: None,
             frontmatter_links_enabled: true,
+            alias_links_enabled: true,
             validate_on_write: false,
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
@@ -1106,6 +1119,11 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .links
             .as_ref()
             .and_then(|l| l.frontmatter)
+            .unwrap_or(true),
+        alias_links_enabled: cfg
+            .links
+            .as_ref()
+            .and_then(|l| l.aliases)
             .unwrap_or(true),
         validate_on_write,
         lint_ignore: cfg

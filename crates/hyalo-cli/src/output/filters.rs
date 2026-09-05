@@ -59,8 +59,9 @@ pub(super) const TAG_SUMMARY_ENTRY_FILTER: &str =
 /// - ` (kind)` for anything that is not a plain `wikilink`;
 /// - `(broken anchor)` / `(unresolved)` / `(out of vault)` verdicts — an
 ///   `external` link gets none of them, because it names nothing to resolve;
+/// - ` (via alias)` when a frontmatter `aliases:` entry resolved it (iter-272);
 /// - the DEC-268 heading suggestion, then a `[label]` suffix.
-pub(super) const LINK_INFO_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)\(if .label then " [\(.label)]" else "" end)""##;
+pub(super) const LINK_INFO_FILTER: &str = r##""  line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)\(if .label then " [\(.label)]" else "" end)""##;
 
 /// `TaskCount`: `{done, total}`
 pub(super) const TASK_COUNT_FILTER: &str = r#""[\(.done)/\(.total)]""#;
@@ -250,7 +251,7 @@ pub(super) fn key_signature(map: &serde_json::Map<String, serde_json::Value>) ->
 /// one this shape declares", which keeps pre-iter-261 fixtures rendering while
 /// still refusing any other object that happens to carry a `target`.
 fn is_link_info_signature(key_sig: &str) -> bool {
-    const LINK_INFO_KEYS: [&str; 9] = [
+    const LINK_INFO_KEYS: [&str; 11] = [
         "broken_anchor",
         "fragment",
         "kind",
@@ -258,8 +259,11 @@ fn is_link_info_signature(key_sig: &str) -> bool {
         "line",
         "out_of_vault",
         "path",
+        "property",
         "suggested_fragment",
         "target",
+        // iter-272 Part B: `"alias"` when a frontmatter alias resolved it.
+        "via",
     ];
     let mut has_target = false;
     for key in key_sig.split(',') {
