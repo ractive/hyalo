@@ -335,6 +335,29 @@ struct SnapshotHeader {
     /// to before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     attachments: Vec<String>,
+    /// How many files `[scan] exclude` dropped while this snapshot was built
+    /// (iter-273, BUG-18).
+    ///
+    /// The entries list holds only what survived exclusion, so a load has no
+    /// way to recompute this without the vault walk `--index` exists to avoid
+    /// — which is why `summary --index` used to report `excluded: 0` against a
+    /// disk scan's `excluded: 52`. Defaulted and skipped when zero, so an older
+    /// snapshot still loads and an unexcluded vault's bytes are unchanged.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    scan_excluded: u64,
+    /// The `[scan] exclude` patterns that produced [`Self::scan_excluded`].
+    ///
+    /// Recorded so a load can tell "the same exclusions are still configured,
+    /// so the stored count still describes this vault" from "the config has
+    /// changed since the index was built", where the count would be a lie.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scan_exclude: Vec<String>,
+}
+
+/// `skip_serializing_if` predicate keeping a zero count out of the wire format.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde requires the by-ref shape
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 /// The snapshot wire format — header + entries + graph + optional BM25 index,
@@ -1376,6 +1399,20 @@ impl SnapshotIndex {
                 crate::discovery::note_scan_excluded(removed);
             }
         }
+        // BUG-18 (iter-273): the retain above only accounts for files the
+        // *snapshot still carries*. When the index was built with the same
+        // exclusions already in force, those files never entered it, so the
+        // build-time figure recorded in the header is the only witness left —
+        // without it `summary --index` reported `excluded: 0` for a vault the
+        // disk scan reports 52 excluded files for. Trusted only while the
+        // configured patterns still match the ones that produced it.
+        if !header.scan_exclude.is_empty()
+            && header.scan_exclude == crate::discovery::scan_exclude_patterns()
+        {
+            crate::discovery::note_scan_excluded(
+                usize::try_from(header.scan_excluded).unwrap_or(usize::MAX),
+            );
+        }
 
         let path_index: HashMap<String, usize> = entries
             .iter()
@@ -1543,6 +1580,13 @@ fn write_snapshot(
             .map_or(0, |d| d.as_secs()),
         pid: std::process::id(),
         attachments: attachments.to_vec(),
+        // iter-273 (BUG-18): read straight from the process-global counters
+        // rather than threaded through every caller — `create-index` has just
+        // finished the walk that set them, and a `save_to` of a snapshot
+        // loaded in this same process re-seeded them from the header it read,
+        // so both write paths record the figure that describes these bytes.
+        scan_excluded: crate::discovery::scan_excluded_count() as u64,
+        scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -1864,26 +1908,57 @@ fn parse_iso8601_secs(s: &str) -> Option<u64> {
 /// exists, is not reported — the former is "unknown", the latter is the
 /// caller's deletion handling, not staleness.
 pub fn files_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Vec<String> {
-    let mut stale = Vec::new();
-    for entry in index.entries() {
-        let rel = entry.rel_path.as_str();
-        let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
-            continue;
-        };
-        let Ok(meta) = std::fs::metadata(dir.join(rel)) else {
-            continue;
-        };
-        let Ok(modified) = meta.modified() else {
-            continue;
-        };
-        let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
-            continue;
-        };
-        if disk.as_secs() > indexed.saturating_add(STALENESS_TOLERANCE_SECS) {
-            stale.push(rel.to_owned());
-        }
-    }
-    stale
+    index
+        .entries()
+        .iter()
+        .filter(|e| entry_is_stale_on_disk(e, dir))
+        .map(|e| e.rel_path.clone())
+        .collect()
+}
+
+/// The first indexed file whose bytes on disk are newer than the snapshot
+/// remembers, or `None` when every entry is current.
+///
+/// INDEX-1 (iter-273, BUG-12) — the DEC-280 amendment. [`newest_dir_mtime`] is
+/// blind to an in-place overwrite: rewriting `n2.md` moves that file's mtime
+/// but leaves its directory's untouched, so `find --index` answered from a
+/// snapshot that no longer described the vault, with no warning and exit 0.
+/// This is the same per-entry comparison [`files_modified_since_snapshot`]
+/// already made for `links fix`, short-circuited at the first hit: the warning
+/// only needs one witness, and stopping there makes the common "something
+/// changed" case cost a handful of `stat`s rather than one per indexed file.
+///
+/// The clean-vault case does pay one `stat` per entry, which is why callers
+/// run this **after** the cheaper directory probe and only when a run did not
+/// already refresh every file it named (DEC-280's "refresh what you are about
+/// to return" half).
+pub fn first_file_modified_since_snapshot(index: &SnapshotIndex, dir: &Path) -> Option<String> {
+    index
+        .entries()
+        .iter()
+        .find(|e| entry_is_stale_on_disk(e, dir))
+        .map(|e| e.rel_path.clone())
+}
+
+/// Whether one index entry's file on disk is newer than the entry records.
+///
+/// A file whose stored mtime cannot be parsed, or which no longer exists, is
+/// not stale — the former is "unknown", the latter is the caller's deletion
+/// handling. Both keep the historic answer of the loop this was extracted from.
+fn entry_is_stale_on_disk(entry: &IndexEntry, dir: &Path) -> bool {
+    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::metadata(dir.join(&entry.rel_path)) else {
+        return false;
+    };
+    let Ok(modified) = meta.modified() else {
+        return false;
+    };
+    let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
+        return false;
+    };
+    disk.as_secs() > indexed.saturating_add(STALENESS_TOLERANCE_SECS)
 }
 
 /// Bring one named file's index entry up to date with disk, if it drifted.
@@ -2396,6 +2471,20 @@ impl FileVisitor for BodyCollector {
         self.buf.push_str(raw);
         ScanAction::Continue
     }
+}
+
+/// Read one file's heading outline, and nothing else.
+///
+/// NAMED-3 (iter-273, BUG-9): the broken-anchor verdict needs the *target*
+/// file's headings, which the index supplies for free during a vault sweep but
+/// not when `--file` / `--glob` narrowed the scan to the source file alone.
+/// One targeted read per distinct anchor target is the cheap way to make the
+/// four spellings of the same question return the same answer — far cheaper
+/// than promoting every per-file link query into a whole-vault scan.
+pub fn scan_file_sections(full_path: &Path) -> Result<Vec<OutlineSection>> {
+    let mut scanner = SectionScanner::new();
+    crate::scanner::scan_file_multi(full_path, &mut [&mut scanner])?;
+    Ok(scanner.into_sections())
 }
 
 /// Visitor that builds outline sections from body events.
@@ -3055,6 +3144,8 @@ Content.
                 created_at: 0,
                 pid: std::process::id(),
                 attachments: Vec::new(),
+                scan_excluded: 0,
+                scan_exclude: Vec::new(),
             },
             entries,
             graph: &graph,
@@ -3350,6 +3441,8 @@ Content.
                 created_at: 0,
                 pid: std::process::id(),
                 attachments: Vec::new(),
+                scan_excluded: 0,
+                scan_exclude: Vec::new(),
             },
             bm25_index: Some(&original),
             entries: &entries,

@@ -5263,3 +5263,155 @@ set `site_prefix` or fix the links.
 
 **Where:** nothing implemented; recorded so the option is not re-litigated. See
 [[iterations/iteration-272-resolution-completeness]].
+
+## DEC-301: a path the caller names is a promise, not a filter (2026-09-05) — amends DEC-278, DEC-280, DEC-284
+
+**Decision:** For `find`, a path supplied as `--file` or positionally is
+answered *about that path*, never quietly dropped:
+
+- **Unparsable frontmatter is an error** (exit 1, the YAML diagnostic in
+  `cause`, a `lint --rule HYALO005` hint), matching what `set`/`remove`/`append`
+  have done since iteration 204's L-2. `--files-from` keeps DEC-284's batch
+  semantics: the same file is counted as a skip and the run exits 0.
+- **`--index` reads it from disk when the snapshot has never seen it.** One
+  `is_file` plus one parse per named path, upserted into the in-memory snapshot
+  (never written back), announced with a `note:`. A path in neither the
+  snapshot nor the vault keeps `find`'s existing L-7 refusal (`file not found`,
+  exit 1) rather than being downgraded to a `files_missing` counter — the
+  refusal is strictly stronger and matches the non-`--index` path.
+- **The broken-anchor verdict does not depend on how the file was selected.**
+  `--file` / `--glob` narrow the scan, so the *target* of an anchored link was
+  usually absent from the index and `broken_anchor` silently defaulted to
+  `false`. The verdict now falls back to one memoized read of the target file's
+  headings, so `--file`, `--glob`, positional and the vault sweep return
+  identical link JSON, `suggested_fragment` included.
+- **`lint --rule X` reports rule X.** A frontmatter parse error is HYALO005's
+  finding; under a filter that does not name HYALO005 the file becomes a counted
+  skip (DEC-278's one-line summary) instead of inflating `--count` for an
+  unrelated rule.
+
+**Why.** All four were the same failure: exit 0 with a clean-looking answer to a
+question about a file the caller had named by hand. A script cannot tell that
+from "the file matched no filter", which is exactly the ambiguity DEC-278's
+skip-summary was allowed to create for *batch* scans and was never meant to
+create for a named one. Batch and named are different contracts; the code had
+lost the distinction because `--files-from` is flattened into the same `file`
+list before dispatch (now tracked by `CommandContext::file_list_from_files_from`).
+
+**Where:** `commands::NamedFilePolicy` + `build_scanned_index_named`,
+`find::run::refresh_named_files_into_snapshot`, `find::anchor_verdict` +
+`hyalo_core::index::scan_file_sections`, `lint::file`'s parse-error branch.
+See [[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-302: the stale-index probe falls through to per-file mtimes (2026-09-05) — amends DEC-280
+
+**Decision:** When the DEC-280 directory-mtime probe finds nothing, a second
+pass compares each indexed file's recorded mtime against disk and stops at the
+first drift, naming that file in the `index older than vault` warning. It runs
+only when the cheap probe was clean and the run did not already refresh every
+file it named.
+
+**Why.** DEC-280's probe watches directory mtimes, which move when an entry is
+created, renamed or removed — and *not* when an existing file is overwritten in
+place. On APFS, `printf … > n2.md` over an indexed note left the whole vault
+looking untouched, so `find --index` served the pre-edit snapshot with no
+warning and exit 0. Since the index already stores every file's mtime, the
+detection is a comparison, not a scan.
+
+**Cost.** One `stat` per indexed file in the worst case (a clean vault, where
+the pass runs to completion). Measured on MDN's 14,375 files: `find --index
+--limit 1` went from 0.12 s to 0.15 s — about 0.03 s, inside the 0.1 s budget,
+and paid only by runs the cheap probe already declared clean. A dirty vault
+short-circuits at the first drifted file.
+
+**Residual blind spot.** An edit landing in the same whole second as the
+snapshot: mtimes are compared in whole seconds with a one-second tolerance
+(`STALENESS_TOLERANCE_SECS`), unchanged from DEC-280.
+
+**Where:** `hyalo_core::index::first_file_modified_since_snapshot`, called from
+`run.rs`'s snapshot-load path. See
+[[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-303: the snapshot records what `[scan] exclude` dropped (2026-09-05) — amends DEC-277
+
+**Decision:** `SnapshotHeader` carries `scan_excluded` (the count of files
+`[scan] exclude` dropped while the index was built) and `scan_exclude` (the
+patterns that dropped them). On load, the stored count seeds
+`summary`'s `excluded` figure **only** when the configured patterns still match
+the recorded ones. Both fields default and are skipped when empty, so older
+snapshots load unchanged and an unexcluded vault's bytes are identical.
+
+**Why.** DEC-277 applies exclusions at snapshot *load* as well as on the disk
+walk, which correctly handles a snapshot built before the exclusion existed. It
+cannot handle the ordinary case: `create-index` run *with* the exclusion in
+force never puts those files in the snapshot, so nothing remains at load to
+count and `summary --index` reported `excluded: 0` where the disk scan reported
+52. The build-time figure is the only witness, and it is one integer.
+
+**Where:** `hyalo_core::index::SnapshotHeader`, `write_snapshot`,
+`SnapshotIndex::load`, `discovery::scan_exclude_patterns`. See
+[[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-304: `mv` resolves the destination exactly like the source (2026-09-05)
+
+**Decision:** Every `mv` destination — positional `DEST`, `--to <file>`,
+`--to <dir>/`, and batch — goes through the same CWD-relative → vault-relative
+normalisation `resolve_file` applies to the source, in one place in the dispatch
+arm. A trailing slash survives the strip, because single-file mode reads it as
+"this is a directory".
+
+**Why.** With `dir = "kb"` in `.hyalo.toml`, `hyalo mv kb/a.md kb/sub/a.md` run
+from the project root resolved the source to `a.md` and the destination to the
+literal `kb/sub/a.md` — itself vault-relative — and created `kb/kb/sub/a.md`.
+All four forms had it, because all four bypassed the normalisation the source
+goes through. Normalising once, at the single point where the destination is
+decided, is what stops the four drifting apart again.
+
+**Also:** `--to dir/` naming a directory that does not exist used to be answered
+with `did you mean dir/.md?`, a path nothing can name. It now reports the
+missing directory and offers the explicit file destination.
+
+**Where:** `commands::mv::strip_vault_prefix_from_destination`,
+`validate_target_single`. Closes
+[[backlog/done/mv-destination-path-resolved-vault-relative]]. See
+[[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-305: `--on-conflict` is a validated choice honoured in both `mv` modes (2026-09-05)
+
+**Decision:** `mv --on-conflict` is a clap value enum (`error` | `skip`);
+anything else is a usage error listing the real values. Single-file mode honours
+`skip`: the source stays where it is, the destination is untouched, the path is
+reported under `skipped`, and the run exits 0. The batch collision error
+distinguishes "two sources map to one destination" from "a file already exists
+at the destination" (and says so when a batch hits both).
+
+**Why.** As a `String`, `--on-conflict overwrite` parsed cleanly and then behaved
+as `error` — the worst possible answer from a flag whose only job is to say what
+happens to your files. And `skip` was accepted in single-file mode and ignored,
+so the run failed with `target file already exists`: the exact outcome the flag
+exists to avoid. The two collision kinds have different fixes (rename a source
+vs deal with the file already there), so one sentence could not serve both.
+
+**Where:** `cli::args::ConflictPolicy`, `commands::mv::validate_target_single`,
+`build_rename_map`. See
+[[iterations/iteration-273-index-and-named-file-honesty]].
+
+## DEC-306: batch `mv` sweeps for split frontmatter links, once per batch (2026-09-05) — amends DEC-296's scope note
+
+**Decision:** Batch `mv` runs the same split-frontmatter-link sweep single-file
+`mv` has run since iteration 269 (SCAN-1), reusing the candidate list the one
+link-graph build already produces. Each candidate's frontmatter block is read
+**once** and tested against every rename, so the sweep costs the same for one
+move as for two hundred. Each move reports its own findings under
+`moves[].frontmatter_links_skipped`.
+
+**Why.** A frontmatter `[[…]]` that straddles a line break is not a graph edge,
+so the file holding it is not a backlink source and the batch never opened it —
+`mv --glob` could leave a dangling reference behind with nothing on stderr,
+while `mv <file>` on the same target reported it. A guarantee that depends on
+which spelling of the command you used is not a guarantee.
+
+**Where:** `link_rewrite::scan_split_frontmatter_links_batch`,
+`plan_batch_mv` → `BatchMvPlanResult`. Closes
+[[backlog/done/mv-batch-frontmatter-link-scan-gap]]. See
+[[iterations/iteration-273-index-and-named-file-honesty]].

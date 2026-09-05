@@ -32,6 +32,49 @@ use hyalo_core::types::{
 use build::{TitleMatcher, extract_title, matches_task_filter};
 use sort::{apply_sort, presort_index_entries};
 
+/// Memoized heading outlines for link targets the active index does not hold
+/// (iter-273, NAMED-3). `None` marks a target that could not be read, so a
+/// failed read is attempted once rather than once per link.
+type AnchorSectionsCache = std::cell::RefCell<HashMap<String, Option<Vec<OutlineSection>>>>;
+
+/// The broken-anchor verdict for `#fragment` in `target_path`, plus DEC-268's
+/// unique-prefix suggestion, derived from one section list so the two can never
+/// disagree.
+///
+/// The index answers whenever it holds the target — every link on the
+/// vault-sweep and `--index` paths. Only a scan narrowed by `--file`/`--glob`
+/// reaches the disk fallback, and then at most once per distinct target file.
+fn anchor_verdict(
+    index: &dyn VaultIndex,
+    cache: &AnchorSectionsCache,
+    canonical_dir: &Path,
+    target_path: &str,
+    fragment: &str,
+) -> (bool, Option<String>) {
+    fn verdict(sections: &[OutlineSection], fragment: &str) -> (bool, Option<String>) {
+        let broken = !hyalo_core::anchor::fragment_matches_headings(fragment, sections);
+        let suggested = broken
+            .then(|| hyalo_core::anchor::unique_heading_by_prefix(fragment, sections))
+            .flatten()
+            .map(str::to_owned);
+        (broken, suggested)
+    }
+
+    if let Some(entry) = index.get(target_path) {
+        return verdict(&entry.sections, fragment);
+    }
+    let mut cache = cache.borrow_mut();
+    let sections = cache.entry(target_path.to_owned()).or_insert_with(|| {
+        hyalo_core::index::scan_file_sections(&canonical_dir.join(target_path)).ok()
+    });
+    // A target that resolved but cannot be re-read (deleted between the two
+    // steps, or unreadable) keeps the historic "not broken" answer rather than
+    // inventing a broken anchor out of an I/O failure.
+    sections
+        .as_deref()
+        .map_or((false, None), |s| verdict(s, fragment))
+}
+
 /// Strip hyalo's internal `(?i)` prefix out of a regex engine error message
 /// and re-align the caret line beneath it (L-6).
 ///
@@ -195,6 +238,11 @@ pub fn find(
 
     // Canonicalize the vault directory for link resolution
     let canonical_dir = discovery::canonicalize_vault_dir(dir)?;
+
+    // NAMED-3 (iter-273): headings of link targets the index does not carry,
+    // read from disk at most once each. Empty — and never touched — on the
+    // vault-sweep path, where every target is already indexed.
+    let anchor_sections_cache: AnchorSectionsCache = std::cell::RefCell::new(HashMap::new());
 
     // Rewrite each --file argument to its vault-relative form when it is an
     // absolute path inside the vault (mirrors what `set --file` etc. do via
@@ -922,16 +970,24 @@ pub fn find(
                         // headings come from the index entry (zero file reads on
                         // the index path; already-scanned sections on disk scan).
                         // `^block-id` fragments are skipped by the matcher.
-                        let broken_anchor = match (&path, &link.fragment) {
-                            (Some(target_path), Some(fragment)) => {
-                                index.get(target_path).is_some_and(|target_entry| {
-                                    !hyalo_core::anchor::fragment_matches_headings(
-                                        fragment,
-                                        &target_entry.sections,
-                                    )
-                                })
-                            }
-                            _ => false,
+                        //
+                        // NAMED-3 (iter-273, BUG-9): when `--file` / `--glob`
+                        // narrowed the scan, the *target* is usually not in
+                        // the index and the verdict used to silently default
+                        // to "fine" — so the same broken anchor reported by
+                        // the vault sweep vanished when the caller named the
+                        // file it lives in. `anchor_verdict` falls back to one
+                        // memoized read of the target file, so all four
+                        // spellings agree.
+                        let (broken_anchor, suggested_fragment) = match (&path, &link.fragment) {
+                            (Some(target_path), Some(fragment)) => anchor_verdict(
+                                index,
+                                &anchor_sections_cache,
+                                &canonical_dir,
+                                target_path,
+                                fragment,
+                            ),
+                            _ => (false, None),
                         };
                         // iter-193: a target that walks above the vault root
                         // is out of scope, not broken — flag it so
@@ -946,24 +1002,14 @@ pub fn find(
                         // iter-261 (UX-6): the reported bucket —
                         // wikilink/embed/markdown/external/attachment.
                         let kind = LinkKindLabel::classify(link, path.as_deref());
-                        // DEC-268 (iter-261): a dead fragment that is the
-                        // prefix of exactly one heading in the target file gets
-                        // the full heading text as a suggestion — the
-                        // `[[decision-log#DEC-068]]` shape. Reported, never
-                        // applied: an automatic prefix match would silently
-                        // paper over a typo.
-                        let suggested_fragment = match (broken_anchor, &path, &link.fragment) {
-                            (true, Some(target_path), Some(fragment)) => index
-                                .get(target_path)
-                                .and_then(|target_entry| {
-                                    hyalo_core::anchor::unique_heading_by_prefix(
-                                        fragment,
-                                        &target_entry.sections,
-                                    )
-                                })
-                                .map(str::to_owned),
-                            _ => None,
-                        };
+                        // DEC-268 (iter-261): `suggested_fragment` — the full
+                        // heading text when the dead fragment is the prefix of
+                        // exactly one heading in the target file — is computed
+                        // by `anchor_verdict` alongside the verdict itself, so
+                        // the two can never be derived from different section
+                        // lists. Reported, never applied: an automatic prefix
+                        // match would silently paper over a typo.
+                        //
                         // iter-272 Part B (DEC-296): say so when the target
                         // only resolved because a note declares it as a
                         // frontmatter alias — the reader otherwise has no way

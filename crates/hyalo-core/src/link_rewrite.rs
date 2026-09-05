@@ -300,7 +300,7 @@ pub fn plan_mv(
     all_skipped_frontmatter.extend(scan_split_frontmatter_links(
         dir,
         &split_candidates,
-        &by_source,
+        &|p: &Path| by_source.contains_key(p),
         old_rel,
         old_stem,
         &case_index,
@@ -1124,9 +1124,9 @@ pub fn plan_batch_mv(
     renames: &[(String, String)],
     site_prefix: Option<&str>,
     allow_ambiguous: bool,
-) -> Result<Vec<RewritePlan>> {
+) -> Result<BatchMvPlanResult> {
     if renames.is_empty() {
-        return Ok(vec![]);
+        return Ok(BatchMvPlanResult::default());
     }
 
     // Build the link graph once.
@@ -1143,6 +1143,9 @@ pub fn plan_batch_mv(
     }
     let graph = build.graph;
     let case_index = build.case_index;
+    // MV-2 (iter-273): the same candidate marker `plan_mv` uses, produced by
+    // the one graph build this batch already pays for.
+    let split_candidates = build.split_frontmatter_candidates;
 
     // Build a full rename map: old_stem/old_rel → new_rel for fast lookups.
     // Stored as (old_rel, old_stem, new_rel, new_stem, old_dir, new_dir).
@@ -1378,7 +1381,40 @@ pub fn plan_batch_mv(
         }
     }
 
-    Ok(plans.into_values().collect())
+    // --- Step 3 (MV-2, iter-273): the widened split-link sweep ---
+    // A frontmatter `[[…]]` that straddles a line break is not a graph edge,
+    // so the file holding it never appears in `source_to_renames` and step 1
+    // never opened it. Single-file `mv` has swept for those since iteration
+    // 269; batch `mv` did not, which meant `mv --glob` could leave a dangling
+    // link behind with nothing on stderr. One pass over the candidate list the
+    // graph build already produced closes the gap for every move at once.
+    let skipped_frontmatter = scan_split_frontmatter_links_batch(
+        dir,
+        &split_candidates,
+        &|p: &Path| source_to_renames.contains_key(&p.to_string_lossy().replace('\\', "/")),
+        &rename_info
+            .iter()
+            .map(|(old_rel, old_stem, ..)| (old_rel.clone(), old_stem.clone()))
+            .collect::<Vec<_>>(),
+        &case_index,
+    );
+
+    Ok(BatchMvPlanResult {
+        plans: plans.into_values().collect(),
+        skipped_frontmatter,
+    })
+}
+
+/// Result of [`plan_batch_mv`] (iter-273, MV-2).
+#[derive(Debug, Default)]
+pub struct BatchMvPlanResult {
+    /// Rewrite plans for every file the batch will modify.
+    pub plans: Vec<RewritePlan>,
+    /// Frontmatter wikilinks left untouched because their brackets span a line
+    /// break, keyed by the `old_rel` of the move that named them — so each
+    /// entry in the batch's `moves` array can carry its own report, the same
+    /// figure single-file `mv` puts in `frontmatter_links_skipped`.
+    pub skipped_frontmatter: HashMap<String, Vec<SkippedFrontmatterLink>>,
 }
 
 /// A single `[[...]]` occurrence found on a YAML frontmatter line.
@@ -1528,34 +1564,70 @@ fn split_frontmatter_wikilink(
 fn scan_split_frontmatter_links(
     dir: &Path,
     candidates: &[PathBuf],
-    already_scanned: &HashMap<PathBuf, Vec<&crate::link_graph::BacklinkEntry>>,
+    already_scanned: &dyn Fn(&Path) -> bool,
     old_rel: &str,
     old_stem: &str,
     case_index: &CaseInsensitiveIndex,
 ) -> Vec<SkippedFrontmatterLink> {
-    let old_rel_norm = old_rel.replace('\\', "/");
-    let mut found = Vec::new();
+    let moves = [(old_rel.to_owned(), old_stem.to_owned())];
+    scan_split_frontmatter_links_batch(dir, candidates, already_scanned, &moves, case_index)
+        .remove(old_rel)
+        .unwrap_or_default()
+}
+
+/// The many-moves form of [`scan_split_frontmatter_links`] (iter-273, MV-2).
+///
+/// Batch `mv` used to skip this sweep entirely, so a split frontmatter link
+/// naming a moved file was left dangling *and* unreported — the single-file
+/// path's guarantee did not survive `--glob`. Running the single-move sweep
+/// once per rename would re-read every candidate N times; this reads each
+/// candidate's frontmatter block **once** and tests every move against it, so
+/// the sweep costs the same for one move as for two hundred. Since the
+/// candidate list is normally empty (a split `[[` in frontmatter is rare), that
+/// cost is normally zero either way — but the batch case is exactly the one
+/// where "normally" stops being a safe assumption.
+///
+/// Keyed by `old_rel`, so each move can report its own
+/// `frontmatter_links_skipped`.
+fn scan_split_frontmatter_links_batch(
+    dir: &Path,
+    candidates: &[PathBuf],
+    already_scanned: &dyn Fn(&Path) -> bool,
+    moves: &[(String, String)],
+    case_index: &CaseInsensitiveIndex,
+) -> HashMap<String, Vec<SkippedFrontmatterLink>> {
+    let mut found: HashMap<String, Vec<SkippedFrontmatterLink>> = HashMap::new();
+    if moves.is_empty() {
+        return found;
+    }
     for rel_path in candidates {
-        if already_scanned.contains_key(rel_path) {
+        if already_scanned(rel_path) {
             continue;
         }
         let rel_norm = rel_path.to_string_lossy().replace('\\', "/");
-        if rel_norm == old_rel_norm {
-            continue;
-        }
         let Ok(Some(raw)) = crate::frontmatter::read_frontmatter_raw(&dir.join(rel_path)) else {
             continue;
         };
         for (idx, (line, rest)) in lines_with_rest(&raw).enumerate() {
-            if let Some(target) =
-                split_frontmatter_wikilink(line, rest, old_rel, old_stem, Some(case_index))
-            {
-                found.push(SkippedFrontmatterLink {
-                    source: rel_norm.clone(),
-                    // +1 for the opening `---`, +1 to make the index 1-based.
-                    line: idx + 2,
-                    target,
-                });
+            for (old_rel, old_stem) in moves {
+                // A moved file's own frontmatter is rewritten by the outbound
+                // pass, not reported as an unrewritable inbound link.
+                if rel_norm == old_rel.replace('\\', "/") {
+                    continue;
+                }
+                if let Some(target) =
+                    split_frontmatter_wikilink(line, rest, old_rel, old_stem, Some(case_index))
+                {
+                    found
+                        .entry(old_rel.clone())
+                        .or_default()
+                        .push(SkippedFrontmatterLink {
+                            source: rel_norm.clone(),
+                            // +1 for the opening `---`, +1 to make it 1-based.
+                            line: idx + 2,
+                            target,
+                        });
+                }
             }
         }
     }

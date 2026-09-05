@@ -51,6 +51,7 @@ mod iteration267_help_hints_text;
 mod iteration269_carry_over_fixes;
 mod iteration271_write_rewrite_safety;
 mod iteration272_resolution_completeness;
+mod iteration273_named_file_honesty;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

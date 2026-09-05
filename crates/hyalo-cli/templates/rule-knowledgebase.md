@@ -171,7 +171,25 @@ Prefer `hyalo` CLI for operations on files in this directory:
   instead of silently rewriting the prose to the bare target.
 - **Move/rename (single file)**: `hyalo mv old.md --to new.md` (rewrites links across the vault)
 - **Move/rename (batch)**: `hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/` (dry-run by default; add `--apply` to commit; builds link graph once for all files; use `--on-conflict=skip` to skip collisions)
+- **`mv` destinations resolve like sources** (DEC-304, iter-273): a CWD-relative destination
+  carrying the configured vault dir works from the project root — with `dir = "kb"`,
+  `hyalo mv kb/a.md kb/sub/a.md` lands at `kb/sub/a.md`, not `kb/kb/sub/a.md`. All four
+  destination forms (positional `DEST`, `--to <file>`, `--to <dir>/`, batch) behave the same,
+  and a `--to dir/` whose directory does not exist says so instead of suggesting `dir/.md`.
+  `--on-conflict` takes `error` (default) or `skip` and nothing else — an unknown policy is a
+  usage error (DEC-305) — and `skip` works in single-file mode too: the source stays put and is
+  reported under `skipped` at exit 0. Batch `mv` runs the split-frontmatter-link sweep once for
+  the whole batch and reports each move's own `moves[].frontmatter_links_skipped` (DEC-306).
 - **Create new file from schema**: `hyalo new --type <name> --file <vault-relative-path>` (scaffold a skeleton; then run `hyalo lint --file <path>` to see what to fill in; add `--index` to patch an existing `.hyalo-index` in place so subsequent `--index` queries see the new file without a full rebuild). `--dry-run` prints the scaffold and writes nothing — not even the parent directory (DEC-285, iter-267). Placeholders are deliberately un-fillable: a required `string` gets `TBD`, a required `number`/`date`/`datetime`/`boolean` with no schema `default` is written **empty** (`rating:`), which lint reports as `required property must not be empty`; a schema `default` (including `$today`) is emitted verbatim. `new` takes no `--property`: it writes only what the schema declares, so chain `hyalo new --type <name> --file <path> && hyalo set <path> --property k=v` to set anything else
+- **A named path is a promise** (DEC-301, iter-273): a `--file` or positional path whose YAML
+  frontmatter will not parse fails the run (exit 1, the diagnostic in `cause`, a
+  `lint --rule HYALO005` hint) instead of returning an empty result set; a `--files-from` list
+  keeps batch semantics and counts it at exit 0. With `--index`, a named path the snapshot has
+  never seen is read from disk for that run, so a note created since the last `create-index` is
+  never invisible; a path in neither place is still `file not found`, exit 1. `--file`/`--glob`
+  now keep `broken_anchor` and `suggested_fragment`, so the four ways of selecting one file
+  return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
+  error is HYALO005's finding and is otherwise a counted skip.
 - **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
 - **Diff-aware lint (CI)**: `git diff --name-only origin/main...HEAD | hyalo lint --files-from -` — scope any command to a caller-supplied file list; non-.md paths and deleted files are silently skipped (counters in JSON envelope). Three-dot `origin/main...HEAD` (merge-base) keeps a stale branch scoped to files it changed. A path named explicitly — positionally, with `--file`, or through `--files-from` — is linted **even when `[lint] ignore` matches it** (DEC-284, iter-267), which is what a diff gate wants; `--glob` and the bare vault sweep still honour the ignore list, so select paths with `--glob` when you want it applied
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
@@ -247,6 +265,15 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: HYALO006 does not check anchors (see above), so use `hyalo find --broken-links --strict` instead — exits 1 if any file has a broken target or broken anchor, 0 otherwise. `--strict` is a general `find` flag (works with any filter, e.g. `find --property status=draft --strict`), not anchor-specific. `hyalo links fix` also gets a one-line stderr-adjacent note ("N broken anchor(s) — see `find --broken-links`") when anchors are broken but targets are not, and `hyalo summary`'s `links.broken_anchors` figure is distinct from `links.broken` (link-count vs file-count units, so don't expect the raw numbers to match).
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`
+
+- **The index says when it is stale** (DEC-302/DEC-303, iter-273): when the directory-mtime
+  probe finds nothing, hyalo compares each indexed file's recorded mtime against disk and names
+  the first drift in `index older than vault (<file> changed on disk …)` — this is what catches
+  an in-place overwrite, which moves no directory's mtime. It costs one `stat` per indexed file
+  (~0.03 s over MDN's 14,375) and only runs on a vault the cheap probe called clean; an edit
+  inside the same whole second as the snapshot is still invisible. A snapshot also records how
+  many files `[scan] exclude` dropped when it was built, so `summary --index` reports the same
+  `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
 
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).

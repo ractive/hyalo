@@ -162,6 +162,35 @@ pub(super) fn lint_one_file_extended(
     let properties = match hyalo_core::frontmatter::read_frontmatter(full_path) {
         Ok(p) => p,
         Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
+            // NAMED-4 (iter-273, BUG-20): a parse error is HYALO005's finding
+            // and nobody else's. It used to be emitted regardless of `--rule`,
+            // so `lint --rule MD018 --count` on a vault with Templater
+            // templates answered "1" — a count of MD018 hits that contained no
+            // MD018 hit, and `--rule HYALO006` listed 28 of them. Under an
+            // explicit filter that does not name HYALO005 the file becomes a
+            // counted skip instead (DEC-278's one-line summary), which is what
+            // "this file could not be linted" already means everywhere else.
+            if !rule_filter.is_empty()
+                && !rule_filter
+                    .iter()
+                    .any(|r| r == RULE_ID_FRONTMATTER_PARSE_ERROR)
+            {
+                hyalo_core::warn::record_skip(
+                    rel_path,
+                    terse_root_cause(&e),
+                    hyalo_core::warn::SkipKind::Frontmatter,
+                );
+                return Ok(PerFileLintResult {
+                    rel_path: rel_path.to_owned(),
+                    doc_type: None,
+                    violations_by_rule: indexmap::IndexMap::new(),
+                    total_violations: 0,
+                    body_modified: false,
+                    fix_actions: Vec::new(),
+                    body_fix_outcomes: Vec::new(),
+                    post_fix_schema_remaining: None,
+                });
+            }
             // Malformed frontmatter — report as a single error-severity
             // violation under the stable HYALO005 rule id so it shows up in
             // lint output, `lint-rules list`, and CI. A file whose frontmatter

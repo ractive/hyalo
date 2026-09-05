@@ -2,7 +2,7 @@
 type: backlog
 title: "mv resolves the source path against CWD but the destination against the vault, nesting the vault dir"
 date: 2026-09-04
-status: planned
+status: done
 priority: medium
 origin: "plan consolidation session after the 261–268 loop, 2026-09-04"
 ---
