@@ -2,13 +2,13 @@
 use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::case_index::CaseInsensitiveIndex;
-use crate::link_graph::strip_site_prefix;
 use crate::util::levenshtein;
 
 /// Process-global set of `[scan] include` globs.
@@ -1701,7 +1701,17 @@ fn classify_link(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> LinkResolution {
-    let exact = resolve_target(canonical_dir, resolved_target, site_prefix, None);
+    // iter-278 (ALLOC-1/ALLOC-3): the *literal* probe — "is this link already
+    // correct as written?" — is the single hottest question hyalo asks: one
+    // per link, up to three candidate paths each, and until now every one of
+    // them a `stat` plus a `realpath`, because passing `None` here was the only
+    // way to ask for the uncanonicalized answer. On MDN with
+    // `--site-prefix en-US/docs` it was 930 of the 979 samples of an indexed
+    // `summary` (95 %). `resolve_target_literal` keeps those semantics — the
+    // link's own spelling is what comes back, no stem or alias lookup runs —
+    // and lets a *complete* index answer existence from memory. With no index,
+    // or one scoped to `--file`, it falls back to the same filesystem probes.
+    let exact = resolve_target_literal(canonical_dir, resolved_target, site_prefix, case_index);
 
     if let Some(exact_str) = exact {
         // Link resolves exactly. If we have a case index, also check whether the
@@ -1979,7 +1989,10 @@ fn indexed_existence(rel_path: &str, case_index: Option<&CaseInsensitiveIndex>) 
     let Some(idx) = case_index.filter(|i| i.is_complete()) else {
         return Existence::Unknown;
     };
-    if idx.contains_path(rel_path) {
+    // iter-278: one fold per probe instead of one per lookup — `contains_path`,
+    // `lookup_unique` and `has_any_case` all key on the same lowercased path.
+    let folded = crate::case_index::fold_key(rel_path);
+    if idx.contains_path_folded(&folded, rel_path) {
         return Existence::Present(rel_path.to_owned());
     }
     // The case-folded hit is the *common* case on a static-site corpus: MDN
@@ -1988,13 +2001,87 @@ fn indexed_existence(rel_path: &str, case_index: Option<&CaseInsensitiveIndex>) 
     // and the index fallback below it answer with this same canonical path
     // whenever `lookup_unique` succeeds, so taking it here changes no verdict
     // and skips a `stat` plus a `canonicalize` per candidate.
-    if let Some(canonical) = idx.lookup_unique(rel_path) {
+    if let Some(canonical) = idx.lookup_unique_folded(&folded) {
         return Existence::Present(canonical.to_owned());
     }
-    if idx.has_any_case(rel_path) {
+    if idx.has_any_case_folded(&folded) {
         Existence::Unknown
     } else {
         Existence::Absent
+    }
+}
+
+/// Shorten `value` to `len` bytes, keeping it borrowed when it already is
+/// (iter-278).
+///
+/// `String::truncate` needs an owned buffer; a `Cow` that has not been forced
+/// to allocate yet re-slices instead, which is what every unremarkable link
+/// target does.
+fn truncate_cow(value: &mut Cow<'_, str>, len: usize) {
+    if len >= value.len() {
+        return;
+    }
+    match value {
+        Cow::Borrowed(s) => *value = Cow::Borrowed(&s[..len]),
+        Cow::Owned(s) => s.truncate(len),
+    }
+}
+
+/// What a vault-wide index can say about a path when the caller wants the
+/// **literal** verdict — "would opening this exact spelling succeed?" — rather
+/// than the canonicalizing one [`indexed_existence`] gives (iter-278).
+///
+/// This is the answer `resolve_target(.., case_index: None)` has always
+/// computed with a `stat` plus a `realpath`, and it is by far the hottest
+/// question hyalo asks: [`classify_link`] runs it for every link in the vault
+/// to decide whether the link is *already* correct before consulting the case
+/// index. On MDN with `--site-prefix en-US/docs` that was 95 % of an indexed
+/// `summary` (iter-278, ALLOC-1) — iteration 277 removed the syscalls from the
+/// *indexed* probe (BUG-13) and left this one untouched.
+///
+/// Only a complete index may answer, and it answers exactly what the
+/// filesystem would:
+///
+/// - the exact spelling is in the index → present, reported as written;
+/// - some casing of it is, and the volume folds case → the literal probe would
+///   open that file and report the author's spelling, so: present as written;
+/// - some casing of it is, and the volume does not fold case → absent;
+/// - no casing of it is → absent on either kind of volume.
+fn literal_existence(
+    canonical_dir: &Path,
+    rel_path: &str,
+    existence_index: Option<&CaseInsensitiveIndex>,
+) -> Existence {
+    let Some(idx) = existence_index.filter(|i| i.is_complete()) else {
+        return Existence::Unknown;
+    };
+    let folded = crate::case_index::fold_key(rel_path);
+    if idx.contains_path_folded(&folded, rel_path) {
+        return Existence::Present(rel_path.to_owned());
+    }
+    if idx.has_any_case_folded(&folded) && crate::case_index::fs_folds_case_cached(canonical_dir) {
+        return Existence::Present(rel_path.to_owned());
+    }
+    Existence::Absent
+}
+
+/// The existence verdict for one candidate path under the resolver's two
+/// indexes (iter-278).
+///
+/// `case_index` — when present — both proves existence and supplies the
+/// canonical on-disk spelling, exactly as it has since iteration 277. When it
+/// is `None` the caller wants the literal verdict, and `existence_index` (if
+/// any) answers it from memory instead of from the filesystem.
+fn probe_existence(
+    canonical_dir: &Path,
+    rel_path: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+    existence_index: Option<&CaseInsensitiveIndex>,
+) -> Existence {
+    if case_index.is_some() {
+        indexed_existence(rel_path, case_index)
+    } else {
+        literal_existence(canonical_dir, rel_path, existence_index)
     }
 }
 
@@ -2002,8 +2089,9 @@ fn resolve_candidate_path(
     canonical_dir: &Path,
     candidate: &str,
     case_index: Option<&CaseInsensitiveIndex>,
+    existence_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
-    match indexed_existence(candidate, case_index) {
+    match probe_existence(canonical_dir, candidate, case_index, existence_index) {
         // The vault-wide index already resolves this path, so the file exists
         // and is inside the vault by construction — no `stat`, no
         // `canonicalize` (iter-277, BUG-13).
@@ -2091,6 +2179,40 @@ pub fn resolve_target(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
+    resolve_target_inner(canonical_dir, target, site_prefix, case_index, None)
+}
+
+/// [`resolve_target`] with the **literal** filesystem semantics — the answer
+/// `resolve_target(.., None)` gives — but with `existence_index` allowed to
+/// supply the existence verdict from memory instead of from a `stat` plus a
+/// `realpath` per candidate (iter-278).
+///
+/// The resolved path is still the caller's own spelling: the index is consulted
+/// for existence only, never to canonicalize casing or to reach a bare stem, so
+/// a caller that wants the canonicalizing answer keeps calling
+/// [`resolve_target`] with the index in `case_index`. Passing `None` (or an
+/// index that does not cover the whole vault) falls back to the filesystem
+/// probes, so nothing changes for a `--file`-scoped run.
+///
+/// See [`literal_existence`] for the verdict table and why it matches what the
+/// filesystem would have said on either kind of volume.
+#[must_use]
+pub fn resolve_target_literal(
+    canonical_dir: &Path,
+    target: &str,
+    site_prefix: Option<&str>,
+    existence_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
+    resolve_target_inner(canonical_dir, target, site_prefix, None, existence_index)
+}
+
+fn resolve_target_inner(
+    canonical_dir: &Path,
+    target: &str,
+    site_prefix: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+    existence_index: Option<&CaseInsensitiveIndex>,
+) -> Option<String> {
     // iter-275 (BUG-23, DEC-310): Obsidian trims a wikilink target before
     // resolving it, so `[[ Leah Ferguson ]]` opens the same note `[[Leah
     // Ferguson]]` does. The written text is kept on the link (`target`
@@ -2100,30 +2222,41 @@ pub fn resolve_target(
         return None;
     }
 
-    // Normalize backslashes to forward slashes
-    let mut target = target.replace('\\', "/");
+    // iter-278 (ALLOC-2): every normalization step below borrows until one of
+    // them actually has something to change. A vault whose links carry no
+    // backslash, no `.` segment and no percent-escape — every corpus but a
+    // Windows-authored one — walks the whole sequence without allocating.
+    //
+    // Normalize backslashes to forward slashes.
+    let mut target: Cow<'_, str> = if target.contains('\\') {
+        Cow::Owned(target.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(target)
+    };
 
     // Strip fragment (#...) and query string (?...) before resolution.
     // These are URL components that don't correspond to filesystem paths.
-    if let Some(pos) = target.find('#') {
-        target.truncate(pos);
-    }
-    if let Some(pos) = target.find('?') {
-        target.truncate(pos);
-    }
     // `[[a #Heading]]` leaves `a ` behind once the fragment is split off; trim
     // again so the space before the `#` is not part of the filename.
-    let trimmed_len = target.trim_end().len();
-    target.truncate(trimmed_len);
+    let head_len = target
+        .find(['#', '?'])
+        .map_or(target.len(), |pos| target[..pos].trim_end().len());
+    truncate_cow(&mut target, head_len);
     // iter-275 (BUG-37): `[[./a]]` and `[[a]]` name the same file, so both must
     // report the same canonical path. `.` segments are pure syntax — dropping
     // them here (never `..`, which the traversal guard below still rejects)
     // keeps `path` canonical instead of echoing the author's prefix back.
     while target.starts_with("./") {
-        target.drain(..2);
+        target = match target {
+            Cow::Borrowed(s) => Cow::Borrowed(&s[2..]),
+            Cow::Owned(mut s) => {
+                s.drain(..2);
+                Cow::Owned(s)
+            }
+        };
     }
     while target.contains("/./") {
-        target = target.replace("/./", "/");
+        target = Cow::Owned(target.replace("/./", "/"));
     }
     if target.is_empty() {
         return None;
@@ -2134,16 +2267,18 @@ pub fn resolve_target(
     // this only affects markdown-style destinations. Invalid or non-UTF-8
     // escape sequences keep the literal text (see `percent_decode_path`).
     if let Some(decoded) = percent_decode_path(&target) {
-        target = decoded;
+        target = Cow::Owned(decoded);
     }
     // Remember whether the author wrote a trailing slash before it is stripped:
     // `/foo/` is unambiguously a *directory* reference, so the `.md`-append
     // attempt below must not apply to it (iter-203).
     let trailing_slash = target.len() > 1 && target.ends_with('/');
     // Strip trailing slash (e.g. "docs/page/" → "docs/page")
-    while target.ends_with('/') && target.len() > 1 {
-        target.pop();
+    let mut stripped_len = target.len();
+    while stripped_len > 1 && target.as_bytes()[stripped_len - 1] == b'/' {
+        stripped_len -= 1;
     }
+    truncate_cow(&mut target, stripped_len);
     if target.is_empty() {
         return None;
     }
@@ -2157,41 +2292,48 @@ pub fn resolve_target(
     // was "resolving" to `graphql/reference/actions.md` at confidence 1.0 and
     // getting rewritten by a plain `links fix --apply`).
     let site_absolute = target.starts_with('/');
-    let target = if target.starts_with('/') {
-        let stripped = strip_site_prefix(&target, site_prefix);
+    // `normalized` owns whatever the steps above had to build; `target` is the
+    // view resolution works with from here on, so the site-prefix strip is a
+    // slice rather than a third `String` (iter-278, ALLOC-2).
+    let normalized = target;
+    let target: &str = if site_absolute {
+        let stripped = crate::link_graph::strip_site_prefix_ref(&normalized, site_prefix);
         // Reject traversal even after prefix stripping (e.g. `/docs/../../etc/passwd`)
-        if has_parent_traversal(&stripped) {
+        if has_parent_traversal(stripped) {
             return None;
         }
         stripped
     } else {
-        if has_parent_traversal(&target) || Path::new(&target).is_absolute() {
+        if has_parent_traversal(&normalized) || Path::new(normalized.as_ref()).is_absolute() {
             return None;
         }
-        target
+        &normalized
     };
 
     // iter-277 (BUG-13): when the case index covers the whole vault it *is*
     // the file set, so existence is a hash lookup rather than a `stat` plus a
     // `canonicalize`. On MDN with `--site-prefix en-US/docs` almost every
     // site-absolute link probed three paths that all had to go to disk.
-    match indexed_existence(&target, case_index) {
+    // iter-278: the literal probe — `case_index: None`, which `classify_link`
+    // runs for every link in the vault — answers from `existence_index` the
+    // same way.
+    match probe_existence(canonical_dir, target, case_index, existence_index) {
         Existence::Present(path) => return Some(path),
         Existence::Absent => {
             // Proof of absence for this literal path only; the `.md` /
             // `/index.md` and bare-stem fallbacks below still apply.
         }
         Existence::Unknown => {
-            let full = canonical_dir.join(&target);
+            let full = canonical_dir.join(target);
             if full.is_file() {
                 // Ok(true) = within vault; Ok(false) or Err = reject
                 if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
                     if let Some(idx) = case_index
-                        && let Some(canonical_path) = idx.lookup_unique(&target)
+                        && let Some(canonical_path) = idx.lookup_unique(target)
                     {
                         return Some(canonical_path.to_owned());
                     }
-                    return Some(target.clone());
+                    return Some(target.to_owned());
                 }
                 return None;
             }
@@ -2200,7 +2342,7 @@ pub fn resolve_target(
 
     // Exact literal path does not exist. Try case-insensitive index lookup.
     if let Some(idx) = case_index
-        && let Some(canonical_path) = idx.lookup_unique(&target)
+        && let Some(canonical_path) = idx.lookup_unique(target)
     {
         // Verify the resolved path is within vault bounds.
         let full_resolved = canonical_dir.join(canonical_path);
@@ -2209,7 +2351,7 @@ pub fn resolve_target(
         }
     }
 
-    let target_has_md_ext = std::path::Path::new(&target)
+    let target_has_md_ext = std::path::Path::new(target)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
 
@@ -2234,15 +2376,23 @@ pub fn resolve_target(
         // concrete path beats a fuzzy basename search. Unlike that fallback,
         // the directory-index attempt also applies to site-absolute targets —
         // resolving `/foo` to `foo/index.md` is a path lookup, not a guess.
-        let with_ext = format!("{target}.md");
-        let dir_index = format!("{target}/{DIRECTORY_INDEX_FILE}");
-        let ordered = if trailing_slash {
-            [dir_index.as_str(), with_ext.as_str()]
+        //
+        // iter-278 (ALLOC-2): both spellings share one buffer, sized once for
+        // the longer of them, instead of a `format!` per candidate.
+        let mut candidate = String::with_capacity(target.len() + 1 + DIRECTORY_INDEX_FILE.len());
+        let suffixes: [&str; 2] = if trailing_slash {
+            ["/index.md", ".md"]
         } else {
-            [with_ext.as_str(), dir_index.as_str()]
+            [".md", "/index.md"]
         };
-        for candidate in ordered {
-            if let Some(hit) = resolve_candidate_path(canonical_dir, candidate, case_index) {
+        debug_assert_eq!(DIRECTORY_INDEX_FILE, "index.md");
+        for suffix in suffixes {
+            candidate.clear();
+            candidate.push_str(target);
+            candidate.push_str(suffix);
+            if let Some(hit) =
+                resolve_candidate_path(canonical_dir, &candidate, case_index, existence_index)
+            {
                 return Some(hit);
             }
         }
@@ -2266,13 +2416,13 @@ pub fn resolve_target(
         && let Some(idx) = case_index
     {
         // Try the target as-is (could already be a stem or have .md).
-        let stem = if Path::new(target.as_str())
+        let stem = if Path::new(target)
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
         {
             &target[..target.len() - 3]
         } else {
-            &target
+            target
         };
         if let Some(canonical_path) = idx.lookup_stem(stem) {
             let full_resolved = canonical_dir.join(canonical_path);

@@ -87,6 +87,21 @@ pub struct CaseInsensitiveIndex {
     complete: bool,
 }
 
+/// The map key for `s`, borrowed when `s` is already the key (iter-278).
+///
+/// Every lookup in this index is keyed by the ASCII-lowercased path, and the
+/// three probes `resolve_target` runs per link used to build that key three
+/// times over. A path that carries no ASCII uppercase byte — every on-disk
+/// path in a lowercase static-site corpus, and every candidate derived from
+/// one — already *is* its own key, so the common case allocates nothing.
+pub(crate) fn fold_key(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        std::borrow::Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 impl CaseInsensitiveIndex {
     /// Create an empty index with case-insensitive path lookups disabled.
     /// Stem lookups are always active.
@@ -132,7 +147,14 @@ impl CaseInsensitiveIndex {
     /// volume after an exact-path miss.
     #[must_use]
     pub fn has_any_case(&self, rel_path: &str) -> bool {
-        self.map.contains_key(&rel_path.to_ascii_lowercase())
+        self.has_any_case_folded(&fold_key(rel_path))
+    }
+
+    /// [`has_any_case`](Self::has_any_case) against a key the caller already
+    /// folded with [`fold_key`] (iter-278).
+    #[must_use]
+    pub(crate) fn has_any_case_folded(&self, folded: &str) -> bool {
+        self.map.contains_key(folded)
     }
 
     /// Enable or disable case-insensitive path lookups.
@@ -191,11 +213,16 @@ impl CaseInsensitiveIndex {
     /// Returns `None` when case-insensitive path lookups are disabled on this
     /// index (see [`set_case_insensitive_paths`]).
     pub fn lookup_unique(&self, rel_path: &str) -> Option<&str> {
+        self.lookup_unique_folded(&fold_key(rel_path))
+    }
+
+    /// [`lookup_unique`](Self::lookup_unique) against a key the caller already
+    /// folded with [`fold_key`] (iter-278).
+    pub(crate) fn lookup_unique_folded(&self, folded: &str) -> Option<&str> {
         if !self.case_insensitive_paths {
             return None;
         }
-        let key = rel_path.to_ascii_lowercase();
-        let candidates = self.map.get(&key)?;
+        let candidates = self.map.get(folded)?;
         if candidates.len() == 1 {
             Some(&candidates[0])
         } else {
@@ -211,8 +238,16 @@ impl CaseInsensitiveIndex {
     /// filesystem hit (iter-203's directory-index backlink keys) use it.
     #[must_use]
     pub fn contains_path(&self, rel_path: &str) -> bool {
+        self.contains_path_folded(&fold_key(rel_path), rel_path)
+    }
+
+    /// [`contains_path`](Self::contains_path) against a key the caller already
+    /// folded with [`fold_key`] (iter-278). `rel_path` is still the exact
+    /// spelling being tested — folding decides the bucket, not the answer.
+    #[must_use]
+    pub(crate) fn contains_path_folded(&self, folded: &str, rel_path: &str) -> bool {
         self.map
-            .get(&rel_path.to_ascii_lowercase())
+            .get(folded)
             .is_some_and(|candidates| candidates.iter().any(|c| c == rel_path))
     }
 
@@ -677,6 +712,33 @@ pub fn probe_case_insensitive_cached(dir: &Path) -> bool {
 
     if let Ok(mut map) = cache.lock() {
         map.insert(key, resolved);
+    }
+    resolved
+}
+
+/// Per-process memo of case sensitivity keyed by an **already canonical**
+/// vault directory (iter-278).
+static CANONICAL_FOLD_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+
+/// Whether the filesystem under an already-canonicalized `canonical_dir` folds
+/// case, memoized without canonicalizing again (iter-278).
+///
+/// [`probe_case_insensitive_cached`] keys its memo on `canonicalize(dir)`, a
+/// `realpath` syscall per call — fine for the handful of config-time callers,
+/// far too expensive for link resolution, which asks the question once per
+/// probed link target. `resolve_target` already receives a pre-canonicalized
+/// vault path (see `canonicalize_vault_dir`), so the key needs no syscall; the
+/// answer itself is still produced by the shared probe, once.
+pub(crate) fn fs_folds_case_cached(canonical_dir: &Path) -> bool {
+    let cache = CANONICAL_FOLD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(map) = cache.lock()
+        && let Some(&cached) = map.get(canonical_dir)
+    {
+        return cached;
+    }
+    let resolved = probe_case_insensitive_cached(canonical_dir);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(canonical_dir.to_path_buf(), resolved);
     }
     resolved
 }
