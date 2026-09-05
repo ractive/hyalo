@@ -8,6 +8,42 @@
 // FileObject dynamic filter builder
 // ---------------------------------------------------------------------------
 
+thread_local! {
+    /// Whether the run asked for broken links specifically (`--broken-links`).
+    ///
+    /// UX-6 (iter-277): text mode used to print every link of every matched
+    /// file, so an MDN page with ninety working links and one dead target
+    /// rendered ninety-one lines and buried the reason it was listed. The
+    /// JSON is deliberately untouched — it already carries `path: null` and
+    /// `broken_anchor` per link, and a consumer filters on those — so the
+    /// selection lives in the text renderer alone.
+    ///
+    /// A thread-local rather than a parameter: the renderer is a recursive
+    /// `serde_json::Value` walk shared by every command, and the flag belongs
+    /// to one command's output pass. One `hyalo` process renders one command's
+    /// results, on one thread, so the value cannot outlive its run.
+    static BROKEN_LINKS_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restrict the rendered `links:` section to the genuinely broken links.
+///
+/// Called by `find` when `--broken-links` filtered the result set.
+pub(crate) fn set_broken_links_only(on: bool) {
+    BROKEN_LINKS_ONLY.with(|c| c.set(on));
+}
+
+/// Whether the `links:` section should be narrowed to broken links.
+fn broken_links_only() -> bool {
+    BROKEN_LINKS_ONLY.with(std::cell::Cell::get)
+}
+
+/// The jq expression selecting only the links `find --broken-links` calls
+/// broken — the same rule the documented `--jq` recipe uses: an external URI
+/// and a resolved attachment are never broken, an out-of-vault target is
+/// reported as such rather than as broken, and a dead `#fragment` counts even
+/// though its target resolved.
+const BROKEN_LINK_SELECT: &str = r##"map(select((.kind != "external" and .kind != "attachment") and ((.path == null and ((.out_of_vault // false) | not)) or (.broken_anchor // false)))) | "##;
+
 /// Build a jaq filter string for a `FileObject` by inspecting which optional
 /// fields are present in the JSON object.
 ///
@@ -124,8 +160,13 @@ pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json:
     // link is written on, the same one `lint`/`backlinks` report. `// 0`
     // guards JSON from a pre-215 hyalo that has no `.line`.
     if map.contains_key("links") {
+        let select = if broken_links_only() {
+            BROKEN_LINK_SELECT
+        } else {
+            ""
+        };
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | SELECT_PLACEHOLDERmap("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)") | join("\n"))" else empty end"##.replace("SELECT_PLACEHOLDER", select),
         );
     }
 

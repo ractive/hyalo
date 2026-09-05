@@ -262,6 +262,11 @@ pub(crate) fn run(
                 needs_stem_map,
                 resolved.as_snapshot(),
             );
+            // UX-6 (iter-277): `--broken-links` narrows the *text* rendering of
+            // each file's `links:` section to the links that made it match.
+            // JSON is untouched — every link is still reported, with its own
+            // `path` / `broken_anchor` verdict.
+            crate::output::set_broken_links_only(broken_links);
             let mut outcome = find(
                 resolved.as_index(),
                 dir,
