@@ -380,6 +380,15 @@ pub(crate) fn set_type(
             Ok(validate_enabled) => {
                 if validate_enabled {
                     toml_changes.push("enable validate_on_write (new schema)".to_owned());
+                    // iter-274 (UX-19): creating the first type flips a switch
+                    // the caller did not ask for and will feel later — from
+                    // here on `set`/`append` REFUSE a value that violates the
+                    // schema instead of writing it. Buried in `toml_changes`
+                    // that reads as a detail; on stderr it reads as the
+                    // behaviour change it is.
+                    crate::warn::note(
+                        "created the [schema] section and set validate_on_write = true — `set`/`append` now refuse values that violate the schema; set it to false in .hyalo.toml to keep writes unchecked",
+                    );
                 }
             }
             Err(msg) => {

@@ -9,7 +9,7 @@
 //! The CLI keeps flag parsing and output formatting only; it re-exports
 //! these items from `commands::lint` for call-site compatibility.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -764,6 +764,13 @@ pub fn validate_properties(
     // (SKILL.md, ADR, CHANGELOG.md) must lint clean. Skip only the `type`
     // requirement in that case; every other required property is still checked.
     let type_satisfied_by_bind = doc_type.is_none() && bound_type.is_some();
+    // iter-274 (UX-6): required properties reported empty here. Their type
+    // constraint is skipped below, because `rating:` (DEC-285's deliberately
+    // un-fillable placeholder for a required number) otherwise produced two
+    // errors for one defect — `required property "rating" must not be empty`
+    // *and* `property "rating" expected number, got null` — and a reader
+    // filling in the number fixes both at once. One defect, one error.
+    let mut required_empty: HashSet<&str> = HashSet::new();
     for req in &effective_schema.required {
         if type_satisfied_by_bind && req == "type" {
             continue;
@@ -785,6 +792,7 @@ pub fn validate_properties(
                 });
             }
             Some(v) if v.is_null() || v.as_array().is_some_and(Vec::is_empty) => {
+                required_empty.insert(req.as_str());
                 violations.push(Violation {
                     severity: Severity::Error,
                     kind: missing_kind,
@@ -844,12 +852,17 @@ pub fn validate_properties(
             || (name == "okf_version" && is_bundle_root_index(rel_path));
 
         if let Some(constraint) = effective_schema.properties.get(name.as_str()) {
-            violations.extend(validate_constraint(
-                name,
-                value,
-                constraint,
-                &mut regex_cache,
-            ));
+            // UX-6: an empty required property has already been reported as
+            // empty; re-reporting it as a type violation is the same defect
+            // twice, and a `--fix` reader chasing two messages fixes one thing.
+            if !required_empty.contains(name.as_str()) {
+                violations.extend(validate_constraint(
+                    name,
+                    value,
+                    constraint,
+                    &mut regex_cache,
+                ));
+            }
         } else if !effective_schema.properties.is_empty() && !implicitly_accepted {
             // Property not declared in schema — warn only when the schema declares
             // some properties. Schemas that only specify `required` remain
