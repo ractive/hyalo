@@ -614,7 +614,9 @@ pub fn detect_broken_links_from_index(
                     // note declares as an alias is broken *and* exactly
                     // fixable. Planned here, before the fuzzy matcher ever
                     // sees it.
-                    if let Some(declaring) = alias_fix_target(&link.target, case_index) {
+                    if link.kind == LinkKind::Wikilink
+                        && let Some(declaring) = alias_fix_target(&link.target, case_index)
+                    {
                         alias_fixes.push(FixPlan {
                             source: entry.rel_path.clone(),
                             line: *line,
@@ -671,6 +673,11 @@ pub fn detect_broken_links_from_index(
 /// filename beats an alias, DEC-296, and an *ambiguous* filename beats it
 /// too — ALIAS-4), for an unknown alias, and for one two notes claim (which
 /// `stem_classification` reports as ambiguous instead).
+///
+/// Callers apply this to **wikilinks only**: an alias is an Obsidian wikilink
+/// concept, and a markdown `[x](Leah)` names a file relative to its own
+/// folder, so answering it with somebody's alias would be a guess dressed up
+/// as a certainty.
 /// The vault paths a bare, unresolved wikilink target is ambiguous between
 /// (iter-275, ALIAS-5 / BUG-26): two files sharing a stem, or — when no file
 /// carries the stem at all — two notes declaring it as an alias.

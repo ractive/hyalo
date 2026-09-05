@@ -201,11 +201,20 @@ fn part_b_links_fix_proposes_the_alias_backed_rewrite() {
         "Leah Ferguson.md",
         "---\ntitle: Leah Ferguson\naliases:\n  - Leah\n---\n",
     );
-    write(&tmp, "src.md", "See [[Leah]].\n\nAnd [[Leah|the boss]].\n");
+    write(
+        &tmp,
+        "src.md",
+        "See [[Leah]].\n\nAnd [[Leah|the boss]].\n\nBut not [x](Leah).\n",
+    );
 
     let out = run_json(&tmp, &["links", "fix", "--dry-run"]);
     let r = &out["results"];
-    assert_eq!(r["alias_fixes"].as_u64(), Some(2), "{r}");
+    assert_eq!(
+        r["alias_fixes"].as_u64(),
+        Some(2),
+        "wikilinks only — a markdown `[x](Leah)` names a file beside its own \
+         source, so an alias is not an answer for it: {r}"
+    );
     let plans = r["alias_fix_plans"].as_array().unwrap();
     assert_eq!(plans[0]["strategy"], "Alias", "{r}");
     assert_eq!(plans[0]["confidence"].as_f64(), Some(1.0), "{r}");
@@ -221,7 +230,7 @@ fn part_b_links_fix_proposes_the_alias_backed_rewrite() {
     run_json(&tmp, &["links", "fix", "--apply"]);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("src.md")).unwrap(),
-        "See [[Leah Ferguson|Leah]].\n\nAnd [[Leah Ferguson|the boss]].\n"
+        "See [[Leah Ferguson|Leah]].\n\nAnd [[Leah Ferguson|the boss]].\n\nBut not [x](Leah).\n"
     );
 }
 
