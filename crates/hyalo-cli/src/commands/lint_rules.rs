@@ -118,11 +118,21 @@ pub(crate) fn show_rule(
         "effective_severity": format!("{}", eff_sev),
         "autofixable": entry.autofixable,
         "source": entry.source,
+        // iter-274 (UX-14): report what the override actually SETS. A rule
+        // whose `.hyalo.toml` entry pins only the severity used to render
+        // `enabled: null`, which reads as "unknown" rather than "not
+        // overridden" — and the reader then had to know that `effective_enabled`
+        // is the answer. An unset dimension is now simply absent from the
+        // object, so every key present in `override` is a value the config set.
         "override": override_entry.map(|ov| {
-            serde_json::json!({
-                "enabled": ov.enabled(),
-                "severity": ov.severity(),
-            })
+            let mut o = serde_json::Map::new();
+            if let Some(enabled) = ov.enabled() {
+                o.insert("enabled".to_owned(), serde_json::json!(enabled));
+            }
+            if let Some(severity) = ov.severity() {
+                o.insert("severity".to_owned(), serde_json::json!(severity));
+            }
+            serde_json::Value::Object(o)
         }),
     });
     if let Some(act) = activation {

@@ -420,12 +420,24 @@ pub fn lint_files_extended(
             }
         }
 
+        // UX-13: per-rule fixed counts, aggregated over every file — not just
+        // the ones that survived the display cap, so the map agrees with
+        // `total_fixed` rather than with what happens to be printed.
+        let mut rules_fixed: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for f in &output_fix_files {
+            for g in &f.fixed_groups {
+                *rules_fixed.entry(g.rule.clone()).or_insert(0) += g.count;
+            }
+        }
+
         let fix_output = ExtLintFixOutput {
             files: output_fix_files,
             total_fixed: authoritative_total_fixed,
             total_remaining: authoritative_total_remaining,
             total_conflicts: authoritative_total_conflicts,
             rules_fired: authoritative_rules_fired,
+            rules_fixed,
             files_with_violations: total_files_with_violations,
             files_checked: files_checked_total,
             files_truncated,

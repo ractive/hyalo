@@ -783,6 +783,18 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     // value resolved here only decides *which tree* is the target.
     let scope = resolve_scope(dir, cwd);
     let root = scope.root.as_path();
+    // iter-274 (UX-18): a `--dir` naming a directory that does not exist used
+    // to report a tidy list of "skipped (not found)" lines and exit 0 — which
+    // reads as "already clean" for a path that was simply mistyped. A target
+    // tree that is not there is a user error.
+    if !root.is_dir() {
+        return Err(hyalo_core::user_error_with(
+            format!("target directory does not exist: {}", root.display()),
+            Some("pass --dir with a path that exists, or omit it to clean the current directory"
+                .to_owned()),
+            None,
+        ));
+    }
     let mut report = Report::new("deinit", &scope, None);
 
     // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
