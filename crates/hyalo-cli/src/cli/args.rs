@@ -1435,6 +1435,15 @@ element matches. Repeatable (AND).\n\
             - --where-tag T: only mutate files with this tag (nested matching: 'project' matches 'project/backend'). \
 Repeatable (AND).\n\
             SIDE EFFECTS: Modifies matched files on disk (unless --dry-run is passed).\n\
+            COERCION (K=V): the value's YAML type is inferred from the text, in this order — \
+integer (`3`), float (`3.5`; scientific notation counts, so `1e3` is written as `1000.0`), \
+boolean (exactly `true` / `false`), `[[wikilink]]`, bracket list (`[a, b]`, `[]`), else string. \
+Everything else stays a string, including `null` and `~` (the four-character and one-character \
+*strings*, not a YAML null) and `K=` (the empty string). A date is a string too — \
+`due=2026-12-31` is written unquoted and re-reads as a YAML date, but hyalo only parses it as one \
+when the schema declares the property `date`/`datetime`. YAML-1.1 keys that would otherwise read \
+as booleans (`y`, `n`, `yes`, `no`, `on`, `off`) are quoted on output. There is no form that \
+writes a YAML null (DEC-314): `hyalo remove --property K` takes the key out instead.\n\
             FORMATTING: only the lines of the keys you change are rewritten. Every other \
             frontmatter line — quote style, block scalars, flow collections, indentation, \
             blank lines and comments — is preserved byte for byte. A block that cannot be \

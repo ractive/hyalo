@@ -870,7 +870,10 @@ commit = "["
     );
     assert!(malformed[0].contains("invalid regex"), "{malformed:?}");
 
-    // The TOML itself parses fine — only the schema is rejected.
+    // iter-276 (BUG-20): a `[schema]` that does not load is reported as
+    // `malformed: true` too — the schema is gone and validates nothing, which
+    // is the state `malformed` exists to make visible. `schema_error` says it
+    // was the schema and not the whole file, so the two remain distinguishable.
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(["config", "--format", "json", "--jq", ".results.malformed"])
@@ -878,8 +881,18 @@ commit = "["
         .unwrap();
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "false",
-        "the TOML parses; it is the schema that is invalid"
+        "true",
+        "an unloadable [schema] is a malformed config"
+    );
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["config", "--format", "json", "--jq", ".results.schema_error"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("invalid [schema]"),
+        "schema_error carries the diagnostic: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 
     // DEC-290: `set --validate` against an unloadable `[schema]` now refuses.

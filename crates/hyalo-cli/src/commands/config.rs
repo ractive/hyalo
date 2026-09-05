@@ -47,6 +47,14 @@ pub(crate) struct ConfigReport {
     /// `hyalo config` is the one place it is safe to show and continue,
     /// because showing it is the whole point.
     pub dir_out_of_bounds: Option<String>,
+    /// Diagnostic when the file parsed but its `[schema]` section did not
+    /// (BUG-20, iter-276) — an unknown key such as `requried`, or a wrong
+    /// nesting like `[schema.note]`. The schema is dropped, so every
+    /// validating command refuses per DEC-290 while the rest of the config
+    /// stays in effect. Reported as `malformed: true` alongside
+    /// [`Self::malformed`], because "my schema validates nothing" is exactly
+    /// the state `malformed` exists to make visible.
+    pub schema_error: Option<String>,
     /// Current working directory.
     pub cwd: PathBuf,
     /// Resolved vault directory: the effective directory the CLI would use —
@@ -206,6 +214,7 @@ pub(crate) fn collect_config_report(
         config_path,
         raw_contents,
         malformed: resolved.malformed,
+        schema_error: resolved.schema_invalid.clone(),
         dir_salvaged: resolved.dir_salvaged,
         dir_out_of_bounds: resolved.dir_out_of_bounds,
         cwd: cwd.to_path_buf(),
@@ -306,8 +315,13 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             // config file exists but could not be parsed, so every sibling
             // value below is a built-in default; `parse_error` carries the
             // diagnostic that was previously stderr-only.
-            "malformed": report.malformed.is_some(),
-            "parse_error": report.malformed,
+            // A `[schema]` that did not parse counts too (BUG-20, iter-276):
+            // the schema is dropped and validates nothing, which is the same
+            // silent-default state `malformed` exists to expose.
+            // `schema_error` says which of the two it was.
+            "malformed": report.malformed.is_some() || report.schema_error.is_some(),
+            "parse_error": report.malformed.clone().or_else(|| report.schema_error.clone()),
+            "schema_error": report.schema_error,
             // `true` when `dir` below was salvaged from an otherwise
             // unusable file rather than defaulted (NEW-17, dogfood pre3) —
             // meaningful only alongside `malformed: true`.
@@ -477,6 +491,19 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         None => String::new(),
     };
 
+    // BUG-20 (iter-276): the file parsed but `[schema]` did not, so the schema
+    // is empty and validates nothing. Reported as `malformed: true` like a
+    // whole-file parse error, with its own note: every *other* value on the
+    // report is the file's, only the schema is gone.
+    let schema_error_str = match report.schema_error.as_deref() {
+        Some(diagnostic) => format!(
+            "malformed: true\n  {}\n  note: only [schema] was dropped — the rest of the config \
+             is in effect, but lint, find --strict and set --validate refuse until it parses\n",
+            diagnostic.trim_end().replace('\n', "\n  "),
+        ),
+        None => String::new(),
+    };
+
     // H-1 (iter-221): a `dir` refused for resolving outside its own config
     // directory. Distinct from `malformed_str` above — the file parsed fine,
     // but this specific value was refused as a scope-widening attempt, and
@@ -500,7 +527,7 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "{dir_out_of_bounds_str}{malformed_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+        "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
          links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",

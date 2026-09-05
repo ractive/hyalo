@@ -293,16 +293,16 @@ impl SchemaConfig {
             }
         }
 
-        // Auto-add required properties that lack an explicit definition as string.
-        for r in &required {
-            properties
-                .entry(r.clone())
-                .or_insert(PropertyConstraint::String {
-                    pattern: None,
-                    min_length: None,
-                    max_length: None,
-                });
-        }
+        // `required` says "present and not empty" — nothing about the value's
+        // type (DEC-312, iter-276). Until then a required property with no
+        // `[schema.types.<t>.properties.<k>]` block was auto-declared as
+        // `string`, so `required = ["title"]` quietly rejected `title: 2024`
+        // and `title: 2026-09-05` (BUG-42, dogfood v0.22.0) — a constraint the
+        // vault owner never wrote and could not see in `types show`.
+        // `type = "string"` is the explicit opt-in. Required properties stay
+        // out of the undeclared-property warning by name (see
+        // `hyalo_mdlint::schema`), so dropping the synthetic entry does not
+        // make them look undeclared.
 
         // Merge required_sections: default sections first, then type-specific ones.
         let mut required_sections = self.default.required_sections.clone();
@@ -855,8 +855,13 @@ impl TryFrom<RawPropertyConstraint> for PropertyConstraint {
 }
 
 /// Raw TOML shape for a single `[schema.types.<name>]` block.
-/// Intentionally lenient (`serde(default)`) so partial configs are valid.
+///
+/// Every field is `serde(default)` so a partial config is valid, but an
+/// *unknown* key is refused (`deny_unknown_fields`, BUG-20/iter-276): a typo
+/// like `requried` silently produced a type schema with no required
+/// properties at all.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RawTypeSchema {
     #[serde(default)]
     pub required: Vec<String>,
@@ -900,7 +905,14 @@ impl TryFrom<RawTypeSchema> for TypeSchema {
 }
 
 /// Raw TOML shape for the entire `[schema]` section.
+///
+/// `deny_unknown_fields` (BUG-20, iter-276): `requried = ["title"]` used to be
+/// accepted and dropped, leaving a schema that validated nothing while
+/// `lint --strict` exited 0 — the exact failure mode `[scan]` has rejected
+/// since DEC-094. The wrong nesting `[schema.note]` (instead of
+/// `[schema.types.note]`) is caught by the same guard.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RawSchemaConfig {
     #[serde(default)]
     pub default: Option<RawTypeSchema>,
@@ -920,6 +932,11 @@ pub struct RawSchemaConfig {
     /// ```
     #[serde(default)]
     pub bind: Vec<RawSchemaBind>,
+    /// Run schema validation on every `set`/`append`. Read out of the raw TOML
+    /// by the CLI (`extract_schema_validate_on_write`); declared here only so
+    /// `deny_unknown_fields` above does not reject a config that sets it.
+    #[serde(default)]
+    pub validate_on_write: Option<bool>,
 }
 
 /// Raw TOML shape for one `[[schema.bind]]` entry.
@@ -1060,6 +1077,7 @@ required = ["title"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
         assert_eq!(cfg.default.required, vec!["title".to_owned()]);
@@ -1091,6 +1109,7 @@ type = "date"
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1127,6 +1146,7 @@ required = ["date", "status"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1157,6 +1177,7 @@ values = ["planned", "completed"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1184,6 +1205,7 @@ required = ["title"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1207,6 +1229,7 @@ pattern = "^iter-\\d+/"
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1270,6 +1293,7 @@ required = ["title", "date"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1304,6 +1328,7 @@ values = ["active", "archived", "draft"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
@@ -1344,6 +1369,7 @@ values = ["active", "archived", "draft"]
                 types: HashMap::new(),
                 exempt: Vec::new(),
                 bind: Vec::new(),
+                validate_on_write: None,
             });
         SchemaConfig::try_from(raw_schema)
     }
