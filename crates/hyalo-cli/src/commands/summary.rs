@@ -111,6 +111,10 @@ fn differ_only_in_numeric_suffix(a: &str, b: &str) -> bool {
 /// collected during a summary scan.
 ///
 /// `string_prop_values` maps `property_name -> (value -> file_count)`.
+/// Minimum number of files carrying a property before its value
+/// distribution is treated as one (BUG-44, iter-276).
+const MIN_CARRIERS: usize = 10;
+
 fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<String, usize>>) {
     for (prop_name, value_counts) in string_prop_values {
         // Skip properties where no value reaches the dominant threshold —
@@ -123,7 +127,6 @@ fn warn_inconsistent_properties(string_prop_values: &BTreeMap<String, BTreeMap<S
         // BUG-44 (iter-276): a handful of files is not a distribution. Below
         // this many carriers there is no "dominant" value to be a typo *of* —
         // three files out of twelve is a vocabulary, not a consensus.
-        const MIN_CARRIERS: usize = 10;
         if value_counts.values().sum::<usize>() < MIN_CARRIERS {
             continue;
         }

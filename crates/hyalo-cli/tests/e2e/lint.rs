@@ -886,7 +886,13 @@ commit = "["
     );
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["config", "--format", "json", "--jq", ".results.schema_error"])
+        .args([
+            "config",
+            "--format",
+            "json",
+            "--jq",
+            ".results.schema_error",
+        ])
         .output()
         .unwrap();
     assert!(

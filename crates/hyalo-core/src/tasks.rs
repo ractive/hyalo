@@ -42,7 +42,10 @@ fn list_marker_len(trimmed: &str) -> Option<usize> {
         }
         _ => return None,
     };
-    let spaces = trimmed[marker_len..].bytes().take_while(|b| *b == b' ').count();
+    let spaces = trimmed[marker_len..]
+        .bytes()
+        .take_while(|b| *b == b' ')
+        .count();
     (spaces > 0).then_some(marker_len + spaces)
 }
 
@@ -632,6 +635,52 @@ fn build_new_content(original: &str, lines: &[&str], replacements: &[(usize, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- BUG-40 (iter-276): list markers hyalo used to miss
+
+    #[test]
+    fn ordered_and_wide_gap_markers_are_tasks() {
+        for line in [
+            "- [ ] one",
+            "-  [ ] two spaces",
+            "-   [x] three spaces",
+            "1. [ ] ordered dot",
+            "12) [x] ordered paren",
+            "  - [ ] indented",
+            "* [ ] star",
+            "+ [ ] plus",
+            "- [ ]no space after bracket",
+        ] {
+            assert!(
+                detect_task_checkbox(line).is_some(),
+                "{line:?} must be a task"
+            );
+        }
+    }
+
+    #[test]
+    fn lookalike_markers_are_not_tasks() {
+        for line in [
+            "1.5 [ ] not a marker",
+            "-fish [ ] not a marker",
+            "-[ ] no space after the dash",
+            "1234567890. [ ] ten digits",
+            "text - [ ] mid-line",
+        ] {
+            assert!(
+                detect_task_checkbox(line).is_none(),
+                "{line:?} must not be a task"
+            );
+        }
+    }
+
+    #[test]
+    fn toggling_keeps_the_markers_own_spacing() {
+        let (line, info) = mutate_task_line("1.  [ ] wide ordered", 3, 'x').expect("task");
+        assert_eq!(line, "1.  [x] wide ordered");
+        assert_eq!(info.text, "wide ordered");
+    }
+
     use std::fs;
     use tempfile::tempdir;
 

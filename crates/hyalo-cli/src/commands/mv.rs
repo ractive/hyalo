@@ -1055,10 +1055,7 @@ fn validate_target_single(
     // must say the same thing. `--to ../deep/` used to be answered with
     // "destination directory does not exist", which invites the reader to go
     // and create a directory outside the vault.
-    if normalized
-        .split('/')
-        .any(|seg| seg == "..")
-    {
+    if normalized.split('/').any(|seg| seg == "..") {
         let out = crate::output::format_error(
             format,
             "path contains '..' and is rejected",

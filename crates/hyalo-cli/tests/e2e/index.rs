@@ -750,11 +750,19 @@ fn backlinks_with_index_matches_disk_scan() {
 }
 
 // ---------------------------------------------------------------------------
-// Incompatible / garbage index falls back gracefully
+// An index file the caller NAMED is a promise (BUG-11, iter-276)
 // ---------------------------------------------------------------------------
+//
+// Until iteration 276 a garbage `--index-file` was ignored, the full disk scan
+// ran, and `-q` hid the only warning — so a caller who reached for the flag to
+// avoid the scan paid for it anyway and could not tell. `--index-file` now
+// joins `--files-from`, `--dir` and `create-index --output` in DEC-301's
+// contract: a path you name must work. A *missing in-vault* `.hyalo-index`
+// under bare `--index` still falls back (nothing was named), with a `-q`-proof
+// warning — see `bare_index_without_a_snapshot_falls_back_loudly` below.
 
 #[test]
-fn incompatible_index_falls_back_to_disk_scan() {
+fn a_garbage_named_index_is_an_error_not_a_silent_disk_scan() {
     let tmp = setup_vault();
 
     // Write garbage bytes as the "index" file.
@@ -768,31 +776,29 @@ fn incompatible_index_falls_back_to_disk_scan() {
         .output()
         .unwrap();
 
-    // Should succeed by falling back to disk scan.
-    assert!(
-        output.status.success(),
-        "find with a garbage index should succeed (fall back to disk); stderr: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a named index that cannot be read fails the run; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-
-    // Stderr should contain a warning about the incompatible index.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("warning"),
-        "expected a 'warning' on stderr when index is incompatible; got: {stderr}"
+        stderr.contains("could not read index file"),
+        "the error names the path: {stderr}"
     );
-
-    // Results should still contain all 4 vault files.
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        unwrap_results(&json).len(),
-        4,
-        "expected 4 files from disk fallback"
+    assert!(
+        stderr.contains("create-index"),
+        "and the hint says how to build one: {stderr}"
+    );
+    assert!(
+        !stderr.contains("falling back"),
+        "nothing fell back — the run failed: {stderr}"
     );
 }
 
 #[test]
-fn incompatible_index_falls_back_for_summary() {
+fn a_garbage_named_index_is_an_error_for_summary_too() {
     let tmp = setup_vault();
 
     let garbage_path = tmp.path().join("bad.idx");
@@ -805,14 +811,30 @@ fn incompatible_index_falls_back_for_summary() {
         .output()
         .unwrap();
 
+    assert_eq!(output.status.code(), Some(1));
     assert!(
-        output.status.success(),
-        "summary with garbage index should succeed; stderr: {}",
+        String::from_utf8_lossy(&output.stderr).contains("could not read index file"),
+        "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 4);
+/// The carve-out: nothing was *named*, so the vault's own missing snapshot
+/// falls back to disk — but says so where `-q` cannot hide it.
+#[test]
+fn bare_index_without_a_snapshot_falls_back_loudly() {
+    let tmp = setup_vault();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args(["find", "--index", "-q"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("falling back to disk scan"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1223,9 +1245,12 @@ fn mv_to_subdir_with_index_uses_forward_slash_key() {
 }
 
 #[test]
-fn mv_with_corrupt_index_still_succeeds_with_warning() {
-    // iter-154 AC: if the snapshot is corrupt/unreadable, mv still succeeds
-    // and a stderr note is emitted (the load-time fallback warning).
+fn mv_with_a_corrupt_named_index_refuses_before_moving_anything() {
+    // iter-154's AC was "mv still succeeds with a corrupt index"; iter-276
+    // (BUG-11) supersedes it. A `--index-file` the caller named and that
+    // cannot be read fails the run *before* the move, so the vault and the
+    // snapshot cannot drift apart behind a warning nobody read. Dropping the
+    // flag still moves the file (`mv_moves_the_file_without_an_index` below).
     let tmp = setup_vault();
     let index_path = tmp.path().join(".hyalo-index");
     std::fs::write(&index_path, b"not a valid hyalo index").unwrap();
@@ -1238,18 +1263,26 @@ fn mv_with_corrupt_index_still_succeeds_with_warning() {
         .output()
         .unwrap();
 
+    assert_eq!(output.status.code(), Some(1));
     assert!(
-        output.status.success(),
-        "mv must still succeed with a corrupt index: stderr={}",
+        String::from_utf8_lossy(&output.stderr).contains("could not read index file"),
+        "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("falling back to disk scan"),
-        "expected stderr to warn about the corrupt index fallback; got: {stderr}"
-    );
+    assert!(tmp.path().join("gamma.md").exists(), "nothing was moved");
+    assert!(!tmp.path().join("renamed-gamma.md").exists());
+}
 
-    // The file move itself happened on disk regardless of the index state.
+#[test]
+fn mv_moves_the_file_without_an_index() {
+    let tmp = setup_vault();
+    let output = hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .arg("mv")
+        .args(["--file", "gamma.md", "--to", "renamed-gamma.md"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
     assert!(tmp.path().join("renamed-gamma.md").exists());
     assert!(!tmp.path().join("gamma.md").exists());
 }

@@ -599,7 +599,9 @@ mod tests {
     fn a_fence_indented_under_an_ordered_item_is_a_fence() {
         // The GitHub Docs shape: a 4-space-indented `1.` whose fence sits at
         // five columns. Before iter-276 every prose rule fired on line 3.
-        let s = spans("    1. Add the registry\n     ```\n     npmRegistryServer: \"https://x\"\n     ```\n");
+        let s = spans(
+            "    1. Add the registry\n     ```\n     npmRegistryServer: \"https://x\"\n     ```\n",
+        );
         assert!(!s.line_is_code(2), "the opening fence is markup");
         assert!(s.line_is_code(3), "the sample is code");
         assert!(!s.line_is_code(4), "the closing fence is markup");

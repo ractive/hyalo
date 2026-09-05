@@ -186,10 +186,7 @@ pub fn warn_if_cwd_shadows_vault_path(dir: &std::path::Path, path_arg: &str) {
         return;
     }
     let in_vault = vault.join(rel);
-    let same = match (
-        dunce::canonicalize(&in_cwd),
-        dunce::canonicalize(&in_vault),
-    ) {
+    let same = match (dunce::canonicalize(&in_cwd), dunce::canonicalize(&in_vault)) {
         (Ok(a), Ok(b)) => a == b,
         // The vault candidate does not exist, so hyalo is about to say "file
         // not found" while a file of that name sits in the current directory.

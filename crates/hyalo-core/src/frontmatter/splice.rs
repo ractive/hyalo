@@ -635,10 +635,9 @@ fn try_list_splice(
             };
             let item_text = render_scalar_item(new_item);
             if is_single_line_flow(body) {
-                return match item_text
-                    .as_deref()
-                    .and_then(|text| splice_flow_list(body, old_items.len(), FlowOp::Replace(idx, text)))
-                {
+                return match item_text.as_deref().and_then(|text| {
+                    splice_flow_list(body, old_items.len(), FlowOp::Replace(idx, text))
+                }) {
                     Some(text) => ListSpliceResult::Spliced(text),
                     None => ListSpliceResult::FlowNotModellable,
                 };

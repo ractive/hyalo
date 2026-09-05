@@ -968,7 +968,9 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
     if n == 0 {
         return Ok(no_frontmatter);
     }
-    let Some(opening) = opening_delimiter(&line).map(|o| (o.has_bom, o.line_ending, o.trailing_ws.to_owned())) else {
+    let Some(opening) =
+        opening_delimiter(&line).map(|o| (o.has_bom, o.line_ending, o.trailing_ws.to_owned()))
+    else {
         // No frontmatter — body starts at offset 0
         return Ok(no_frontmatter);
     };

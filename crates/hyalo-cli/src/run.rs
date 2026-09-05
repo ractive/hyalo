@@ -2263,7 +2263,8 @@ fn run_inner() -> Result<(), AppError> {
                 // hide it — the caller asked for the cheap path and is not
                 // getting it.
                 crate::warn::warn_always(format!(
-                    "no index at {}; falling back to a disk scan — run `hyalo create-index`",
+                    "index at {} could not be used; falling back to disk scan — run \
+                     `hyalo create-index`",
                     p.display()
                 ));
                 None

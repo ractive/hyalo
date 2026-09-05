@@ -1285,9 +1285,11 @@ impl SnapshotIndex {
                 }
                 Err(e) => {
                     if warn {
-                        eprintln!(
-                            "warning: index file is incompatible ({e}); falling back to disk scan"
-                        );
+                        // The caller decides what happens next — a named
+                        // `--index-file` now fails the run (BUG-11, iter-276)
+                        // rather than falling back, so this line must not
+                        // promise a fallback it cannot deliver.
+                        eprintln!("warning: index file is incompatible ({e})");
                     }
                     return None;
                 }

@@ -264,8 +264,7 @@ pub fn remove(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                if let Some(detail) =
-                    super::report_unparseable_skip(files_arg, globs, rel_path, &e)
+                if let Some(detail) = super::report_unparseable_skip(files_arg, globs, rel_path, &e)
                 {
                     unparseable_cause = Some(detail);
                 }
@@ -335,15 +334,13 @@ pub fn remove(
 
     // L-2: the single file the user named by hand was unparseable — report it
     // as an error rather than a 0-modified success.
-    if let Some(outcome) =
-        super::single_named_file_unparseable(
-            files_arg,
-            globs,
-            &skipped_unparseable,
-            unparseable_cause.as_deref(),
-            format,
-        )
-    {
+    if let Some(outcome) = super::single_named_file_unparseable(
+        files_arg,
+        globs,
+        &skipped_unparseable,
+        unparseable_cause.as_deref(),
+        format,
+    ) {
         return Ok(outcome);
     }
 
