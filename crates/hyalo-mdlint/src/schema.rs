@@ -876,6 +876,24 @@ pub fn validate_constraint(
     constraint: &PropertyConstraint,
     regex_cache: &mut HashMap<String, Result<Regex, String>>,
 ) -> Vec<Violation> {
+    // iter-272 Part A: the `type` discriminator is not an ordinary string
+    // property. DEC-281 lets it bind through three shapes — a plain string, a
+    // `[[Wikilink]]`, and a one-element list of either — but every declared
+    // type carries an implicit `type: string` constraint (required properties
+    // without an explicit definition are auto-added as `string`), so the list
+    // shape Obsidian's own property editor writes was rejected by the very
+    // constraint check that binding had already accepted. Normalise the value
+    // the same way binding does, and validate the *bound type name* against the
+    // constraint. A shape that names no type falls through unchanged and is
+    // reported by the DEC-281 message in `validate_properties`.
+    if name == "type"
+        && matches!(constraint, PropertyConstraint::String { .. })
+        && !matches!(value, Value::String(_))
+        && let Some(bound) = schema::normalize_type_value(value)
+    {
+        return validate_constraint(name, &Value::String(bound), constraint, regex_cache);
+    }
+
     match constraint {
         PropertyConstraint::String {
             pattern,
@@ -1363,6 +1381,98 @@ mod tests {
             .properties
             .insert("date".to_string(), PropertyConstraint::Date);
         schema
+    }
+
+    /// A schema declaring a type `iteration` that requires `title` and `type`.
+    /// `merged_schema_for_type` auto-adds a `string` constraint for every
+    /// required property without an explicit definition, so `type` carries the
+    /// implicit string constraint that iter-272 Part A had to reconcile with
+    /// DEC-281's three binding shapes.
+    fn schema_with_declared_iteration_type() -> SchemaConfig {
+        let mut schema = SchemaConfig::default();
+        schema.default.required = vec!["title".to_string(), "type".to_string()];
+        let mut iteration = TypeSchema::default();
+        iteration.required = vec!["title".to_string(), "type".to_string()];
+        schema.types.insert("iteration".to_string(), iteration);
+        schema
+    }
+
+    fn typed_props(type_value: Value) -> IndexMap<String, Value> {
+        let mut props: IndexMap<String, Value> = IndexMap::new();
+        props.insert("title".to_string(), Value::String("L".to_string()));
+        props.insert("type".to_string(), type_value);
+        props
+    }
+
+    #[test]
+    fn declared_type_accepts_all_dec281_shapes() {
+        let schema = schema_with_declared_iteration_type();
+        for shape in [
+            Value::String("iteration".to_string()),
+            Value::String("[[iteration]]".to_string()),
+            Value::Array(vec![Value::String("iteration".to_string())]),
+            Value::Array(vec![Value::String("[[iteration]]".to_string())]),
+            Value::Array(vec![Value::String("[[iteration|iter]]".to_string())]),
+        ] {
+            let violations = validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
+            assert!(
+                !violations
+                    .iter()
+                    .any(|v| v.message.contains("expected string")),
+                "shape {shape} must not trip the implicit string constraint: {violations:?}"
+            );
+            assert!(
+                !violations.iter().any(|v| v.message.contains("must name one type")),
+                "shape {shape} must bind to the declared type: {violations:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn declared_type_still_rejects_multi_element_and_empty_lists() {
+        let schema = schema_with_declared_iteration_type();
+        for shape in [
+            Value::Array(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+            ]),
+            Value::Array(vec![]),
+        ] {
+            let violations = validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.message.contains("must name one type")),
+                "shape {shape} must still be reported with the DEC-281 message: {violations:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_constraint_simple_type_accepts_one_element_list() {
+        let string_constraint = PropertyConstraint::String {
+            pattern: None,
+            min_length: None,
+            max_length: None,
+        };
+        // `set --validate` shares this validator, so the fix reaches it too.
+        assert!(
+            validate_constraint_simple(
+                "type",
+                &Value::Array(vec![Value::String("[[Author]]".to_string())]),
+                &string_constraint,
+            )
+            .is_none()
+        );
+        // A non-`type` property is unaffected.
+        assert!(
+            validate_constraint_simple(
+                "status",
+                &Value::Array(vec![Value::String("planned".to_string())]),
+                &string_constraint,
+            )
+            .is_some()
+        );
     }
 
     #[test]
