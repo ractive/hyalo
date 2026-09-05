@@ -153,7 +153,13 @@ through the H-1 guard, and it cannot become ambiguous if a second `Leah Ferguson
 
 ALIAS-4 verified on the Hub: `[[avatar]]` ×3 and `[[Avatar]]` all report `path: null` and
 `via: null` — an ambiguous filename match is a filename match, and the alias on
-`Plugins/avatar.md` no longer breaks the tie for `find` while `mv` calls it ambiguous.
+`Plugins/avatar.md` no longer breaks the tie for `find` while `mv` calls it ambiguous. The
+matching `mv .../Plugins/avatar.md .../Plugins/avatar-plugin.md --dry-run` lists all four
+under `skipped_ambiguous` with both candidates and rewrites only the one genuine path-form
+link, so `find` and `mv` now agree.
+
+Alias fixes are **wikilink-only**: a markdown `[x](Leah)` names a file beside its own source,
+so answering it with somebody's alias would be a guess dressed as a certainty.
 
 **Part B — `mv`.** The frontmatter ambiguity guard now fires for the full moved-dir × twin-dir
 × source-dir matrix (a parameterised e2e test walks all of it), plus the kepano repro. The
