@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 271 — Write and rewrite safety: closing fence, emitter guard, MD031/MD019 in code blocks, site_prefix case rewrites, mv ambiguity"
 date: 2026-09-05
-status: in-progress
+status: completed
 tags:
   - iteration
   - frontmatter
@@ -377,3 +377,23 @@ green; 17 new e2e tests in `crates/hyalo-cli/tests/e2e/iteration271_write_rewrit
 covering all seven parts, plus new unit tests in `frontmatter/mod.rs`, `scanner/body_state.rs`,
 `link_fix.rs` and `rules/spans.rs`. Iteration 263 fixtures, iteration 269's MD034/MD047 tests
 and the hostile-scalar set all stayed green without modification.
+`hyalo lint --strict` on this knowledgebase: 0 errors (one pre-existing HYALO002 warning on
+[[iterations/iteration-270-schema-write-semantics]], untouched by this iteration).
+
+All six xtask gates pass: `check-feature-fanout`, `check-help-drift`,
+`check-command-reference`, `check-bundled-skills`, `check-pi-package-sync`,
+`check-mutation-journal`.
+
+**Two operational notes on running the xtask gates locally**, both cheaper than the workaround
+currently in the loop's memory:
+
+1. `CARGO_MANIFEST_DIR` must be **absolute**. `workspace_root()` walks up from it, so a relative
+   `crates/xtask` resolves to the empty path and every gate that shells out with
+   `current_dir(workspace_root)` silently fails to run the binary — reported as "could not get
+   help output for 'hyalo <cmd>'", which reads like a missing command rather than a broken
+   invocation.
+2. The gates that shell out to `cargo run -q -p hyalo-cli -- …` hang in `read_output` waiting
+   for a pipe that never closes. Put a two-line `cargo` shim first on `PATH` that strips
+   `run -q -p hyalo-cli --` and execs `target/release/hyalo` instead; `check-help-drift` then
+   finishes in seconds. The gate is testing help *text*, so the binary it reads it from is
+   immaterial as long as it is current.
