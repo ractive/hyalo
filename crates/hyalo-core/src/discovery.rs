@@ -2175,12 +2175,34 @@ pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
     let Ok(files) = discover_files(dir) else {
         return;
     };
-    for file in &files {
-        let aliases = read_aliases(file);
-        if aliases.is_empty() {
-            continue;
-        }
-        idx.insert_aliases(&relative_path(dir, file), aliases);
+    // Read in parallel, like `ScannedIndex::build` does: the pass is pure I/O
+    // latency over thousands of small reads, and serially it cost 0.19 s of
+    // the 0.66 s `find --broken-links --count` takes on the Obsidian Hub
+    // (6393 notes). Insertion stays serial and in `discover_files` order, so
+    // the alias map — and therefore every ambiguity verdict — is
+    // deterministic.
+    #[cfg(not(miri))]
+    let collected: Vec<(String, Vec<String>)> = {
+        use rayon::prelude::*;
+        files
+            .par_iter()
+            .filter_map(|file| {
+                let aliases = read_aliases(file);
+                (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+            })
+            .collect()
+    };
+    #[cfg(miri)]
+    let collected: Vec<(String, Vec<String>)> = files
+        .iter()
+        .filter_map(|file| {
+            let aliases = read_aliases(file);
+            (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+        })
+        .collect();
+
+    for (rel, aliases) in collected {
+        idx.insert_aliases(&rel, aliases);
     }
 }
 
@@ -2243,7 +2265,10 @@ mod tests {
     #[test]
     fn a_unique_alias_resolves_and_reports_via_alias() {
         let (_tmp, canon, idx) = alias_vault(&[
-            ("Leah Ferguson.md", "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n"),
+            (
+                "Leah Ferguson.md",
+                "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n",
+            ),
             ("src.md", "see [[Leah]]\n"),
         ]);
         assert_eq!(
@@ -2290,9 +2315,8 @@ mod tests {
 
     #[test]
     fn the_string_form_of_aliases_is_accepted() {
-        let (_tmp, canon, idx) = alias_vault(&[
-            ("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n"),
-        ]);
+        let (_tmp, canon, idx) =
+            alias_vault(&[("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n")]);
         assert_eq!(
             resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
             Some("Leah Ferguson.md")
@@ -2301,12 +2325,10 @@ mod tests {
 
     #[test]
     fn an_alias_with_a_fragment_or_label_still_resolves() {
-        let (_tmp, canon, idx) = alias_vault(&[
-            (
-                "Leah Ferguson.md",
-                "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
-            ),
-        ]);
+        let (_tmp, canon, idx) = alias_vault(&[(
+            "Leah Ferguson.md",
+            "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
+        )]);
         // `resolve_target` strips the fragment; the alias half is what is left.
         assert_eq!(
             resolve_target(&canon, "Leah#Work", None, Some(&idx)).as_deref(),
@@ -2322,9 +2344,8 @@ mod tests {
 
     #[test]
     fn a_note_aliasing_its_own_stem_changes_nothing() {
-        let (_tmp, canon, idx) = alias_vault(&[
-            ("note.md", "---\ntitle: N\naliases:\n- note\n---\n"),
-        ]);
+        let (_tmp, canon, idx) =
+            alias_vault(&[("note.md", "---\ntitle: N\naliases:\n- note\n---\n")]);
         assert_eq!(
             resolve_target(&canon, "note", None, Some(&idx)).as_deref(),
             Some("note.md")
@@ -2334,9 +2355,10 @@ mod tests {
 
     #[test]
     fn a_path_qualified_target_never_consults_aliases() {
-        let (_tmp, canon, idx) = alias_vault(&[
-            ("sub/Leah Ferguson.md", "---\ntitle: L\naliases:\n- Leah\n---\n"),
-        ]);
+        let (_tmp, canon, idx) = alias_vault(&[(
+            "sub/Leah Ferguson.md",
+            "---\ntitle: L\naliases:\n- Leah\n---\n",
+        )]);
         assert_eq!(resolve_target(&canon, "sub/Leah", None, Some(&idx)), None);
         assert!(!resolves_via_alias("sub/Leah", Some(&idx)));
     }

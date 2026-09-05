@@ -2586,7 +2586,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
         assert!(rejected.is_empty(), "unexpected rejected: {rejected:?}");
@@ -2633,7 +2634,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty(), "nothing may be written: {plans:?}");
         assert!(unapplied.is_empty(), "not a stale-text case: {unapplied:?}");
         assert_eq!(rejected.len(), 1, "guard must reject the fix: {rejected:?}");
@@ -2771,7 +2773,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2804,7 +2807,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2933,7 +2937,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
         assert!(
@@ -2968,7 +2973,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -3013,7 +3019,8 @@ See [broken](old-name.md) here.
             },
         ];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -3058,7 +3065,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -3089,7 +3097,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -3123,7 +3132,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert!(plans.is_empty(), "no replacement should have been produced");
         assert_eq!(unapplied.len(), 1);
@@ -3157,7 +3167,8 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
@@ -3193,7 +3204,8 @@ See [broken](old-name.md) here.
             emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
@@ -3229,7 +3241,8 @@ See [broken](old-name.md) here.
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);

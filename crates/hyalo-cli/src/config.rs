@@ -1120,11 +1120,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .as_ref()
             .and_then(|l| l.frontmatter)
             .unwrap_or(true),
-        alias_links_enabled: cfg
-            .links
-            .as_ref()
-            .and_then(|l| l.aliases)
-            .unwrap_or(true),
+        alias_links_enabled: cfg.links.as_ref().and_then(|l| l.aliases).unwrap_or(true),
         validate_on_write,
         lint_ignore: cfg
             .lint

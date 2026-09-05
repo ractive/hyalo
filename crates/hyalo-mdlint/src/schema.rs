@@ -1391,8 +1391,10 @@ mod tests {
     fn schema_with_declared_iteration_type() -> SchemaConfig {
         let mut schema = SchemaConfig::default();
         schema.default.required = vec!["title".to_string(), "type".to_string()];
-        let mut iteration = TypeSchema::default();
-        iteration.required = vec!["title".to_string(), "type".to_string()];
+        let iteration = TypeSchema {
+            required: vec!["title".to_string(), "type".to_string()],
+            ..TypeSchema::default()
+        };
         schema.types.insert("iteration".to_string(), iteration);
         schema
     }
@@ -1414,7 +1416,8 @@ mod tests {
             Value::Array(vec![Value::String("[[iteration]]".to_string())]),
             Value::Array(vec![Value::String("[[iteration|iter]]".to_string())]),
         ] {
-            let violations = validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
+            let violations =
+                validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
             assert!(
                 !violations
                     .iter()
@@ -1422,7 +1425,9 @@ mod tests {
                 "shape {shape} must not trip the implicit string constraint: {violations:?}"
             );
             assert!(
-                !violations.iter().any(|v| v.message.contains("must name one type")),
+                !violations
+                    .iter()
+                    .any(|v| v.message.contains("must name one type")),
                 "shape {shape} must bind to the declared type: {violations:?}"
             );
         }
@@ -1438,7 +1443,8 @@ mod tests {
             ]),
             Value::Array(vec![]),
         ] {
-            let violations = validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
+            let violations =
+                validate_properties("l.md", &typed_props(shape.clone()), &schema, false);
             assert!(
                 violations
                     .iter()

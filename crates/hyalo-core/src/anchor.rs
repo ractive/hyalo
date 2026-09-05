@@ -348,7 +348,6 @@ mod tests {
         assert_eq!(unique_heading_by_prefix("Browser_com", &sections), None);
     }
 
-
     #[test]
     fn exact_match() {
         let secs = [sec(Some("Tasks"))];

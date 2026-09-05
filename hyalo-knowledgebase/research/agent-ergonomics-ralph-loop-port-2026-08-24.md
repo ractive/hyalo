@@ -4,7 +4,7 @@ type: research
 date: 2026-08-24
 status: active
 tags: [dogfooding, agent-ergonomics, ralph-loop, cmux, pi]
-related: [[[iterations/iteration-206-links-perf-profiling]], [[research/cli-structured-output-patterns]], [[research/token-consumption-analysis]]]
+related: ["[[iterations/iteration-206-links-perf-profiling]]", "[[research/cli-structured-output-patterns]]", "[[research/token-consumption-analysis]]"]
 ---
 
 # Agent-facing ergonomics review — pi + cmux port of ralph-loop

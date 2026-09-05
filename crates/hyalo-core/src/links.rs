@@ -2589,7 +2589,10 @@ mod tests {
         for text in ["[[a]", "[[ ]]", "[[]]", "[[a\nb]]"] {
             let mut links = Vec::new();
             extract_links_from_text(text, &mut links);
-            assert!(links.is_empty(), "{text:?} must not yield a link: {links:?}");
+            assert!(
+                links.is_empty(),
+                "{text:?} must not yield a link: {links:?}"
+            );
         }
     }
 

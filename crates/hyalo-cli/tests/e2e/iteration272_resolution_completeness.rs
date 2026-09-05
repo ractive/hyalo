@@ -102,7 +102,11 @@ fn part_a_multi_element_and_empty_type_lists_are_still_rejected() {
         "[schema.default]\nrequired = [\"title\", \"type\"]\n\n\
          [schema.types.Authors]\nrequired = [\"title\", \"type\"]\n",
     );
-    write(&tmp, "multi.md", "---\ntitle: M\ntype: [\"a\", \"b\"]\n---\n");
+    write(
+        &tmp,
+        "multi.md",
+        "---\ntitle: M\ntype: [\"a\", \"b\"]\n---\n",
+    );
     let output = hyalo(&tmp)
         .args(["lint", "--file", "multi.md", "--format", "json"])
         .output()
@@ -209,7 +213,10 @@ fn part_b_a_filename_beats_an_alias_and_a_shared_alias_is_ambiguous() {
     let links = links_of(&tmp, "src.md");
     assert_eq!(links[0].1.as_deref(), Some("Leah.md"));
     assert_eq!(links[0].3, None, "a filename match is not `via: alias`");
-    assert_eq!(links[1].1, None, "an alias claimed twice resolves to nothing");
+    assert_eq!(
+        links[1].1, None,
+        "an alias claimed twice resolves to nothing"
+    );
 }
 
 #[test]
@@ -217,11 +224,7 @@ fn part_b_mv_does_not_rewrite_a_link_written_through_an_alias() {
     let tmp = alias_vault();
     let out = run_json(
         &tmp,
-        &[
-            "mv",
-            "people/Leah Ferguson.md",
-            "archive/Leah Ferguson.md",
-        ],
+        &["mv", "people/Leah Ferguson.md", "archive/Leah Ferguson.md"],
     );
     assert_eq!(out["results"]["total_links_updated"].as_u64(), Some(0));
     assert_eq!(
@@ -324,10 +327,7 @@ fn part_d_bound2_a_flow_list_opening_with_three_brackets_yields_both_links() {
     );
     let links = links_of(&tmp, "src.md");
     assert_eq!(
-        links
-            .iter()
-            .map(|l| l.0.as_str())
-            .collect::<Vec<_>>(),
+        links.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(),
         vec!["iterations/x", "research/y"],
         "{links:?}"
     );
