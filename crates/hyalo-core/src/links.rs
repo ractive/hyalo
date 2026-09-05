@@ -312,14 +312,23 @@ fn extract_links_and_anchors(
             continue;
         }
 
-        // Check for markdown link: [text](target)
-        // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
+        // Check for markdown link: [text](target), and the image form
+        // `![alt](img.png)`.
+        //
+        // iter-272 Part E: the image form used to be dropped outright, so an
+        // `![alt](diagram.png)` naming a file that does not exist was invisible
+        // — MDN's whole-vault histogram reported 2 attachments against
+        // thousands of images — while `![[img.png]]` and `[alt](img.png)` were
+        // both inventoried. It is extracted like any other markdown link and
+        // marked `embed`, which puts it in the same bucket as `![[img.png]]`:
+        // reported as `attachment` when it resolves to a vault file, never a
+        // graph edge, and visible when it resolves to nothing.
         // L-16: skip when the `[` is backslash-escaped.
         if bytes[i] == b'['
-            && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
-            && let Some((link, end)) = try_parse_markdown_link_at(cleaned, original, i)
+            && let Some((mut link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
+            link.embed = i > 0 && bytes[i - 1] == b'!' && !is_escaped(bytes, i - 1);
             out.push(link);
             i = end;
             continue;
@@ -2644,13 +2653,36 @@ mod tests {
         assert!(parse_markdown_link("text", "#heading").is_none());
     }
 
+    /// iter-272 Part E: `![alt](img.png)` is an inventoried embed, not a
+    /// dropped link. Before this it was skipped outright, so a missing image
+    /// never surfaced anywhere.
     #[test]
-    fn markdown_image_skipped() {
+    fn markdown_image_is_extracted_as_an_embed() {
         let text = "![alt text](image.png) and [[real link]]";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 2, "{links:?}");
+        assert_eq!(links[0].target, "image.png");
+        assert!(links[0].embed);
+        assert_eq!(links[0].label.as_deref(), Some("alt text"));
+        assert_eq!(links[1].target, "real link");
+        assert!(!links[1].embed);
+    }
+
+    #[test]
+    fn a_plain_markdown_link_is_not_an_embed() {
+        let mut links = Vec::new();
+        extract_links_from_text("[alt](image.png)", &mut links);
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "real link");
+        assert!(!links[0].embed);
+    }
+
+    #[test]
+    fn an_escaped_bang_leaves_a_plain_markdown_link() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"\![alt](image.png)", &mut links);
+        assert_eq!(links.len(), 1, "{links:?}");
+        assert!(!links[0].embed, "{links:?}");
     }
 
     // --- LinkSpan / extract_link_spans tests ---

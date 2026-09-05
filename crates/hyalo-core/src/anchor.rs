@@ -202,7 +202,7 @@ pub fn unique_heading_by_prefix<'a>(
         let Some(prefix) = heading.get(..needle.len()) else {
             continue;
         };
-        if !prefix.eq_ignore_ascii_case(&needle) {
+        if !prefix_matches_fragment(prefix, &needle) {
             continue;
         }
         if found.is_some() {
@@ -212,6 +212,36 @@ pub fn unique_heading_by_prefix<'a>(
         found = Some(heading);
     }
     found
+}
+
+/// Compare a heading's leading bytes against a fragment, folding ASCII case
+/// *and* the three interchangeable word separators (iter-272 Part E).
+///
+/// DEC-268 forbids silently *resolving* a fragment by fuzzy matching; it says
+/// nothing about what may be *suggested*. MDN slugs its headings with
+/// underscores (`#Browser_compatibility`) while the heading itself is written
+/// with spaces, so a strict comparison found no prefix for 1242 of the 1254
+/// broken anchors on an MDN copy — every one of them a heading the reader
+/// could see two lines away. `-`, `_` and a space are treated as one
+/// character class here, and only here: the suggestion still has to be a
+/// unique prefix of exactly one heading, and it is still printed rather than
+/// applied.
+fn prefix_matches_fragment(prefix: &str, needle: &str) -> bool {
+    if prefix.len() != needle.len() {
+        return false;
+    }
+    prefix
+        .bytes()
+        .zip(needle.bytes())
+        .all(|(a, b)| separator_class(a) == separator_class(b))
+}
+
+/// `b` folded to lowercase, with every word separator mapped to one byte.
+fn separator_class(b: u8) -> u8 {
+    match b {
+        b'-' | b'_' | b' ' => b'-',
+        other => other.to_ascii_lowercase(),
+    }
 }
 
 /// Validate a link fragment against a target file's outline sections.
@@ -290,6 +320,34 @@ mod tests {
             code_blocks: Vec::new(),
         }
     }
+
+    // --- iter-272 Part E: separator-insensitive suggestion matching ---
+
+    #[test]
+    fn suggested_fragment_folds_underscores_hyphens_and_spaces() {
+        let sections = vec![sec(Some("Browser compatibility and support"))];
+        // MDN slugs with underscores; the heading is written with spaces.
+        assert_eq!(
+            unique_heading_by_prefix("Browser_compatibility", &sections),
+            Some("Browser compatibility and support")
+        );
+        assert_eq!(
+            unique_heading_by_prefix("browser-compatibility", &sections),
+            Some("Browser compatibility and support")
+        );
+        // A genuinely different fragment still gets no suggestion.
+        assert_eq!(unique_heading_by_prefix("Server_compat", &sections), None);
+    }
+
+    #[test]
+    fn separator_folding_does_not_make_a_suggestion_ambiguous_match() {
+        let sections = vec![
+            sec(Some("Browser compatibility")),
+            sec(Some("Browser_compatibility notes")),
+        ];
+        assert_eq!(unique_heading_by_prefix("Browser_com", &sections), None);
+    }
+
 
     #[test]
     fn exact_match() {
