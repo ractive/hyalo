@@ -52,7 +52,15 @@ pub fn create_index(
                 format,
                 &hyalo_core::outside_vault_message("output path", Some(&canonical_parent)),
                 Some(&index_path.display().to_string()),
-                Some("use --allow-outside-vault to override"),
+                // iter-274 (UX-25): name the two real ways forward and nothing
+                // else. `create-index` WRITES the snapshot, so the reader's
+                // options are an in-vault output path or the override — never
+                // a read-side `--index` flag this command does not have.
+                Some(&format!(
+                    "write the snapshot inside the vault (-o {}/<name>) or pass \
+                     --allow-outside-vault to write here anyway",
+                    dir.display()
+                )),
                 None,
             );
             return Ok(CommandOutcome::UserError(out));

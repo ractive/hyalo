@@ -819,6 +819,33 @@ fn run_inner() -> Result<(), AppError> {
                 return Err(AppError::Exit(2));
             }
 
+            // iter-274 (UX-25): `--index` on `create-index` / `drop-index`.
+            // Those two commands WRITE (or delete) a snapshot; `--index` is the
+            // read-side flag that says "answer this query from a snapshot", so
+            // the combination is meaningless rather than misspelled. clap's
+            // generic "unexpected argument '--index' found / tip: a similar
+            // argument exists: '--index-file'" pointed at the very flag the
+            // caller had already passed. Say what is actually wrong.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && crate::suggest::unknown_arg_is(&e, "--index")
+                && let Some(sub @ ("create-index" | "drop-index")) =
+                    crate::suggest::top_level_subcommand(&raw_args, &Cli::command())
+            {
+                let (verb, path_flag) = if sub == "create-index" {
+                    ("writes", "-o/--output PATH")
+                } else {
+                    ("deletes", "-p/--path PATH")
+                };
+                eprintln!(
+                    "error: `hyalo {sub} --index` cannot be combined — `--index` reads a \
+                     snapshot, and `{sub}` {verb} one\n\n\
+                     hint: name the snapshot with {path_flag} (the global --index-file PATH is \
+                     accepted as a synonym); use `--index` on a querying command such as \
+                     `hyalo find --index`\n"
+                );
+                return Err(AppError::Exit(2));
+            }
+
             // Only attempt subcommand suggestions when clap couldn't recognise a
             // flag or subcommand — this avoids misleading tips for other error kinds.
             if matches!(
