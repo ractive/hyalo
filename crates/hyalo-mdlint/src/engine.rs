@@ -967,6 +967,25 @@ impl HyaloLintEngine {
         // on the cheap "any directive at all?" check so the common file pays
         // nothing.
         if spans.has_disable_directives() {
+            // A `-disable-next-line` comment binds to the line below it. A
+            // rule that wants a blank line there ("headings should be
+            // surrounded by blank lines") is really objecting to the
+            // *directive*, which is markup, not prose — and its fix disarms
+            // the directive, so the next fix pass rewrites the very line the
+            // author protected. That is how MD022 undid BUG-4's own
+            // suppression. Such a finding is also unactionable: inserting the
+            // blank line by hand breaks the directive just the same. Drop it.
+            let guards = spans.guarded_line_starts();
+            if !guards.is_empty() {
+                diagnostics.retain(|d| {
+                    !d.fix.as_ref().is_some_and(|f| {
+                        let replaced = body_content.get(f.start..f.end).unwrap_or_default();
+                        let adds_break =
+                            f.replacement.matches('\n').count() > replaced.matches('\n').count();
+                        adds_break && guards.iter().any(|b| f.start <= *b && *b <= f.end)
+                    })
+                });
+            }
             diagnostics.retain(|d| {
                 !spans.rule_disabled_at(d.line, |token| self.token_names_rule(token, &d.rule_id))
             });

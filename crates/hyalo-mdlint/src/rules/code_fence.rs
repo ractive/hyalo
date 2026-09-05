@@ -23,9 +23,23 @@ pub struct CodeFence {
 /// (CommonMark §4.5); tilde fences have no such restriction.
 #[must_use]
 pub fn fence_open(line: &str) -> Option<CodeFence> {
+    fence_open_within(line, 3)
+}
+
+/// [`fence_open`], with the maximum leading indent supplied by the caller.
+///
+/// CommonMark's "up to three spaces" is measured from the *container's*
+/// content column, not from column 0: a fence written inside a list item may
+/// carry the item's own indentation as well (BUG-5, dogfood v0.22.0 — GitHub
+/// Docs indents ```` ``` ```` four spaces under a numbered item, and every
+/// prose rule fired inside the sample because the fence was invisible).
+/// [`super::spans::BodySpans`] tracks the open list containers and passes
+/// `content_column + 3` here; everything else keeps the column-0 rule.
+#[must_use]
+pub fn fence_open_within(line: &str, max_indent: usize) -> Option<CodeFence> {
     let indent = line.len() - line.trim_start_matches(' ').len();
-    // More than three leading spaces makes it an indented code block, not a fence.
-    if indent > 3 {
+    // Deeper than the container allows makes it an indented code block.
+    if indent > max_indent {
         return None;
     }
     let rest = &line[indent..];
@@ -51,8 +65,17 @@ pub fn fence_open(line: &str) -> Option<CodeFence> {
 /// after it (CommonMark §4.5).
 #[must_use]
 pub fn is_fence_close(line: &str, open: &CodeFence) -> bool {
+    is_fence_close_within(line, open, 3)
+}
+
+/// [`is_fence_close`], with the maximum leading indent supplied by the caller.
+///
+/// A fence opened inside a list item is closed by one indented to the same
+/// container, so the closing probe needs the same allowance the opener got.
+#[must_use]
+pub fn is_fence_close_within(line: &str, open: &CodeFence, max_indent: usize) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
+    if indent > max_indent {
         return false;
     }
     let rest = &line[indent..];

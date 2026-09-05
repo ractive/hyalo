@@ -17,4 +17,4 @@ pub use hyalo007::non_scalar_title_kind;
 pub use obsidian::{
     is_obsidian_tag_line, is_obsidian_tag_token, link_text_is_image, url_is_inside_link_markup,
 };
-pub use spans::BodySpans;
+pub use spans::{BodySpans, DirectiveToken};

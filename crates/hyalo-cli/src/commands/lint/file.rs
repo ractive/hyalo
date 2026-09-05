@@ -41,6 +41,42 @@ fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
     )
 }
 
+/// Report a `<!-- markdownlint-… -->` comment that names a rule hyalo does not
+/// have (BUG-43, dogfood v0.22.0).
+///
+/// markdownlint warns about these; hyalo used to accept them in silence, so a
+/// typo (`no-hard-tab`) left the region the author meant to protect fully
+/// linted — and `--fix` then rewrote it. The warning bypasses `-q`: it says a
+/// directive *in the vault* does not do what it looks like it does, which is
+/// not noise a caller asked to silence. The cheap `contains` guard keeps the
+/// extra body pass off every file that carries no directive at all.
+fn warn_unknown_directive_rules(
+    body: &str,
+    rel_path: &str,
+    engine: &hyalo_mdlint::HyaloLintEngine,
+    to_file_line: impl Fn(usize) -> usize,
+) {
+    if !body.contains("markdownlint-") {
+        return;
+    }
+    let spans = hyalo_mdlint::rules::BodySpans::new(body);
+    for t in spans.directive_tokens() {
+        let known = engine
+            .available_rules()
+            .iter()
+            .any(|e| e.id.eq_ignore_ascii_case(&t.token) || e.name.eq_ignore_ascii_case(&t.token));
+        if known {
+            continue;
+        }
+        crate::warn::warn_always(format!(
+            "{rel_path}:{}: markdownlint directive names unknown rule `{}` — it suppresses \
+             nothing (see `hyalo lint-rules list` for the ids and aliases)",
+            to_file_line(t.line),
+            t.token
+        ));
+    }
+}
+
 /// Lint a single file (frontmatter + body). Returns a `PerFileLintResult`.
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(super) fn lint_one_file_extended(
@@ -714,6 +750,8 @@ pub(super) fn lint_one_file_extended(
     let body_line_offset = find_body_line_offset(&content, body_start);
     let to_file_line =
         |body_line: usize| body_line.saturating_add(body_line_offset.saturating_sub(1));
+
+    warn_unknown_directive_rules(body_content, rel_path, engine, to_file_line);
 
     // Group body diagnostics by rule: violations fixed across any pass,
     // followed by whatever remains after the loop above (or the single

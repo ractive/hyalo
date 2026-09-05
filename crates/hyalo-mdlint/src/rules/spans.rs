@@ -20,7 +20,7 @@
 //! body once with it and answers all three questions per line, so a rule or a
 //! post-filter never re-derives them (and cannot drift).
 
-use super::code_fence::{CodeFence, fence_open, is_fence_close};
+use super::code_fence::{CodeFence, fence_open_within, is_fence_close_within};
 
 /// One `<!-- markdownlint-… -->` directive found in the body.
 #[derive(Debug, Clone)]
@@ -65,6 +65,22 @@ pub struct BodySpans {
     unterminated_fence_open: Vec<bool>,
     /// `markdownlint-…` directives, in document order.
     disable_events: Vec<DisableEvent>,
+    /// Byte offset of each line's first byte, parallel to the other vectors.
+    line_starts: Vec<usize>,
+}
+
+/// A rule token a directive named, with the 1-based body line of its comment.
+///
+/// Reported so the caller can check it against the rule catalogue: markdownlint
+/// warns about an unknown id or alias in a suppression comment, and a silently
+/// ignored typo means the region the author meant to protect is still linted
+/// (BUG-43, dogfood v0.22.0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectiveToken {
+    /// 1-based body line the `<!-- markdownlint-… -->` comment sits on.
+    pub line: usize,
+    /// The token exactly as written.
+    pub token: String,
 }
 
 impl BodySpans {
@@ -73,15 +89,26 @@ impl BodySpans {
     pub fn new(body: &str) -> Self {
         let lines: Vec<&str> = body.lines().collect();
         let n = lines.len();
+        let mut line_starts = Vec::with_capacity(n + 1);
+        line_starts.push(0);
+        line_starts.extend(
+            body.bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i + 1),
+        );
         let mut spans = Self {
             in_code: vec![false; n],
             in_html_comment: vec![false; n],
             unterminated_fence_open: vec![false; n],
             disable_events: Vec::new(),
+            line_starts,
         };
 
-        // Fence character + the line that opened it, while a fence is open.
-        let mut open_fence: Option<(CodeFence, usize)> = None;
+        // Fence character, the line that opened it, and the indent allowance
+        // its container granted — a fence opened inside a list item is closed
+        // by one indented to the same container.
+        let mut open_fence: Option<(CodeFence, usize, usize)> = None;
         // Indented-code-block state. An indented block can only *start* after
         // a blank line (or at the very top of the body); an indented line that
         // continues a paragraph is a lazy continuation, not code.
@@ -89,10 +116,18 @@ impl BodySpans {
         let mut in_indented = false;
         // HTML comment state (`<!--` … `-->` may span lines).
         let mut in_comment = false;
+        // Content columns of the currently open list items, outermost first.
+        // A fence may be indented up to `content column + 3` (CommonMark
+        // measures the "up to three spaces" from the container, BUG-5).
+        let mut list_content_cols: Vec<usize> = Vec::new();
 
-        for (i, line) in lines.iter().enumerate() {
-            if let Some((fence, _)) = open_fence.as_ref() {
-                if is_fence_close(line, fence) {
+        for (i, raw_line) in lines.iter().enumerate() {
+            // A blockquote prefix (`> `) is container markup: strip it so a
+            // fenced block or list inside a quote is seen like any other.
+            let line = strip_block_quote(raw_line);
+
+            if let Some((fence, _, allowance)) = open_fence.as_ref() {
+                if is_fence_close_within(line, fence, *allowance) {
                     open_fence = None; // the delimiter itself is markup
                 } else {
                     spans.in_code[i] = true;
@@ -101,14 +136,19 @@ impl BodySpans {
                 continue;
             }
 
-            if let Some(fence) = fence_open(line) {
-                open_fence = Some((fence, i));
+            let fence_allowance = list_content_cols.last().map_or(3, |c| c + 3);
+            if let Some(fence) = fence_open_within(line, fence_allowance) {
+                open_fence = Some((fence, i, fence_allowance));
                 in_indented = false;
                 prev_blank = false;
                 continue;
             }
 
             let is_blank = line.trim().is_empty();
+            if !is_blank {
+                update_list_containers(line, &mut list_content_cols);
+            }
+
             if in_indented {
                 if is_blank || is_indented_code_line(line) {
                     spans.in_code[i] = true;
@@ -126,7 +166,7 @@ impl BodySpans {
             prev_blank = is_blank;
         }
 
-        if let Some((_, opener)) = open_fence {
+        if let Some((_, opener, _)) = open_fence {
             spans.unterminated_fence_open[opener] = true;
         }
 
@@ -201,6 +241,41 @@ impl BodySpans {
         region_disabled || file_disabled
     }
 
+    /// Every rule token named by a `markdownlint-…` directive, with the
+    /// 1-based body line of the comment it came from, in document order.
+    ///
+    /// The caller resolves each token against the rule catalogue: hyalo cannot
+    /// tell an id from an alias here, and a token that names neither is a typo
+    /// worth reporting (BUG-43).
+    #[must_use]
+    pub fn directive_tokens(&self) -> Vec<DirectiveToken> {
+        self.disable_events
+            .iter()
+            .flat_map(|ev| {
+                ev.tokens.iter().map(move |t| DirectiveToken {
+                    line: ev.line + 1,
+                    token: t.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Byte offsets at which an autofix must not insert a line break.
+    ///
+    /// A `markdownlint-disable-next-line` comment binds to the line below it;
+    /// pushing the two apart — as MD022's "surround headings with blank lines"
+    /// fix did — silently disarms the directive, and the next fix pass then
+    /// rewrites the very line the author protected (BUG-4, dogfood v0.22.0).
+    /// Each returned offset is the first byte of a guarded line.
+    #[must_use]
+    pub fn guarded_line_starts(&self) -> Vec<usize> {
+        self.disable_events
+            .iter()
+            .filter(|ev| ev.kind == DisableKind::DisableNextLine)
+            .filter_map(|ev| self.line_starts.get(ev.line + 1).copied())
+            .collect()
+    }
+
     fn at(line_1based: usize, flags: &[bool]) -> bool {
         line_1based
             .checked_sub(1)
@@ -216,25 +291,103 @@ fn is_indented_code_line(line: &str) -> bool {
     line.starts_with("    ") || line.starts_with('\t')
 }
 
-/// Track HTML-comment state across `line` and record any `markdownlint-…`
-/// directive it carries.
-fn scan_html_comment(line: &str, index: usize, in_comment: &mut bool, spans: &mut BodySpans) {
+/// Strip a leading blockquote marker (`>` with up to three spaces of indent
+/// and one optional space after it), so a list or fence inside a quote is
+/// classified like any other. Lines that are not quoted are returned as-is.
+fn strip_block_quote(line: &str) -> &str {
     let mut rest = line;
     loop {
+        let indent = rest.len() - rest.trim_start_matches(' ').len();
+        if indent > 3 {
+            return rest;
+        }
+        let Some(after) = rest[indent..].strip_prefix('>') else {
+            return rest;
+        };
+        rest = after.strip_prefix(' ').unwrap_or(after);
+    }
+}
+
+/// Update the open list-item content columns for a non-blank `line`.
+///
+/// A bullet (`-`, `*`, `+`) or ordered (`1.`, `1)`) marker opens a container
+/// whose content starts after the marker and its following whitespace; a line
+/// that dedents past a container closes it. The stack only exists to widen the
+/// fence-indent allowance, so an approximation that never *narrows* it below
+/// CommonMark's column-0 rule is enough.
+fn update_list_containers(line: &str, stack: &mut Vec<usize>) {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    if let Some(content_col) = list_marker_content_column(line, indent) {
+        // A marker at column `indent` belongs to the innermost container whose
+        // content starts at or before it.
+        while stack.last().is_some_and(|c| *c > indent) {
+            stack.pop();
+        }
+        stack.push(content_col);
+    } else {
+        // A continuation line that dedents out of a container closes it.
+        while stack.last().is_some_and(|c| *c > indent) {
+            stack.pop();
+        }
+    }
+}
+
+/// The content column of a list marker starting at `indent`, if `line` is a
+/// list item.
+fn list_marker_content_column(line: &str, indent: usize) -> Option<usize> {
+    let rest = &line[indent..];
+    let marker_len = match rest.as_bytes().first()? {
+        b'-' | b'*' | b'+' => 1,
+        b'0'..=b'9' => {
+            // Up to nine digits followed by `.` or `)` (CommonMark §5.2).
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 9 || !matches!(rest.as_bytes().get(digits), Some(b'.' | b')')) {
+                return None;
+            }
+            digits + 1
+        }
+        _ => return None,
+    };
+    let after = &rest[marker_len..];
+    // The marker must be followed by whitespace (or end the line) to be a
+    // marker at all, so `-fish` and `1.5` are prose.
+    let spaces = after.bytes().take_while(|b| *b == b' ').count();
+    if spaces == 0 && !after.is_empty() {
+        return None;
+    }
+    // Five or more spaces means the content starts one column after the
+    // marker and the rest is an indented code block (CommonMark §5.2).
+    let gap = if spaces == 0 || spaces > 4 { 1 } else { spaces };
+    Some(indent + marker_len + gap)
+}
+
+/// Track HTML-comment state across `line` and record any `markdownlint-…`
+/// directive it carries.
+/// The line is marked `in_html_comment` only when **nothing but the comment**
+/// is on it. A heading carrying a trailing `<!-- markdownlint-disable-next-line
+/// … -->` is still a heading, and the rules that skip comment lines were
+/// skipping it — which is how `disable-next-line` came to protect its own line
+/// instead of the next one (BUG-4, dogfood v0.22.0).
+fn scan_html_comment(line: &str, index: usize, in_comment: &mut bool, spans: &mut BodySpans) {
+    let mut rest = line;
+    // Bytes of this line that sit outside any comment span.
+    let mut outside_len = 0usize;
+    let entered_commented = *in_comment;
+    loop {
         if *in_comment {
-            spans.in_html_comment[index] = true;
             match rest.find("-->") {
                 Some(end) => {
                     *in_comment = false;
                     rest = &rest[end + 3..];
                 }
-                None => return,
+                None => break,
             }
         } else {
             let Some(start) = rest.find("<!--") else {
-                return;
+                outside_len += rest.trim().len();
+                break;
             };
-            spans.in_html_comment[index] = true;
+            outside_len += rest[..start].trim().len();
             *in_comment = true;
             rest = &rest[start + 4..];
             // A directive must be wholly contained in one comment; anything
@@ -245,6 +398,11 @@ fn scan_html_comment(line: &str, index: usize, in_comment: &mut bool, spans: &mu
                 spans.disable_events.push(ev);
             }
         }
+    }
+    // A line that carried no comment at all is untouched; one whose only
+    // content is comment text is a comment line.
+    if (entered_commented || line.contains("<!--")) && outside_len == 0 {
+        spans.in_html_comment[index] = true;
     }
 }
 
@@ -399,5 +557,113 @@ mod tests {
     fn a_directive_inside_a_code_fence_is_a_sample_not_a_directive() {
         let s = spans("```md\n<!-- markdownlint-disable -->\n```\n");
         assert!(!s.has_disable_directives());
+    }
+
+    // --- BUG-4 (iter-276): a trailing directive does not comment out its line
+
+    #[test]
+    fn a_line_with_a_trailing_comment_is_not_a_comment_line() {
+        let s = spans("#   heading <!-- markdownlint-disable-next-line MD019 -->\n#   next\n");
+        assert!(
+            !s.line_is_html_comment(1),
+            "the heading is still a heading, so MD019 must see it"
+        );
+        let md019 = |t: &str| t == "MD019";
+        assert!(
+            !s.rule_disabled_at(1, md019),
+            "-next-line never protects its own line"
+        );
+        assert!(s.rule_disabled_at(2, md019), "it protects the one after");
+    }
+
+    #[test]
+    fn a_standalone_comment_line_is_still_a_comment_line() {
+        let s = spans("  <!-- a note -->  \ntext\n");
+        assert!(s.line_is_html_comment(1));
+        assert!(!s.line_is_html_comment(2));
+    }
+
+    #[test]
+    fn text_after_a_closing_comment_marker_makes_the_line_prose() {
+        let s = spans("a\n<!-- start\nstill inside\nend --> #   tail\n");
+        assert!(s.line_is_html_comment(3), "wholly inside the comment");
+        assert!(
+            !s.line_is_html_comment(4),
+            "content after `-->` is real prose"
+        );
+    }
+
+    // --- BUG-5 (iter-276): fences indented inside list items
+
+    #[test]
+    fn a_fence_indented_under_an_ordered_item_is_a_fence() {
+        // The GitHub Docs shape: a 4-space-indented `1.` whose fence sits at
+        // five columns. Before iter-276 every prose rule fired on line 3.
+        let s = spans("    1. Add the registry\n     ```\n     npmRegistryServer: \"https://x\"\n     ```\n");
+        assert!(!s.line_is_code(2), "the opening fence is markup");
+        assert!(s.line_is_code(3), "the sample is code");
+        assert!(!s.line_is_code(4), "the closing fence is markup");
+    }
+
+    #[test]
+    fn a_fence_indented_under_a_bullet_item_is_a_fence() {
+        let s = spans("- item\n\n  ~~~yaml\n  key:   value\n  ~~~\n\nafter\n");
+        assert!(s.line_is_code(4));
+        assert!(!s.line_is_code(3));
+        assert!(!s.line_is_code(7));
+    }
+
+    #[test]
+    fn a_fence_inside_a_blockquoted_list_is_a_fence() {
+        let s = spans("> - item\n>   ```\n>   #   sample\n>   ```\n");
+        assert!(s.line_is_code(3));
+        assert!(!s.line_is_code(2));
+    }
+
+    #[test]
+    fn a_nested_list_widens_the_allowance_further() {
+        let s = spans("- outer\n  - inner\n    ```\n    #   sample\n    ```\n");
+        assert!(s.line_is_code(4));
+    }
+
+    #[test]
+    fn dedenting_out_of_a_list_restores_the_column_zero_rule() {
+        // After the list ends, a four-space fence is an indented code block —
+        // which is still code, but not a fence, so it must not swallow the
+        // rest of the document.
+        let s = spans("- item\n\nprose\n\n    ```\n    x\n\nafter\n");
+        assert!(s.line_is_code(5), "indented code block");
+        assert!(!s.line_is_code(8), "the block ended at the blank line");
+    }
+
+    #[test]
+    fn a_lookalike_marker_does_not_open_a_container() {
+        // `1.5` and `-fish` are prose, not list markers.
+        let s = spans("1.5 metres\n    ```\n    x\n");
+        assert!(
+            !s.opens_unterminated_fence(2),
+            "no container, so a four-space fence is not a fence"
+        );
+    }
+
+    // --- BUG-43 (iter-276): directive tokens are reported for validation
+
+    #[test]
+    fn directive_tokens_carry_their_comment_line() {
+        let s = spans("a\n<!-- markdownlint-disable MD019, no-such-rule -->\nb\n");
+        let tokens = s.directive_tokens();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].line, 2);
+        assert_eq!(tokens[0].token, "MD019");
+        assert_eq!(tokens[1].token, "no-such-rule");
+    }
+
+    #[test]
+    fn a_bare_directive_names_no_tokens() {
+        assert!(
+            spans("<!-- markdownlint-disable -->\nx\n")
+                .directive_tokens()
+                .is_empty()
+        );
     }
 }
