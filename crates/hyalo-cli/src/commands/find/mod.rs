@@ -1000,7 +1000,8 @@ pub fn find(
                     // entries (`path == entry.rel_path`) are excluded from
                     // the `--orphan`/`--dead-end` outbound-edge count below so
                     // this does not change those verdicts.
-                    .chain(entry.self_anchors.iter().map(|(line, fragment)| {
+                    .chain(entry.self_anchors.iter().map(|anchor| {
+                        let fragment = &anchor.fragment;
                         let broken_anchor = !hyalo_core::anchor::fragment_matches_headings(
                             fragment,
                             &entry.sections,
@@ -1008,12 +1009,17 @@ pub fn find(
                         LinkInfo {
                             target: String::new(),
                             path: Some(entry.rel_path.clone()),
-                            label: None,
-                            // A same-file heading jump is a wikilink-shaped
-                            // reference to this very file, never an attachment.
-                            kind: LinkKindLabel::Wikilink,
+                            label: anchor.label.clone(),
+                            // A same-file heading jump names this very file,
+                            // never an attachment — but it keeps the syntax it
+                            // was written in (iter-272 Part C / BUG-8): a
+                            // vault with no wikilinks must not report any.
+                            kind: match anchor.kind {
+                                hyalo_core::links::LinkKind::Wikilink => LinkKindLabel::Wikilink,
+                                hyalo_core::links::LinkKind::Markdown => LinkKindLabel::Markdown,
+                            },
                             property: None,
-                            line: *line,
+                            line: anchor.line,
                             fragment: Some(fragment.clone()),
                             broken_anchor,
                             // DEC-268: same unique-prefix suggestion as for a

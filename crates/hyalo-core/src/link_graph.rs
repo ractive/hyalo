@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery;
 use crate::frontmatter;
-use crate::links::{Link, LinkKind};
+use crate::links::{Link, LinkKind, SelfAnchor};
 use crate::scanner::{self, FileVisitor, ScanAction};
 
 /// A single backlink: a file that links to some target.
@@ -523,7 +523,7 @@ pub(crate) struct FileLinks {
     /// they are produced by the same single-pass body scan, and are copied
     /// onto [`crate::index::IndexEntry::self_anchors`] so `find --broken-links`
     /// can validate them (iter-211 / BUG-8).
-    pub(crate) self_anchors: Vec<(usize, String)>,
+    pub(crate) self_anchors: Vec<SelfAnchor>,
 }
 
 /// Strip a trailing `.md` extension from `s`, matching any ASCII casing
@@ -752,9 +752,9 @@ pub const DEFAULT_FRONTMATTER_LINK_PROPERTIES: &[&str] =
 pub(crate) struct LinkGraphVisitor {
     source: PathBuf,
     links: Vec<(usize, Link)>,
-    self_anchors: Vec<(usize, String)>,
+    self_anchors: Vec<SelfAnchor>,
     scratch: Vec<Link>,
-    anchor_scratch: Vec<String>,
+    anchor_scratch: Vec<SelfAnchor>,
     /// Frontmatter property names to scan for `[[wikilink]]` patterns.
     /// `None` scans **every** frontmatter value (the iter-262 default);
     /// `Some(&[])` disables frontmatter scanning entirely.
@@ -893,8 +893,9 @@ impl FileVisitor for LinkGraphVisitor {
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
         }
-        for frag in self.anchor_scratch.drain(..) {
-            self.self_anchors.push((line_num, frag));
+        for mut anchor in self.anchor_scratch.drain(..) {
+            anchor.line = line_num;
+            self.self_anchors.push(anchor);
         }
         ScanAction::Continue
     }

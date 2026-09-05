@@ -18,7 +18,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
-use crate::links::Link;
+use crate::links::{Link, SelfAnchor};
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
 use crate::types::{FindTaskInfo, OutlineSection, TaskCount};
@@ -63,7 +63,7 @@ pub struct IndexEntry {
     /// (iter-211 / BUG-8). Defaulted + skipped when empty so snapshots written
     /// by older hyalo versions keep loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub self_anchors: Vec<(usize, String)>,
+    pub self_anchors: Vec<SelfAnchor>,
     /// Pre-tokenized BM25 tokens (body + title, stemmed). Populated by `create-index`
     /// when `scan_body` is `true`. `None` when the index was created before BM25
     /// support or with `scan_body = false`.

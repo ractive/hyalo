@@ -3274,7 +3274,12 @@ See [broken](old-name.md) here.
             sections: Vec::new(),
             tasks: Vec::new(),
             links: Vec::new(),
-            self_anchors: vec![(1, "nope".to_string())],
+            self_anchors: vec![crate::links::SelfAnchor {
+                line: 1,
+                fragment: "nope".to_string(),
+                kind: crate::links::LinkKind::Wikilink,
+                label: None,
+            }],
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
