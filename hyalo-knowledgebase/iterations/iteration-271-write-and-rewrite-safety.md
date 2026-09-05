@@ -360,6 +360,24 @@ incoming form — `raw_target_names_index` / `strip_directory_index` stop `/inde
 to a directory link, a trailing slash survives, and `markdown_fix_round_trips` accepts the
 directory form of a directory-index target so the guard does not reject the correct emission.
 
+**Review-found regression, fixed on the PR branch (filesystem-case-sensitivity-dependent).**
+`ubuntu-latest` CI failed `a_site_prefix_link_is_not_a_case_mismatch`: `--apply` rewrote the
+fixture's `Guides/Anchor_positioning` to `guides/anchor_positioning`, even though the dry-run
+correctly reported `case_mismatches: 0`. Root cause: `classify_link`'s exact-match probe
+(`Path::is_file()`) is case-insensitive on macOS/APFS and Windows/NTFS but case-sensitive on
+Linux/ext4. On a case-sensitive filesystem the exact probe for a site-absolute link that differs
+from disk only by case genuinely fails, so classification falls through to the case-index
+fallback — where `is_case_only_variant` compares the *un-stripped* site-absolute text against
+the *site-prefix-stripped* canonical path and, since they differ by more than case (the whole
+site-prefix segment), returns `false`. The link is misclassified as `LinkResolution::
+StemRelocation` (a genuine relocation) instead of `LinkResolution::CaseMismatch`, and
+`StemRelocation` fed into `relocations` without the `resolved_through_site_prefix` guard —
+so it got applied. macOS and Windows CI never exercised this because their case-insensitive
+`is_file()` takes the exact-match branch first, which the guard already covered. Fixed by
+applying the same `resolved_through_site_prefix` skip to the `StemRelocation` arm in
+`detect_broken_links_from_index` (`crates/hyalo-core/src/link_fix.rs`), matching DEC-295's
+intent regardless of which internal bucket a filesystem quirk sorts the link into.
+
 **CASE-2 partially deferred.** The dry-run's reported `new_target` is still the plan's
 vault-relative path in both modes, not the emitted string. Making it the emitted string means
 threading the per-plan emission out of `build_replacements_for_file` through

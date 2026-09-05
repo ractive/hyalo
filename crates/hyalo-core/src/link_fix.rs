@@ -461,6 +461,27 @@ pub fn detect_broken_links_from_index(
                     // bucket, not `case_mismatches` — a relocation is not a
                     // cosmetic casing fix, and lumping the two made the "Case
                     // mismatches" count lie about what changed.
+                    //
+                    // iter-271 Part F, found by CI on a case-sensitive
+                    // filesystem: `classify_link`'s exact-match probe uses
+                    // `Path::is_file()`, which is case-insensitive on macOS/
+                    // APFS but case-sensitive on Linux/Windows-case-sensitive
+                    // volumes. On a case-sensitive filesystem a site-absolute
+                    // link that differs from disk *only* by case fails the
+                    // exact probe and falls through to the case-index
+                    // fallback, where `is_case_only_variant` compares the
+                    // *un-stripped* site-absolute text against the
+                    // *site-prefix-stripped* canonical path — never equal
+                    // beyond case alone — so it is misclassified as a
+                    // relocation instead of a case mismatch. The same
+                    // `resolved_through_site_prefix` guard applies here for
+                    // the same reason DEC-295 gives for `case_mismatches`: a
+                    // site-absolute link is correct for the site regardless
+                    // of which internal bucket a case-sensitive-filesystem
+                    // quirk sorts it into.
+                    if resolved_through_site_prefix(&link.target, site_prefix) {
+                        continue;
+                    }
                     relocations.push(FixPlan {
                         source: entry.rel_path.clone(),
                         line: *line,
