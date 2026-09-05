@@ -1304,7 +1304,7 @@ required = ["title", "date"]
     }
 
     #[test]
-    fn merged_schema_auto_adds_string_for_required_without_property() {
+    fn merged_schema_leaves_a_bare_required_property_unconstrained() {
         let toml = r#"
 [schema.default]
 required = ["title", "type"]
@@ -1333,18 +1333,20 @@ values = ["active", "archived", "draft"]
         let cfg = SchemaConfig::from_raw_lossy(raw_schema);
 
         let merged = cfg.merged_schema_for_type("docs");
-        // All 4 required fields should have property definitions
-        assert_eq!(merged.properties.len(), 4);
-        // title and type should be auto-added as string
-        assert!(matches!(
-            merged.properties.get("title"),
-            Some(PropertyConstraint::String { pattern: None, .. })
-        ));
-        assert!(matches!(
-            merged.properties.get("type"),
-            Some(PropertyConstraint::String { pattern: None, .. })
-        ));
-        // Explicit definitions should be preserved
+        // DEC-312 (iter-276): a required property with no `properties` block
+        // of its own gets NO constraint. It used to be auto-declared
+        // `string`, so `required = ["title"]` silently rejected `title: 2024`
+        // — a rule the vault owner never wrote and could not see in
+        // `types show` (BUG-42).
+        assert_eq!(merged.required.len(), 4);
+        assert_eq!(
+            merged.properties.len(),
+            2,
+            "only the two explicitly declared constraints"
+        );
+        assert!(merged.properties.get("title").is_none());
+        assert!(merged.properties.get("type").is_none());
+        // Explicit definitions are still preserved.
         assert!(matches!(
             merged.properties.get("date"),
             Some(PropertyConstraint::Date)

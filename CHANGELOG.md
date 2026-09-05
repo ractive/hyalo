@@ -22,6 +22,12 @@ and this project adheres to
   section, is 399 ms → 402 ms — inside run-to-run noise. The on-disk format is
   unchanged: indexes written before this release load unchanged, and indexes
   written after it are read by the previous release, verified both directions.
+  (Superseded later in this same release: the snapshot header now carries a
+  format version, and one written before it is *refused* with a warning and a
+  fall back to disk — see the format-version entry below. The wire format is
+  still additive; the refusal is a deliberate correctness gate, because the
+  272/273 link and header changes make an older snapshot answer differently
+  from a disk scan of the same vault.)
   Mutating commands (`set`, `remove`, `append`, `task toggle`, `mv`,
   `lint --fix --index`) force the section before re-saving, so none of them can
   drop the search index from a snapshot they only meant to patch.

@@ -1031,8 +1031,24 @@ Body.
 
     #[test]
     fn opening_delimiter_rejects_trailing_junk() {
-        assert!(opening_delimiter("--- \n").is_none());
         assert!(opening_delimiter("---x\n").is_none());
+        assert!(opening_delimiter("--- x\n").is_none());
+    }
+
+    /// iter-276 (BUG-34, DEC-293 amended): trailing ASCII whitespace is
+    /// accepted, matching `is_closing_delimiter` and YAML's directives-end
+    /// marker. It used to be rejected, so a file opening with `--- ` read as
+    /// having no frontmatter and `set` prepended a *second* block above the
+    /// one already there. The tolerated bytes ride along so a rewrite
+    /// reproduces the line exactly.
+    #[test]
+    fn opening_delimiter_accepts_trailing_whitespace_and_keeps_it() {
+        let d = opening_delimiter("--- \n").expect("`--- ` opens frontmatter");
+        assert_eq!(d.trailing_ws, " ");
+        let d = opening_delimiter("---\t\t\r\n").expect("tabs count too");
+        assert_eq!(d.trailing_ws, "\t\t");
+        let d = opening_delimiter("---\n").expect("the plain form still works");
+        assert_eq!(d.trailing_ws, "");
     }
 
     #[test]

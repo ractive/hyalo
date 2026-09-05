@@ -41,6 +41,17 @@ fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
     )
 }
 
+/// Whether `token` has the shape of a markdownlint rule id or alias: ASCII
+/// alphanumeric, optionally with `-` or `_` inside. Anything else was never
+/// meant as a rule name (see [`warn_unknown_directive_rules`]).
+fn token_could_name_a_rule(token: &str) -> bool {
+    let mut chars = token.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Report a `<!-- markdownlint-… -->` comment that names a rule hyalo does not
 /// have (BUG-43, dogfood v0.22.0).
 ///
@@ -61,6 +72,14 @@ fn warn_unknown_directive_rules(
     }
     let spans = hyalo_mdlint::rules::BodySpans::new(body);
     for t in spans.directive_tokens() {
+        // Only complain about a token that *could* be a rule name. Prose that
+        // documents the syntax — `<!-- markdownlint-enable … -->` in a
+        // sentence, inside backticks that `BodySpans` does not treat as a
+        // code block — is not a typo, and warning about it would make the
+        // check noise on exactly the documents most likely to mention it.
+        if !token_could_name_a_rule(&t.token) {
+            continue;
+        }
         let known = engine
             .available_rules()
             .iter()
