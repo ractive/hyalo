@@ -4207,18 +4207,60 @@ mod tests {
         );
     }
 
+    // POSIX-only: `realpath`-style canonicalization must resolve every
+    // intermediate component and fails outright if any of them (here `sub`)
+    // doesn't exist, so `canonicalize_existing_ancestor` falls back to the
+    // literal path and a `..` segment can survive `strip_prefix`. We must
+    // refuse to rewrite such paths — handing `../foo.md` to resolve_file
+    // would either error or silently escape the vault.
+    //
+    // Windows' `GetFullPathNameW` lexically collapses `..` segments as part
+    // of *any* canonicalize call, independent of whether the components in
+    // between exist on disk — so `canonicalize(".../sub/..")` succeeds and
+    // already resolves to the vault root with no leftover `..`, and this
+    // fallback path can't be reached the same way. See
+    // `strip_abs_resolves_parent_traversal_on_windows` below for the
+    // Windows-equivalent (and still-safe) behavior.
+    #[cfg(not(windows))]
     #[test]
     fn strip_abs_rejects_parent_traversal_in_nonexistent_path() {
-        // When canonicalize falls back to the literal path (because the file
-        // doesn't exist), a `..` segment can survive strip_prefix. We must
-        // refuse to rewrite such paths — handing `../foo.md` to resolve_file
-        // would either error or silently escape the vault.
         let tmp = tempfile::tempdir().unwrap();
         let canonical = dunce::canonicalize(tmp.path()).unwrap();
         // Build something like `<canonical>/sub/../escape.md` where neither
         // `sub` nor `escape.md` exists, so canonicalize fails and we keep the
         // literal form with `..` intact.
         let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
+    }
+
+    // Windows counterpart of the test above: the OS resolves `sub/..` to the
+    // vault root lexically, even though `sub` never existed, so the result
+    // is the legitimate in-vault relative path rather than a rejection. This
+    // is safe — it's the correct real path, not an escape.
+    #[cfg(windows)]
+    #[test]
+    fn strip_abs_resolves_parent_traversal_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), &abs_str),
+            Some("escape.md".to_owned())
+        );
+    }
+
+    // A traversal that genuinely lands outside the vault must still be
+    // rejected on every platform — this is enforced by the `strip_prefix`
+    // check against the canonical vault dir, independent of the leftover-`..`
+    // guard above.
+    #[test]
+    fn strip_abs_rejects_traversal_that_escapes_the_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        // `<canonical>/../escape.md` truly lies outside the vault dir.
+        let abs = canonical.join("../escape.md");
         let abs_str = abs.to_string_lossy();
         assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
     }
