@@ -846,14 +846,19 @@ pub(crate) enum Commands {
             the promoted title; use --fields properties-typed for a [{name, type, value}] array. \
             --format text prints the included field names under the results.\n\
             LINK KINDS: every entry in --fields links carries kind — wikilink (plain [[note]]), \
-            embed (![[note]] / ![[img.png]]), markdown ([text](note.md)), external (any scheme: \
-            URI: https, obsidian://, mailto:, file://) or attachment (resolved to a non-.md vault \
-            file: an image, a PDF, an Obsidian .base). external and attachment links never count \
-            as broken, never appear under --broken-links or HYALO006, and are not graph edges for \
-            --orphan/--dead-end. Text mode prints the kind after the arrow unless it is wikilink. \
+            embed (![[note]] / ![[img.png]] / ![alt](img.png)), markdown ([text](note.md), and \
+            [text](#frag) — a same-file anchor keeps the syntax it was written in), external (any \
+            scheme: URI: https, obsidian://, mailto:, file://) or attachment (resolved to a non-.md \
+            vault file: an image, a PDF, an Obsidian .base). external and attachment links never \
+            count as broken, never appear under --broken-links or HYALO006, and are not graph edges \
+            for --orphan/--dead-end. Text mode prints the kind after the arrow unless it is \
+            wikilink. A link that resolved through a note's frontmatter aliases: also carries \
+            via: \"alias\" (printed as `(via alias)` in text mode); kind stays wikilink, because an \
+            alias changes what the target names, not how it was written. Turn alias resolution off \
+            with [links] aliases = false. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
             also carries suggested_fragment, the full heading to write instead (never applied \
-            automatically).\n\
+            automatically; -, _ and a space are one character class for that prefix test).\n\
             SIZE: size/lines let a caller budget before reading -- pair them with \
             `read --lines A:B` or `read --section H` instead of pulling a large body whole.\n\
             RESULT SHAPE: `results` is always the array of matched files, whichever way the file \
@@ -1766,7 +1771,11 @@ Repeatable (AND).\n\
             WIKILINK RESOLUTION:\n\
             Wikilinks accept an optional .md suffix — [[foo.md]], [[foo.md#heading]], and [[foo.md|alias]]\n\
             are treated identically to [[foo]], [[foo#heading]], and [[foo|alias]] respectively.\n\
-            This matches Obsidian's behavior when copy-pasting note names that include the extension.\n\n\
+            This matches Obsidian's behavior when copy-pasting note names that include the extension.\n\
+            A bare target that names no file is matched against every note's frontmatter aliases:\n\
+            (DEC-296) — a filename always wins, an alias claimed by two notes is ambiguous, and a\n\
+            target that resolves through an alias is never broken and is never fuzzy-matched.\n\
+            Turn it off with `[links] aliases = false`.\n\n\
             Default behavior (no subcommand): dry-run of `links fix` — shows what would be\n\
             repaired without modifying files. Equivalent to `hyalo links fix --dry-run`.\n\n\
             OUTPUT: JSON object with broken/fixable/fuzzy/unfixable counts, per-fix details \
@@ -2832,7 +2841,14 @@ pub(crate) enum LinksAction {
             broken and is left untouched. Only a stem-casing mismatch ([[note]] for Note.md)\n\
             triggers a case-mismatch fix — and the fix preserves the short form ([[Note]],\n\
             never [[sub/Note]]). Links matching >=2 files are reported as ambiguous and\n\
-            never auto-fixed.\n\n\
+            never auto-fixed.\n\
+            A bare target that names no file at all is matched against every note's\n\
+            frontmatter aliases: (DEC-296). A target that resolves through an alias is not\n\
+            broken, gets no plan and is never fuzzy-matched; one claimed by two notes is\n\
+            ambiguous. `[links] aliases = false` turns this off.\n\n\
+            EMITTED TARGET: every reported plan carries emitted_target — the exact link text\n\
+            --apply writes — beside the vault-relative new_target. Both are filled by the\n\
+            same planning pass in --dry-run and --apply, so the preview is byte-accurate.\n\n\
             Use --expand-short-form to opt into path expansion (Obsidian-incompatible).\n\n\
             Case-mismatch detection: when case-insensitive resolution is active (controlled by\n\
             `[links] case_insensitive` in .hyalo.toml — \"auto\", \"true\", or \"false\"), broken links\n\

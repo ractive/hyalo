@@ -2,7 +2,7 @@
 //!
 //! - **Part A (BUG-5).** A one-element list `type:` binds *and* passes the
 //!   implicit string constraint every declared type carries.
-//! - **Part B (BUG-6, DEC-288).** Frontmatter `aliases:` resolve wikilinks,
+//! - **Part B (BUG-6, DEC-296).** Frontmatter `aliases:` resolve wikilinks,
 //!   consistently across `find`, `backlinks`, `summary` and `links fix`.
 //! - **Part C (BUG-8).** `[text](#fragment)` is a markdown link, not a
 //!   wikilink.
@@ -115,7 +115,7 @@ fn part_a_multi_element_and_empty_type_lists_are_still_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Part B — frontmatter `aliases:` as link targets (DEC-288)
+// Part B — frontmatter `aliases:` as link targets (DEC-296)
 // ---------------------------------------------------------------------------
 
 fn alias_vault() -> TempDir {

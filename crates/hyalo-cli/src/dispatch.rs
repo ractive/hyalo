@@ -55,7 +55,7 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
             idx.insert(rel);
         }
     }
-    // iter-272 Part B (DEC-288): frontmatter `aliases:` are resolution targets.
+    // iter-272 Part B (DEC-296): frontmatter `aliases:` are resolution targets.
     // Frontmatter-only scan — no body bytes are read.
     discovery::populate_aliases_from_dir(dir, &mut idx);
     idx

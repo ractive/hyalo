@@ -208,7 +208,7 @@ pub struct LinkInfo {
     pub out_of_vault: bool,
     /// How the target resolved when a plain path or filename lookup was not
     /// what answered — currently only `"alias"`, for a target matched against
-    /// a note's frontmatter `aliases:` (iter-272 Part B, DEC-288).
+    /// a note's frontmatter `aliases:` (iter-272 Part B, DEC-296).
     ///
     /// Absent for every link that resolves by path or filename, so a report of
     /// an alias-free vault keeps today's shape byte for byte. `kind` stays
@@ -219,7 +219,7 @@ pub struct LinkInfo {
 }
 
 /// Value of [`LinkInfo::via`] for a target resolved through a frontmatter
-/// `aliases:` entry (iter-272 Part B, DEC-288).
+/// `aliases:` entry (iter-272 Part B, DEC-296).
 pub const LINK_VIA_ALIAS: &str = "alias";
 
 /// A single backlink: another file that links to this one.

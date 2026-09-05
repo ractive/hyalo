@@ -217,7 +217,7 @@ fn glob_dir_prefix(glob: &str) -> String {
 }
 
 /// Process-wide switch for frontmatter-`aliases:` link resolution
-/// (iter-272 Part B, DEC-288). Default **on**, like DEC-267 case folding.
+/// (iter-272 Part B, DEC-296). Default **on**, like DEC-267 case folding.
 static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 
 /// Install the effective `[links] aliases` setting for this process.
@@ -1572,7 +1572,7 @@ fn classify_short_form_wikilink(
         stem_index.lookup(target)
     };
 
-    // iter-272 Part B (DEC-288): no file carries that stem — but a note may
+    // iter-272 Part B (DEC-296): no file carries that stem — but a note may
     // declare it as a frontmatter alias, which is how Obsidian resolves
     // `[[Leah]]` to `Leah Ferguson.md`. An alias-resolved link is *valid as
     // written*: it needs no rewrite, so it is `ShortFormValid` rather than a
@@ -2110,7 +2110,7 @@ pub fn resolve_target(
                 return Some(canonical_path.to_owned());
             }
         }
-        // iter-272 Part B (DEC-288): last resort — a frontmatter `aliases:`
+        // iter-272 Part B (DEC-296): last resort — a frontmatter `aliases:`
         // entry. Obsidian resolves `[[Leah]]` to the note declaring
         // `aliases: [Leah]`, and 7 of the Obsidian Hub's 47 genuinely-broken
         // targets were exactly that. Deliberately *after* every path and stem
@@ -2163,7 +2163,7 @@ pub fn read_aliases(path: &Path) -> Vec<String> {
 }
 
 /// Populate `idx` with every note's declared frontmatter `aliases:` by
-/// scanning the vault's frontmatter (iter-272 Part B, DEC-288).
+/// scanning the vault's frontmatter (iter-272 Part B, DEC-296).
 ///
 /// Only the frontmatter of each file is read — the visitor stops the scan the
 /// moment the properties are parsed — so the pass costs one `open` + one short
@@ -2218,7 +2218,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // --- iter-272 Part B (DEC-288): frontmatter `aliases:` resolution ---
+    // --- iter-272 Part B (DEC-296): frontmatter `aliases:` resolution ---
 
     /// Build a vault whose notes declare aliases, plus the matching index.
     fn alias_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, CaseInsensitiveIndex) {

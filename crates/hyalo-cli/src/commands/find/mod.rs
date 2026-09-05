@@ -964,7 +964,7 @@ pub fn find(
                                 .map(str::to_owned),
                             _ => None,
                         };
-                        // iter-272 Part B (DEC-288): say so when the target
+                        // iter-272 Part B (DEC-296): say so when the target
                         // only resolved because a note declares it as a
                         // frontmatter alias — the reader otherwise has no way
                         // to tell `[[Leah]]` from a filename match.

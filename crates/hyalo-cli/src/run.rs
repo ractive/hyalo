@@ -1211,7 +1211,7 @@ fn run_inner() -> Result<(), AppError> {
         }
     }
 
-    // Install `[links] aliases` (iter-272, DEC-288) once, before any command
+    // Install `[links] aliases` (iter-272, DEC-296) once, before any command
     // runs, so every resolver, index builder and graph pass sees the same
     // answer without threading it through their signatures.
     hyalo_core::discovery::set_link_aliases(config.alias_links_enabled);

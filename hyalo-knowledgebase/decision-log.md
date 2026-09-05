@@ -5137,3 +5137,126 @@ broken ones.
 `emit_markdown_fix_target` + `raw_target_names_index` / `strip_directory_index`
 (form preservation), `markdown_fix_round_trips` (the guard that accepts it). See
 [[iterations/iteration-271-write-and-rewrite-safety]].
+
+## DEC-296: a frontmatter `aliases:` value resolves a `[[wikilink]]` (2026-09-05)
+
+**Decision:** `[[Leah]]` resolves to the note whose frontmatter declares
+`aliases: [Leah]`. The rules:
+
+- The property is **`aliases`** and nothing else — Obsidian's own spelling.
+  Both shapes its property editor writes are accepted: a list, and a bare
+  string (`aliases: Leah`). Non-string list items and blank entries are
+  ignored. `alias:` (singular) and `title:` are **not** alias sources.
+- **A filename or path match always beats an alias.** The alias map is
+  consulted only after every path, `.md`-suffix, directory-index and bare-stem
+  attempt has failed, so no vault can have an existing link repointed by
+  someone else's frontmatter.
+- **An alias claimed by two notes is ambiguous**, reported exactly like a
+  colliding bare stem, never resolved to whichever note was scanned first.
+- Matching **folds case**, like every other link lookup (DEC-267).
+- `[[alias#Heading]]` and `[[alias|label]]` work: the fragment and the label
+  are split off before resolution, as for any other target.
+- The reported `kind` stays `wikilink` — an alias changes *what the target
+  names*, not the syntax it was written in. The resolution is reported as
+  `via: "alias"` on the link entry (absent for every other link, so an
+  alias-free vault's output is unchanged byte for byte).
+- An alias-resolved link is a **real graph edge**: `backlinks`, `--orphan`,
+  `--dead-end`, `summary.links` and HYALO006 all agree with
+  `find --fields links`.
+- `links fix` never proposes a rewrite for a target that resolves through an
+  alias, and never fuzzy-matches one.
+- `mv` does not touch aliases and does not rewrite alias-written links: the
+  alias travels with the note, so the link keeps resolving at the new path.
+- **`[links] aliases = false`** turns the whole rule off and restores
+  filename-only resolution. Default **on**, like DEC-267 case folding.
+  `hyalo config --jq '.results.links.aliases'` reports the effective value.
+
+**Index:** the alias map is built **at load, from the frontmatter the index
+already carries** — no snapshot format change, so an index written by an older
+hyalo resolves aliases identically. The disk path builds it with a
+frontmatter-only scan (the visitor stops before the body), and the link-graph
+build reads aliases in the pass that already enumerates every file.
+
+**Why.** On the Obsidian Hub vault 7 of the 47 genuinely-broken targets (9
+occurrences) are declared aliases of notes that exist, and the vault declares
+5489 distinct aliases. Worse than the false "broken" verdict was what
+`links fix --apply-fuzzy` did with them: `Leah → Lewuathe.md` at 0.87,
+`Cat → CatMuse.md`, `jamesb → jamesgreenblue.md` — three confident rewrites of
+links that were already correct. A resolver that does not know about aliases is
+not merely incomplete on an Obsidian vault, it is dangerous on one.
+
+**Where:** `case_index::CaseInsensitiveIndex::{insert_aliases, lookup_alias,
+lookup_alias_all}`, `discovery::{resolve_target, resolves_via_alias,
+populate_aliases_from_dir, read_aliases, set_link_aliases}`,
+`discovery::classify_short_form_wikilink`, `link_graph::insert_file_links`,
+`filter::extract_aliases`. See
+[[iterations/iteration-272-resolution-completeness]].
+
+## DEC-297: `![alt](img.png)` is inventoried as an embed (2026-09-05)
+
+**Decision:** The markdown *image* form is extracted like every other markdown
+link and flagged `embed`, so it is reported as `attachment` when it resolves to
+a vault file and stays visible when it resolves to nothing. It is still never a
+graph edge, never fuzzy-matched and never rewritten by a plain `links fix`.
+
+**Why.** `![[img.png]]` and `[alt](img.png)` were both inventoried while
+`![alt](img.png)` — the form every static-site corpus writes — was dropped at
+extraction. MDN's whole-vault histogram therefore reported `attachment: 2`
+against thousands of images, and a missing image surfaced nowhere: not in
+`find --fields links`, not in `--broken-links`, not in `summary`.
+
+**Where:** `links::extract_links_and_anchors`. See
+[[iterations/iteration-272-resolution-completeness]].
+
+## DEC-298: the `suggested_fragment` prefix test folds `-`, `_` and space (2026-09-05) — amends DEC-268
+
+**Decision:** When deciding whether a dead fragment is the unique prefix of one
+heading, `-`, `_` and a space are one character class. **Only the suggestion is
+affected.** DEC-268's rule that a prefix match never silently *resolves* an
+anchor is untouched: the suggestion is still printed, never applied, and still
+requires a unique match.
+
+**Why.** MDN slugs its headings with underscores (`#Browser_compatibility`)
+while the heading itself is written with spaces, so a strict comparison found
+no prefix for **1242 of the 1254** broken anchors on an MDN CSS copy — every
+one of them a heading the reader could see two lines away. DEC-268 forbids
+silent matching, not helpful suggesting.
+
+**Where:** `anchor::{unique_heading_by_prefix, prefix_matches_fragment}`. See
+[[iterations/iteration-272-resolution-completeness]].
+
+## DEC-299: block-reference and slug anchors stay unchecked — backlog (2026-09-05)
+
+**Decision:** `[[Target#^block-id]]` is **not** reported as a broken anchor,
+and neither is a slug-shaped fragment that matches no heading beyond what
+DEC-075 already accepts. Backlogged, not rejected.
+
+**Why.** Obsidian does break `#^nope`, so hyalo is genuinely incomplete here —
+but checking it needs a block-id scan (`^id` markers at the end of a block),
+which is a new indexed field, a snapshot format addition and a new class of
+false positive on every corpus that writes `^` for other reasons. That is its
+own iteration, not a line in this one. Reporting them broken *without* the scan
+would be strictly worse than saying nothing: every block reference in every
+Obsidian vault would be a false positive.
+
+**Where:** `anchor::is_block_ref` (the current skip, unchanged). See
+[[iterations/iteration-272-resolution-completeness]].
+
+## DEC-300: no `[links] redirect_property` — backlog (2026-09-05)
+
+**Decision:** A config key that reads a `redirect_from:` list as extra
+resolution targets is **not** added in this iteration.
+
+**Why.** It looked like a few lines on top of DEC-296's alias map, and it is
+not: the alias map is keyed by *bare note name* and is consulted only for
+targets with no path separator, because that is the only shape an Obsidian
+alias can take. GitHub Docs' `redirect_from:` values are **site-absolute URL
+paths** (`/actions/reference/workflow-syntax`), which resolve through
+`strip_site_prefix` and the path lookup, never through the name map. Supporting
+them means a second, path-keyed alias map with its own precedence against the
+directory-index rule — a different feature wearing the same word. The 1569
+"broken" GitHub Docs files stay reported; a vault that wants them resolved can
+set `site_prefix` or fix the links.
+
+**Where:** nothing implemented; recorded so the option is not re-litigated. See
+[[iterations/iteration-272-resolution-completeness]].

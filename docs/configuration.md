@@ -13,6 +13,7 @@ default_limit = 100       # max results for list commands (default: 50; 0 = unli
 [links]
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
+aliases = true                                        # frontmatter `aliases:` resolve wikilinks (default: true)
 fuzzy_min_confidence = 0.8                            # confidence floor for links fix --apply-fuzzy (default: 0.8)
 
 [links.auto]
@@ -131,6 +132,43 @@ whose case-folded directory layouts (`en-US` written as `en-us`) otherwise make
 a dry run offer tens of thousands of casing rewrites that every downstream
 tool would resolve fine anyway. The same effect for a single run is the
 `links fix --case-insensitive` flag.
+
+### `[links] aliases` — frontmatter aliases as link targets
+
+A note's frontmatter `aliases:` are alternative names it can be linked by, the
+way Obsidian treats them:
+
+```yaml
+---
+title: Leah Ferguson
+aliases:
+  - Leah
+  - L. Ferguson
+---
+```
+
+`[[Leah]]` written anywhere in the vault then resolves to that note. The rules
+(DEC-296):
+
+- Only the `aliases` property is read, in either shape Obsidian writes — a list
+  or a bare string (`aliases: Leah`).
+- **A filename or path match always wins.** The alias map is consulted only
+  after every path, `.md`-suffix, directory-index and bare-stem attempt fails,
+  so no existing link is ever repointed by someone else's frontmatter.
+- An alias declared by **two** notes is ambiguous and resolves to nothing —
+  the same verdict a colliding bare stem gets.
+- Matching folds case, like every other lookup, and `[[alias#Heading]]` /
+  `[[alias|label]]` work.
+- A link that resolved this way reports `via: "alias"`; its `kind` stays
+  `wikilink`. It is a real graph edge, so `backlinks`, `--orphan`,
+  `--dead-end`, `summary.links` and HYALO006 all agree with
+  `find --fields links`.
+- `links fix` never proposes a rewrite for such a target and never
+  fuzzy-matches one; `mv` leaves alias-written links alone, because the alias
+  travels with the note.
+
+Set `aliases = false` to restore filename-only resolution.
+`hyalo config --jq '.results.links.aliases'` reports the effective value.
 
 Under `"auto"`, hyalo detects case behaviour with **stat calls only**: it looks
 up an existing vault entry (or the vault directory itself) under a

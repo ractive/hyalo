@@ -255,7 +255,7 @@ impl ScannedIndex {
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
         let graph = if options.scan_body {
-            // iter-272 Part B (DEC-288): every entry's frontmatter is already
+            // iter-272 Part B (DEC-296): every entry's frontmatter is already
             // parsed, so the declared `aliases:` come for free — the graph
             // resolves an alias-named wikilink to the same file
             // `find --fields links` reports, and `backlinks` / `--orphan` /

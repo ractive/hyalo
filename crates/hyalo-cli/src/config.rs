@@ -53,7 +53,7 @@ struct LinksConfig {
     #[serde(default)]
     auto: Option<AutoLinksConfig>,
     /// Whether a frontmatter `aliases:` value resolves a `[[wikilink]]`
-    /// (iter-272, DEC-288). Default `true`.
+    /// (iter-272, DEC-296). Default `true`.
     ///
     /// `false` restores the pre-iter-272 behaviour: only filenames and paths
     /// resolve, and `[[Leah]]` is broken even when a note declares
@@ -336,7 +336,7 @@ pub(crate) struct ResolvedDefaults {
     /// [`Self::frontmatter_link_props`], which this value resolves into.
     pub(crate) frontmatter_links_enabled: bool,
     /// Effective `[links] aliases` — whether a frontmatter `aliases:` value
-    /// resolves a wikilink (iter-272, DEC-288). Default `true`.
+    /// resolves a wikilink (iter-272, DEC-296). Default `true`.
     pub(crate) alias_links_enabled: bool,
     /// When `true`, schema validation is applied on every `set`/`append` operation.
     /// From `validate_on_write = true` in `.hyalo.toml`.

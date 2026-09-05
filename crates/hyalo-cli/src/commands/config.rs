@@ -90,7 +90,7 @@ pub(crate) struct ConfigReport {
     /// allow-list, when one is configured. `None` means whatever
     /// [`Self::frontmatter_links`] implies.
     pub frontmatter_link_properties: Option<Vec<String>>,
-    /// Effective `[links] aliases` (iter-272, DEC-288): whether a frontmatter
+    /// Effective `[links] aliases` (iter-272, DEC-296): whether a frontmatter
     /// `aliases:` value resolves a `[[wikilink]]`.
     pub alias_links: bool,
     /// Effective `[scan]` settings (iter-265): the vault-wide exclusion globs

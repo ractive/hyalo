@@ -67,7 +67,7 @@ pub struct CaseInsensitiveIndex {
     /// the resolved `[links] case_insensitive` mode.
     case_insensitive_paths: bool,
     /// Map from lowercased frontmatter `aliases:` value → list of real paths
-    /// declaring that alias (iter-272 Part B, DEC-288).
+    /// declaring that alias (iter-272 Part B, DEC-296).
     ///
     /// Obsidian resolves `[[Leah]]` to the note whose frontmatter declares
     /// `aliases: [Leah]`. The map is consulted only after path and stem

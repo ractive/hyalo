@@ -42,7 +42,7 @@ pub fn extract_tags(props: &IndexMap<String, Value>) -> Vec<String> {
 pub const ALIASES_PROPERTY: &str = "aliases";
 
 /// Extract the declared `aliases:` of a note from its parsed frontmatter
-/// (iter-272 Part B, DEC-288).
+/// (iter-272 Part B, DEC-296).
 ///
 /// Obsidian accepts both shapes its property editor can write:
 /// - a list — `aliases:\n  - Leah\n  - L. Ferguson`

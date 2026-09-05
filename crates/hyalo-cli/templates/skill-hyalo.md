@@ -463,10 +463,21 @@ What follows is only what those pages do not say — the behaviour that surprise
 - **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
   `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
   or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
+  `![alt](img.png)` is an embed too (DEC-297), so a missing image is visible. A same-file anchor
+  (`[[#H]]`, `[text](#frag)`) keeps the syntax it was written in — an anchor-only *markdown*
+  link is `kind: "markdown"` and carries its link text.
   `external` and `attachment` are **never broken** — they stay out of `find --broken-links`,
   `summary.links.broken` and HYALO006, and are not graph edges for `--orphan` / `--dead-end`.
   So bucket broken links with
   `select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
+- **Frontmatter `aliases:` resolve wikilinks** (DEC-296): `[[Leah]]` finds the note declaring
+  `aliases: [Leah]` (list or bare string). A filename or path always wins; an alias claimed by
+  two notes is ambiguous, not resolved; matching folds case like DEC-267; `[[alias#Heading]]`
+  and `[[alias|label]]` work. The link's `kind` stays `wikilink` and it carries `via: "alias"`.
+  Alias links are real graph edges (`backlinks`, `--orphan`, `--dead-end`, `summary.links`,
+  HYALO006) and `links fix` never proposes or fuzzy-matches a rewrite for one. `mv` leaves them
+  alone — the alias travels with the note. Opt out with `[links] aliases = false`
+  (`hyalo config --jq '.results.links.aliases'`).
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
@@ -480,7 +491,12 @@ What follows is only what those pages do not say — the behaviour that surprise
   `.md`, and neither `/index` nor `.md` is appended to a form that lacked it.
 - **A dead `#anchor` that prefixes exactly one heading gets a `suggested_fragment`** (DEC-268):
   `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write.
-  Reported, never applied — an ambiguous prefix suggests nothing.
+  Reported, never applied — an ambiguous prefix suggests nothing. `-`, `_` and a space are one
+  character class for that prefix test (DEC-298), so `#Browser_compatibility` suggests the
+  `Browser compatibility` heading.
+- **`links fix` reports the string it will write** (iter-272): every plan carries
+  `emitted_target` beside the vault-relative `new_target`, filled by the same planning pass in
+  `--dry-run` and `--apply`, so a preview is byte-accurate about what lands on disk.
 - **`config` reports a broken config rather than failing.** `results.malformed` /
   `results.parse_error` mean every other value shown is a built-in default.
 - **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.

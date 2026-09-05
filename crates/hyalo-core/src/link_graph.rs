@@ -709,7 +709,7 @@ fn insert_file_links(
         // equal the raw target (only `.md`-suffix difference) to avoid
         // double-counting via the toggle.
         //
-        // iter-272 Part B (DEC-288): when no file has that stem, a frontmatter
+        // iter-272 Part B (DEC-296): when no file has that stem, a frontmatter
         // `aliases:` entry can still name one — and an alias-resolved link is
         // a real graph edge, so `backlinks`, `--orphan`, `--dead-end` and
         // `summary.links` all agree with what `find --fields links` reports.

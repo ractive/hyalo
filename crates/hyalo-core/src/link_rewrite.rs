@@ -118,7 +118,7 @@ pub struct SkippedAmbiguous {
 ///
 /// Still limited to single-file [`plan_mv`]: [`plan_batch_mv`] has no channel
 /// for these reports at all (it returns bare [`RewritePlan`]s), so batch moves
-/// neither warn about split links nor did before — see DEC-288.
+/// neither warn about split links nor did before — see DEC-296.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkippedFrontmatterLink {
     /// Vault-relative path of the file holding the link.
@@ -1620,7 +1620,7 @@ fn plan_frontmatter_wikilink_rewrites(
             continue;
         }
 
-        // BUG-7 (dogfood v0.22.0), iter-271 Part G: the DEC-288 ambiguity
+        // BUG-7 (dogfood v0.22.0), iter-271 Part G: the DEC-296 ambiguity
         // guard applies to a frontmatter link exactly as it does to a body
         // one. `related: "[[a]]"` names a bare stem, and a bare stem shared by
         // `a.md` and `x/a.md` names neither — the body rewriter skipped it
