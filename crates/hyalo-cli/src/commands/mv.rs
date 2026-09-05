@@ -582,8 +582,10 @@ fn build_rename_map(
         let message = match (has_source_clash, has_pre_existing) {
             (true, false) => "destination collision: multiple sources map to the same destination",
             (false, true) => "destination collision: a file already exists at the destination",
-            _ => "destination collision: some sources share a destination and some destinations \
-                  are already taken",
+            _ => {
+                "destination collision: some sources share a destination and some destinations \
+                  are already taken"
+            }
         };
         let out = crate::output::format_error(
             format,

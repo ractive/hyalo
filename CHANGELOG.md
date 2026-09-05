@@ -192,6 +192,7 @@ and this project adheres to
 - `hyalo config` reports the effective output format plus `format_source`, and an effective `hints` boolean
 - `lint --format github` summary counts files checked: `N errors, M warnings in K of T files checked`
 - `set`/`append` with `--validate` (or `[schema] validate_on_write`) now refuse with exit 1 when `[schema]` exists but cannot be loaded, instead of falling back to an empty schema and writing unvalidated (DEC-290). Writes without `--validate`, and every other command, are unaffected.
+- `mv --on-conflict` is a validated choice (`error` | `skip`): an unknown policy is now a usage error instead of parsing and silently behaving as `error`, and single-file mode honours `skip` (the source stays put, reported under `skipped`, exit 0). The batch collision error distinguishes two sources sharing a destination from a destination that is already taken.
 
 ### Removed
 
@@ -366,6 +367,14 @@ and this project adheres to
 - A markdown destination in angle brackets whose text is a parenthesised URL — `[y](<(https://…)>)` — is external: never broken, never fuzzy-matched.
 - `![alt](img.png)` is inventoried like `![[img.png]]` (DEC-297), so a missing image surfaces in `find --fields links`, `--broken-links` and `summary` instead of being dropped at extraction.
 - The DEC-268 heading suggestion folds `-`, `_` and space (DEC-298), so an underscore-slugged fragment such as `#Browser_compatibility` now suggests the `Browser compatibility` heading it prefixes.
+- `find` no longer answers a *named* file with an empty success: a `--file` or positional path whose YAML frontmatter will not parse exits 1 with the diagnostic (a `--files-from` list keeps batch semantics and counts it).
+- `find --index --file <path>` reads a note the snapshot has never seen from disk instead of returning `results: []`, so a file created since the last `create-index` is never invisible.
+- `find --file`/`--glob` with `--broken-links` (or `--fields links`) keeps `broken_anchor` and `suggested_fragment`; the four ways of selecting one file now return identical link JSON.
+- `lint --rule <ID>` no longer reports frontmatter parse errors under an unrelated rule — `--rule MD018 --count` on a vault of unparsable templates answers 0 plus the skip summary, and HYALO005 still reports them.
+- The `--index` staleness probe now sees an in-place overwrite: when the directory-mtime probe is clean, each indexed file's recorded mtime is compared against disk and the first drift is named in the warning.
+- `summary --index` reports the same `excluded` count as a disk scan — the snapshot records how many files `[scan] exclude` dropped when it was built, and the patterns that dropped them.
+- `mv` resolves the destination exactly like the source, so `hyalo mv kb/a.md kb/sub/a.md` run beside a `dir = "kb"` vault lands at `kb/sub/a.md` instead of creating `kb/kb/sub/`. All four destination forms are affected; a missing `--to dir/` is reported as a missing directory rather than `did you mean dir/.md?`.
+- Batch `mv` runs the split-frontmatter-link sweep single-file `mv` has run since iteration 269 — once per batch — and reports each move's own `frontmatter_links_skipped`.
 
 ### Added
 

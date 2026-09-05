@@ -151,12 +151,13 @@ pub(crate) struct IndexFlags {
     /// STALENESS PROBE: on load, hyalo compares directory mtimes in the
     /// vault (the root and every directory up to 3 levels below it — cheap,
     /// directory-only stats, no file reads) against the snapshot's creation
-    /// time and warns `index older than vault` when one postdates it. Two
-    /// blind spots: in-place edits of existing notes (content changes that
-    /// don't add, remove, or rename any file), and files added or removed
-    /// inside a directory more than 3 levels deep — see `create-index
-    /// --help` for the full contract. The warning never stops the run:
-    /// stale results are still served.
+    /// time and warns `index older than vault` when one postdates it. When
+    /// that probe finds nothing, a second pass compares each indexed file's
+    /// recorded mtime against disk and stops at the first drift, so an
+    /// in-place overwrite (which moves no directory mtime) is named in the
+    /// warning rather than silently served. Remaining blind spot: an edit
+    /// within the same whole second as the snapshot. The warning never stops
+    /// the run: stale results are still served.
     #[arg(long)]
     pub index: bool,
 
@@ -892,6 +893,13 @@ pub(crate) enum Commands {
             `--fields properties-typed` is emitted under the snake_case key `properties_typed` \
             (like every other envelope key); `--fields properties_typed` is accepted as a spelling \
             of the same field so a printed field list round-trips.\n\
+            NAMED FILES ARE NOT A BATCH: a path you type (--file or positional) whose YAML \
+            frontmatter will not parse fails the run (exit 1, with the parse diagnostic and the \
+            HYALO005 rule to run) instead of returning an empty result set; a --files-from list \
+            keeps batch semantics and counts the same file as a skip at exit 0. With --index, a \
+            named path the snapshot has never seen is read from disk for that run (a note added \
+            since the last create-index is never invisible); a path in neither the snapshot nor \
+            the vault is still `file not found`, exit 1.\n\
             JQ: --jq operates on the full envelope. Examples: --jq '.results[].file', --jq '.total'.\n\
             VIEWS: --view <name> loads a saved filter set from .hyalo.toml. Additional CLI flags \
             merge on top: list filters (--property, --tag, --section, --glob) extend the view's \
@@ -1248,9 +1256,21 @@ pub(crate) enum Commands {
             survive and `git diff` shows one changed target per line. A link whose `[[...]]` spans a\n\
             line break (a folded or literal block scalar) has no single-line span to replace: it is\n\
             left alone, counted in a stderr warning, and listed under `frontmatter_links_skipped`.\n\
-            Single-file mode finds those links anywhere in the vault, including in files that hold\n\
-            no other link to the moved target — a split link is not a backlink, so the link graph\n\
-            alone would never surface it. Batch mode reports no frontmatter skips.\n\n\
+            Both modes find those links anywhere in the vault, including in files that hold no\n\
+            other link to the moved target — a split link is not a backlink, so the link graph\n\
+            alone would never surface it. Batch mode sweeps once for the whole batch and reports\n\
+            each move's own list under `moves[].frontmatter_links_skipped`.\n\n\
+            DESTINATION PATHS: the destination is resolved exactly like the source, so a\n\
+            CWD-relative path carrying the configured vault dir works from the project root\n\
+            (`dir = \"kb\"` → `hyalo mv kb/a.md kb/sub/a.md` lands at `kb/sub/a.md`, not\n\
+            `kb/kb/sub/a.md`). A destination that would escape the vault is refused. A trailing\n\
+            slash always means \"directory\": in single-file mode the source's basename is\n\
+            appended when that directory exists, and a missing one is reported as such.\n\n\
+            CONFLICTS: --on-conflict takes `error` (default) or `skip`; anything else is a usage\n\
+            error. `skip` works in both modes — batch moves everything that does not collide,\n\
+            single-file mode leaves the source where it is and reports it under `skipped` at\n\
+            exit 0. The batch error distinguishes two sources mapping to one destination from a\n\
+            destination that is already taken.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
@@ -1610,12 +1630,20 @@ Repeatable (AND).\n\
             (the vault root and every directory up to 3 levels below it; deeper\n\
             levels are skipped because a full walk of a 14k-file vault costs more\n\
             than the indexed query itself) against the snapshot's creation time\n\
-            and warn `index older than vault` when one postdates it. Two blind\n\
-            spots: in-place edits of existing notes (an edit that changes a file's\n\
-            content without adding/removing/renaming any file leaves every\n\
-            directory's mtime untouched), and files added or removed inside a\n\
-            directory more than 3 levels below the root. Re-run create-index\n\
-            whenever the vault may have changed.\n\
+            and warn `index older than vault` when one postdates it. When that\n\
+            probe is clean, a second pass compares every indexed file's recorded\n\
+            mtime against disk and stops at the first drift, naming the file in\n\
+            the warning — this is what catches an in-place overwrite and a change\n\
+            more than 3 levels below the root, neither of which moves any\n\
+            directory's mtime. It costs one stat per indexed file and only runs on\n\
+            a vault the cheap probe found clean (measured at ~0.02 s over 14,375\n\
+            MDN files). Remaining blind spot: an edit landing in the same whole\n\
+            second as the snapshot. Re-run create-index whenever the vault may\n\
+            have changed.\n\
+            EXCLUSIONS: the snapshot records how many files `[scan] exclude`\n\
+            dropped when it was built, and which patterns dropped them, so\n\
+            `summary --index` reports the same `excluded` figure as a disk scan.\n\
+            Change the patterns and the recorded count is ignored — rebuild.\n\
             The warning does not stop the run: stale results are still served and\n\
             still exit 0. Re-run `create-index`, or omit `--index` to force a\n\
             disk scan instead.\n\n\

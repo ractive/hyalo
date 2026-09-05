@@ -1618,14 +1618,15 @@ fn scan_split_frontmatter_links_batch(
                 if let Some(target) =
                     split_frontmatter_wikilink(line, rest, old_rel, old_stem, Some(case_index))
                 {
-                    found.entry(old_rel.clone()).or_default().push(
-                        SkippedFrontmatterLink {
+                    found
+                        .entry(old_rel.clone())
+                        .or_default()
+                        .push(SkippedFrontmatterLink {
                             source: rel_norm.clone(),
                             // +1 for the opening `---`, +1 to make it 1-based.
                             line: idx + 2,
                             target,
-                        },
-                    );
+                        });
                 }
             }
         }

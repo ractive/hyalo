@@ -286,7 +286,7 @@ pub(crate) fn single_named_file_unparseable(
 }
 
 /// Turn "the file you named will not parse" into an error for a *reading*
-/// command (iter-273, DEC-298).
+/// command (iter-273, DEC-301).
 ///
 /// The mutation twin is [`single_named_file_unparseable`], whose message ends
 /// in "nothing was modified" because a write had been asked for. A read has
@@ -477,7 +477,7 @@ pub(crate) fn resolve_index<'a>(
 }
 
 /// How a scan should treat a file the caller *named* whose frontmatter will not
-/// parse (iter-273, DEC-298).
+/// parse (iter-273, DEC-301).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NamedFilePolicy {
     /// Historic behaviour: the file is dropped from the result set and folded
@@ -610,7 +610,7 @@ pub(crate) fn build_scanned_index_named(
 
     let build = ScannedIndex::build(&files, site_prefix, options)?;
 
-    // DEC-298 (iter-273): a path the caller typed is a promise that the answer
+    // DEC-301 (iter-273): a path the caller typed is a promise that the answer
     // is about *that* file. Dropping it into the skip summary and exiting 0
     // with `results: []` is indistinguishable, to a script, from "the file
     // matched no filter" — the exact empty success `set` stopped producing in
@@ -619,14 +619,12 @@ pub(crate) fn build_scanned_index_named(
     if named_policy == NamedFilePolicy::Fatal
         && let Some(w) = build.warnings.iter().find(|w| {
             w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE
-                && named_rel.iter().any(|rel| *rel == w.rel_path)
+                && named_rel.contains(&w.rel_path)
         })
     {
-        return Ok(ScannedIndexOutcome::Outcome(named_file_unparseable_outcome(
-            &w.rel_path,
-            &w.message,
-            format,
-        )));
+        return Ok(ScannedIndexOutcome::Outcome(
+            named_file_unparseable_outcome(&w.rel_path, &w.message, format),
+        ));
     }
 
     // Same distinction `create_index` makes: a warning is the BUG-14

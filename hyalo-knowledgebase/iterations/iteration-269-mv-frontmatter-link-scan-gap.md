@@ -239,7 +239,7 @@ trivially "missing a trailing newline" rather than as "nothing to check".
 ## Links
 
 - [[backlog/done/mv-frontmatter-split-link-detection-gap]]
-- [[backlog/mv-batch-frontmatter-link-scan-gap]] — batch `mv` carry-over filed here
+- [[backlog/done/mv-batch-frontmatter-link-scan-gap]] — batch `mv` carry-over filed here
 - [[iterations/iteration-262-frontmatter-wikilinks-first-class]]
 - [[iterations/iteration-263-lint-autofix-obsidian-safety]]
 - [[iterations/iteration-267-help-hints-text-polish]]
@@ -285,7 +285,7 @@ unchanged ambiguity probe and nothing new is rewritten by default.
 **Batch `mv` deferred, deliberately.** `plan_batch_mv` returns bare `RewritePlan`s and has
 never had a `frontmatter_links_skipped` channel at all, so extending it means changing its
 return type and the batch output shape. `mv --help` now states the asymmetry. Filed as
-[[backlog/mv-batch-frontmatter-link-scan-gap]] rather than left implicit.
+[[backlog/done/mv-batch-frontmatter-link-scan-gap]] rather than left implicit.
 
 **Verified unchanged** on `../kepano-obsidian` and this knowledgebase: `summary`,
 `find --orphan`, `find --dead-end` and `backlinks` are byte-identical before/after, and an

@@ -250,7 +250,7 @@ pub(crate) struct CommandContext<'a> {
     /// `resolve_files_from_for_command` rewrites `--files-from` into the
     /// command's `file` field before dispatch, so by the time a handler runs
     /// the two are indistinguishable — yet they carry opposite contracts
-    /// (DEC-284 / DEC-298): a path the caller typed is a promise the answer is
+    /// (DEC-284 / DEC-301): a path the caller typed is a promise the answer is
     /// about *that* file, while a `--files-from` list is a batch whose
     /// unusable entries are counted, not fatal.
     pub file_list_from_files_from: bool,

@@ -24,7 +24,7 @@ related:
   - "[[iterations/iteration-268-object-list-schema-type]]"
   - "[[iterations/iteration-269-mv-frontmatter-link-scan-gap]]"
   - "[[iterations/iteration-270-schema-write-semantics]]"
-  - "[[backlog/mv-destination-path-resolved-vault-relative]]"
+  - "[[backlog/done/mv-destination-path-resolved-vault-relative]]"
 ---
 
 # Dogfood v0.22.0 — after iterations 261–270
@@ -260,7 +260,7 @@ With `dir = "kb"` from the parent directory, `hyalo mv kb/a.md kb/sub/a.md`, `--
 kb/sub/a.md` and `--glob a.md --to kb/sub/ --apply` all move to `kb/kb/sub/a.md`; the source side
 strips the prefix, the destination does not, and link rewrites follow the nested path. `--to
 kb/sub/` yields the hint `did you mean kb/sub/.md?`. Already filed as
-[[backlog/mv-destination-path-resolved-vault-relative]]; all three forms are affected.
+[[backlog/done/mv-destination-path-resolved-vault-relative]]; all three forms are affected.
 
 ### BUG-15: A frontmatter flow list beginning `[[[` mis-captures the link target, so `mv` leaves it dangling (MEDIUM)
 

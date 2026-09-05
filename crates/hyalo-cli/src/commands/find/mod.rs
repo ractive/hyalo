@@ -70,7 +70,9 @@ fn anchor_verdict(
     // A target that resolved but cannot be re-read (deleted between the two
     // steps, or unreadable) keeps the historic "not broken" answer rather than
     // inventing a broken anchor out of an I/O failure.
-    sections.as_deref().map_or((false, None), |s| verdict(s, fragment))
+    sections
+        .as_deref()
+        .map_or((false, None), |s| verdict(s, fragment))
 }
 
 /// Strip hyalo's internal `(?i)` prefix out of a regex engine error message

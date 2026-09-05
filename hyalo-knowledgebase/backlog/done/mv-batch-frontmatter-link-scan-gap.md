@@ -2,7 +2,7 @@
 type: backlog
 title: batch mv has no split-frontmatter-link scan or skipped-links channel
 date: 2026-09-04
-status: planned
+status: done
 priority: low
 origin: "iter-269 (PR #313) carry-over sweep, 2026-09-04"
 ---

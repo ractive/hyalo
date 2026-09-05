@@ -2071,9 +2071,9 @@ fn run_inner() -> Result<(), AppError> {
                         let (_, _, created_at, _) = idx.header_info();
                         let dirs_moved =
                             hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
-                                newest > created_at.saturating_add(
-                                    hyalo_core::index::STALENESS_TOLERANCE_SECS,
-                                )
+                                newest
+                                    > created_at
+                                        .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
                             });
                         if dirs_moved {
                             crate::warn::warn(
@@ -2088,7 +2088,9 @@ fn run_inner() -> Result<(), AppError> {
                             // comparison only when the cheap probe found
                             // nothing, so the extra `stat`s are paid once, on
                             // the vault that looked clean.
-                            hyalo_core::index::first_file_modified_since_snapshot(&idx, &dir)
+                            hyalo_core::index::first_file_modified_since_snapshot(
+                                    &idx, &dir,
+                                )
                         {
                             crate::warn::warn(format!(
                                 "index older than vault ({rel} changed on disk since the index \

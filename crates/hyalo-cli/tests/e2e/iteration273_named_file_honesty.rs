@@ -59,7 +59,11 @@ fn run_ok(tmp: &TempDir, args: &[&str]) -> serde_json::Value {
 fn vault_with_unparsable_file() -> TempDir {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write(&tmp, "dup.md", "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n");
+    write(
+        &tmp,
+        "dup.md",
+        "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n",
+    );
     write(&tmp, "good.md", "---\ntitle: Good\n---\n\n# Good\n\nbody\n");
     tmp
 }
@@ -118,7 +122,10 @@ fn files_from_keeps_batch_semantics_for_an_unparsable_note() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["total"], 1, "only the parsable file is reported: {json}");
+    assert_eq!(
+        json["total"], 1,
+        "only the parsable file is reported: {json}"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unparsable frontmatter"),
@@ -222,10 +229,7 @@ fn the_broken_anchor_verdict_does_not_depend_on_how_the_file_was_selected() {
     let sweep = anchor_verdict(&tmp, &["find", "--broken-links"]);
     assert_eq!(
         sweep,
-        (
-            true,
-            Some("DEC-068: Snapshot index format".to_owned())
-        ),
+        (true, Some("DEC-068: Snapshot index format".to_owned())),
         "baseline: the vault sweep sees the broken anchor and DEC-268's suggestion"
     );
     for args in [
@@ -251,7 +255,11 @@ fn the_broken_anchor_verdict_does_not_depend_on_how_the_file_was_selected() {
 fn lint_rule_filter_excludes_frontmatter_parse_errors() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write(&tmp, "dup.md", "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n");
+    write(
+        &tmp,
+        "dup.md",
+        "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n",
+    );
 
     let output = hyalo(&tmp)
         .args(["lint", "--rule", "MD018", "--count"])
@@ -273,7 +281,11 @@ fn lint_rule_filter_excludes_frontmatter_parse_errors() {
 fn lint_rule_hyalo005_still_reports_the_parse_error() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write(&tmp, "dup.md", "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n");
+    write(
+        &tmp,
+        "dup.md",
+        "---\ntitle: Dup\ntitle: Dup2\n---\n\nbody\n",
+    );
 
     for filter in [
         vec!["lint", "--rule", "HYALO005", "--count"],
@@ -297,14 +309,26 @@ fn lint_rule_hyalo005_still_reports_the_parse_error() {
 fn an_in_place_overwrite_makes_the_next_index_read_warn() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
-    write(&tmp, "n1.md", "---\ntitle: N1\nstatus: final\n---\n\nbody\n");
-    write(&tmp, "n2.md", "---\ntitle: N2\nstatus: final\n---\n\nbody\n");
+    write(
+        &tmp,
+        "n1.md",
+        "---\ntitle: N1\nstatus: final\n---\n\nbody\n",
+    );
+    write(
+        &tmp,
+        "n2.md",
+        "---\ntitle: N2\nstatus: final\n---\n\nbody\n",
+    );
     run_ok(&tmp, &["create-index"]);
 
     // The probe compares whole seconds with a one-second tolerance, so the
     // overwrite has to land in a later second to be detectable at all.
     std::thread::sleep(std::time::Duration::from_millis(2100));
-    write(&tmp, "n2.md", "---\ntitle: N2 rewritten\nstatus: draft\n---\n\nnew\n");
+    write(
+        &tmp,
+        "n2.md",
+        "---\ntitle: N2 rewritten\nstatus: draft\n---\n\nnew\n",
+    );
 
     let (code, _, stderr) = run(&tmp, &["find", "--index", "--property", "status=final"]);
     assert_eq!(code, 0, "warn-but-serve: the read still answers");
@@ -342,11 +366,7 @@ fn summary_agrees_with_the_disk_scan_about_excluded_files() {
     )
     .unwrap();
     for i in 0..3 {
-        write(
-            &tmp,
-            &format!("n{i}.md"),
-            "---\ntitle: N\n---\n\nbody\n",
-        );
+        write(&tmp, &format!("n{i}.md"), "---\ntitle: N\n---\n\nbody\n");
     }
     for i in 0..2 {
         write(
@@ -441,7 +461,10 @@ fn every_destination_form_lands_inside_the_vault_not_below_a_second_copy_of_it()
 
     run_ok(&tmp, &["mv", "kb/a.md", "kb/sub/a.md"]);
     run_ok(&tmp, &["mv", "--file", "kb/b.md", "--to", "kb/sub/b.md"]);
-    run_ok(&tmp, &["mv", "--glob", "c.md", "--to", "kb/sub/", "--apply"]);
+    run_ok(
+        &tmp,
+        &["mv", "--glob", "c.md", "--to", "kb/sub/", "--apply"],
+    );
 
     for name in ["a", "b", "c"] {
         assert!(
@@ -480,7 +503,10 @@ fn a_trailing_slash_destination_that_does_not_exist_says_so() {
     let tmp = nested_vault();
     let (code, json, _) = run(&tmp, &["mv", "--file", "kb/a.md", "--to", "kb/nope/"]);
     assert_eq!(code, 1, "{json}");
-    assert_eq!(json["error"], "destination directory does not exist", "{json}");
+    assert_eq!(
+        json["error"], "destination directory does not exist",
+        "{json}"
+    );
     let hint = json["hint"].as_str().unwrap_or_default();
     assert!(
         !hint.contains("/.md"),
@@ -561,7 +587,11 @@ fn an_unknown_on_conflict_policy_is_a_usage_error() {
 #[test]
 fn single_file_mv_honours_on_conflict_skip() {
     let tmp = nested_vault();
-    write(&tmp, "kb/sub/a.md", "---\ntitle: existing\n---\n\nkeep me\n");
+    write(
+        &tmp,
+        "kb/sub/a.md",
+        "---\ntitle: existing\n---\n\nkeep me\n",
+    );
 
     let json = run_ok(
         &tmp,
@@ -588,7 +618,11 @@ fn single_file_mv_honours_on_conflict_skip() {
 #[test]
 fn single_file_mv_without_skip_still_refuses_and_says_how_to_skip() {
     let tmp = nested_vault();
-    write(&tmp, "kb/sub/a.md", "---\ntitle: existing\n---\n\nkeep me\n");
+    write(
+        &tmp,
+        "kb/sub/a.md",
+        "---\ntitle: existing\n---\n\nkeep me\n",
+    );
 
     let (code, json, _) = run(&tmp, &["mv", "--file", "kb/a.md", "--to", "kb/sub/a.md"]);
     assert_eq!(code, 1, "{json}");
@@ -605,7 +639,11 @@ fn single_file_mv_without_skip_still_refuses_and_says_how_to_skip() {
 #[test]
 fn a_pre_existing_destination_is_not_reported_as_two_sources_clashing() {
     let tmp = nested_vault();
-    write(&tmp, "kb/sub/a.md", "---\ntitle: existing\n---\n\nkeep me\n");
+    write(
+        &tmp,
+        "kb/sub/a.md",
+        "---\ntitle: existing\n---\n\nkeep me\n",
+    );
 
     let (code, json, _) = run(&tmp, &["mv", "--glob", "a.md", "--to", "sub/", "--apply"]);
     assert_eq!(code, 1, "{json}");
