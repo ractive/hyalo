@@ -51,6 +51,15 @@ pub struct BrokenLinkInfo {
     pub source: String,
     pub line: usize,
     pub target: String,
+    /// The vault files an *ambiguous* target matches (iter-275, ALIAS-5 /
+    /// BUG-26) — two files sharing a basename stem, or two notes declaring
+    /// the same frontmatter alias.
+    ///
+    /// Only ever populated for entries in
+    /// [`BrokenLinkReport::ambiguous`]; omitted for a plain broken link,
+    /// whose problem is that nothing matches at all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<String>,
 }
 
 /// Summary of broken link detection across the vault.
@@ -94,6 +103,13 @@ pub struct BrokenLinkReport {
     /// Site-absolute targets (`/src/foo.md`) deliberately stay in `broken`:
     /// a vault that is itself the site root makes those genuine misses.
     pub out_of_vault: Vec<BrokenLinkInfo>,
+    /// Bare targets that exactly one note declares as a frontmatter alias
+    /// (iter-275, DEC-308 / ALIAS-2) — all [`FixStrategy::Alias`].
+    ///
+    /// Broken as written (Obsidian renders them unresolved), but with an
+    /// exact, non-fuzzy rewrite available: `[[Leah]]` → `[[Leah Ferguson|Leah]]`.
+    /// Applied by plain `--apply`, never by the fuzzy path.
+    pub alias_fixes: Vec<FixPlan>,
 }
 
 /// A single actionable fix: rewrite `old_target` → `new_target` in `source`.
@@ -165,7 +181,7 @@ pub fn annotate_emitted_targets(fixes: &mut [FixPlan], emitted: &EmittedTargets)
 }
 
 /// How a candidate file was matched to a broken link target.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum FixStrategy {
     /// The target matched an existing file path case-insensitively.
     CaseInsensitive,
@@ -207,6 +223,18 @@ pub enum FixStrategy {
     /// markdown links) or the canonical short-form stem (for bare wikilinks
     /// whose stem lookup succeeded with a case-only difference).
     LinkCaseMismatch,
+    /// The target is a **frontmatter alias** declared by exactly one note
+    /// (iter-275, DEC-308 / ALIAS-2).
+    ///
+    /// Obsidian leaves a hand-typed `[[Leah]]` unresolved and its own link
+    /// suggester writes `[[Leah Ferguson|Leah]]` — the alias as display text
+    /// over the real note. That rewrite is what this strategy plans: exact,
+    /// confidence 1.0, its own bucket, and never routed through the fuzzy
+    /// matcher (which used to offer `Leah` → `Lewuathe.md` at 0.87 on the
+    /// Obsidian Hub). `new_target` is the declaring note's vault path; the
+    /// `|alias` display text is added by the writer, so an author who already
+    /// wrote `[[Leah|label]]` keeps their label.
+    Alias,
 }
 
 impl FixStrategy {
@@ -226,6 +254,7 @@ impl FixStrategy {
             FixStrategy::BasenameFallback => "basename-fallback",
             FixStrategy::FuzzyMatch => "fuzzy-match",
             FixStrategy::LinkCaseMismatch => "link-case-mismatch",
+            FixStrategy::Alias => "alias",
         }
     }
 }
@@ -450,6 +479,7 @@ pub fn detect_broken_links_from_index(
             relocations: Vec::new(),
             ambiguous: Vec::new(),
             out_of_vault: Vec::new(),
+            alias_fixes: Vec::new(),
         };
     };
 
@@ -465,6 +495,7 @@ pub fn detect_broken_links_from_index(
     let mut relocations: Vec<FixPlan> = Vec::new();
     let mut ambiguous: Vec<BrokenLinkInfo> = Vec::new();
     let mut out_of_vault: Vec<BrokenLinkInfo> = Vec::new();
+    let mut alias_fixes: Vec<FixPlan> = Vec::new();
 
     for entry in index.entries() {
         for (line, link) in &entry.links {
@@ -575,13 +606,33 @@ pub fn detect_broken_links_from_index(
                         source: entry.rel_path.clone(),
                         line: *line,
                         target: link.target.clone(),
+                        candidates: ambiguous_candidates(&link.target, case_index),
                     });
                 }
                 LinkResolution::Broken => {
+                    // ALIAS-2 (iter-275, DEC-308): a bare target exactly one
+                    // note declares as an alias is broken *and* exactly
+                    // fixable. Planned here, before the fuzzy matcher ever
+                    // sees it.
+                    if link.kind == LinkKind::Wikilink
+                        && let Some(declaring) = alias_fix_target(&link.target, case_index)
+                    {
+                        alias_fixes.push(FixPlan {
+                            source: entry.rel_path.clone(),
+                            line: *line,
+                            old_target: link.target.clone(),
+                            new_target: declaring,
+                            strategy: FixStrategy::Alias,
+                            confidence: 1.0,
+                            emitted_target: None,
+                        });
+                        continue;
+                    }
                     let info = BrokenLinkInfo {
                         source: entry.rel_path.clone(),
                         line: *line,
                         target: link.target.clone(),
+                        candidates: Vec::new(),
                     };
                     // A target that still starts with `..` after normalization
                     // names a file above the vault root — out of scope, not
@@ -601,6 +652,7 @@ pub fn detect_broken_links_from_index(
     relocations.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     ambiguous.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     out_of_vault.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
+    alias_fixes.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
 
     BrokenLinkReport {
         total_links,
@@ -609,7 +661,62 @@ pub fn detect_broken_links_from_index(
         relocations,
         ambiguous,
         out_of_vault,
+        alias_fixes,
     }
+}
+
+/// The vault path of the single note declaring `target` as a frontmatter
+/// alias, when that is the only thing that can resolve the link (iter-275,
+/// ALIAS-2).
+///
+/// `None` for a path-form target, for a stem any file already carries (a
+/// filename beats an alias, DEC-296, and an *ambiguous* filename beats it
+/// too — ALIAS-4), for an unknown alias, and for one two notes claim (which
+/// `stem_classification` reports as ambiguous instead).
+///
+/// Callers apply this to **wikilinks only**: an alias is an Obsidian wikilink
+/// concept, and a markdown `[x](Leah)` names a file relative to its own
+/// folder, so answering it with somebody's alias would be a guess dressed up
+/// as a certainty.
+/// The vault paths a bare, unresolved wikilink target is ambiguous between
+/// (iter-275, ALIAS-5 / BUG-26): two files sharing a stem, or — when no file
+/// carries the stem at all — two notes declaring it as an alias.
+fn ambiguous_candidates(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> Vec<String> {
+    let Some(idx) = case_index else {
+        return Vec::new();
+    };
+    let target = target.trim();
+    if target.is_empty() || target.contains('/') || target.contains('\\') {
+        return Vec::new();
+    }
+    let stem = strip_md_suffix(target);
+    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
+    if stem.is_empty() {
+        return Vec::new();
+    }
+    let by_stem = idx.lookup_stem_all(stem);
+    if by_stem.len() > 1 {
+        return by_stem.to_vec();
+    }
+    let by_alias = idx.lookup_alias_all(stem);
+    if by_stem.is_empty() && by_alias.len() > 1 {
+        return by_alias.to_vec();
+    }
+    Vec::new()
+}
+
+fn alias_fix_target(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> Option<String> {
+    let idx = case_index?;
+    let target = target.trim();
+    if target.is_empty() || target.contains('/') || target.contains('\\') {
+        return None;
+    }
+    let stem = strip_md_suffix(target);
+    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
+    if stem.is_empty() || !idx.lookup_stem_all(stem).is_empty() {
+        return None;
+    }
+    idx.lookup_alias(stem).map(str::to_owned)
 }
 
 // ---------------------------------------------------------------------------
@@ -1676,8 +1783,24 @@ fn build_replacements_for_file(
                     // Use stem (without .md) for wikilinks; wikilink targets
                     // are vault-relative as written, so the plan's target is
                     // already in the right coordinate system.
-                    let emitted = strip_md_suffix(&fix.new_target).to_string();
-                    let ok = wikilink_fix_round_trips(&emitted, &fix.new_target);
+                    let path_text = strip_md_suffix(&fix.new_target).to_string();
+                    let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
+                    // ALIAS-2 (iter-275, DEC-308): an alias fix writes what
+                    // Obsidian's own link suggester writes — the note over the
+                    // alias as display text — so `[[Leah]]` becomes
+                    // `[[Leah Ferguson|Leah]]` and the rendered prose does not
+                    // change. A link that already carries a label keeps it
+                    // (the label lives in the span tail, past `target_end`),
+                    // and an embed takes the bare target: `![[Leah|Leah]]`
+                    // would embed a note under a caption nobody asked for.
+                    let emitted = if fix.strategy == FixStrategy::Alias
+                        && span.link.label.is_none()
+                        && !span.link.embed
+                    {
+                        format!("{path_text}|{}", span.link.target.trim())
+                    } else {
+                        path_text
+                    };
                     (emitted, ok)
                 }
                 LinkKind::Markdown => {
@@ -1757,6 +1880,7 @@ mod tests {
             source: source.to_string(),
             line,
             target: target.to_string(),
+            candidates: Vec::new(),
         }
     }
 

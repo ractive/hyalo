@@ -67,11 +67,34 @@ struct BatchTotals {
     replacements: usize,
 }
 
+/// One destination two sources want, or one already taken by a file the batch
+/// is not moving (iter-275, MV-5 / BUG-25).
+///
+/// A dry run exists to *show* what a move would do, so meeting a collision by
+/// refusing to answer at all told the caller least at the moment they asked
+/// most. Each collision is now a row, the non-colliding moves are still
+/// planned and reported, and `--apply` keeps refusing (a partial batch is not
+/// what `mv --glob` promises).
+#[derive(Serialize)]
+struct Collision {
+    source: String,
+    destination: String,
+}
+
 #[derive(Serialize)]
 struct BatchMvResult {
     moves: Vec<MoveEntry>,
     updated_files: Vec<UpdatedFile>,
     totals: BatchTotals,
+    /// `totals.files_changed` and `totals.replacements` under the names
+    /// single-file `mv` uses (iter-275, MV-5). Batch JSON had neither, so a
+    /// caller reading `total_links_updated` got `null` from one mode and a
+    /// number from the other.
+    total_files_updated: usize,
+    total_links_updated: usize,
+    /// Destination collisions, listed rather than fatal in a dry run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    collisions: Vec<Collision>,
     applied: bool,
     /// `!applied`, restated under the name the rest of the mutation family
     /// uses (iter-256 COH-9). `applied` predates the convention and is kept
@@ -173,8 +196,19 @@ pub fn mv(
     // NEW-3: emit stderr notes for text format (JSON envelope has skipped_ambiguous array).
     if format == Format::Text {
         for skipped in &mv_plan.skipped_ambiguous {
+            // UX-2 (iter-275, MV-8): the JSON entry has carried `property`
+            // since iteration 271 and `self` since this one; text mode showed
+            // neither, so a reader had to guess whether a reported line was a
+            // frontmatter value or body prose.
+            let mut where_ = String::new();
+            if let Some(property) = &skipped.property {
+                let _ = write!(where_, " (property: {property})");
+            }
+            if skipped.is_self {
+                where_.push_str(" (in the moved file itself)");
+            }
             eprintln!(
-                "note: skipped ambiguous link [[{}]] at {}:{}\n      candidates: {}\n      \
+                "note: skipped ambiguous link [[{}]] at {}:{}{where_}\n      candidates: {}\n      \
                  (use --allow-ambiguous to rewrite based on stem match anyway)",
                 skipped.target,
                 skipped.source,
@@ -267,11 +301,17 @@ pub fn mv_batch(
     }
 
     // 4. Build rename map (old_rel → new_rel), detect collisions.
-    let (renames, conflicts, skipped) =
-        match build_rename_map(dir, &sources, &to_dir, on_conflict, format) {
+    let (renames, conflicts, skipped, collisions) =
+        match build_rename_map(dir, &sources, &to_dir, on_conflict, format, apply) {
             Ok(t) => t,
             Err(outcome) => return Ok(outcome),
         };
+    if !collisions.is_empty() {
+        crate::warn::warn(format!(
+            "{} destination collision(s) listed under `collisions`; those moves are not planned",
+            collisions.len()
+        ));
+    }
 
     // 5. Plan rewrites (build link graph once).
     let mut plan_result = if renames.is_empty() {
@@ -321,6 +361,9 @@ pub fn mv_batch(
             files_changed: updated_files.len(),
             replacements: total_replacements,
         },
+        total_files_updated: updated_files.len(),
+        total_links_updated: total_replacements,
+        collisions,
         moves,
         updated_files,
         applied: apply,
@@ -424,9 +467,11 @@ fn resolve_batch_sources(
 // Rename map construction
 // ---------------------------------------------------------------------------
 
-/// Build (renames, conflicts, skipped) from source paths and destination dir.
+/// Build (renames, conflicts, skipped, collisions) from source paths and
+/// destination dir.
 ///
-/// Returns `Ok((renames, conflicts, skipped))` or `Err(outcome)` on user error.
+/// Returns `Ok((renames, conflicts, skipped, collisions))` or `Err(outcome)`
+/// on user error.
 #[allow(clippy::type_complexity)]
 fn build_rename_map(
     dir: &Path,
@@ -434,14 +479,30 @@ fn build_rename_map(
     to_dir: &str,
     on_conflict: ConflictPolicy,
     format: Format,
-) -> std::result::Result<(Vec<(String, String)>, Vec<String>, Vec<String>), CommandOutcome> {
+    apply: bool,
+) -> std::result::Result<
+    (
+        Vec<(String, String)>,
+        Vec<String>,
+        Vec<String>,
+        Vec<Collision>,
+    ),
+    CommandOutcome,
+> {
     // Build proposed rename map: source → dest (old_rel → new_rel).
     let mut proposed: Vec<(String, String)> = Vec::new();
     for src in sources {
         let basename = Path::new(src)
             .file_name()
             .map_or_else(|| src.clone(), |n| n.to_string_lossy().into_owned());
-        let new_rel = format!("{to_dir}/{basename}");
+        // MV-4 (iter-275): an empty `to_dir` is the vault root, not a leading
+        // slash — `--to .` from inside the vault must land at `a.md`, never
+        // `/a.md`.
+        let new_rel = if to_dir.is_empty() {
+            basename
+        } else {
+            format!("{to_dir}/{basename}")
+        };
         proposed.push((src.clone(), new_rel));
     }
 
@@ -557,9 +618,36 @@ fn build_rename_map(
                 .into_iter()
                 .filter(|(s, _)| !skipped_set.contains(s.as_str()))
                 .collect();
-            return Ok((final_renames, vec![], skipped));
+            return Ok((final_renames, vec![], skipped, vec![]));
         }
-        // Default: error.
+        // BUG-25 (dogfood v0.22.0), iter-275 MV-5: a **dry run** lists the
+        // collisions and still plans everything else, so `--dry-run` answers
+        // the question it was asked. `--apply` keeps failing: half a batch is
+        // not what `mv --glob … --apply` promises, and the caller has
+        // `--on-conflict skip` for that.
+        if !apply {
+            let mut collisions: Vec<Collision> = all_collision_dests
+                .iter()
+                .flat_map(|dst| {
+                    let srcs = dest_to_sources.get(dst).map_or(&[][..], Vec::as_slice);
+                    srcs.iter().map(move |s| Collision {
+                        source: s.clone(),
+                        destination: dst.clone(),
+                    })
+                })
+                .collect();
+            collisions.sort_by(|a, b| {
+                a.destination
+                    .cmp(&b.destination)
+                    .then(a.source.cmp(&b.source))
+            });
+            let planned: Vec<(String, String)> = proposed
+                .into_iter()
+                .filter(|(_, dst)| !all_collision_dests.contains(dst))
+                .collect();
+            return Ok((planned, vec![], vec![], collisions));
+        }
+        // Default (`--apply`): error.
         //
         // BUG-24 (iter-273, MV-3): "multiple sources map to the same
         // destination" was printed for *both* kinds of collision, so a single
@@ -597,7 +685,7 @@ fn build_rename_map(
         return Err(CommandOutcome::UserError(out));
     }
 
-    Ok((proposed, vec![], vec![]))
+    Ok((proposed, vec![], vec![], vec![]))
 }
 
 // ---------------------------------------------------------------------------
@@ -872,17 +960,59 @@ fn ensure_dest_within_vault(
 /// directory", and losing it would turn a directory destination into a
 /// `.md`-less filename.
 fn strip_vault_prefix_from_destination(dir: &Path, to_arg: &str) -> String {
+    // MV-4 (iter-275, BUG-10): an absolute destination *inside* the vault is
+    // accepted exactly as an absolute source is — `mv sub/a.md
+    // /abs/vault/a3.md` used to be refused with "target path must be relative
+    // and within the vault" about a path that was both, while the source form
+    // was accepted with a stylistic nag. Same helper, same nag.
+    if let Some(rel) = hyalo_core::discovery::strip_absolute_vault_prefix(dir, to_arg) {
+        crate::warn::warn_llm_misuse(dir);
+        return rel;
+    }
     let normalized = to_arg.replace('\\', "/");
-    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
-    let bare = normalized.trim_end_matches('/');
-    let had_trailing_slash = bare.len() != normalized.len();
+    let mut trimmed = normalized.as_str();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest;
+    }
+    // MV-4: `--to .`, `--to ./` and `--to <vault-dir>/` all name the vault
+    // root. The empty string is this function's root sentinel; DEC-304's
+    // prefix strip used to leave `"/"` behind for it, which every downstream
+    // check then read as an absolute path.
+    if trimmed.is_empty() || trimmed == "." {
+        return String::new();
+    }
+    let bare = trimmed.trim_end_matches('/');
+    let had_trailing_slash = bare.len() != trimmed.len();
+    if destination_names_vault_root(dir, bare) {
+        return String::new();
+    }
     match hyalo_core::discovery::strip_dir_prefix(dir, bare) {
         Some(stripped) if had_trailing_slash => format!("{stripped}/"),
         Some(stripped) => stripped,
-        // No prefix to strip (or stripping would leave nothing, i.e. the
-        // destination *is* the vault root): keep what the caller typed.
-        None => normalized.to_owned(),
+        // No prefix to strip: keep what the caller typed (minus any `./`).
+        None if had_trailing_slash => format!("{bare}/"),
+        None => bare.to_owned(),
     }
+}
+
+/// Whether a `--to` path names the configured vault directory itself, and so
+/// means "the vault root" (iter-275, MV-4).
+///
+/// With `dir = "kb"` in `.hyalo.toml`, `--to kb/` used to be read as the
+/// *subdirectory* `kb/kb`, and the error suggested creating `kb/` — the vault
+/// the caller was already inside. `strip_dir_prefix` cannot answer this: it
+/// returns `None` both for "no prefix here" and for "the prefix is the whole
+/// path".
+fn destination_names_vault_root(dir: &Path, bare: &str) -> bool {
+    if bare.is_empty() {
+        return false;
+    }
+    let dir_str = dir.to_string_lossy().replace('\\', "/");
+    if bare == dir_str.trim_end_matches('/') {
+        return true;
+    }
+    dir.file_name()
+        .is_some_and(|name| bare == name.to_string_lossy())
 }
 
 /// Outcome of validating a single-file `mv` destination.
@@ -906,21 +1036,33 @@ fn validate_target_single(
     on_conflict: ConflictPolicy,
 ) -> std::result::Result<TargetSingle, CommandOutcome> {
     let normalized = to_arg.replace('\\', "/");
-    let normalized = normalized
-        .strip_prefix("./")
-        .unwrap_or(&normalized)
-        .to_owned();
+    // MV-4 (iter-275): strip *every* leading `./`, and read a bare `.` as the
+    // vault root. `--to ./` used to normalise to the empty string and then be
+    // rebuilt as `/a.md`, which the traversal guard below rejected as
+    // "must be relative and within the vault".
+    let mut trimmed = normalized.as_str();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest;
+    }
+    let normalized = if trimmed == "." {
+        String::new()
+    } else {
+        trimmed.to_owned()
+    };
 
     // Must end with .md
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if !normalized.ends_with(".md") {
         // Check if target is an existing directory — auto-append basename.
+        // An empty destination is the vault root, which is always a directory.
         let target_path = dir.join(&normalized);
-        if target_path.is_dir() {
+        if normalized.is_empty() || target_path.is_dir() {
             let basename = Path::new(src_rel)
                 .file_name()
                 .map_or_else(|| src_rel.to_string(), |n| n.to_string_lossy().into_owned());
-            let with_basename = if normalized.ends_with('/') {
+            let with_basename = if normalized.is_empty() {
+                basename
+            } else if normalized.ends_with('/') {
                 format!("{normalized}{basename}")
             } else {
                 format!("{normalized}/{basename}")
@@ -1060,12 +1202,16 @@ fn validate_batch_target(
     to_arg: &str,
     format: Format,
 ) -> std::result::Result<String, CommandOutcome> {
-    let normalized = to_arg.replace('\\', "/");
-    let normalized = normalized
-        .strip_prefix("./")
-        .unwrap_or(&normalized)
-        .trim_end_matches('/')
-        .to_owned();
+    let replaced = to_arg.replace('\\', "/");
+    let mut trimmed = replaced.as_str();
+    while let Some(rest) = trimmed.strip_prefix("./") {
+        trimmed = rest;
+    }
+    let normalized = if trimmed == "." {
+        String::new()
+    } else {
+        trimmed.trim_end_matches('/').to_owned()
+    };
 
     // Reject .md suffix in batch mode.
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
@@ -1080,17 +1226,11 @@ fn validate_batch_target(
         return Err(CommandOutcome::UserError(out));
     }
 
-    // Reject empty path (e.g. `--to ./` or `--to /`).
-    if normalized.is_empty() {
-        let out = crate::output::format_error(
-            format,
-            "destination directory cannot be empty; use a relative subdirectory path",
-            Some(to_arg),
-            None,
-            None,
-        );
-        return Err(CommandOutcome::UserError(out));
-    }
+    // MV-4 (iter-275): an empty normalised path is the **vault root** —
+    // `--to .`, `--to ./` and `--to <vault-dir>/` all mean "move these to the
+    // top of the vault", which is a legitimate batch destination. A literally
+    // empty `--to ""` is caught in `run` before the vault prefix is stripped,
+    // where the caller's own text is still available to quote.
 
     // Reject path traversal.
     let has_traversal = std::path::Path::new(&normalized).components().any(|c| {
@@ -1220,9 +1360,20 @@ pub(crate) fn run(
             None,
         )));
     };
+    if to.trim().is_empty() {
+        return Ok(CommandOutcome::UserError(crate::output::format_error(
+            effective_format,
+            "destination cannot be empty",
+            Some(&to),
+            Some("pass a path, or `.` for the vault root"),
+            None,
+        )));
+    }
     // MV-1 (iter-273): the destination goes through the same CWD-relative →
     // vault-relative normalisation the source does, so `hyalo mv kb/a.md
     // kb/sub/a.md` from the project root stops creating `kb/kb/sub/a.md`.
+    // MV-4 (iter-275) extends it to absolute in-vault destinations and to the
+    // vault root itself, which the strip used to leave as a bare `/`.
     let to = strip_vault_prefix_from_destination(dir, &to);
     // Parse property filters for batch mode
     let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties

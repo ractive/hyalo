@@ -366,6 +366,16 @@ pub fn links_fix(
         .filter(|f| in_scope(f.source.as_str()))
         .collect();
     let relocation_count = relocations.len();
+    // ALIAS-2 (iter-275, DEC-308): a bare `[[alias]]` is broken as Obsidian
+    // renders it, and its fix is exact — the note that declares the alias,
+    // with the alias kept as display text. Its own bucket, applied by plain
+    // `--apply`, never routed through the fuzzy matcher.
+    let mut alias_fixes: Vec<_> = report
+        .alias_fixes
+        .into_iter()
+        .filter(|f| in_scope(f.source.as_str()))
+        .collect();
+    let alias_fix_count = alias_fixes.len();
     // Ambiguous short-form links — reported but never auto-fixed.
     let ambiguous: Vec<_> = report
         .ambiguous
@@ -402,6 +412,7 @@ pub fn links_fix(
     all_fixes.extend(applicable_fuzzy.iter().cloned());
     all_fixes.extend(case_mismatches.iter().cloned());
     all_fixes.extend(relocations.iter().cloned());
+    all_fixes.extend(alias_fixes.iter().cloned());
 
     if dry_run {
         if !all_fixes.is_empty() {
@@ -437,6 +448,7 @@ pub fn links_fix(
         &mut fuzzy_fixes,
         &mut case_mismatches,
         &mut relocations,
+        &mut alias_fixes,
         &mut unapplied_fixes,
         &mut rejected_fixes,
     ] {
@@ -455,6 +467,7 @@ pub fn links_fix(
     // (`[[note]]` → `sub/note`) was presented to the user as a casing fix.
     let case_mismatch_json = fixes_with_rule(&case_mismatches);
     let relocation_json = fixes_with_rule(&relocations);
+    let alias_fix_json = fixes_with_rule(&alias_fixes);
     // iter-212: the fuzzy bucket mixes genuine path-similarity guesses with
     // `basename-fallback` relocations. The text renderer printed `[fuzzy N]`
     // for both, so the honest strategy name never reached the user; carry each
@@ -523,6 +536,9 @@ pub fn links_fix(
             .chain(applicable_fuzzy.iter())
             .chain(case_mismatches.iter())
             .chain(relocations.iter())
+            // iter-275 (ALIAS-2): alias fixes are written by plain `--apply`,
+            // so they belong in the applied set like every other certain fix.
+            .chain(alias_fixes.iter())
             .filter(|f| {
                 !excluded_keys.contains(&(
                     f.source.as_str(),
@@ -545,6 +561,7 @@ pub fn links_fix(
                 source: f.source.clone(),
                 line: f.line,
                 target: f.old_target.clone(),
+                candidates: Vec::new(),
             }),
     );
     unfixable_links.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
@@ -600,6 +617,10 @@ pub fn links_fix(
         // `BrokenLinkReport::relocations`.
         "relocations": relocation_count,
         "relocation_fixes": relocation_json,
+        // iter-275 (ALIAS-2, DEC-308): alias-backed rewrites — exact,
+        // confidence 1.0, written by plain `--apply`.
+        "alias_fixes": alias_fix_count,
+        "alias_fix_plans": alias_fix_json,
         "ambiguous": ambiguous_count,
         "ambiguous_links": ambiguous,
         // iter-193: targets resolving above the vault root are out of scope,

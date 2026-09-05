@@ -5450,3 +5450,119 @@ handlers in `run::run` and `output_pipeline` re-render it through
 now exits 0 and reports drift as `results.changed` (amending the
 iteration-176 choice). See
 [[iterations/iteration-274-hints-help-and-contract-polish]].
+
+## DEC-308: a bare `[[alias]]` is broken, and the alias map's job is to fix it (2026-09-05) — amends DEC-296
+
+**Decision:** `[links] aliases` defaults to **false**. A hand-typed `[[Leah]]`
+naming a note's frontmatter `aliases:` is reported **broken** — the way Obsidian
+renders it — and counts in `summary.links.broken`, `find --broken-links` and
+HYALO006. The alias map is still built in both modes, and does two other jobs:
+
+- `links fix` plans the rewrite Obsidian's own link suggester writes —
+  `[[Leah]]` → `[[Leah Ferguson|Leah]]` — in its own `alias_fixes` /
+  `alias_fix_plans` bucket, strategy `Alias`, confidence 1.0, applied by plain
+  `--apply` and **never** routed through the fuzzy matcher. An existing label
+  survives (`[[Leah|boss]]` → `[[Leah Ferguson|boss]]`); an embed or a markdown
+  destination rewrites the target only. The emitted target is the note's
+  vault-relative path, exactly as every other wikilink fix emits it.
+- `find` labels such a link `via: "alias"` whether or not it resolved, so text
+  mode prints `(unresolved) (via alias)` — the marker `find --help` has
+  promised since iteration 272 and never delivered (BUG-32).
+
+`[links] aliases = true` restores iteration 272's behaviour verbatim, for vaults
+running the Alias Linker community plugin.
+
+**Why.** DEC-296's premise was wrong. Obsidian does **not** resolve a bare
+`[[alias]]`, by design: aliases feed the link *suggester*, which inserts
+`[[Artificial Intelligence|AI]]`, and a hand-typed `[[AI]]` is an unresolved
+link whose click creates a new note. Verified against the Obsidian help page on
+aliases and the forum thread *"Wikilink resolution does not honor frontmatter
+aliases (1.12.7)"*, where a moderator states "This is not a bug … it's an
+intentional design decision"; the community plugin **Alias Linker** exists
+precisely to patch it in. On the Obsidian Hub, 51 links carried `via: "alias"`
+and were excluded from every broken-link report although Obsidian shows them
+dead — and `links fix` could not propose the one rewrite that is right for
+them. Reporting a link as fine because *hyalo* can resolve it, when the editor
+the vault is written for cannot, is the opposite of what a linter is for.
+
+**Where:** `discovery::link_aliases_enabled` (default `false`),
+`discovery::resolve_target`'s alias fallback, `stem_classification`,
+`link_fix::alias_fix_target` + `FixStrategy::Alias`,
+`commands::find`'s `via` label, `config::LinksConfig::aliases`. See
+[[iterations/iteration-275-alias-semantics-and-mv-guards]].
+
+### DEC-296 addendum
+
+DEC-296 is **superseded in part by DEC-308**. Its mechanics stand — unique
+alias, filename beats alias, shared alias ambiguous, case-folded matching, the
+scalar form, `[[alias#h]]` / `[[alias|label]]`, frontmatter links with their
+`property`, index parity, `mv` leaving alias links alone — and are exactly what
+`[links] aliases = true` still does. Only its premise ("Obsidian resolves a bare
+alias") was wrong, and with it the default. DEC-308 adds one rule DEC-296 got
+wrong in *both* modes: an **ambiguous filename match is still a filename
+match**, so an alias never breaks the tie (`[[avatar]]` with `Plugins/avatar.md`
+aliased `Avatar` and `Themes/Avatar.md` present is `path: null` in `find`,
+`backlinks`, `summary` and `mv` alike — previously `find` claimed the plugin
+while `mv` called it ambiguous, so a rename silently repointed the links).
+
+## DEC-309: `-`, `_` and a space are one word separator when *resolving* an anchor (2026-09-05) — amends DEC-268 and DEC-298
+
+**Decision:** Anchor resolution folds the three interchangeable word separators,
+not just the anchor *suggestion* DEC-298 folded them for. `#Browser_compatibility`
+resolves to `## Browser compatibility` outright. The fold is applied to the
+GitHub slug of both sides, so punctuation is still dropped the way DEC-075
+drops it, and the duplicate-slug suffixes (`-1`, `-2`) still disambiguate.
+`anchor::unique_heading_by_prefix` also stops excluding an *equal-length*
+match (`<`, not `<=`), so the most useful suggestion there is — the whole
+heading — is finally offered.
+
+**Why.** MDN slugs its headings with underscores while writing the heading text
+with spaces, so the two conventions disagree on exactly one byte. hyalo reported
+**10 929** dead anchors on an MDN checkout with only 251 suggestions; every one
+of the unsuggested ones named a heading the reader could see two lines away.
+DEC-268 forbids *guessing* a heading, and this is not a guess: no two headings
+in the wild differ only in which separator joins their words, and a renderer
+that emits one form is read by an author writing the other. DEC-298's own
+motivating example (`#Browser_compatibility`) was exactly this shape and still
+did not resolve.
+
+**Where:** `anchor::fold_separators`, `anchor::fragment_matches_headings`,
+`anchor::unique_heading_by_prefix`. See
+[[iterations/iteration-275-alias-semantics-and-mv-guards]].
+
+## DEC-310: a wikilink target is trimmed before resolution, and `.` segments are dropped (2026-09-05)
+
+**Decision:** `resolve_target` trims its input and drops `.` path segments, so
+`[[ a ]]`, `[[a ]]`, `[[a #Heading]]` and `[[./a]]` all resolve to `a.md` and
+report `path: "a.md"`. The link's `target` still carries the text the author
+wrote — the trim is a resolution rule, not a rewrite — and `mv` rewrites the
+trimmed form.
+
+**Why.** Obsidian trims, so `[[ Leah Ferguson ]]` opens the note and hyalo
+called it broken; HYALO006 fired on a link that works. `[[./a]]` was the mirror
+image: it resolved, but reported `path: "./a.md"`, a spelling no other command
+answers with, so `backlinks`, `find --broken-links` and any `--jq` grouping by
+path saw two different files.
+
+**Where:** `discovery::resolve_target`, `discovery::stem_classification`,
+`discovery::resolves_via_alias`. See
+[[iterations/iteration-275-alias-semantics-and-mv-guards]].
+
+## DEC-311: `[[note#Heading One#Sub Two]]` is a heading *path*, resolved by walking the outline (2026-09-05) — sits beside DEC-299
+
+**Decision:** A fragment containing an inner `#` is read as Obsidian's heading
+path: each segment must match a heading nested inside the one before it, within
+that heading's own subtree. `[[t#Heading One#Sub Two]]` resolves when `Sub Two`
+sits under `Heading One`; `[[t#Heading One#Elsewhere]]` is a broken anchor even
+though both headings exist, because `Elsewhere` is under `Other`. Separator
+folding (DEC-309) applies per segment. A heading that genuinely contains a `#`
+still matches through the ordinary literal checks, which run afterwards.
+
+**Why.** Implemented rather than deferred because it is a resolver-only change:
+`OutlineSection` already carries `level` and document order, which is everything
+a nesting check needs. The alternative was to keep reporting a correct Obsidian
+link as a dead anchor, and the fragment text (`Heading One#Sub Two`) made the
+report unreadable as well as wrong.
+
+**Where:** `anchor::heading_path_matches`, `anchor::segment_matches_heading`.
+See [[iterations/iteration-275-alias-semantics-and-mv-guards]].

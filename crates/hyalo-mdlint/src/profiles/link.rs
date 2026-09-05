@@ -117,6 +117,44 @@ impl FileVisitor for LinkCollector<'_> {
     }
 }
 
+/// The vault files a bare, unresolved target is ambiguous between — two files
+/// sharing a basename stem, or two notes declaring the same frontmatter alias
+/// (iter-275, ALIAS-5 / BUG-26).
+///
+/// Empty for everything else, including a path-form target (which asserts a
+/// location and is simply missing) and a markdown destination (whose `/`-less
+/// form is resolved against the source folder, not by stem).
+fn ambiguous_candidates(
+    case_index: &CaseInsensitiveIndex,
+    kind: LinkKind,
+    target: &str,
+) -> Vec<String> {
+    if kind != LinkKind::Wikilink {
+        return Vec::new();
+    }
+    let target = target.trim();
+    if target.is_empty() || target.contains('/') || target.contains('\\') {
+        return Vec::new();
+    }
+    let stem = target
+        .strip_suffix(".md")
+        .or_else(|| target.strip_suffix(".MD"))
+        .unwrap_or(target);
+    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
+    if stem.is_empty() {
+        return Vec::new();
+    }
+    let by_stem = case_index.lookup_stem_all(stem);
+    if by_stem.len() > 1 {
+        return by_stem.to_vec();
+    }
+    let by_alias = case_index.lookup_alias_all(stem);
+    if by_stem.is_empty() && by_alias.len() > 1 {
+        return by_alias.to_vec();
+    }
+    Vec::new()
+}
+
 /// Scan `content` (the already-read file bytes) and return one finding per link
 /// whose target does not resolve to a known vault file.
 ///
@@ -166,13 +204,26 @@ pub fn check_broken_links(
                     LinkKind::Markdown => "markdown link",
                 }
             };
-            findings.push(BrokenLinkFinding {
-                line,
-                message: format!(
+            // BUG-26 (dogfood v0.22.0), iter-275 ALIAS-5: "does not resolve"
+            // is the wrong diagnosis for a target two files — or two
+            // `aliases:` declarations — both answer to. The fix is to
+            // disambiguate, not to create the note, so the message names the
+            // candidates the way `mv`'s `skipped_ambiguous` does.
+            let candidates = ambiguous_candidates(&ctx.case_index, link.kind, &link.target);
+            let message = if candidates.is_empty() {
+                format!(
                     "broken {kind}: `{}` does not resolve to a vault file",
                     link.target
-                ),
-            });
+                )
+            } else {
+                format!(
+                    "ambiguous {kind}: `{}` matches {} candidates: {}",
+                    link.target,
+                    candidates.len(),
+                    candidates.join(", ")
+                )
+            };
+            findings.push(BrokenLinkFinding { line, message });
         }
     }
     findings

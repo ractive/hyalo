@@ -241,14 +241,21 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **`set` on a list property** (DEC-270, iter-262): `set K=<scalar>` on a property that holds a
   list replaces it — `set` means replace — and says so on stderr, with the affected files under
   `list_collapsed` in JSON. Use `hyalo append` when the list should stay a list.
-- **Frontmatter `aliases:` resolve wikilinks** (DEC-296, iter-272): `[[Leah]]` resolves to the
-  note declaring `aliases: [Leah]` — a list or a bare string, matched case-folded. A filename or
-  path match always wins, an alias claimed by two notes is ambiguous rather than resolved, and
-  `[[alias#Heading]]` / `[[alias|label]]` work. `kind` stays `wikilink`; the entry carries
-  `via: "alias"`. Alias links count for `backlinks`, `--orphan`/`--dead-end`,
-  `summary.links` and HYALO006; `links fix` never proposes or fuzzy-matches a rewrite for one,
-  and `mv` leaves them alone (the alias moves with the note). `[links] aliases = false` restores
-  filename-only resolution; `hyalo config --jq '.results.links.aliases'` reports it.
+- **A bare `[[alias]]` is broken, and `links fix` repairs it** (DEC-308, amends DEC-296,
+  iter-275): Obsidian does **not** resolve a hand-typed `[[Leah]]` — aliases feed its link
+  *suggester*, which writes `[[Leah Ferguson|Leah]]` — so `[links] aliases` defaults to
+  **false** and such a link counts in `summary.links.broken`, `--broken-links` and HYALO006.
+  Its entry still carries `via: "alias"` (text mode prints `(unresolved) (via alias)`), which
+  marks it *broken but exactly fixable*: `links fix` plans the suggester's own rewrite in its
+  `alias_fixes` / `alias_fix_plans` bucket — strategy `Alias`, confidence 1.0, written by plain
+  `--apply`, never routed through fuzzy. An existing label survives (`[[Leah|boss]]` →
+  `[[Leah Ferguson|boss]]`); an embed or markdown form rewrites the target only.
+  `[links] aliases = true` (for vaults running the Alias Linker plugin) restores iteration
+  272's resolution: `[[Leah]]` resolves to the declaring note, matched case-folded, with a
+  filename or path always winning. In **either** mode an *ambiguous stem* is never tie-broken
+  by an alias, and an alias claimed by two notes is ambiguous — reported with its `candidates`
+  under `links fix` and named by HYALO006 ("ambiguous wikilink … matches 2 candidates").
+  `hyalo config --jq '.results.links.aliases'` reports the effective mode.
 - **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
   on every platform, not only on a case-insensitive filesystem. Opt out with
   `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the
@@ -279,9 +286,18 @@ Prefer `hyalo` CLI for operations on files in this directory:
   after it and letting the next `set` overwrite the body. A block that never closes at column 0
   is reported as unclosed (`HYALO005`). `set`/`append` also never emit a block scalar containing
   a `---`/`...` line: such a value is written double-quoted so it round-trips.
-- **`mv` guards ambiguous frontmatter links** (iter-271): a bare `related: "[[a]]"` whose stem
-  matches two files is skipped and listed in `skipped_ambiguous` with the `property` it came
-  from, exactly as a body `[[a]]` is; `--allow-ambiguous` rewrites both.
+- **`mv` guards ambiguous links wherever they live** (iter-271, completed in iter-275): a bare
+  `related: "[[a]]"` whose stem matches two files is skipped and listed in `skipped_ambiguous`
+  with the `property` it came from, exactly as a body `[[a]]` is — for **every** directory
+  layout, not only when the moved file sits at the vault root. The moved file's own body
+  self-links go through the same guard and are marked `self: true`. `--allow-ambiguous`
+  rewrites them all. Text mode prints the `property` and the `self` marker.
+- **`mv` destinations name what you typed** (iter-275, extends DEC-304): an absolute path
+  inside the vault is accepted (with the source's "prefer relative" note), and `--to .`,
+  `--to ./` and `--to <vault-dir>/` all mean the **vault root**. A batch dry run lists
+  destination collisions under `collisions: [{source, destination}]` and still plans every
+  non-colliding move; `--apply` still refuses. Batch JSON carries `total_files_updated` /
+  `total_links_updated`, the keys single-file mode uses.
 - **Attachments resolve like Obsidian**: `![[img.png]]` matches a unique basename anywhere in
   the vault, `![[sub/img.png]]` also resolves against the source folder, and
   `[[Templates/Bases/Books.base]]` resolves by path. `links fix` never matches across an
@@ -290,7 +306,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **Anchor suggestions** (DEC-268): a broken `#fragment` that is the prefix of exactly one
   heading in the target file carries `suggested_fragment` with the full heading text —
   `[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`. Reported, never auto-applied;
-  an ambiguous prefix suggests nothing.
+  an ambiguous prefix suggests nothing, and a fragment covering the *whole* heading is
+  suggested (iter-275).
+- **Anchors fold `-`, `_` and a space on resolution** (DEC-309, iter-275): `#Browser_compatibility`
+  resolves to `## Browser compatibility` — the two conventions differ by one byte and no two
+  real headings differ only in their separator. MDN's broken-anchor count fell from 10 929 to
+  529. A **nested heading path** `[[note#Heading One#Sub Two]]` resolves by walking the outline
+  (DEC-311): the second segment must sit *under* the first, so `[[note#Heading One#Elsewhere]]`
+  is still a broken anchor when `Elsewhere` lives under a different heading.
+- **A wikilink target is trimmed, and `.` segments are dropped** (DEC-310, iter-275):
+  `[[ a ]]`, `[[a ]]`, `[[a #Heading]]` and `[[./a]]` all resolve to `a.md` and report
+  `path: "a.md"`. `target` still carries what the author wrote; `mv` rewrites the trimmed form.
 - **Locate a broken link**: every entry in `find --fields links` carries `line`, the 1-based source line — the same one `lint` (HYALO006) and `backlinks` report — and links are listed in document order. Text output renders it as `line 12: "target" → "path"`. For a `file:line` list an editor can jump to: `hyalo find --broken-links --jq '.results[] as $f | $f.links[] | select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor)) | "\($f.file):\(.line) \(.target)"'` (the `out_of_vault` exclusion matters: an out-of-vault link also has `path: null` but is not itself broken, and can appear alongside a genuinely broken link in the same file's listing)
 - **Gate broken anchors in CI**: HYALO006 does not check anchors (see above), so use `hyalo find --broken-links --strict` instead — exits 1 if any file has a broken target or broken anchor, 0 otherwise. `--strict` is a general `find` flag (works with any filter, e.g. `find --property status=draft --strict`), not anchor-specific. `hyalo links fix` also gets a one-line stderr-adjacent note ("N broken anchor(s) — see `find --broken-links`") when anchors are broken but targets are not, and `hyalo summary`'s `links.broken_anchors` figure is distinct from `links.broken` (link-count vs file-count units, so don't expect the raw numbers to match).
 - **Manage lint rules**: `hyalo lint-rules list`, `hyalo lint-rules show <ID>`, `hyalo lint-rules set <ID> --enabled false`, `hyalo lint-rules set <ID> --severity warn`

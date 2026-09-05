@@ -133,14 +133,13 @@ impl LinkGraph {
         // frontmatter is read (the visitor stops before the body), and the
         // second pass below re-opens the same files while they are still warm
         // in the page cache.
-        let aliases = crate::discovery::link_aliases_enabled();
+        // DEC-308 (iter-275): the map is built regardless of `[links]
+        // aliases`; the flag decides whether it *resolves* a link.
         for (full_path, rel) in files {
             let rel_fwd = rel.to_string_lossy().replace('\\', "/");
-            if aliases {
-                let declared = crate::discovery::read_aliases(full_path);
-                if !declared.is_empty() {
-                    case_index.insert_aliases(&rel_fwd, declared);
-                }
+            let declared = crate::discovery::read_aliases(full_path);
+            if !declared.is_empty() {
+                case_index.insert_aliases(&rel_fwd, declared);
             }
             case_index.insert(&rel_fwd);
         }
@@ -201,10 +200,8 @@ impl LinkGraph {
         // iter-272 Part B: the caller already parsed every file's frontmatter
         // during its own scan, so the alias map costs one pass over data in
         // hand — no second read of any file.
-        if crate::discovery::link_aliases_enabled() {
-            for (rel_path, declared) in aliases {
-                case_index.insert_aliases(rel_path, declared);
-            }
+        for (rel_path, declared) in aliases {
+            case_index.insert_aliases(rel_path, declared);
         }
         for fl in file_links {
             insert_file_links(&mut index, fl, site_prefix, &case_index);

@@ -53,10 +53,13 @@ struct LinksConfig {
     #[serde(default)]
     auto: Option<AutoLinksConfig>,
     /// Whether a frontmatter `aliases:` value resolves a `[[wikilink]]`
-    /// (iter-272, DEC-296). Default `true`.
+    /// (iter-272, DEC-296 as amended by DEC-308). Default **`false`**.
     ///
-    /// `false` restores the pre-iter-272 behaviour: only filenames and paths
-    /// resolve, and `[[Leah]]` is broken even when a note declares
+    /// The default mirrors Obsidian, which leaves a hand-typed `[[Leah]]`
+    /// unresolved by design — aliases drive its link *suggester*, which
+    /// inserts `[[Leah Ferguson|Leah]]`. `true` is for vaults running the
+    /// Alias Linker community plugin, and restores iteration 272's
+    /// behaviour: `[[Leah]]` resolves to the note declaring
     /// `aliases: [Leah]`.
     #[serde(default)]
     aliases: Option<bool>,
@@ -342,7 +345,7 @@ pub(crate) struct ResolvedDefaults {
     /// [`Self::frontmatter_link_props`], which this value resolves into.
     pub(crate) frontmatter_links_enabled: bool,
     /// Effective `[links] aliases` — whether a frontmatter `aliases:` value
-    /// resolves a wikilink (iter-272, DEC-296). Default `true`.
+    /// resolves a wikilink (DEC-296, amended by DEC-308). Default `false`.
     pub(crate) alias_links_enabled: bool,
     /// When `true`, schema validation is applied on every `set`/`append` operation.
     /// From `validate_on_write = true` in `.hyalo.toml`.
@@ -502,7 +505,8 @@ impl ResolvedDefaults {
             search_language: None,
             frontmatter_link_props: None,
             frontmatter_links_enabled: true,
-            alias_links_enabled: true,
+            // DEC-308: Obsidian does not resolve a bare `[[alias]]`.
+            alias_links_enabled: false,
             validate_on_write: false,
             lint_ignore: Vec::new(),
             okf_ignore: Vec::new(),
@@ -1131,7 +1135,7 @@ pub(crate) fn load_config_from(dir: &Path) -> ResolvedDefaults {
             .as_ref()
             .and_then(|l| l.frontmatter)
             .unwrap_or(true),
-        alias_links_enabled: cfg.links.as_ref().and_then(|l| l.aliases).unwrap_or(true),
+        alias_links_enabled: cfg.links.as_ref().and_then(|l| l.aliases).unwrap_or(false),
         validate_on_write,
         lint_ignore: cfg
             .lint

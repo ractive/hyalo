@@ -661,7 +661,21 @@ fn two_sources_mapping_to_one_destination_still_says_so() {
     write(&tmp, "one/note.md", "---\ntitle: One\n---\n\nbody\n");
     write(&tmp, "two/note.md", "---\ntitle: Two\n---\n\nbody\n");
 
+    // iter-275 (MV-5, BUG-25): a *dry run* lists the collision instead of
+    // refusing to answer; `--apply` still refuses.
     let (code, json, _) = run(&tmp, &["mv", "--glob", "**/note.md", "--to", "flat/"]);
+    assert_eq!(code, 0, "{json}");
+    let collisions = json["results"]["collisions"].as_array().unwrap();
+    assert_eq!(collisions.len(), 2, "{json}");
+    assert_eq!(collisions[0]["destination"], "flat/note.md", "{json}");
+    assert_eq!(collisions[0]["source"], "one/note.md", "{json}");
+    assert_eq!(collisions[1]["source"], "two/note.md", "{json}");
+    assert_eq!(json["results"]["moves"].as_array().unwrap().len(), 0);
+
+    let (code, json, _) = run(
+        &tmp,
+        &["mv", "--glob", "**/note.md", "--to", "flat/", "--apply"],
+    );
     assert_eq!(code, 1, "{json}");
     assert_eq!(
         json["error"], "destination collision: multiple sources map to the same destination",

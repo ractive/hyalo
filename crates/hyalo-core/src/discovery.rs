@@ -228,7 +228,18 @@ fn glob_dir_prefix(glob: &str) -> String {
 }
 
 /// Process-wide switch for frontmatter-`aliases:` link resolution
-/// (iter-272 Part B, DEC-296). Default **on**, like DEC-267 case folding.
+/// (iter-272 Part B, DEC-296 as amended by DEC-308).
+///
+/// Default **off** since iteration 275: Obsidian does not resolve a bare
+/// `[[alias]]` — aliases feed the link *suggester*, which inserts
+/// `[[Note|alias]]`, and a hand-typed `[[alias]]` is an unresolved link whose
+/// click creates a new note. Turning it on is for vaults running the Alias
+/// Linker community plugin, which patches Obsidian to do what DEC-296
+/// assumed it already did.
+///
+/// The alias **map** is built either way: `links fix` uses it to propose the
+/// rewrite that is actually right (`[[Leah]]` → `[[Leah Ferguson|Leah]]`),
+/// and `find` uses it to label such a link `via: "alias"`.
 static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 
 /// Install the effective `[links] aliases` setting for this process.
@@ -242,10 +253,10 @@ pub fn set_link_aliases(enabled: bool) {
 }
 
 /// Whether frontmatter `aliases:` resolve links in this process. Defaults to
-/// `true` when nothing configured it (library callers, tests).
+/// `false` (Obsidian's own behaviour, DEC-308) when nothing configured it.
 #[must_use]
 pub fn link_aliases_enabled() -> bool {
-    LINK_ALIASES.get().copied().unwrap_or(true)
+    LINK_ALIASES.get().copied().unwrap_or(false)
 }
 
 /// Install the `[scan] include` glob set for this process.
@@ -959,6 +970,33 @@ pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<b
     Ok(canonical_full.starts_with(canonical_dir))
 }
 
+/// `path` with its deepest *existing* ancestor canonicalized and the missing
+/// tail re-appended (iter-275, MV-4).
+///
+/// `dunce::canonicalize` requires every component to exist, which a
+/// yet-to-be-created destination never satisfies. Returns `path` unchanged
+/// when no ancestor can be canonicalized at all.
+fn canonicalize_existing_ancestor(path: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    loop {
+        if let Ok(canonical) = dunce::canonicalize(cursor) {
+            let mut out = canonical;
+            for segment in tail.iter().rev() {
+                out.push(segment);
+            }
+            return out;
+        }
+        match (cursor.parent(), cursor.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                cursor = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// If `path_arg` is an absolute path that lies inside the canonical vault `dir`,
 /// return the equivalent vault-relative path. Otherwise return `None`.
 ///
@@ -979,9 +1017,16 @@ pub fn strip_absolute_vault_prefix(dir: &Path, path_arg: &str) -> Option<String>
         return None;
     }
     let canonical_dir = canonicalize_vault_dir(dir).ok()?;
-    // Prefer canonicalized input (resolves symlinks, `..`, etc.); fall back to
-    // the literal path so non-existent files inside the vault still rewrite.
-    let candidate = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    // Prefer canonicalized input (resolves symlinks, `..`, etc.). A path that
+    // does not exist yet — every `mv` destination, iter-275 MV-4 — cannot be
+    // canonicalized as a whole, so its nearest existing ancestor is
+    // canonicalized instead and the missing tail re-appended. Falling straight
+    // back to the literal path (what this did before) failed on any vault
+    // reached through a symlink: macOS's `/var/folders/...` temp dirs
+    // canonicalize to `/private/var/...`, so the literal destination never
+    // shared a prefix with the canonical vault and an in-vault absolute path
+    // was refused as "outside the vault".
+    let candidate = dunce::canonicalize(p).unwrap_or_else(|_| canonicalize_existing_ancestor(p));
     let stripped = candidate.strip_prefix(&canonical_dir).ok()?;
     // Reject leftover parent-traversal segments. When canonicalize falls back
     // to the literal path, a string like `/vault/../vault/x.md` can survive
@@ -1566,6 +1611,13 @@ fn classify_short_form_wikilink(
         return None; // caller should use regular path-based classification
     }
 
+    // iter-275 (BUG-23): the same trim `resolve_target` applies, so a stem
+    // written `[[ note ]]` is classified against `note`, not ` note `.
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+
     // Only apply to bare stems (no directory separator). Wikilinks with an
     // explicit `.md` extension (e.g. `[[Note.md]]`) are path-like targets;
     // let the caller handle them via regular path-based classification rather
@@ -1606,7 +1658,14 @@ fn classify_short_form_wikilink(
     {
         match idx.lookup_alias_all(target).len() {
             0 => {}
-            1 => return Some(LinkResolution::ShortFormValid),
+            // DEC-308 (iter-275): a unique alias resolves the link only when
+            // the vault opted in. In the default mode it is broken — and
+            // `links fix` turns it into an `alias_fixes` plan.
+            1 if link_aliases_enabled() => return Some(LinkResolution::ShortFormValid),
+            1 => return Some(LinkResolution::Broken),
+            // ALIAS-5 (iter-275, BUG-26): two notes claiming one alias is
+            // *ambiguous* in either mode, so `links fix` reports the
+            // candidates rather than "does not resolve".
             _ => return Some(LinkResolution::ShortFormAmbiguous),
         }
     }
@@ -1974,6 +2033,11 @@ pub fn resolve_target(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
+    // iter-275 (BUG-23, DEC-310): Obsidian trims a wikilink target before
+    // resolving it, so `[[ Leah Ferguson ]]` opens the same note `[[Leah
+    // Ferguson]]` does. The written text is kept on the link (`target`
+    // reports what the author typed); only resolution sees the trimmed form.
+    let target = target.trim();
     if target.is_empty() {
         return None;
     }
@@ -1988,6 +2052,23 @@ pub fn resolve_target(
     }
     if let Some(pos) = target.find('?') {
         target.truncate(pos);
+    }
+    // `[[a #Heading]]` leaves `a ` behind once the fragment is split off; trim
+    // again so the space before the `#` is not part of the filename.
+    let trimmed_len = target.trim_end().len();
+    target.truncate(trimmed_len);
+    // iter-275 (BUG-37): `[[./a]]` and `[[a]]` name the same file, so both must
+    // report the same canonical path. `.` segments are pure syntax — dropping
+    // them here (never `..`, which the traversal guard below still rejects)
+    // keeps `path` canonical instead of echoing the author's prefix back.
+    while target.starts_with("./") {
+        target.drain(..2);
+    }
+    while target.contains("/./") {
+        target = target.replace("/./", "/");
+    }
+    if target.is_empty() {
+        return None;
     }
     // L-23: percent-decode the path portion so `[x](my%20dest.md)` resolves to
     // `my dest.md`. Decoding is applied uniformly (resolve_target is
@@ -2132,6 +2213,17 @@ pub fn resolve_target(
                 return Some(canonical_path.to_owned());
             }
         }
+        // BUG-2 (dogfood v0.22.0), iter-275 ALIAS-4: an *ambiguous* filename
+        // match is still a filename match. `[[avatar]]` on the Obsidian Hub
+        // names both `Plugins/avatar.md` and `Themes/Avatar.md`; the alias
+        // `Avatar` on the first one used to break the tie, so `find` claimed
+        // the plugin while `mv` — which never consults aliases — called the
+        // link ambiguous, and a rename silently repointed all four links at
+        // the theme. DEC-296 says a filename beats an alias; two filenames
+        // beat it too, and leave the link unresolved.
+        if idx.lookup_stem_all(stem).len() > 1 {
+            return None;
+        }
         // iter-272 Part B (DEC-296): last resort — a frontmatter `aliases:`
         // entry. Obsidian resolves `[[Leah]]` to the note declaring
         // `aliases: [Leah]`, and 7 of the Obsidian Hub's 47 genuinely-broken
@@ -2140,7 +2232,13 @@ pub fn resolve_target(
         // `lookup_alias` answers `None` when two notes claim the same alias,
         // which keeps the link ambiguous rather than resolving it to whichever
         // note happened to be scanned first.
-        if let Some(canonical_path) = idx.lookup_alias(stem) {
+        // DEC-308 (iter-275): consulted only when `[links] aliases = true`.
+        // Obsidian leaves a bare `[[alias]]` unresolved by design, so the
+        // default answers the way Obsidian renders it and `links fix` offers
+        // the alias-backed rewrite instead.
+        if link_aliases_enabled()
+            && let Some(canonical_path) = idx.lookup_alias(stem)
+        {
             let full_resolved = canonical_dir.join(canonical_path);
             if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
                 return Some(canonical_path.to_owned());
@@ -2191,9 +2289,10 @@ pub fn read_aliases(path: &Path) -> Vec<String> {
 /// moment the properties are parsed — so the pass costs one `open` + one short
 /// `read` per note and touches no body bytes.
 pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
-    if !link_aliases_enabled() {
-        return;
-    }
+    // DEC-308 (iter-275): built regardless of `[links] aliases`. The flag
+    // governs *resolution*; the map itself is what lets `links fix` propose
+    // `[[Leah]]` → `[[Leah Ferguson|Leah]]` and `find` label the link
+    // `via: "alias"` in the default mode, where it is broken-but-fixable.
     let Ok(files) = discover_files(dir) else {
         return;
     };
@@ -2240,7 +2339,9 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
         return false;
     };
     // Only a bare, non-site-absolute target can name an alias — the same guard
-    // `resolve_target` applies before its stem and alias lookups.
+    // `resolve_target` applies before its stem and alias lookups (and the same
+    // trim, iter-275 BUG-23).
+    let target = target.trim();
     if target.is_empty() || target.contains('/') || target.contains('\\') {
         return false;
     }
@@ -2248,13 +2349,15 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
         .strip_suffix(".md")
         .or_else(|| target.strip_suffix(".MD"))
         .unwrap_or(target);
-    let stem = stem.split('#').next().unwrap_or(stem);
+    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
     if stem.is_empty() || !idx.has_alias(stem) {
         return false;
     }
     // A filename always beats an alias, so a target the stem map already
-    // answers did not resolve "via alias" even when an alias also matches.
-    idx.lookup_stem(stem).is_none() && idx.lookup_alias(stem).is_some()
+    // answers did not resolve "via alias" even when an alias also matches —
+    // and an *ambiguous* filename match beats it too (ALIAS-4, iter-275),
+    // which is why the whole bucket is tested rather than `lookup_stem`.
+    idx.lookup_stem_all(stem).is_empty() && idx.lookup_alias(stem).is_some()
 }
 
 #[cfg(test)]
@@ -2284,8 +2387,12 @@ mod tests {
         (tmp, canon, idx)
     }
 
+    /// DEC-308 (iter-275): with `[links] aliases` at its default (off, the
+    /// Obsidian behaviour) a bare `[[Leah]]` does **not** resolve — but the
+    /// alias map is still built, and `resolves_via_alias` still labels the
+    /// link so `links fix` can offer `[[Leah Ferguson|Leah]]`.
     #[test]
-    fn a_unique_alias_resolves_and_reports_via_alias() {
+    fn a_unique_alias_is_labelled_but_does_not_resolve_by_default() {
         let (_tmp, canon, idx) = alias_vault(&[
             (
                 "Leah Ferguson.md",
@@ -2293,15 +2400,28 @@ mod tests {
             ),
             ("src.md", "see [[Leah]]\n"),
         ]);
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert_eq!(resolve_target(&canon, "Leah", None, Some(&idx)), None);
         assert!(resolves_via_alias("Leah", Some(&idx)));
         // Case folds like every other lookup (DEC-267).
-        assert_eq!(
-            resolve_target(&canon, "leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
+        assert!(resolves_via_alias("leah", Some(&idx)));
+        assert_eq!(idx.lookup_alias("leah"), Some("Leah Ferguson.md"));
+    }
+
+    /// ALIAS-4 (iter-275, BUG-2): two files sharing a stem leave the link
+    /// unresolved; the alias on one of them never breaks the tie.
+    #[test]
+    fn an_ambiguous_stem_is_never_tie_broken_by_an_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            (
+                "Plugins/avatar.md",
+                "---\ntitle: plugin\naliases:\n- Avatar\n---\n",
+            ),
+            ("Themes/Avatar.md", "---\ntitle: theme\n---\n"),
+        ]);
+        assert_eq!(resolve_target(&canon, "avatar", None, Some(&idx)), None);
+        assert!(
+            !resolves_via_alias("avatar", Some(&idx)),
+            "an ambiguous filename match is still a filename match"
         );
     }
 
@@ -2337,31 +2457,22 @@ mod tests {
 
     #[test]
     fn the_string_form_of_aliases_is_accepted() {
-        let (_tmp, canon, idx) =
+        let (_tmp, _canon, idx) =
             alias_vault(&[("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n")]);
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert_eq!(idx.lookup_alias("leah"), Some("Leah Ferguson.md"));
     }
 
     #[test]
-    fn an_alias_with_a_fragment_or_label_still_resolves() {
-        let (_tmp, canon, idx) = alias_vault(&[(
+    fn an_alias_with_a_fragment_or_label_is_still_recognised_as_an_alias() {
+        let (_tmp, _canon, idx) = alias_vault(&[(
             "Leah Ferguson.md",
             "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
         )]);
-        // `resolve_target` strips the fragment; the alias half is what is left.
-        assert_eq!(
-            resolve_target(&canon, "Leah#Work", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        // The fragment is split off before the alias lookup.
+        assert!(resolves_via_alias("Leah#Work", Some(&idx)));
         // A `[[alias|label]]` never reaches the resolver with its label — the
         // extractor splits it off — so the target is the bare alias.
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert!(resolves_via_alias("Leah", Some(&idx)));
     }
 
     #[test]
@@ -4096,18 +4207,60 @@ mod tests {
         );
     }
 
+    // POSIX-only: `realpath`-style canonicalization must resolve every
+    // intermediate component and fails outright if any of them (here `sub`)
+    // doesn't exist, so `canonicalize_existing_ancestor` falls back to the
+    // literal path and a `..` segment can survive `strip_prefix`. We must
+    // refuse to rewrite such paths — handing `../foo.md` to resolve_file
+    // would either error or silently escape the vault.
+    //
+    // Windows' `GetFullPathNameW` lexically collapses `..` segments as part
+    // of *any* canonicalize call, independent of whether the components in
+    // between exist on disk — so `canonicalize(".../sub/..")` succeeds and
+    // already resolves to the vault root with no leftover `..`, and this
+    // fallback path can't be reached the same way. See
+    // `strip_abs_resolves_parent_traversal_on_windows` below for the
+    // Windows-equivalent (and still-safe) behavior.
+    #[cfg(not(windows))]
     #[test]
     fn strip_abs_rejects_parent_traversal_in_nonexistent_path() {
-        // When canonicalize falls back to the literal path (because the file
-        // doesn't exist), a `..` segment can survive strip_prefix. We must
-        // refuse to rewrite such paths — handing `../foo.md` to resolve_file
-        // would either error or silently escape the vault.
         let tmp = tempfile::tempdir().unwrap();
         let canonical = dunce::canonicalize(tmp.path()).unwrap();
         // Build something like `<canonical>/sub/../escape.md` where neither
         // `sub` nor `escape.md` exists, so canonicalize fails and we keep the
         // literal form with `..` intact.
         let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
+    }
+
+    // Windows counterpart of the test above: the OS resolves `sub/..` to the
+    // vault root lexically, even though `sub` never existed, so the result
+    // is the legitimate in-vault relative path rather than a rejection. This
+    // is safe — it's the correct real path, not an escape.
+    #[cfg(windows)]
+    #[test]
+    fn strip_abs_resolves_parent_traversal_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        let abs = canonical.join("sub/../escape.md");
+        let abs_str = abs.to_string_lossy();
+        assert_eq!(
+            strip_absolute_vault_prefix(tmp.path(), &abs_str),
+            Some("escape.md".to_owned())
+        );
+    }
+
+    // A traversal that genuinely lands outside the vault must still be
+    // rejected on every platform — this is enforced by the `strip_prefix`
+    // check against the canonical vault dir, independent of the leftover-`..`
+    // guard above.
+    #[test]
+    fn strip_abs_rejects_traversal_that_escapes_the_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(tmp.path()).unwrap();
+        // `<canonical>/../escape.md` truly lies outside the vault dir.
+        let abs = canonical.join("../escape.md");
         let abs_str = abs.to_string_lossy();
         assert_eq!(strip_absolute_vault_prefix(tmp.path(), &abs_str), None);
     }

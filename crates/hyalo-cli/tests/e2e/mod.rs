@@ -53,6 +53,7 @@ mod iteration271_write_rewrite_safety;
 mod iteration272_resolution_completeness;
 mod iteration273_named_file_honesty;
 mod iteration274_contract_polish;
+mod iteration275_alias_and_mv_guards;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

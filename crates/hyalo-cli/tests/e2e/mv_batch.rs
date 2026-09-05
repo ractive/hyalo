@@ -995,13 +995,13 @@ fn t_no_selector_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// T_TO_SLASH — mv --to ./ is rejected (empty dest after normalization)
+// T_TO_SLASH — `--to ./` is the vault root (iter-275, MV-4); `--to ""` is not
 // ---------------------------------------------------------------------------
 
 #[test]
-fn t_to_slash_rejected() {
+fn t_to_slash_is_the_vault_root() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "note.md", "---\nstatus: done\n---\nBody.\n");
+    write_md(tmp.path(), "sub/note.md", "---\nstatus: done\n---\nBody.\n");
     let dir = tmp.path().to_str().unwrap();
 
     let output = hyalo_no_hints()
@@ -1010,17 +1010,40 @@ fn t_to_slash_rejected() {
         .output()
         .unwrap();
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "`--to ./` names the vault root, not an empty path: {stdout}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let moves = json["results"]["moves"].as_array().unwrap();
+    assert_eq!(moves.len(), 1, "{stdout}");
+    assert_eq!(moves[0]["from"], "sub/note.md", "{stdout}");
+    assert_eq!(moves[0]["to"], "note.md", "{stdout}");
+}
+
+#[test]
+fn t_to_empty_string_is_rejected() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "note.md", "---\nstatus: done\n---\nBody.\n");
+    let dir = tmp.path().to_str().unwrap();
+
+    let output = hyalo_no_hints()
+        .args(["--dir", dir])
+        .args(["mv", "--property", "status=done", "--to", ""])
+        .output()
+        .unwrap();
+
     assert!(
         !output.status.success(),
-        "expected non-zero exit for --to ./"
+        "expected non-zero exit for an empty --to"
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stderr}{stdout}");
     assert!(
-        combined.contains("destination directory cannot be empty"),
-        "error must mention 'destination directory cannot be empty', got: {combined}"
+        combined.contains("destination cannot be empty"),
+        "error must mention 'destination cannot be empty', got: {combined}"
     );
 }
 

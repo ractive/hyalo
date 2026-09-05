@@ -1048,8 +1048,16 @@ pub fn find(
                         // only resolved because a note declares it as a
                         // frontmatter alias — the reader otherwise has no way
                         // to tell `[[Leah]]` from a filename match.
-                        let via = (path.is_some()
-                            && !link.external
+                        //
+                        // BUG-32 / DEC-308 (iter-275): no longer gated on the
+                        // link having resolved. In the default mode a bare
+                        // `[[Leah]]` is *broken* — as Obsidian renders it —
+                        // and `via: "alias"` is what tells the reader this
+                        // particular broken link has an exact fix waiting in
+                        // `links fix`'s `alias_fixes` bucket. Text mode prints
+                        // `(unresolved) (via alias)`, which `find --help` has
+                        // promised since iteration 272 and never delivered.
+                        let via = (!link.external
                             && discovery::resolves_via_alias(&link.target, case_index))
                         .then(|| hyalo_core::types::LINK_VIA_ALIAS.to_owned());
                         LinkInfo {
