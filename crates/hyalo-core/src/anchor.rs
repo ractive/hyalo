@@ -196,7 +196,13 @@ pub fn unique_heading_by_prefix<'a>(
         let Some(heading) = section.heading.as_deref().map(str::trim) else {
             continue;
         };
-        if heading.len() <= needle.len() || is_templated_heading(heading) {
+        // iter-275 (BUG-7, DEC-309): `<`, not `<=`. A heading the folded
+        // fragment matches *exactly* is the single most useful suggestion
+        // there is — `#Predefined_fallback_options` next to
+        // `## Predefined fallback options` — and the old `<=` excluded
+        // precisely that case, so the fragment MDN writes most often was the
+        // one shape that never got a suggestion.
+        if heading.len() < needle.len() || is_templated_heading(heading) {
             continue;
         }
         let Some(prefix) = heading.get(..needle.len()) else {
@@ -244,6 +250,86 @@ fn separator_class(b: u8) -> u8 {
     }
 }
 
+/// A slug with `-`, `_` and every whitespace character folded to one
+/// separator, so the three interchangeable word separators compare equal
+/// (iter-275, DEC-309).
+///
+/// [`github_slug`] already lowercases and maps whitespace to `-`, but it keeps
+/// `_` verbatim — GitHub's own rule. MDN, on the other hand, slugs
+/// `## Browser compatibility` as `#Browser_compatibility`, so the two
+/// conventions disagree on exactly one byte and hyalo reported 10 929 dead
+/// anchors on an MDN checkout that every browser resolves. DEC-268 forbids
+/// *guessing* a heading; folding a separator is not a guess — no two headings
+/// in the wild differ only in which separator their words are joined with, and
+/// a renderer that emits one form is read by an author writing the other.
+fn fold_separators(slug: &str) -> String {
+    slug.chars()
+        .map(|c| {
+            if c == '-' || c == '_' || c.is_whitespace() {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Whether one heading-path segment names `heading`, under the same two
+/// conventions a whole fragment uses: raw text (DEC-060) or the renderer's
+/// slug with separators folded (DEC-075 + DEC-309).
+///
+/// Deliberately per-heading, with no duplicate-suffix bookkeeping: a heading
+/// path names a position in the outline, so the `-1`/`-2` disambiguation
+/// [`heading_slugs`] applies to a flat slug list has nothing to disambiguate.
+fn segment_matches_heading(segment: &str, heading: &str) -> bool {
+    let needle = normalize_for_match(segment);
+    let heading = heading.trim();
+    if heading.eq_ignore_ascii_case(&needle) {
+        return true;
+    }
+    let needle_slug = github_slug(&needle);
+    !needle_slug.is_empty()
+        && fold_separators(&github_slug(heading)) == fold_separators(&needle_slug)
+}
+
+/// Whether `segments` names a chain of headings, each nested inside the one
+/// before it (DEC-311, iter-275).
+///
+/// Obsidian's `[[note#Heading One#Sub Two]]` means "the `Sub Two` heading that
+/// sits under `Heading One`", so the check walks the outline rather than
+/// comparing strings: each segment must match a heading at a strictly deeper
+/// level than its parent, and *within* the parent's subtree — the run of
+/// sections up to the next heading at the parent's level or shallower. A
+/// segment that matches several headings is retried against each, so an
+/// ambiguous first segment cannot mask a valid path under a later one.
+fn heading_path_matches(segments: &[&str], sections: &[OutlineSection]) -> bool {
+    let Some((first, rest)) = segments.split_first() else {
+        return true;
+    };
+    for (i, section) in sections.iter().enumerate() {
+        let Some(heading) = section.heading.as_deref() else {
+            continue;
+        };
+        if !segment_matches_heading(first, heading) {
+            continue;
+        }
+        if rest.is_empty() {
+            return true;
+        }
+        let level = section.level;
+        let subtree_end = sections
+            .iter()
+            .enumerate()
+            .skip(i + 1)
+            .find(|(_, s)| s.heading.is_some() && s.level <= level)
+            .map_or(sections.len(), |(j, _)| j);
+        if heading_path_matches(rest, &sections[i + 1..subtree_end]) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Validate a link fragment against a target file's outline sections.
 ///
 /// Returns `true` when the fragment matches one of the headings under the
@@ -267,6 +353,18 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
         // matching so it is never reported broken.
         return true;
     }
+    // DEC-311 (iter-275, BUG-36): `[[a#Heading One#Sub Two]]` is Obsidian's
+    // *heading path* — "Sub Two, nested under Heading One" — not a heading
+    // literally named `Heading One#Sub Two`. Tried first, and only when the
+    // fragment actually carries an inner `#`; a heading that genuinely
+    // contains one still matches through the literal checks below.
+    if needle.contains('#') {
+        let segments: Vec<&str> = needle.split('#').map(str::trim).collect();
+        if segments.iter().all(|s| !s.is_empty()) && heading_path_matches(&segments, sections) {
+            return true;
+        }
+    }
+
     // DEC-060: raw heading text, case-insensitive.
     if sections.iter().any(|s| {
         s.heading
@@ -277,8 +375,18 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     }
     // DEC-075: GitHub-rendered slug, with duplicate suffixes.
     let needle_slug = github_slug(&needle);
-    if !needle_slug.is_empty() && heading_slugs(sections).contains(&needle_slug) {
-        return true;
+    if !needle_slug.is_empty() {
+        let slugs = heading_slugs(sections);
+        if slugs.contains(&needle_slug) {
+            return true;
+        }
+        // DEC-309 (iter-275, BUG-7): `-`, `_` and a space are one word
+        // separator. `#Browser_compatibility` names `## Browser compatibility`
+        // in every renderer MDN ships; only GitHub's slug rule says otherwise.
+        let needle_folded = fold_separators(&needle_slug);
+        if slugs.iter().any(|s| fold_separators(s) == needle_folded) {
+            return true;
+        }
     }
     // DEC-099 (iter-215): nothing matched literally — but if either side is
     // *templated*, hyalo is comparing pre-render source against a fragment
@@ -596,16 +704,88 @@ mod tests {
     }
 
     #[test]
-    fn prefix_of_nothing_and_exact_heading_suggest_nothing() {
+    fn prefix_of_nothing_suggests_nothing_but_a_whole_heading_does() {
         let sections = secs(&["DEC-068: Snapshot index format"]);
         // No heading starts with it.
         assert_eq!(unique_heading_by_prefix("DEC-999", &sections), None);
-        // An exact match is not a *prefix* fix — the anchor already resolves,
-        // so it never reaches this helper, and it suggests nothing anyway.
+        // iter-275 (BUG-7, DEC-309): a fragment covering the *whole* heading is
+        // the most useful suggestion there is — it is what MDN's
+        // `#Browser_compatibility` looks like once the separators are folded.
+        // A byte-identical fragment never reaches this helper (the anchor
+        // resolves), so answering it costs nothing.
         assert_eq!(
             unique_heading_by_prefix("DEC-068: Snapshot index format", &sections),
-            None
+            Some("DEC-068: Snapshot index format")
         );
+    }
+
+    #[test]
+    fn a_whole_heading_written_with_underscores_is_suggested() {
+        let sections = secs(&["Predefined fallback options"]);
+        assert_eq!(
+            unique_heading_by_prefix("Predefined_fallback_options", &sections),
+            Some("Predefined fallback options")
+        );
+    }
+
+    // --- iter-275 (DEC-309): separator folding on *resolution* ---
+
+    #[test]
+    fn underscore_fragment_resolves_to_a_space_separated_heading() {
+        let secs = [sec(Some("Browser compatibility"))];
+        assert!(fragment_matches_headings("Browser_compatibility", &secs));
+        assert!(fragment_matches_headings("browser-compatibility", &secs));
+        assert!(!fragment_matches_headings("Browser_compatibilty", &secs));
+    }
+
+    // --- iter-275 (DEC-311): nested heading paths ---
+
+    #[test]
+    fn a_nested_heading_path_resolves_and_respects_nesting() {
+        let sections = vec![
+            OutlineSection {
+                level: 2,
+                heading: Some("Heading One".into()),
+                line: 1,
+                links: Vec::new(),
+                tasks: None,
+                code_blocks: Vec::new(),
+            },
+            OutlineSection {
+                level: 3,
+                heading: Some("Sub Two".into()),
+                line: 2,
+                links: Vec::new(),
+                tasks: None,
+                code_blocks: Vec::new(),
+            },
+            OutlineSection {
+                level: 2,
+                heading: Some("Other".into()),
+                line: 3,
+                links: Vec::new(),
+                tasks: None,
+                code_blocks: Vec::new(),
+            },
+            OutlineSection {
+                level: 3,
+                heading: Some("Elsewhere".into()),
+                line: 4,
+                links: Vec::new(),
+                tasks: None,
+                code_blocks: Vec::new(),
+            },
+        ];
+        assert!(fragment_matches_headings("Heading One#Sub Two", &sections));
+        // `Elsewhere` exists, but not under `Heading One`.
+        assert!(!fragment_matches_headings(
+            "Heading One#Elsewhere",
+            &sections
+        ));
+        // Separator folding applies per segment.
+        assert!(fragment_matches_headings("heading_one#sub_two", &sections));
+        // A single segment still resolves on its own.
+        assert!(fragment_matches_headings("Sub Two", &sections));
     }
 
     #[test]

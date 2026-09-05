@@ -1566,6 +1566,13 @@ fn classify_short_form_wikilink(
         return None; // caller should use regular path-based classification
     }
 
+    // iter-275 (BUG-23): the same trim `resolve_target` applies, so a stem
+    // written `[[ note ]]` is classified against `note`, not ` note `.
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+
     // Only apply to bare stems (no directory separator). Wikilinks with an
     // explicit `.md` extension (e.g. `[[Note.md]]`) are path-like targets;
     // let the caller handle them via regular path-based classification rather
@@ -1974,6 +1981,11 @@ pub fn resolve_target(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
+    // iter-275 (BUG-23, DEC-310): Obsidian trims a wikilink target before
+    // resolving it, so `[[ Leah Ferguson ]]` opens the same note `[[Leah
+    // Ferguson]]` does. The written text is kept on the link (`target`
+    // reports what the author typed); only resolution sees the trimmed form.
+    let target = target.trim();
     if target.is_empty() {
         return None;
     }
@@ -1988,6 +2000,23 @@ pub fn resolve_target(
     }
     if let Some(pos) = target.find('?') {
         target.truncate(pos);
+    }
+    // `[[a #Heading]]` leaves `a ` behind once the fragment is split off; trim
+    // again so the space before the `#` is not part of the filename.
+    let trimmed_len = target.trim_end().len();
+    target.truncate(trimmed_len);
+    // iter-275 (BUG-37): `[[./a]]` and `[[a]]` name the same file, so both must
+    // report the same canonical path. `.` segments are pure syntax — dropping
+    // them here (never `..`, which the traversal guard below still rejects)
+    // keeps `path` canonical instead of echoing the author's prefix back.
+    while let Some(rest) = target.strip_prefix("./") {
+        target = rest.to_owned();
+    }
+    while target.contains("/./") {
+        target = target.replace("/./", "/");
+    }
+    if target.is_empty() {
+        return None;
     }
     // L-23: percent-decode the path portion so `[x](my%20dest.md)` resolves to
     // `my dest.md`. Decoding is applied uniformly (resolve_target is
@@ -2240,7 +2269,9 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
         return false;
     };
     // Only a bare, non-site-absolute target can name an alias — the same guard
-    // `resolve_target` applies before its stem and alias lookups.
+    // `resolve_target` applies before its stem and alias lookups (and the same
+    // trim, iter-275 BUG-23).
+    let target = target.trim();
     if target.is_empty() || target.contains('/') || target.contains('\\') {
         return false;
     }
@@ -2248,7 +2279,7 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
         .strip_suffix(".md")
         .or_else(|| target.strip_suffix(".MD"))
         .unwrap_or(target);
-    let stem = stem.split('#').next().unwrap_or(stem);
+    let stem = stem.split('#').next().unwrap_or(stem).trim_end();
     if stem.is_empty() || !idx.has_alias(stem) {
         return false;
     }
