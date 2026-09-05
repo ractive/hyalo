@@ -202,7 +202,7 @@ pub fn mv(
             // frontmatter value or body prose.
             let mut where_ = String::new();
             if let Some(property) = &skipped.property {
-                where_.push_str(&format!(" (property: {property})"));
+                let _ = write!(where_, " (property: {property})");
             }
             if skipped.is_self {
                 where_.push_str(" (in the moved file itself)");

@@ -1741,23 +1741,24 @@ fn plan_frontmatter_wikilink_rewrites(
             if ambiguous_stem_includes(&t_norm, old_rel, idx) {
                 true
             } else {
-            let canonical = idx
-                .lookup_unique(&t_norm)
-                .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
-                // iter-262: a bare stem naming a file in a subdirectory
-                // (`categories: ["[[Books]]"]` → `Categories/Books.md`) is how
-                // Obsidian writes nearly every frontmatter link. The path
-                // lookups above never match it — `books.md` is not a vault path
-                // — so `mv Categories/Books.md` used to report
-                // `links updated: 0` and leave the reference dangling. Only an
-                // unambiguous stem resolves; `lookup_stem` returns `None` when
-                // two files share a basename, and guessing there would rewrite
-                // the wrong link.
-                .or_else(|| {
-                    (!t_norm.contains('/'))
-                        .then(|| idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm)))?
-                });
-            canonical == Some(old_rel) || canonical == Some(old_stem)
+                let canonical = idx
+                    .lookup_unique(&t_norm)
+                    .or_else(|| idx.lookup_unique(&format!("{t_norm}.md")))
+                    // iter-262: a bare stem naming a file in a subdirectory
+                    // (`categories: ["[[Books]]"]` → `Categories/Books.md`) is how
+                    // Obsidian writes nearly every frontmatter link. The path
+                    // lookups above never match it — `books.md` is not a vault path
+                    // — so `mv Categories/Books.md` used to report
+                    // `links updated: 0` and leave the reference dangling. Only an
+                    // unambiguous stem resolves; `lookup_stem` returns `None` when
+                    // two files share a basename, and guessing there would rewrite
+                    // the wrong link.
+                    .or_else(|| {
+                        (!t_norm.contains('/')).then(|| {
+                            idx.lookup_stem(t_norm.strip_suffix(".md").unwrap_or(&t_norm))
+                        })?
+                    });
+                canonical == Some(old_rel) || canonical == Some(old_stem)
             }
         } else {
             false
@@ -1838,8 +1839,7 @@ fn ambiguous_self_link_candidates(
         return None;
     }
     let candidates = case_index.lookup_stem_all(stem);
-    (candidates.len() > 1 && candidates.iter().any(|c| c == old_rel))
-        .then(|| candidates.to_vec())
+    (candidates.len() > 1 && candidates.iter().any(|c| c == old_rel)).then(|| candidates.to_vec())
 }
 
 /// Whether `t_norm` (a lower-cased, forward-slashed frontmatter target) is a

@@ -970,6 +970,33 @@ pub(crate) fn ensure_within_vault(canonical_dir: &Path, full: &Path) -> Result<b
     Ok(canonical_full.starts_with(canonical_dir))
 }
 
+/// `path` with its deepest *existing* ancestor canonicalized and the missing
+/// tail re-appended (iter-275, MV-4).
+///
+/// `dunce::canonicalize` requires every component to exist, which a
+/// yet-to-be-created destination never satisfies. Returns `path` unchanged
+/// when no ancestor can be canonicalized at all.
+fn canonicalize_existing_ancestor(path: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    loop {
+        if let Ok(canonical) = dunce::canonicalize(cursor) {
+            let mut out = canonical;
+            for segment in tail.iter().rev() {
+                out.push(segment);
+            }
+            return out;
+        }
+        match (cursor.parent(), cursor.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                cursor = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
 /// If `path_arg` is an absolute path that lies inside the canonical vault `dir`,
 /// return the equivalent vault-relative path. Otherwise return `None`.
 ///
@@ -990,9 +1017,16 @@ pub fn strip_absolute_vault_prefix(dir: &Path, path_arg: &str) -> Option<String>
         return None;
     }
     let canonical_dir = canonicalize_vault_dir(dir).ok()?;
-    // Prefer canonicalized input (resolves symlinks, `..`, etc.); fall back to
-    // the literal path so non-existent files inside the vault still rewrite.
-    let candidate = dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    // Prefer canonicalized input (resolves symlinks, `..`, etc.). A path that
+    // does not exist yet — every `mv` destination, iter-275 MV-4 — cannot be
+    // canonicalized as a whole, so its nearest existing ancestor is
+    // canonicalized instead and the missing tail re-appended. Falling straight
+    // back to the literal path (what this did before) failed on any vault
+    // reached through a symlink: macOS's `/var/folders/...` temp dirs
+    // canonicalize to `/private/var/...`, so the literal destination never
+    // shared a prefix with the canonical vault and an in-vault absolute path
+    // was refused as "outside the vault".
+    let candidate = dunce::canonicalize(p).unwrap_or_else(|_| canonicalize_existing_ancestor(p));
     let stripped = candidate.strip_prefix(&canonical_dir).ok()?;
     // Reject leftover parent-traversal segments. When canonicalize falls back
     // to the literal path, a string like `/vault/../vault/x.md` can survive
@@ -2027,8 +2061,8 @@ pub fn resolve_target(
     // report the same canonical path. `.` segments are pure syntax — dropping
     // them here (never `..`, which the traversal guard below still rejects)
     // keeps `path` canonical instead of echoing the author's prefix back.
-    while let Some(rest) = target.strip_prefix("./") {
-        target = rest.to_owned();
+    while target.starts_with("./") {
+        target.drain(..2);
     }
     while target.contains("/./") {
         target = target.replace("/./", "/");
