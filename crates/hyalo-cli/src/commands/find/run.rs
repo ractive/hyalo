@@ -541,7 +541,7 @@ fn observed_property_values(
     use crate::hints::{ObservedProperty, ObservedValue};
     use hyalo_core::filter::{FilterOp, PropertyFilter};
 
-    let keys: Vec<&str> = filters
+    let mut keys: Vec<&str> = filters
         .iter()
         .filter_map(|f| match f {
             PropertyFilter::Scalar {
@@ -555,6 +555,22 @@ fn observed_property_values(
     if keys.is_empty() {
         return std::collections::BTreeMap::new();
     }
+    // iter-274 (UX-21): a dot- or index-path filter (`title.b.c=1`,
+    // `title[0]=1`) that matches nothing is usually a path into a value that is
+    // not a map or a list at all. Observe the ROOT segment too, so the hint can
+    // say what `title` actually holds instead of reporting the whole path as an
+    // absent property.
+    let mut roots: Vec<&str> = Vec::new();
+    for key in &keys {
+        let Some(end) = key.find(['.', '[']) else {
+            continue;
+        };
+        let root = &key[..end];
+        if !root.is_empty() && !keys.contains(&root) && !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    keys.extend(roots);
 
     // key -> (files carrying the key, rendered value -> (count, typeable))
     type Bucket = (u64, std::collections::BTreeMap<String, (u64, bool)>);

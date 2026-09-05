@@ -104,12 +104,15 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `--sort links_count|backlinks_count`). `title` is promoted out of `properties`, so read it as
   `.results[].title`, not `.results[].properties.title`.
 - **`title` is promoted in three steps** (DEC-283, iter-267): a scalar frontmatter `title`, else
-  the first H1, else the **filename stem** — Obsidian's own fallback, so a vault whose notes carry
+  the first H1 (with any `<!-- … -->` comment stripped, iter-274), else the **filename stem** — Obsidian's own fallback, so a vault whose notes carry
   no `title` property still sorts and filters usefully instead of reporting `title: (none)`.
   `title_source` (`property` | `h1` | `filename`) rides along with `title` and says which step
   answered, so a consumer can tell an authored title from a derived one. `--title`,
   `--property 'title~=…'` and `--sort title` all read the promoted value; test the raw
   frontmatter key with `--property title` / `--property '!title'`.
+- **`--sort title` collates, it does not compare bytes** (iter-274): the key folds case and
+  skips leading punctuation, so `apple` sorts before `Zebra` and a `{% data … %}` title sorts
+  among its alphabetical peers instead of after `z`.
 - **Sort direction is uniform** (DEC-273, iter-264): every `--sort` key orders ascending and
   `--reverse` inverts it, so `--sort backlinks_count --reverse` is "most linked first" just as
   `--sort modified --reverse` is "newest first". `score` alone ranks best-match-first. A file
@@ -123,7 +126,19 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **The regex operator is `~=`, never `=~`** (DEC-276, iter-264): `K=~/pat/` is a hard error
   naming `~=` (it used to be read as equality against the literal `~/pat/`, which matched every
   YAML null). An empty pattern (`K~=`, `K~=//`) and an empty selection (`--fields ''`) are errors
-  too — all exit 1.
+  too — all exit 1. iter-274 extends the family: an **empty operand** (`K=`, `K>=`, `K>`), a
+  **second `=`** (`a=b=c`) and an empty filter name (`=b`) are errors too, instead of matching
+  nothing in silence. Use `K` for presence, `K=null` for a YAML null, `!K` for absence, and
+  `K~=/a=b/` for a value that genuinely contains `=`.
+- **Exit codes are 0 / 1 / 2** (DEC-307, iter-274): **0** the command answered (a dry run and a
+  zero-result query have both answered — drift and findings live in the payload, not the exit
+  code, unless a `--strict`-style flag was passed); **1** every hyalo-own user error — a bad
+  `--sort` key, an unparseable `--glob`, an unreadable `--files-from` list, an unknown
+  `init --profile`, `create-index --output` into a missing directory, `find a b`,
+  `deinit --dir <nonexistent>`, a broken `.hyalo.toml` under a gate command — all rendered
+  through the standard error envelope, so `--format json` stays parseable; **2** clap usage
+  errors and internal errors. `okf index` without `--apply` exits 0 and reports drift as
+  `results.changed`.
 - **`find`'s `results` is always the array of files**, whichever way the file list was supplied
   (`--file`, `--glob`, `--files-from`, or a full scan), so `.results[0]` always works. The
   `files_missing` / `files_skipped_non_md` / `files_skipped_outside_vault` counters are top-level
@@ -191,6 +206,15 @@ Prefer `hyalo` CLI for operations on files in this directory:
   return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
   error is HYALO005's finding and is otherwise a counted skip.
 - **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **`SCHEMA` is a selectable rule** (iter-274): `hyalo lint --rule SCHEMA` (or `--rule-prefix
+  SCHEMA`) runs the frontmatter/schema pass alone — the id its findings are already reported
+  under, and the one `summary`'s schema hint points at. `lint-rules list`/`show` carry a
+  `SCHEMA` row marked `configurable: false`: its severity comes from the schema, so change it
+  with `hyalo types set`, not `lint-rules set`. `lint --fix` JSON also reports
+  `rules_fixed: {rule: n}` beside `rules_fired`.
+- **An empty `--files-from` list warns** (iter-274): examining nothing still exits 0, so a
+  gate whose upstream command produced no paths says so on stderr — `-q` does not silence it.
+  "No input" and "no findings" must not look alike.
 - **Diff-aware lint (CI)**: `git diff --name-only origin/main...HEAD | hyalo lint --files-from -` — scope any command to a caller-supplied file list; non-.md paths and deleted files are silently skipped (counters in JSON envelope). Three-dot `origin/main...HEAD` (merge-base) keeps a stale branch scoped to files it changed. A path named explicitly — positionally, with `--file`, or through `--files-from` — is linted **even when `[lint] ignore` matches it** (DEC-284, iter-267), which is what a diff gate wants; `--glob` and the bare vault sweep still honour the ignore list, so select paths with `--glob` when you want it applied
 - **Gate broken links (HYALO006)**: `hyalo lint --rule HYALO006` flags wikilinks/markdown links that point at a non-existent vault file (link TARGET only — broken `#heading` anchors are not checked here); `hyalo lint --strict` promotes it to an error so CI fails on a broken link. Resolution is vault-wide even under `--files-from`, so a diff-scoped file linking to an untouched-but-existing file is not a false positive.
 - **Out-of-vault targets**: a link resolving above the scanned directory (`../../CONTRIBUTING.md`) is flagged `out_of_vault` rather than broken — `hyalo links` counts it under `out_of_vault`, `hyalo summary` under `links.out_of_vault`, and `find --broken-links` skips a file whose only unresolved link escapes the vault.

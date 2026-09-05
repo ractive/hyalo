@@ -246,6 +246,29 @@ fn rebuild_find(ctx: &HintContext, filters: &[ActiveFilter], skip_index: Option<
     b.finish(ctx)
 }
 
+/// For a dot- or index-path filter key, the observation of its ROOT segment
+/// when that root exists in the vault and holds only scalars — i.e. when the
+/// path could never resolve (iter-274, UX-21).
+fn path_root_observation<'a>(
+    key: &str,
+    observed: &'a BTreeMap<String, ObservedProperty>,
+) -> Option<(&'a str, &'a ObservedProperty)> {
+    let end = key.find(['.', '['])?;
+    let root = &key[..end];
+    let (name, observation) = observed.get_key_value(root)?;
+    if observation.files == 0 || observation.values.is_empty() {
+        return None;
+    }
+    // Every observed value is typeable ⇒ every one is a scalar ⇒ no descent is
+    // possible. A single map or list among them makes the path plausible, so
+    // stay quiet.
+    observation
+        .values
+        .iter()
+        .all(|v| v.typeable)
+        .then_some((name.as_str(), observation))
+}
+
 /// Build the 1–3 hints shown when a `find` query matched nothing.
 ///
 /// `observed` maps a property key to the distinct values that key carries in
@@ -342,10 +365,30 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 ));
             }
             _ => {
-                hints.push(Hint::new(
-                    format!("No file has a `{key}` property — list the ones that exist"),
-                    HintBuilder::cmd("properties summary").finish(ctx),
-                ));
+                // iter-274 (UX-21): a dot- or index-path whose ROOT key does
+                // exist is not an absent property — it is a path into a value
+                // that is not a map or a list, which can never match. Say that
+                // instead of sending the reader to the property listing to
+                // discover a key that is already there.
+                if let Some((root, observation)) = path_root_observation(key, observed) {
+                    let files = observation.files;
+                    let files_label = if files == 1 { "file" } else { "files" };
+                    hints.push(Hint::new(
+                        format!(
+                            "`{root}` holds a scalar in all {files} {files_label} that set it, \
+                             so the path `{key}` can never match — inspect the values"
+                        ),
+                        HintBuilder::cmd("find")
+                            .flag_value("--property", root)
+                            .flag_value("--fields", "properties")
+                            .finish(ctx),
+                    ));
+                } else {
+                    hints.push(Hint::new(
+                        format!("No file has a `{key}` property — list the ones that exist"),
+                        HintBuilder::cmd("properties summary").finish(ctx),
+                    ));
+                }
             }
         }
     }

@@ -193,6 +193,10 @@ and this project adheres to
 - `lint --format github` summary counts files checked: `N errors, M warnings in K of T files checked`
 - `set`/`append` with `--validate` (or `[schema] validate_on_write`) now refuse with exit 1 when `[schema]` exists but cannot be loaded, instead of falling back to an empty schema and writing unvalidated (DEC-290). Writes without `--validate`, and every other command, are unaffected.
 - `mv --on-conflict` is a validated choice (`error` | `skip`): an unknown policy is now a usage error instead of parsing and silently behaving as `error`, and single-file mode honours `skip` (the source stays put, reported under `skipped`, exit 0). The batch collision error distinguishes two sources sharing a destination from a destination that is already taken.
+- Hints on an indexed run carry `--index` / `--index-file` wherever the hinted command accepts it, so a follow-up query stays indexed instead of rescanning the vault (UX-2).
+- `links fix` prints the `site_prefix` diagnostic before fuzzy scoring and skips scoring the site-absolute links once 500 or more of them resolve nowhere (UX-3); `find --broken-links` points at `site_prefix` instead of `links fix` when every broken link is site-absolute.
+- The `links auto` stop-list note caps its `--exclude-title` list at the five titles it says it shows and states that flags ADD to the built-in list while `[links.auto] exclude_titles` REPLACES it — an empty list now switches the stop-list off (UX-11, BUG-23).
+- Exit codes are now a documented taxonomy (DEC-307): 0 answered, 1 every hyalo-own user error rendered through the JSON envelope, 2 clap usage and internal errors. `find a b`, a bad `--glob`, an unreadable `--files-from` list, `create-index --output` into a missing directory, an unknown `init --profile` and `deinit --dir <nonexistent>` all exit 1; `okf index` without `--apply` exits 0 and reports drift as `results.changed` (UX-1, BUG-25, UX-18, UX-20).
 
 ### Removed
 
@@ -375,6 +379,11 @@ and this project adheres to
 - `summary --index` reports the same `excluded` count as a disk scan — the snapshot records how many files `[scan] exclude` dropped when it was built, and the patterns that dropped them.
 - `mv` resolves the destination exactly like the source, so `hyalo mv kb/a.md kb/sub/a.md` run beside a `dir = "kb"` vault lands at `kb/sub/a.md` instead of creating `kb/kb/sub/`. All four destination forms are affected; a missing `--to dir/` is reported as a missing directory rather than `did you mean dir/.md?`.
 - Batch `mv` runs the split-frontmatter-link sweep single-file `mv` has run since iteration 269 — once per batch — and reports each move's own `frontmatter_links_skipped`.
+- Hints: `summary`'s site-URL diagnostic names the real `site_prefix` key (BUG-22); a zero-result `find` distinguishes a key the vault does not have from one whose values simply do not match, listing the values with counts (BUG-17); `links fix` no longer warns "stripped 0 of N" for a site-absolute link that resolved (UX-22).
+- Help text: the `types` subcommands no longer leak 12-space doc-comment indentation into `--help` (UX-7), and `check-help-drift` gate 3f fails on any future leak; the unknown-flag tip consults the invoked subcommand's real flags instead of recommending a `--property` it does not have (UX-8); the `find` text footer no longer lists `score` and `matches`, which `--fields` rejects (BUG-27).
+- `--property` rejects an empty operand (`K=`, `K>=`), a second `=` (`a=b=c`) and an empty name with exit 1 instead of matching nothing in silence (UX-21); the mixed-type sort warning is computed over the whole sorted set, so `--limit 2` warns when `--limit 0` does (UX-4); `--sort title` collates case-insensitively and skips leading punctuation (UX-15); an H1-derived title has its HTML comments stripped (UX-16).
+- `lint-rules show` reports only the dimensions an override actually sets, never `enabled: null` (UX-14); `task read`/`task toggle` JSON strips the trailing carriage return on CRLF files (UX-17); an empty required typed placeholder reports one error rather than two (UX-6); `types set` says on stderr when it enables `validate_on_write` as a side effect (UX-19).
+- The shipped `--jq` recipes no longer use jq's `IN(...)`, which hyalo's own jq engine does not implement, and the new `xtask check-jq-recipes` gate executes every recipe in every shipped document against the vault (BUG-29). `hyalo config` reports `links.case_insensitive` (BUG-19), and an empty `--files-from` list warns instead of exiting 0 in silence (UX-9).
 
 ### Added
 
@@ -403,6 +412,7 @@ and this project adheres to
 - `lint` honours markdownlint's suppression comments — `markdownlint-disable`, `-enable`, `-disable-line`, `-disable-next-line`, `-disable-file`, `-enable-file` — with rule ids or aliases (DEC-294).
 - Frontmatter `aliases:` resolve wikilinks (DEC-296): `[[Leah]]` finds the note declaring `aliases: [Leah]`, reported as `via: "alias"`. A filename always wins, a shared alias is ambiguous, matching folds case, and alias links are real graph edges. Opt out with `[links] aliases = false`.
 - `links fix` reports `emitted_target` — the exact link text `--apply` writes — on every fix bucket, filled by the same planning pass in both modes so a `--dry-run` preview is byte-accurate (`new_target` stays vault-relative).
+- `hyalo lint --rule SCHEMA` / `--rule-prefix SCHEMA` run the frontmatter schema pass alone, and `lint-rules list`/`show` carry a non-configurable `SCHEMA` row (UX-5). `lint --fix` JSON gains `rules_fixed: {rule: n}` (UX-13).
 
 ## [0.21.0] - 2026-08-28
 
