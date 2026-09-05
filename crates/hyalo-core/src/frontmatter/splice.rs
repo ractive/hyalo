@@ -503,6 +503,11 @@ enum ListDelta {
     Append,
     /// `old_items[.0]` was removed; every other item kept its order.
     Remove(usize),
+    /// Same length, and exactly one position holds a different scalar
+    /// (BUG-38, iter-276): what `tags rename` does. Without this the change
+    /// fell through to a whole-key re-serialize, which rewrote a flow-style
+    /// `tags: [a, b]` as a block list while `set --tag` kept it flow.
+    Replace(usize),
 }
 
 /// Classify a list value change as an append-one or remove-one delta.
@@ -512,6 +517,20 @@ enum ListDelta {
 fn classify_list_delta(old: &[Value], new: &[Value]) -> Option<ListDelta> {
     if new.len() == old.len() + 1 && new[..old.len()] == *old {
         return Some(ListDelta::Append);
+    }
+    if old.len() == new.len() {
+        let mut differing = old
+            .iter()
+            .zip(new.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b);
+        if let Some((idx, (_, new_item))) = differing.next()
+            && differing.next().is_none()
+            && is_inline_scalar(new_item)
+        {
+            return Some(ListDelta::Replace(idx));
+        }
+        return None;
     }
     if old.len() == new.len() + 1 {
         let idx = old
@@ -602,6 +621,30 @@ fn try_list_splice(
             }
             if let Some(item_text) = &item_text
                 && let Some(text) = append_block_item(body, old_items.len(), item_text)
+            {
+                return ListSpliceResult::Spliced(text);
+            }
+            if is_unmodellable_block_list(body, old_items.len()) {
+                return ListSpliceResult::BlockNotModellable;
+            }
+            ListSpliceResult::NotApplicable
+        }
+        ListDelta::Replace(idx) => {
+            let Some(new_item) = new_items.get(idx) else {
+                return ListSpliceResult::NotApplicable;
+            };
+            let item_text = render_scalar_item(new_item);
+            if is_single_line_flow(body) {
+                return match item_text
+                    .as_deref()
+                    .and_then(|text| splice_flow_list(body, old_items.len(), FlowOp::Replace(idx, text)))
+                {
+                    Some(text) => ListSpliceResult::Spliced(text),
+                    None => ListSpliceResult::FlowNotModellable,
+                };
+            }
+            if let Some(item_text) = &item_text
+                && let Some(text) = replace_block_item(body, old_items.len(), idx, item_text)
             {
                 return ListSpliceResult::Spliced(text);
             }
@@ -753,6 +796,50 @@ fn remove_block_item(body: &str, item_count: usize, removed_index: usize) -> Opt
     Some(out)
 }
 
+/// Replace one item of a block-style `key:` sequence in place, keeping every
+/// other line — and each item's own dash indentation — byte-identical
+/// (BUG-38, iter-276).
+///
+/// Returns `None` for any shape [`remove_block_item`] would also refuse: the
+/// caller then falls back to a whole-key re-serialize.
+fn replace_block_item(
+    body: &str,
+    item_count: usize,
+    index: usize,
+    item_text: &str,
+) -> Option<String> {
+    let mut lines = body.split_inclusive('\n');
+    let key_line = lines.next()?;
+    if !key_line.trim_end().ends_with(':') {
+        return None;
+    }
+    let item_lines: Vec<&str> = lines.collect();
+    if item_lines.len() != item_count || index >= item_lines.len() {
+        return None;
+    }
+    let mut indents = Vec::with_capacity(item_lines.len());
+    for line in &item_lines {
+        let stripped = line.trim_end_matches(['\n', '\r']);
+        indents.push(split_dash_indent(stripped)?);
+    }
+
+    let mut out = String::with_capacity(body.len() + item_text.len());
+    out.push_str(key_line);
+    for (i, line) in item_lines.iter().enumerate() {
+        if i == index {
+            let (indent, _) = indents[i];
+            let eol = &line[line.trim_end_matches(['\n', '\r']).len()..];
+            out.push_str(indent);
+            out.push_str("- ");
+            out.push_str(item_text);
+            out.push_str(eol);
+        } else {
+            out.push_str(line);
+        }
+    }
+    Some(out)
+}
+
 /// `true` when `body` is a single-line `key: [...]` flow list — used to
 /// decide whether an append that couldn't be inlined deserves the
 /// `FlowNotInlineable` warning (this *is* a flow list) versus silent
@@ -885,6 +972,8 @@ fn detect_flow_separator(inner: &str, items: &[(usize, usize)]) -> &'static str 
 enum FlowOp<'a> {
     Append(&'a str),
     Remove(usize),
+    /// Replace the item at this index with the given rendered token.
+    Replace(usize, &'a str),
 }
 
 /// Splice one item into or out of a single-line `key: [a, b, c]` flow list.
@@ -917,6 +1006,10 @@ fn splice_flow_list(body: &str, old_len: usize, op: FlowOp<'_>) -> Option<String
             tokens.remove(idx);
         }
         FlowOp::Append(text) => tokens.push(text),
+        FlowOp::Replace(idx, text) => {
+            let slot = tokens.get_mut(idx)?;
+            *slot = text;
+        }
     }
 
     let mut new_content = String::with_capacity(content.len() + 8);

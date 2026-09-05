@@ -19,19 +19,42 @@ use crate::types::{TaskCount, TaskInfo};
 // Detection
 // ---------------------------------------------------------------------------
 
+/// Length of the list marker at the start of `trimmed` (leading whitespace
+/// already removed), including the whitespace that separates it from the
+/// checkbox — or `None` when the line does not start a list item.
+///
+/// Accepts the shapes CommonMark does and hyalo used to miss (BUG-40,
+/// iter-276): a bullet `-`/`*`/`+` or an ordered `1.`/`1)` marker, followed by
+/// **one or more** spaces. `-  [ ]` (two spaces) and `1. [ ]` were not tasks
+/// for `--fields tasks`, `summary` or `task toggle`, while `- [ ]no space`
+/// was — the checkbox's own spacing was policed and the marker's was not.
+fn list_marker_len(trimmed: &str) -> Option<usize> {
+    let bytes = trimmed.as_bytes();
+    let marker_len = match bytes.first()? {
+        b'-' | b'*' | b'+' => 1,
+        b'0'..=b'9' => {
+            let digits = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
+            // CommonMark caps an ordered marker at nine digits.
+            if digits > 9 || !matches!(bytes.get(digits), Some(b'.' | b')')) {
+                return None;
+            }
+            digits + 1
+        }
+        _ => return None,
+    };
+    let spaces = trimmed[marker_len..].bytes().take_while(|b| *b == b' ').count();
+    (spaces > 0).then_some(marker_len + spaces)
+}
+
 /// Detect a markdown task checkbox on a line.
 /// Returns `(status_char, is_done)` if the line is a task, or `None`.
 ///
-/// A task line matches: optional whitespace, then `- [C] ` (or `* [C] ` or `+ [C] `)
-/// where C is any single character. Only `'x'` and `'X'` are considered "done".
+/// A task line matches: optional whitespace, then a list marker (`-`, `*`, `+`
+/// or an ordered `1.` / `1)`) followed by one or more spaces, then `[C]` where
+/// C is any single character. Only `'x'` and `'X'` are considered "done".
 pub fn detect_task_checkbox(line: &str) -> Option<(char, bool)> {
     let trimmed = line.trim_start();
-
-    // Must start with a list marker: `-`, `*`, or `+` followed by a space
-    let rest = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))?;
+    let rest = &trimmed[list_marker_len(trimmed)?..];
 
     // Must be followed by `[` then one char then `]`
     let inner = rest.strip_prefix('[')?;
@@ -55,11 +78,7 @@ pub fn detect_task_checkbox(line: &str) -> Option<(char, bool)> {
 fn extract_task_text(line: &str) -> &str {
     let trimmed = line.trim_start();
     // Strip list marker
-    let rest = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))
-        .unwrap_or("");
+    let rest = list_marker_len(trimmed).map_or("", |n| &trimmed[n..]);
     // Strip `[C] ` — marker is `[`, one char, `]`, then optional space
     if rest.len() < 3 {
         return "";
@@ -387,14 +406,9 @@ pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
 fn mutate_task_line(line: &str, line_num: usize, new_status: char) -> Option<(String, TaskInfo)> {
     let trimmed = line.trim_start();
 
-    // Find list marker length (including leading whitespace)
+    // Find list marker length (including the whitespace after it)
     let leading = line.len() - trimmed.len();
-    let marker_len =
-        if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
-            2usize
-        } else {
-            return None;
-        };
+    let marker_len = list_marker_len(trimmed)?;
 
     // After marker: must be `[C]`
     let after_marker = &trimmed[marker_len..];

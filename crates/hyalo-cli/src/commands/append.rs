@@ -26,6 +26,12 @@ pub(crate) struct AppendPropertyResult {
     /// mutation family exposes this key so one query answers "how many were
     /// skipped" regardless of which command produced the result.
     pub(crate) skipped_count: usize,
+    /// Every scanned file this mutation did not write, with why (UX-1,
+    /// iter-276): `unchanged` for the ones in [`Self::skipped`], `unparsable`
+    /// for a file whose YAML frontmatter was refused. A superset of
+    /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
+    /// needed changing" and "nothing could be changed".
+    pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -382,6 +388,10 @@ pub fn append(
         let total = modified.len() + skipped.len();
         let skipped_count = skipped.len();
         let result = AppendPropertyResult {
+            skipped_detail: crate::commands::mutation::skipped_detail(
+                &skipped,
+                &skipped_unparseable,
+            ),
             property: (*name).to_owned(),
             value: (*raw_value).to_owned(),
             modified,

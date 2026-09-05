@@ -33,6 +33,12 @@ pub(crate) struct SetPropertyResult {
     /// information). Emitting `skipped_count` here too gives the whole
     /// mutation family one key that answers "how many were skipped".
     pub(crate) skipped_count: usize,
+    /// Every scanned file this mutation did not write, with why (UX-1,
+    /// iter-276): `unchanged` for the ones in [`Self::skipped`], `unparsable`
+    /// for a file whose YAML frontmatter was refused. A superset of
+    /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
+    /// needed changing" and "nothing could be changed".
+    pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -59,6 +65,12 @@ pub(crate) struct SetTagResult {
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar — see [`SetPropertyResult::skipped_count`].
     pub(crate) skipped_count: usize,
+    /// Every scanned file this mutation did not write, with why (UX-1,
+    /// iter-276): `unchanged` for the ones in [`Self::skipped`], `unparsable`
+    /// for a file whose YAML frontmatter was refused. A superset of
+    /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
+    /// needed changing" and "nothing could be changed".
+    pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
     pub(crate) total: usize,
     pub(crate) scanned: usize,
     pub(crate) dry_run: bool,
@@ -692,6 +704,10 @@ pub fn set(
         );
         let skipped_count = skipped.len();
         let result = SetPropertyResult {
+            skipped_detail: crate::commands::mutation::skipped_detail(
+                &skipped,
+                &skipped_unparseable,
+            ),
             property: (*name).to_owned(),
             value: parsed_value.clone(),
             modified,
@@ -711,6 +727,10 @@ pub fn set(
         let total = modified.len() + skipped.len();
         let skipped_count = skipped.len();
         let result = SetTagResult {
+            skipped_detail: crate::commands::mutation::skipped_detail(
+                &skipped,
+                &skipped_unparseable,
+            ),
             tag: tag.clone(),
             modified,
             skipped,
