@@ -234,9 +234,23 @@ fn properties_rename_rejects_an_empty_or_blank_key() {
 // ---------------------------------------------------------------------------
 
 /// The dogfood fixture: a fence that opens and never closes. `--fix` used to
-/// insert a blank line *inside* the sample. Real hits:
-/// `docs/content/actions/tutorials/build-and-test-code/rust.md` and five other
-/// GitHub Docs files with an odd fence count.
+/// insert a blank line *inside* the sample.
+///
+/// Verified against the real corpus (`../docs/content`, read-only `--dry-run`).
+/// Seven files there have an odd count of column-0 ```` ``` ```` lines; after
+/// this change **six of them get no MD031 proposal at all**:
+///
+/// - `actions/tutorials/build-and-test-code/rust.md` (the reported hit)
+/// - `actions/how-tos/secure-your-work/use-artifact-attestations/enforce-artifact-attestations.md`
+/// - `admin/administering-your-instance/administering-your-instance-from-the-command-line/command-line-utilities.md`
+/// - `billing/tutorials/automate-usage-reporting.md`
+/// - `code-security/how-tos/secure-your-supply-chain/manage-your-dependency-security/removing-dependabot-access-to-public-registries.md`
+/// - `code-security/tutorials/customize-code-scanning/preparing-your-code-for-codeql-analysis.md`
+///
+/// The seventh, `copilot/how-tos/copilot-cli/set-up-copilot-cli/troubleshoot-copilot-cli-auth.md`,
+/// still reports MD031 at lines 32, 35 and 86 — correctly. Its odd count comes
+/// from a fence line nested *inside* another fence, so its real openers are all
+/// terminated and the guard must not (and does not) silence them.
 #[test]
 fn md031_is_silent_at_the_opener_of_an_unterminated_fence() {
     const UNTERMINATED: &str =
