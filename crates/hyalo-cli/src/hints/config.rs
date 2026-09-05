@@ -141,6 +141,19 @@ pub(super) fn hints_for_lint_rules_show(ctx: &HintContext, data: &serde_json::Va
         build_command_no_glob(ctx, &["lint", "--rule", id]),
     ));
 
+    // BUG-27 (iter-276): a rule marked `configurable: false` — SCHEMA, whose
+    // severity comes from the schema — has no `lint-rules set`/`remove` form
+    // at all, and the hint hyalo printed (`=> hyalo lint-rules set SCHEMA
+    // --enabled false`) failed with `no such rule` when run. The rule's own
+    // `note` already says to use `hyalo types set`; don't contradict it.
+    let configurable = data
+        .get("configurable")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if !configurable {
+        return hints;
+    }
+
     let has_override = data.get("override").is_some_and(|o| !o.is_null());
     if has_override {
         if hints.len() < MAX_HINTS {

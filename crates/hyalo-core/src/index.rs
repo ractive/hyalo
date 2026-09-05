@@ -3199,6 +3199,7 @@ Content.
         let graph = LinkGraph::default();
         let data = SnapshotDataRef {
             header: SnapshotHeader {
+                format_version: SNAPSHOT_FORMAT_VERSION,
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,
@@ -3496,6 +3497,7 @@ Content.
         let graph = LinkGraph::default();
         let bytes = rmp_serde::to_vec_named(&Reordered {
             header: SnapshotHeader {
+                format_version: SNAPSHOT_FORMAT_VERSION,
                 vault_dir: "/tmp/vault".to_owned(),
                 site_prefix: None,
                 created_at: 0,

@@ -334,6 +334,48 @@ Prefer `hyalo` CLI for operations on files in this directory:
   many files `[scan] exclude` dropped when it was built, so `summary --index` reports the same
   `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
 
+- **Suppression comments are scope-correct and typo-loud** (iter-276):
+  `markdownlint-disable-next-line` protects the line *after* the comment and never its own — a
+  *trailing* directive no longer makes its heading invisible to prose rules — and no autofix may
+  insert a blank line between the directive and the line it guards. A fenced block indented
+  inside a list item (a 4-space ```` ``` ```` under `1.`, a bullet, a blockquoted list) is code,
+  so MD009/011/012/019/022/023/034/042 stay silent there. An unknown rule id or alias in a
+  directive warns (`-q`-proof) instead of suppressing nothing. `--max-per-rule 0` means
+  unlimited. MD010's `code_blocks` option is deliberately not exposed (DEC-316) — silence a
+  tab-laden page with `<!-- markdownlint-disable no-hard-tabs -->`.
+- **A schema typo is a config error** (iter-276): an unknown key under `[schema]`,
+  `[schema.types.<t>]`, or the wrong nesting `[schema.<t>]`, is refused with the same
+  "unknown field `x`, expected one of …" diagnostic `[scan]` gives. `hyalo config` reports
+  `malformed: true` and `schema_error`; `lint`, `find --strict` and `set --validate` refuse per
+  DEC-290. A mis-nested `[schema.note]` is answered with the `hyalo types set note` command that
+  creates it properly.
+- **`required` is presence, not type** (DEC-312, iter-276): `required = ["title"]` means present
+  and non-empty; `title: 2024` passes `lint` and `set --validate`. Declare
+  `[schema.types.<t>.properties.title] type = "string"` to require a string. `set` has no form
+  that writes a YAML null (DEC-314) — `hyalo remove --property K` takes the key out; `set --help`
+  documents the whole scalar coercion table.
+- **The snapshot says which format it is** (iter-276): an index written by an older binary is
+  refused with a warning naming both versions and the run falls back to disk. `hyalo config`
+  reports `snapshot_format_version` (what this binary writes); `summary --index` reports the
+  snapshot's own `index_format_version`. `--index-file <unreadable>` exits 1 with an error
+  envelope — a *named* path is a promise (DEC-301) — while a missing in-vault `.hyalo-index`
+  under bare `--index` still falls back to disk, with a `-q`-proof warning.
+- **A bare path is vault-relative, and says when that surprises** (iter-276, BUG-21): running
+  from `kb/sub/` with both `kb/a.md` and `kb/sub/a.md` present, `set a.md` still acts on the
+  vault-root file (DEC-304 stays) but now warns (`-q`-proof) naming both candidates and the one
+  it used. `mv --to ../deep/` reports "path contains `..`" exactly like the source check.
+- **Frontmatter fences round-trip byte for byte** (DEC-293 amended, iter-276): `--- ` with
+  trailing whitespace **opens** frontmatter, matching the closer and YAML, so `set` never
+  prepends a second block above an existing one; and both fences keep their own trailing bytes
+  through `set`/`append`/`remove`. A JSON-mode write against an unparsable file is a single
+  envelope with the YAML diagnostic in `cause` — no bare `error:` line ahead of it.
+- **Small write-side truths** (iter-276): `tags rename` keeps a flow-style `tags: [a, b]` in flow
+  style (and a block list's own indentation); `1. [ ]`, `2) [x]` and `-  [ ]` are tasks for
+  `--fields tasks`, `summary` and `task toggle`; bulk `set`/`append`/`remove` carry
+  `skipped_detail` (`{file, reason}` with `unchanged` or `unparsable`), so a same-value write is
+  distinguishable from a refusal; and `summary`'s near-duplicate-value warning needs a real
+  similarity and at least ten files carrying the property before it speaks.
+
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).
 

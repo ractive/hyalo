@@ -307,7 +307,7 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         scanned-but-unchanged set. task toggle/task set return an array of per-task records with \
         no top-level object; their dry-run records carry old_status, applied records do not.\n\
         Use --format text for human-readable output, --format json for machine-readable output. \
-        Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (internal error).\n\n\
+        Successful output goes to stdout; errors go to stderr with exit code 1 (user error) or 2 (usage error from the argument parser, or an internal error).\n\n\
         ABSOLUTE LINKS: Links like `/docs/page.md` are resolved by stripping a site prefix. \
         By default the prefix is auto-derived from --dir's last path component (e.g. --dir ../my-site/docs → prefix \"docs\"). \
         Override with --site-prefix <PREFIX>, or --site-prefix \"\" to resolve absolute links from the vault/bundle root (strip only the leading `/`). Also settable in .hyalo.toml. \
@@ -1310,7 +1310,10 @@ pub(crate) enum Commands {
             exit 0. A batch DRY RUN never aborts on a collision: it lists each one under\n\
             `collisions` as {source, destination} and still plans every move that does not\n\
             collide. `--apply` refuses, distinguishing two sources mapping to one destination\n\
-            from a destination that is already taken.\n\n\
+            from a destination that is already taken. There is deliberately no `overwrite`\n\
+            (UX-3, iter-276): a move that silently replaces a note destroys content `mv` was\n\
+            never asked to touch, and it is unrecoverable — delete the destination yourself\n\
+            first if that is what you mean.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
@@ -2109,7 +2112,7 @@ Repeatable (AND).\n\
             `<!-- markdownlint-enable no-hard-tabs -->`, plus `-disable-line`,\n\
             `-disable-next-line`, `-disable-file` and `-enable-file`; with no ids a directive\n\
             covers every rule, HYALO ones included. `-capture`/`-restore` are not supported.\n\n\
-            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = internal error.\n\n\
+            EXIT CODES: 0 = clean (after fixes), 1 = errors remain, 2 = usage or internal error (DEC-307).\n\n\
             EXAMPLES:\n\
             hyalo lint\n\
             hyalo lint --detailed\n\
