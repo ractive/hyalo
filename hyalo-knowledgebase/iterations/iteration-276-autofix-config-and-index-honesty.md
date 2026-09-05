@@ -3,7 +3,7 @@ title: "Iteration 276 — Autofix, config and index honesty: disable-next-line, 
 type: iteration
 date: 2026-09-05
 tags: [iteration, lint, schema, index, config, mutations, dogfooding]
-status: in-progress
+status: completed
 branch: iter-276/autofix-config-index-honesty
 priority: 2
 related:
