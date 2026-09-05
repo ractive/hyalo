@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::commands::lint::SCHEMA_PSEUDO_RULE;
 use crate::output::{CommandOutcome, Format, format_error, format_success};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
@@ -74,6 +75,40 @@ pub(crate) fn list_rules(
             entry
         })
         .collect();
+
+    // iter-274 (UX-5): the schema pass is selectable with `--rule SCHEMA` /
+    // `--rule-prefix SCHEMA`, so it belongs in the catalog that documents what
+    // is selectable. It is not configurable — there is no `[lint.rules.SCHEMA]`
+    // entry and no severity to set; severity comes from the schema itself —
+    // and it is not autofixable as a unit, so it carries no override columns.
+    let mut results = results;
+    let schema_row_matches = rule_prefix
+        .is_none_or(|p| SCHEMA_PSEUDO_RULE.to_ascii_lowercase().starts_with(&p.to_ascii_lowercase()))
+        && !disabled_only;
+    if schema_row_matches {
+        results.push(serde_json::json!({
+            "id": SCHEMA_PSEUDO_RULE,
+            "name": "frontmatter-schema",
+            "description": "Frontmatter validated against the [schema] types in .hyalo.toml:                             missing required properties, undeclared properties, type and enum                             constraints, and required sections. Not configurable through                             lint-rules — edit the schema with `hyalo types set`.",
+            "default_enabled": true,
+            "default_severity": "error",
+            "effective_enabled": true,
+            "effective_severity": "error",
+            "autofixable": false,
+            "source": "hyalo-schema",
+            "has_override": false,
+            "configurable": false,
+        }));
+        results.sort_by(|a, b| {
+            let key = |v: &serde_json::Value| {
+                v.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            key(a).cmp(&key(b))
+        });
+    }
 
     let _ = config_dir; // not used currently, kept for potential future hints
     let total = results.len() as u64;

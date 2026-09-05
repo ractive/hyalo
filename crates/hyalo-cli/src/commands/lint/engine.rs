@@ -41,11 +41,22 @@ pub fn lint_files_extended(
         (Some(rule), _) => vec![rule.to_owned()],
         // M-10: prefix matching is case-insensitive so `--rule-prefix hyalo`
         // selects the same family as `--rule-prefix HYALO`.
-        (None, Some(prefix)) => md_lint_engine
-            .rules_matching_prefix_ci(prefix)
-            .iter()
-            .map(|e| e.id.clone())
-            .collect(),
+        (None, Some(prefix)) => {
+            let mut ids: Vec<String> = md_lint_engine
+                .rules_matching_prefix_ci(prefix)
+                .iter()
+                .map(|e| e.id.clone())
+                .collect();
+            // UX-5 (iter-274): the schema pass is selectable by prefix too. It
+            // is not in the markdown catalog, so it has to be added here.
+            if super::SCHEMA_PSEUDO_RULE
+                .to_ascii_lowercase()
+                .starts_with(&prefix.to_ascii_lowercase())
+            {
+                ids.push(super::SCHEMA_PSEUDO_RULE.to_owned());
+            }
+            ids
+        }
         (None, None) => vec![],
     };
 

@@ -25,6 +25,15 @@ use hyalo_core::mode_enabled;
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::fn_params_excessive_bools)] // moved verbatim from the dispatch arm
 #[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
+/// The id the frontmatter/schema findings are reported under, and — since
+/// iter-274 (UX-5) — a selectable `--rule` / `--rule-prefix` value.
+///
+/// It is not a markdown rule: it is not in the mdlint catalog, has no
+/// `[lint.rules]` entry, and is not autofixable as a unit (its individual
+/// checks are). `lint-rules list` shows it as a non-configurable row so the
+/// catalog and the selectable set agree.
+pub(crate) const SCHEMA_PSEUDO_RULE: &str = "SCHEMA";
+
 pub(crate) fn run(
     ctx: &mut CommandContext<'_>,
     file_positional: Vec<String>,
@@ -292,7 +301,16 @@ pub(crate) fn run(
         // issues found", which reads as "clean" in CI). The match is
         // case-insensitive and canonicalizes to the catalog spelling so
         // `--rule hyalo006` behaves exactly like `--rule HYALO006`.
+        //
+        // iter-274 (UX-5): `SCHEMA` is a real, selectable pass — it is the id
+        // the frontmatter findings are reported under, and `summary`'s own hint
+        // told the reader to run `hyalo lint --rule SCHEMA` — but it lives in
+        // hyalo's schema validator rather than in the markdown rule catalog, so
+        // the id check rejected it as "no such rule".
         let rule = match rule {
+            Some(raw) if raw.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) => {
+                Some(SCHEMA_PSEUDO_RULE.to_owned())
+            }
             Some(raw) => match md_engine.rule_entry_ci(&raw) {
                 Some(entry) => Some(entry.id.clone()),
                 None => {
@@ -317,6 +335,10 @@ pub(crate) fn run(
         // case-insensitive, so a matching family is unaffected.
         if let Some(prefix) = rule_prefix.as_deref()
             && md_engine.rules_matching_prefix_ci(prefix).is_empty()
+            // UX-5: the schema pass answers to `--rule-prefix SCHEMA` too.
+            && !SCHEMA_PSEUDO_RULE
+                .to_ascii_lowercase()
+                .starts_with(&prefix.to_ascii_lowercase())
         {
             return Ok(crate::output::CommandOutcome::UserError(
                 crate::output::format_error(
