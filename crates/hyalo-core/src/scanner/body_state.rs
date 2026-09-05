@@ -172,7 +172,8 @@ impl LineScanner {
                 return LineClass::FrontmatterOpen;
             }
             if self.in_frontmatter {
-                // Canonical (lenient) closing delimiter (L-4/L-13).
+                // Canonical (strict column-0) closing delimiter
+                // (L-4/L-13, DEC-293).
                 if is_closing_delimiter(line) {
                     self.in_frontmatter = false;
                     self.frontmatter_done = true;
