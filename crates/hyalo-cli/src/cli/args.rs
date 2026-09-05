@@ -2184,7 +2184,7 @@ Repeatable (AND).\n\
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
-        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\n            EXAMPLES:\n            hyalo types list\n            hyalo types show iteration\n            hyalo types set note --required title,date\n            hyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\n            hyalo types remove draft"
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\nType schemas define required properties, default values, property constraints,\nand filename templates for each document type.\n\nCalling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\nSubcommands:\n- list:   Show all defined types and their required fields (default).\n- show:   Show the full schema for a single type.\n- remove: Delete a type entry.\n- set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\nTOML editing preserves comments and formatting.\n\nSIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\nEXAMPLES:\nhyalo types list\nhyalo types show iteration\nhyalo types set note --required title,date\nhyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\nhyalo types remove draft"
     )]
     Types {
         #[command(subcommand)]
@@ -2747,12 +2747,12 @@ pub(crate) enum TypesAction {
     // `summary` alias — see `ViewsAction::List` (iter-192).
     #[command(
         visible_alias = "summary",
-        long_about = "List all type schemas defined in `.hyalo.toml`.\n\n          OUTPUT: JSON envelope with results array and total count.\n            SIDE EFFECTS: None (read-only)."
+        long_about = "List all type schemas defined in `.hyalo.toml`.\n\nOUTPUT: JSON envelope with results array and total count.\nSIDE EFFECTS: None (read-only)."
     )]
     List,
     /// Show the full schema for a single type
     #[command(
-        long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, property constraints, and required_sections.\n\
+        long_about = "Display the full merged schema for a named type.\n\nOUTPUT: JSON object with type name, required fields, defaults,\nfilename template, property constraints, and required_sections.\n\
             When declared, `item_pattern` is included in the constraint for `string-list` properties,\n\
             an `object-list` property carries `required-keys`, `allowed-keys` (omitted when any key\n\
             is allowed) and `key-patterns` (a key -> regex block, omitted when empty),\n\
@@ -2766,7 +2766,7 @@ pub(crate) enum TypesAction {
     },
     /// Remove a type entry from `.hyalo.toml`
     #[command(
-        long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\n            Fails with a user error if the type does not exist.\n\n            OUTPUT: JSON result with action and type name.\n            SIDE EFFECTS: Modifies .hyalo.toml."
+        long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\nFails with a user error if the type does not exist.\n\nOUTPUT: JSON result with action and type name.\nSIDE EFFECTS: Modifies .hyalo.toml."
     )]
     Remove {
         /// Type name to remove
@@ -2775,7 +2775,7 @@ pub(crate) enum TypesAction {
     },
     /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset). `string-list` and `object-list` carry constraints and are configured in `.hyalo.toml` only; see `hyalo types show`.\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            TYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\n            A --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\nWhen creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\nAll mutation flags are optional and combinable in a single invocation.\n\nFLAGS:\n- --required <fields>: comma-separated required property names to add (repeatable).\n- --default key=value: set a default; auto-applied to files missing the property.\n- --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset). `string-list` and `object-list` carry constraints and are configured in `.hyalo.toml` only; see `hyalo types show`.\n- --property-values key=val1,val2,...: set enum values; implies type=enum.\n- --filename-template <template>: set the filename template for this type.\n- --dry-run: preview changes without writing anything.\n\nTYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\nA --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\nOUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\nSIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update

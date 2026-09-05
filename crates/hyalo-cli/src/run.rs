@@ -760,17 +760,37 @@ fn run_inner() -> Result<(), AppError> {
             // Only fires when the flag names a real property in the effective
             // schema (checked via suggest::is_schema_property), so unrelated
             // typos keep clap's normal error.
+            //
+            // iter-274 (UX-8): the tip now consults the invoked subcommand's
+            // real flags. `hyalo changelog add --type entry` used to be told to
+            // use `--property type=entry` — which `changelog add` does not
+            // accept either, so the corrected command failed the same way. When
+            // the command has no `--property`, name the flags it does have.
             if e.kind() == clap::error::ErrorKind::UnknownArgument
                 && let Some(name) = crate::suggest::unknown_long_flag_name(&e)
                 && crate::suggest::is_schema_property(&config.schema, &name)
             {
-                eprintln!(
-                    "error: unexpected argument '--{name}' found\n\n\
-                     tip: '{name}' is a frontmatter property, not a flag — did you mean \
-                     '--property {name}=<value>'?\n\n\
-                     Example: hyalo find --property {name}=<value>\n"
-                );
-                return Err(AppError::Exit(2));
+                let root = Cli::command();
+                if crate::suggest::command_has_long_flag(&raw_args, &root, "property") {
+                    eprintln!(
+                        "error: unexpected argument '--{name}' found\n\n\
+                         tip: '{name}' is a frontmatter property, not a flag — did you mean \
+                         '--property {name}=<value>'?\n\n\
+                         Example: hyalo find --property {name}=<value>\n"
+                    );
+                    return Err(AppError::Exit(2));
+                }
+                let invoked = crate::suggest::invoked_command(&raw_args, &root);
+                let label = crate::suggest::invoked_command_path(&raw_args, &root);
+                let flags = crate::suggest::long_flag_list(&invoked);
+                if !flags.is_empty() {
+                    eprintln!(
+                        "error: unexpected argument '--{name}' found\n\n\
+                         tip: '{name}' is a frontmatter property, but `hyalo {label}` takes no \
+                         --property; its own flags are: {flags}\n"
+                    );
+                    return Err(AppError::Exit(2));
+                }
             }
 
             // Intercept `--tag` / `-t` on the `append` subcommand. Tags are
