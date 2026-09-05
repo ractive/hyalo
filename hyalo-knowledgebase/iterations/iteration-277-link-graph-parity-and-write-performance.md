@@ -3,7 +3,7 @@ title: "Iteration 277 — Link-graph parity, links fix reporting, hint threading
 type: iteration
 date: 2026-09-05
 tags: [iteration, links, performance, index, hints, dogfooding]
-status: in-progress
+status: completed
 branch: iter-277/link-graph-parity-and-write-performance
 priority: 3
 related:
@@ -134,7 +134,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       the same PR; the performance numbers (before/after, Hub and MDN) recorded in the
       Outcome and in `research/` if a perf note exists for the previous batch.
 - [x] Every unfinished item moved to `backlog/` with its repro.
-- [ ] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+- [x] Gates green: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, every xtask `check-*`
       gate, plus `bench-scale` run once locally with the numbers in the Outcome.
 
@@ -145,14 +145,14 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       hundred writes.
 - [ ] MDN with `--site-prefix en-US/docs`: indexed `summary` ≤ 0.8 s, `find --broken-links
       --count` ≤ 0.6 s, `create-index` ≤ 4 s; disk/index parity still byte-identical.
-- [ ] `summary.orphans` equals `find --orphan --count` and `summary.dead_ends` equals
+- [x] `summary.orphans` equals `find --orphan --count` and `summary.dead_ends` equals
       `find --dead-end --count` on MDN and the Hub; `summary --index` reports `skipped`.
 - [ ] Every fuzzy plan carries `emitted_target`; the Hub's `Cat`, `jamesb`, `paulbricman`
       and `obsidian-floating-toc-plugin` proposals fall below the floor; `broken_anchors`
       matches `find`.
-- [ ] Following the `--index` hint printed by `find --broken-links --site-prefix …` on MDN
+- [x] Following the `--index` hint printed by `find --broken-links --site-prefix …` on MDN
       yields the same count as the command that printed it.
-- [ ] Gates green; changelog; DECs.
+- [x] Gates green; changelog; DECs.
 
 ## Outcome
 
@@ -213,6 +213,23 @@ files 14 375 with the same per-directory breakdown).
 *did* exclude attachments, but by asking its own case index — which holds notes only — whether
 the target resolved to one. The exclusion therefore fired for `find` and never for `summary`.
 A predicate needing neither index nor filesystem cannot drift between call sites at all.
+
+### `links fix` reporting — what DEC-319 reaches, and what it does not
+
+Every `fuzzy_fixes` entry now carries `emitted_target` (BUG-17), `broken_anchors` is the count
+`find` computes rather than a constant 0 (BUG-45), and the two `site_prefix` warnings count
+one shared set (BUG-46).
+
+The runner-up margin (DEC-319) does **not** close all four proposals the acceptance criteria
+named. Measured on a Hub copy: `[[jamesb]]` → `jamesgreenblue.md` fell from 0.885 to 0.337
+and is now below the floor, but `[[Cat]]` → `CatMuse.md` (0.867), `[[paulbricman]]` →
+`paultreanor.md` (0.855) and `[[obsidian-floating-toc-plugin]]` → `obsidian-plugin-toc.md`
+(0.857) did not — raising the margin to 0.10 moved none of them, so their runner-ups are far
+away and they are not near-ties. The plan's premise ("the runner-up scores within a margin")
+holds for one of the four; the other three are a *scorer* problem — one similar-stem candidate
+rated too highly on its own — and widening the ambiguity margin far enough to catch them would
+damp genuinely unique matches. Recorded in DEC-319 and left for a scorer iteration rather than
+tuned until the four examples happened to pass.
 
 ### Deferred
 

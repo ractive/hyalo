@@ -5779,7 +5779,17 @@ human might still want; damping keeps them visible while taking them out of the
 automatic path. `[[Obsidian Publish.]]` → `Obsidian Publish.md` at 1.0, whose
 runner-up is nowhere near, is unaffected.
 
-**Where:** `link_fix::LinkMatcher::find_match`. See
+**What it does not fix.** Measured on the Obsidian Hub afterwards, only `[[jamesb]]` fell
+(0.885 → 0.337 at a 0.05 margin, 0.169 at 0.10). `[[Cat]]` (0.867), `[[paulbricman]]`
+(0.855) and `[[obsidian-floating-toc-plugin]]` (0.857) did **not**: their runner-ups are more
+than 0.10 away, so these are not near-ties at all — they are *single* similar-stem candidates
+the composite scorer rates too highly on its own. Widening the margin far enough to catch
+them would damp genuinely unique matches, which is the opposite of what this decision is for.
+Fixing those three means changing how `candidate_confidence` weights a short stem against a
+longer one, which is a scorer change, not an ambiguity signal, and is left for its own
+iteration.
+
+**Where:** `link_fix::LinkMatcher::find_match` (`CONTESTED_DELTA`). See
 [[iterations/iteration-277-link-graph-parity-and-write-performance]].
 
 ## DEC-320: no `[links] slug_map`; MDN's encoded slugs stay unresolved (2026-09-05)
