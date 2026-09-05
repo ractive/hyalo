@@ -891,13 +891,21 @@ pub(crate) enum Commands {
             vault file: an image, a PDF, an Obsidian .base). external and attachment links never \
             count as broken, never appear under --broken-links or HYALO006, and are not graph edges \
             for --orphan/--dead-end. Text mode prints the kind after the arrow unless it is \
-            wikilink. A link that resolved through a note's frontmatter aliases: also carries \
+            wikilink. A bare [[alias]] naming a note's frontmatter aliases: entry carries \
             via: \"alias\" (printed as `(via alias)` in text mode); kind stays wikilink, because an \
-            alias changes what the target names, not how it was written. Turn alias resolution off \
-            with [links] aliases = false. \
+            alias changes what the target names, not how it was written. ALIAS MODES (DEC-308): by \
+            default such a link is BROKEN — Obsidian leaves a hand-typed [[alias]] unresolved and \
+            its own suggester writes [[Note|alias]] — so via: \"alias\" marks a broken link with an \
+            exact fix waiting in `links fix`'s alias_fixes bucket; set [links] aliases = true (for \
+            vaults running the Alias Linker plugin) and the same link resolves to the declaring \
+            note instead. Either way an ambiguous stem is never tie-broken by an alias. \
             A broken #anchor whose text is the prefix of exactly one heading in the target file \
             also carries suggested_fragment, the full heading to write instead (never applied \
-            automatically; -, _ and a space are one character class for that prefix test).\n\
+            automatically). -, _ and a space are one character class both for that prefix test and \
+            for anchor RESOLUTION (DEC-309), so #Browser_compatibility resolves to \
+            `## Browser compatibility`; a nested heading path [[a#H1#H2]] resolves by walking the \
+            outline (DEC-311), and a wikilink target is trimmed before resolution, so [[ a ]] and \
+            [[./a]] both report the canonical a.md.\n\
             SIZE: size/lines let a caller budget before reading -- pair them with \
             `read --lines A:B` or `read --section H` instead of pulling a large body whole.\n\
             RESULT SHAPE: `results` is always the array of matched files, whichever way the file \
@@ -1245,8 +1253,11 @@ pub(crate) enum Commands {
             AMBIGUOUS BARE WIKILINKS:\n\
             A bare [[stem]] that matches multiple vault files is skipped by default (logged to stderr and\n\
             included in the 'skipped_ambiguous' JSON field). Pass --allow-ambiguous to rewrite it anyway\n\
-            based on stem matching. Reported for every same-stemmed candidate, including when none of\n\
-            them sits at the vault root.\n\n\
+            based on stem matching. Reported for every same-stemmed candidate, whatever directory the\n\
+            moved file, its twin and the linking file sit in, and for a frontmatter value exactly as for\n\
+            body prose — the entry then carries the `property` it came from (text mode prints it too).\n\
+            The moved file's OWN body self-links go through the same guard and are marked `self: true`;\n\
+            without a twin they are rewritten as before.\n\n\
             SINGLE-FILE MODE:\n\
             Provide a positional FILE or --file. The destination is a .md path or an existing\n\
             directory (basename of source is appended), given either as --to <dest> or as a second\n\
@@ -1264,7 +1275,8 @@ pub(crate) enum Commands {
             hyalo mv --glob 'iterations/*.md' --property status=completed --to iterations/done/ --apply\n\
             hyalo mv --tag archive --to archive/ --apply\n\n\
             OUTPUT: JSON object with moves, updated_files (with per-file replacements), totals, applied flag,\n\
-            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution).\n\
+            and skipped_ambiguous (list of links skipped due to ambiguous stem resolution). Batch mode\n\
+            also answers total_files_updated / total_links_updated, the same keys single-file mode uses.\n\
             Text output prints `files updated: N, links updated: M` under the `Moved ...` line in both\n\
             modes, so a rewrite that matched nothing is visible rather than silent.\n\n\
             FRONTMATTER LINKS: `[[wikilinks]]` written in any frontmatter value (`categories:`,\n\
@@ -1280,14 +1292,18 @@ pub(crate) enum Commands {
             DESTINATION PATHS: the destination is resolved exactly like the source, so a\n\
             CWD-relative path carrying the configured vault dir works from the project root\n\
             (`dir = \"kb\"` → `hyalo mv kb/a.md kb/sub/a.md` lands at `kb/sub/a.md`, not\n\
-            `kb/kb/sub/a.md`). A destination that would escape the vault is refused. A trailing\n\
-            slash always means \"directory\": in single-file mode the source's basename is\n\
+            `kb/kb/sub/a.md`), and an ABSOLUTE path inside the vault is accepted with the same\n\
+            \"prefer relative\" note the source prints. `--to .`, `--to ./` and `--to <vault-dir>/`\n\
+            all name the vault ROOT. A destination that would escape the vault is refused. A\n\
+            trailing slash always means \"directory\": in single-file mode the source's basename is\n\
             appended when that directory exists, and a missing one is reported as such.\n\n\
             CONFLICTS: --on-conflict takes `error` (default) or `skip`; anything else is a usage\n\
             error. `skip` works in both modes — batch moves everything that does not collide,\n\
             single-file mode leaves the source where it is and reports it under `skipped` at\n\
-            exit 0. The batch error distinguishes two sources mapping to one destination from a\n\
-            destination that is already taken.\n\n\
+            exit 0. A batch DRY RUN never aborts on a collision: it lists each one under\n\
+            `collisions` as {source, destination} and still plans every move that does not\n\
+            collide. `--apply` refuses, distinguishing two sources mapping to one destination\n\
+            from a destination that is already taken.\n\n\
             INDEX NOTE: When `--index` or `--index-file` is active, the snapshot index is patched\n\
             in-place after a successful move: the moved entry is renamed, files whose links were\n\
             rewritten are re-scanned, and the link graph (target keys + backlink sources) is\n\
@@ -1884,9 +1900,10 @@ Repeatable (AND).\n\
             (NEW-18), omitted when the file/line is unreadable or the target no longer appears \
             there (a stale proposal against text that already changed).\n\
             TEXT LAYOUT: the counts come first, then the fixes that would be (or were) written, \
-            then the actionable buckets (unfixable, out-of-vault, case mismatches, ambiguous, \
-            templated) capped at 20 entries each, and finally the fuzzy proposals — the longest \
-            section. Use --format json for uncapped lists.\n\
+            then the actionable buckets (unfixable, out-of-vault, case mismatches, alias fixes, \
+            ambiguous — with its candidates — and templated) capped at 20 entries each, and \
+            finally the fuzzy proposals — the longest section. Use --format json for uncapped \
+            lists.\n\
             OUT OF VAULT: a target that normalizes above the vault root \
             (../../CONTRIBUTING.md) can never resolve to a scanned file, so it is \
             counted under out_of_vault / out_of_vault_links instead of broken and is \
@@ -2920,10 +2937,16 @@ pub(crate) enum LinksAction {
             triggers a case-mismatch fix — and the fix preserves the short form ([[Note]],\n\
             never [[sub/Note]]). Links matching >=2 files are reported as ambiguous and\n\
             never auto-fixed.\n\
-            A bare target that names no file at all is matched against every note's\n\
-            frontmatter aliases: (DEC-296). A target that resolves through an alias is not\n\
-            broken, gets no plan and is never fuzzy-matched; one claimed by two notes is\n\
-            ambiguous. `[links] aliases = false` turns this off.\n\n\
+            ALIAS FIXES (DEC-308): a bare target that names no file at all is matched\n\
+            against every note's frontmatter aliases:. Obsidian leaves such a link\n\
+            unresolved and its own suggester writes [[Note|alias]], so hyalo plans exactly\n\
+            that rewrite — [[Leah]] -> [[Leah Ferguson|Leah]] — in its own alias_fixes /\n\
+            alias_fix_plans bucket at confidence 1.0, written by plain --apply and never\n\
+            routed through the fuzzy matcher. An existing label survives ([[Leah|boss]] ->\n\
+            [[Leah Ferguson|boss]]); an embed or markdown form rewrites the target only. An\n\
+            alias claimed by two notes is ambiguous, and ambiguous_links entries carry the\n\
+            candidates. With `[links] aliases = true` the link resolves instead and no plan\n\
+            is produced.\n\n\
             EMITTED TARGET: every reported plan carries emitted_target — the exact link text\n\
             --apply writes — beside the vault-relative new_target. Both are filled by the\n\
             same planning pass in --dry-run and --apply, so the preview is byte-accurate.\n\n\

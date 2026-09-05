@@ -442,7 +442,17 @@ What follows is only what those pages do not say — the behaviour that surprise
 
 - **`mv` has two modes.** Single-file mode writes immediately (`--dry-run` to preview;
   `--apply` is rejected there). Batch mode (`--glob`/`--property`/`--tag`/`--type`)
-  defaults to dry-run and needs `--apply` to commit.
+  defaults to dry-run and needs `--apply` to commit. A batch **dry run** lists destination
+  collisions under `collisions: [{source, destination}]` and still plans everything else;
+  `--apply` refuses. Batch JSON also answers `total_files_updated` / `total_links_updated`.
+- **`mv` skips a link it cannot attribute, and says so.** A bare `[[stem]]` two files share is
+  listed in `skipped_ambiguous` with its `candidates` — in a frontmatter value (with the
+  `property` it came from) exactly as in body prose, whatever directory the moved file, its
+  twin and the linking file sit in, and including the moved file's **own** body self-links
+  (marked `self: true`). `--allow-ambiguous` rewrites them all.
+- **`mv` destinations resolve like sources.** A CWD-relative path carrying the configured
+  vault dir works from the project root, an **absolute** path inside the vault is accepted,
+  and `--to .`, `--to ./` and `--to <vault-dir>/` all name the **vault root**.
 - **`links fix` withholds low-confidence repairs.** Fuzzy hits and basename fallbacks are
   reported separately and excluded from `--apply` unless you pass `--apply-fuzzy`, which is
   gated again by a confidence floor (0.8 default; `--min-confidence <0.0-1.0>` or
@@ -480,14 +490,19 @@ What follows is only what those pages do not say — the behaviour that surprise
   `summary.links.broken` and HYALO006, and are not graph edges for `--orphan` / `--dead-end`.
   So bucket broken links with
   `select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
-- **Frontmatter `aliases:` resolve wikilinks** (DEC-296): `[[Leah]]` finds the note declaring
-  `aliases: [Leah]` (list or bare string). A filename or path always wins; an alias claimed by
-  two notes is ambiguous, not resolved; matching folds case like DEC-267; `[[alias#Heading]]`
-  and `[[alias|label]]` work. The link's `kind` stays `wikilink` and it carries `via: "alias"`.
-  Alias links are real graph edges (`backlinks`, `--orphan`, `--dead-end`, `summary.links`,
-  HYALO006) and `links fix` never proposes or fuzzy-matches a rewrite for one. `mv` leaves them
-  alone — the alias travels with the note. Opt out with `[links] aliases = false`
-  (`hyalo config --jq '.results.links.aliases'`).
+- **A bare `[[alias]]` is broken by default, and `links fix` repairs it** (DEC-308, amends
+  DEC-296): Obsidian does not resolve a hand-typed `[[Leah]]` — aliases feed its link
+  *suggester*, which writes `[[Leah Ferguson|Leah]]` — so `[links] aliases` defaults to
+  **false** and such a link counts in `summary.links.broken`, `--broken-links` and HYALO006.
+  It still carries `via: "alias"` (text: `(unresolved) (via alias)`), marking it broken **but
+  exactly fixable**: `links fix` puts the suggester's own rewrite in an `alias_fixes` /
+  `alias_fix_plans` bucket — strategy `Alias`, confidence 1.0, applied by plain `--apply`,
+  never fuzzy. A label survives (`[[Leah|boss]]` → `[[Leah Ferguson|boss]]`); an embed or
+  markdown form rewrites the target only. Set `[links] aliases = true` (Alias Linker plugin)
+  and `[[Leah]]` resolves instead, case-folded, with a filename or path always winning. In
+  either mode an ambiguous *stem* is never tie-broken by an alias, and an alias claimed by two
+  notes is ambiguous — `links fix` lists the `candidates` and HYALO006 says "ambiguous
+  wikilink … matches 2 candidates". `hyalo config --jq '.results.links.aliases'` reports it.
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
@@ -505,9 +520,15 @@ What follows is only what those pages do not say — the behaviour that surprise
   `.md`, and neither `/index` nor `.md` is appended to a form that lacked it.
 - **A dead `#anchor` that prefixes exactly one heading gets a `suggested_fragment`** (DEC-268):
   `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write.
-  Reported, never applied — an ambiguous prefix suggests nothing. `-`, `_` and a space are one
-  character class for that prefix test (DEC-298), so `#Browser_compatibility` suggests the
-  `Browser compatibility` heading.
+  Reported, never applied — an ambiguous prefix suggests nothing; a fragment covering the whole
+  heading is suggested (iter-275).
+- **`-`, `_` and a space are one word separator when an anchor RESOLVES** (DEC-309, amends
+  DEC-268/DEC-298): `#Browser_compatibility` resolves to `## Browser compatibility` outright,
+  which took MDN's broken-anchor count from 10 929 to 529. A nested heading path
+  `[[note#Heading One#Sub Two]]` resolves by walking the outline (DEC-311) — the second segment
+  must sit under the first, so a heading that exists elsewhere is still a broken anchor.
+- **Wikilink targets are trimmed, and `./` is canonical** (DEC-310): `[[ a ]]`, `[[a ]]`,
+  `[[a #Heading]]` and `[[./a]]` all report `path: "a.md"`; `target` keeps the written text.
 - **`links fix` reports the string it will write** (iter-272): every plan carries
   `emitted_target` beside the vault-relative `new_target`, filled by the same planning pass in
   `--dry-run` and `--apply`, so a preview is byte-accurate about what lands on disk.
