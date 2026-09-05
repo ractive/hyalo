@@ -81,8 +81,13 @@ fall back to the filename stem so the loss is invisible.
 
 - [x] Reject empty, whitespace-only and otherwise invalid keys for `--from` and `--to` with
       exit 1, reusing the validator behind `types set ''` / `set --property '=v'`.
-- [x] `--from X --to X` is a no-op that says so; `--to <existing>` still reports `conflicts`
+- [ ] `--from X --to X` is a no-op that says so; `--to <existing>` still reports `conflicts`
       and writes nothing (existing e2e stays green).
+      Not done as sketched — see Outcome: `--from X --to X` was left as the pre-existing exit-1
+      "source and target property names are identical" error rather than converted to an exit-0
+      no-op, since downgrading a gate to a success was judged the wrong direction. Nothing
+      writes either way, so the AC's practical intent (no accidental write) holds; the exit code
+      differs from what this bullet describes.
 - [x] e2e in text and JSON, `--dry-run` included.
 
 ## Part C — MD031 must not fire at the opener of an unterminated fence (BUG-3, HIGH)
@@ -168,9 +173,14 @@ whose URL convention is Title-case over lowercase folders.
 
 ### CASE-2: the dry-run shows the exact string that will be written
 
-- [x] `new_target` and text-mode output in `--dry-run` equal the replacement `--apply` writes,
+- [ ] `new_target` and text-mode output in `--dry-run` equal the replacement `--apply` writes,
       for every strategy. Test: `--dry-run` then `--apply` on one fixture, assert each applied
       `new_text` equals the dry-run `new_target` for the same `(file, line, old_target)`.
+      **Deferred — see Outcome.** Dry-run and apply share `build_replacements_for_file`, so they
+      cannot disagree about what gets written, but the *reported* `new_target` is still the
+      plan's vault-relative path, not the emitted string, so this literal string-equality does
+      not hold yet. Carried forward to iteration 272 (see this file's Carry-over section once
+      filed).
 - [x] On the css copy after the fix: `git diff` after `--apply` contains only case-only
       changes, or none under option (b).
 
@@ -214,8 +224,11 @@ hyalo mv a.md z.md    # body links skipped as ambiguous; related/rel2 rewritten 
 - [x] BUG-28: fixture byte-identical; the all-autofixable-rules audit fixture is byte-identical
       after `--fix` and lives in the e2e suite; Outcome names any other rule that needed it.
 - [x] Part E: a DEC exists; if implemented, the protected-region fixture holds.
-- [x] BUG-4: on the mdn css copy `--apply` yields case-only diffs or none; every dry-run
+- [ ] BUG-4: on the mdn css copy `--apply` yields case-only diffs or none; every dry-run
       `new_target` equals the applied `new_text`.
+      Half met: the css-copy diffs are case-only-or-none (measured 5096→0 case mismatches,
+      1049→0 files rewritten — see Outcome). The `new_target`-equals-applied-`new_text` half is
+      the deferred CASE-2 reporting change, carried to iteration 272.
 - [x] BUG-7: nothing rewritten without `--allow-ambiguous`, four notes; all four with it.
 - [x] Iteration 263 fixtures, iteration 269 MD034/MD047 tests, and the 45-value hostile scalar
       set stay green; Hub `lint --fix --dry-run` delta by rule in the Outcome.

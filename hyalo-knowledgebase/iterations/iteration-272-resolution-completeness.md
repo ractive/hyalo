@@ -151,6 +151,29 @@ won't-do with reasoning). Implement only what fits the resolver work above witho
       (not a flag) that adds those values as resolution aliases — sits on Part B's alias map.
       Decide; implement if the alias map makes it a few lines, else backlog.
 
+## Part F — `links fix --dry-run` reports the string `--apply` actually writes (CASE-2 carry-over from iteration 271, MEDIUM)
+
+Iteration 271 Part F fixed *what* gets written for a `site_prefix`/directory-index case plan
+(the site-prefix skip, form-preserving rewrite) but deliberately deferred the second half of
+CASE-2: the `new_target` reported by `--dry-run` (and text-mode output) is still the plan's
+vault-relative path, not the string `emit_markdown_fix_target`/its wikilink equivalent actually
+emits. Dry-run and apply cannot *disagree* — they share `build_replacements_for_file` — but a
+caller reading the dry-run JSON does not see byte-identical text to what lands on disk (e.g. a
+directory-index rewrite reports the `.md`-suffixed vault-relative path while the applied text
+keeps the author's directory form). See
+[[iterations/iteration-271-write-and-rewrite-safety]] Outcome, Part F.
+
+- [ ] Thread the per-plan emitted string through `build_replacements_for_file` into both
+      `plan_fixes_dry_run` and `apply_fixes`, so the reported `new_target` (or a new field, if
+      keeping `new_target` vault-relative for other consumers) equals the applied `new_text` for
+      every strategy (case-mismatch, relocation, site-prefix-preserving).
+- [ ] Update every e2e/JSON-shape assertion touching `new_target` in the `links fix` suite;
+      call out the output-shape change in `links fix --help` and the changelog if a field is
+      added or its meaning changes.
+- [ ] Test: `--dry-run` then `--apply` on one fixture (a site_prefix + directory-index case),
+      assert each applied `new_text` equals the dry-run-reported value for the same
+      `(file, line, old_target)`.
+
 ## Shared closing tasks
 
 - [ ] Changelog entries via `hyalo changelog add` (one per part that changes behaviour).
@@ -173,6 +196,8 @@ won't-do with reasoning). Implement only what fits the resolver work above witho
 - [ ] `[[Leah] here and [[Target]` yields one link `Target`; the KB research file resolves and
       `mv` dry-run includes it; `[y](<(https://…)>)` is external.
 - [ ] Every Part E item has a DEC line; implemented ones have tests and a measurement.
+- [ ] Part F: every dry-run-reported target for `links fix` equals the string `--apply` writes,
+      for every strategy; iteration 271's `links fix` e2e suite stays green.
 - [ ] Iteration 261/262 fixtures stay green.
 - [ ] Gates green; changelog; DECs; help, skill and rule template updated.
 
@@ -182,4 +207,5 @@ won't-do with reasoning). Implement only what fits the resolver work above witho
 - [[iterations/iteration-261-link-resolution-obsidian-compat]] — resolver, kinds, DEC-266/267/268
 - [[iterations/iteration-262-frontmatter-wikilinks-first-class]] — raw-text frontmatter scanner
 - [[iterations/iteration-266-properties-tags-schema-mutations]] — `normalize_type_value`, DEC-281
+- [[iterations/iteration-271-write-and-rewrite-safety]] — Part F / CASE-2 carry-over (Part F here)
 - [[decision-log]]
