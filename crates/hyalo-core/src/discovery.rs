@@ -120,6 +120,17 @@ pub fn is_scan_excluded(rel: &str) -> bool {
     scan_exclude().is_some_and(|exc| exc.is_excluded(rel))
 }
 
+/// The installed `[scan] exclude` patterns, in the order they were configured.
+///
+/// Empty when no exclusion is in effect. Used by the snapshot writer to record
+/// *which* exclusions produced the count it stores, so a load can tell "the
+/// same exclusions, still N files" from "the config changed since the index was
+/// built" (iter-273, BUG-18).
+#[must_use]
+pub fn scan_exclude_patterns() -> &'static [String] {
+    scan_exclude().map_or(&[], |exc| exc.patterns.as_slice())
+}
+
 /// The `[scan] exclude` glob that drops `rel`, if any.
 #[must_use]
 pub fn scan_exclude_glob(rel: &str) -> Option<&'static str> {

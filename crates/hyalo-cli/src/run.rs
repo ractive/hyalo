@@ -2045,11 +2045,6 @@ fn run_inner() -> Result<(), AppError> {
                     // (bounded-depth walk, iter-249 UX-1) and warn when they
                     // postdate the snapshot, so a stale index is at least
                     // noisy instead of silently wrong.
-                    let (_, _, created_at, _) = idx.header_info();
-                    let stale = hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
-                        newest
-                            > created_at.saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
-                    });
                     // iter-247 (deep-review S-2): warn-but-serve stays the
                     // default — the probe is a heuristic, and turning a
                     // heuristic into a hard refusal would make every indexed
@@ -2072,11 +2067,34 @@ fn run_inner() -> Result<(), AppError> {
                             hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
                         })
                     };
-                    if stale && !refreshed_all_targets && !cli.command.write_repairs_named_targets()
-                    {
-                        crate::warn::warn(
-                            "index older than vault; results may be stale — re-run create-index",
-                        );
+                    if !refreshed_all_targets && !cli.command.write_repairs_named_targets() {
+                        let (_, _, created_at, _) = idx.header_info();
+                        let dirs_moved =
+                            hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
+                                newest > created_at.saturating_add(
+                                    hyalo_core::index::STALENESS_TOLERANCE_SECS,
+                                )
+                            });
+                        if dirs_moved {
+                            crate::warn::warn(
+                                "index older than vault; results may be stale — re-run create-index",
+                            );
+                        } else if let Some(rel) =
+                            // INDEX-1 (iter-273, BUG-12): the directory probe
+                            // above sees notes added and removed, but an
+                            // in-place overwrite moves no directory mtime — so
+                            // a rewritten note was served from the snapshot
+                            // silently. Fall through to the per-entry mtime
+                            // comparison only when the cheap probe found
+                            // nothing, so the extra `stat`s are paid once, on
+                            // the vault that looked clean.
+                            hyalo_core::index::first_file_modified_since_snapshot(&idx, &dir)
+                        {
+                            crate::warn::warn(format!(
+                                "index older than vault ({rel} changed on disk since the index \
+                                 was built); results may be stale — re-run create-index"
+                            ));
+                        }
                     }
                     Some(idx)
                 } else {

@@ -231,16 +231,8 @@ pub(crate) fn run(
     // path the caller typed. Stat-refresh it into the in-memory snapshot (one
     // stat, one parse — DEC-280's cost argument), or, when it is on neither
     // disk nor snapshot, count it under `files_missing`.
-    let named_missing = if from_files_from {
-        0
-    } else {
-        refresh_named_files_into_snapshot(snapshot_index.as_mut(), dir, &file)
-    };
-    if named_missing > 0 {
-        let counters = ctx
-            .files_from_counters
-            .get_or_insert_with(crate::commands::files_from::FilesFromCounters::default);
-        counters.files_missing += named_missing;
+    if !from_files_from {
+        refresh_named_files_into_snapshot(snapshot_index.as_mut(), dir, &file);
     }
     match resolve_index_named(
         snapshot_index.as_ref(),
@@ -354,37 +346,31 @@ pub(crate) fn run(
 /// typed — one `is_file` plus one parse each — so it cannot turn a snapshot
 /// read into a vault scan.
 ///
-/// Returns how many named paths exist in neither place; the caller folds that
-/// into the envelope's `files_missing`, the counter that already means "you
-/// named it, I could not find it".
+/// A path in *neither* the snapshot nor the vault is left alone: `find`'s own
+/// L-7 guard (iter-210, BUG-13) already refuses it with `file not found` and
+/// exit 1, which is a stronger answer than the counter the plan proposed and
+/// the same one the non-`--index` path gives.
 fn refresh_named_files_into_snapshot(
     snapshot: Option<&mut hyalo_core::index::SnapshotIndex>,
     dir: &std::path::Path,
     files: &[String],
-) -> u64 {
+) {
     use hyalo_core::index::VaultIndex as _;
 
     let Some(index) = snapshot else {
         // No `--index`: the disk scan already resolves named paths and errors
         // on a missing one.
-        return 0;
+        return;
     };
-    let mut missing = 0;
     for rel in files {
         if index.get(rel).is_some() {
             continue;
         }
         let full = dir.join(rel);
         if !full.is_file() {
-            missing += 1;
-            crate::warn::warn(format!(
-                "{rel}: named on the command line but present in neither the snapshot \
-                 index nor the vault (counted under files_missing)"
-            ));
             continue;
         }
         if let Err(e) = index.insert_or_replace_entry_with_links(&full, rel) {
-            missing += 1;
             crate::warn::warn(format!(
                 "{rel}: absent from the snapshot index and could not be read from disk: {e}"
             ));
@@ -395,7 +381,6 @@ fn refresh_named_files_into_snapshot(
              (run `hyalo create-index` to fold it in)"
         ));
     }
-    missing
 }
 
 /// Files the zero-result body probe will open before giving up (iter-258).
