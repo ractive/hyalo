@@ -353,6 +353,13 @@ and this project adheres to
 - `mv` flags an ambiguous bare `[[stem]]` between two same-stemmed files even when neither sits at the vault root; which candidate was being moved no longer decides whether the warning appears (DEC-288)
 - `lint --fix` no longer swallows an HTML tag into MD034's autolink: `https://…/x<br>` fixes to `<https://…/x><br>` instead of corrupting the markup (DEC-289)
 - MD047 no longer reports a frontmatter-only file as missing a trailing newline (DEC-289)
+- Frontmatter closes only on a column-0 `---`: an indented `  ---` inside a block scalar no longer truncates the block (keys after it were silently dropped and the next `set` overwrote the body). A malformed block is now reported as unclosed / HYALO005 (DEC-293).
+- `set`/`append` never emit a block scalar containing a `---` or `...` line; such a value is written as a double-quoted scalar that round-trips (DEC-293).
+- `properties rename --from '' ` / `--to ''` are refused with exit 1 instead of giving every file an empty-named property.
+- MD031 no longer proposes a blank line at the opener of a fence that never closes — the fix landed inside the code sample.
+- No prose rule (MD019 among them) fires inside a fenced or indented code block or an HTML comment; MD010, MD031, MD040, MD046, MD047 and MD048 keep checking them on purpose.
+- `links fix` no longer reports a case mismatch for a site-absolute link carrying the configured `site_prefix`, and never appends `/index` or `.md` to a link form that lacked it (DEC-295).
+- `mv` applies its ambiguity guard to frontmatter links too: a bare `related: "[[a]]"` matching two files is skipped and reported with its property, not rewritten.
 
 ### Added
 
@@ -378,6 +385,7 @@ and this project adheres to
 - `find` reports `title_source` (property | h1 | filename) alongside `title` (DEC-283)
 - `links auto` reports `default_excluded_titles` / `default_excluded_mentions` (DEC-286)
 - Schema: `object-list` property type with `required-keys`, `allowed-keys`, `key-patterns` for lists of maps; lint reports the item index and key, and a plain-string item gets a `- ref: <value>` fix-it hint
+- `lint` honours markdownlint's suppression comments — `markdownlint-disable`, `-enable`, `-disable-line`, `-disable-next-line`, `-disable-file`, `-enable-file` — with rule ids or aliases (DEC-294).
 
 ## [0.21.0] - 2026-08-28
 

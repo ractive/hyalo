@@ -204,9 +204,7 @@ pub(super) fn hyalo_serializer_options_for<'a>(
 /// against, which are the lenient ones.
 pub(super) fn has_document_marker_line(value: &Value) -> bool {
     match value {
-        Value::String(s) => s
-            .lines()
-            .any(|line| matches!(line.trim(), "---" | "...")),
+        Value::String(s) => s.lines().any(|line| matches!(line.trim(), "---" | "...")),
         Value::Array(items) => items.iter().any(has_document_marker_line),
         Value::Object(map) => map.values().any(has_document_marker_line),
         _ => false,

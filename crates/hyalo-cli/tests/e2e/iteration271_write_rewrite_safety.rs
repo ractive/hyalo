@@ -77,14 +77,21 @@ fn read_frontmatter_sees_past_an_indented_dashes_line() {
 fn find_and_mutations_all_agree_on_the_indented_fixture() {
     let tmp = vault(&[("ind.md", INDENTED_FENCE)]);
 
-    let v = json(&tmp, &["find", "--file", "ind.md", "--fields", "properties"]);
+    let v = json(
+        &tmp,
+        &["find", "--file", "ind.md", "--fields", "properties"],
+    );
     let props = &v["results"][0]["properties"];
     assert_eq!(props["after"], 1, "`find` sees the same map as `read`");
 
     // `set` adds exactly one line and leaves the body alone.
     let before = read(&tmp, "ind.md");
     let out = run(&tmp, &["set", "ind.md", "--property", "z=1"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let after = read(&tmp, "ind.md");
     assert!(
         after.ends_with("REALBODY\n"),
@@ -95,11 +102,22 @@ fn find_and_mutations_all_agree_on_the_indented_fixture() {
         before.lines().count() + 1,
         "exactly one line added:\n{after}"
     );
-    assert!(after.contains("  ---"), "the block scalar is intact:\n{after}");
+    assert!(
+        after.contains("  ---"),
+        "the block scalar is intact:\n{after}"
+    );
 
     // `append` and `remove` see the full map too.
-    assert!(run(&tmp, &["append", "ind.md", "--property", "tags=x"]).status.success());
-    assert!(run(&tmp, &["remove", "ind.md", "--property", "z"]).status.success());
+    assert!(
+        run(&tmp, &["append", "ind.md", "--property", "tags=x"])
+            .status
+            .success()
+    );
+    assert!(
+        run(&tmp, &["remove", "ind.md", "--property", "z"])
+            .status
+            .success()
+    );
     let v = json(&tmp, &["read", "ind.md", "--frontmatter"]);
     assert_eq!(v["results"]["frontmatter"]["after"], 1);
     assert_eq!(v["results"]["frontmatter"]["k"], "a\n---\nb");
@@ -127,7 +145,11 @@ fn an_indented_last_line_is_reported_as_unclosed_frontmatter() {
 fn a_multiline_value_with_a_dashes_line_round_trips() {
     let tmp = vault(&[("n.md", "---\ntitle: n\n---\nbody\n")]);
     let out = run(&tmp, &["set", "n.md", "--property", "k=a\n---\nb"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let text = read(&tmp, "n.md");
     assert!(
@@ -139,7 +161,11 @@ fn a_multiline_value_with_a_dashes_line_round_trips() {
     assert_eq!(v["results"][0]["properties"]["k"], "a\n---\nb");
 
     let before = read(&tmp, "n.md");
-    assert!(run(&tmp, &["set", "n.md", "--property", "other=1"]).status.success());
+    assert!(
+        run(&tmp, &["set", "n.md", "--property", "other=1"])
+            .status
+            .success()
+    );
     let after = read(&tmp, "n.md");
     // Every line of the original survives verbatim and exactly one is added:
     // the second `set` must not re-serialize the quoted scalar.
@@ -221,7 +247,11 @@ fn md031_is_silent_at_the_opener_of_an_unterminated_fence() {
     let violations = v["results"]["violations"].as_u64().unwrap_or(0);
     assert_eq!(violations, 0, "no proposal at an unterminated opener: {v}");
 
-    assert!(run(&tmp, &["lint", "--fix", "--file", "unterm.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "unterm.md"])
+            .status
+            .success()
+    );
     assert_eq!(
         read(&tmp, "unterm.md"),
         UNTERMINATED,
@@ -243,7 +273,11 @@ fn md031_still_fires_on_a_terminated_fence() {
         1,
         "a real MD031 must survive: {v}"
     );
-    assert!(run(&tmp, &["lint", "--fix", "--file", "ok.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "ok.md"])
+            .status
+            .success()
+    );
     assert!(
         read(&tmp, "ok.md").contains("Intro.\n\n```yaml"),
         "the blank line is inserted where it belongs"
@@ -268,7 +302,11 @@ fn md019_leaves_every_kind_of_code_block_alone() {
         "MD019 must not see code: {v}"
     );
 
-    assert!(run(&tmp, &["lint", "--fix", "--file", "d.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "d.md"])
+            .status
+            .success()
+    );
     assert_eq!(read(&tmp, "d.md"), D, "the file must be byte-identical");
 }
 
@@ -276,7 +314,11 @@ fn md019_leaves_every_kind_of_code_block_alone() {
 #[test]
 fn md019_still_fixes_a_real_heading() {
     let tmp = vault(&[("h.md", "---\ntitle: h\n---\n\n#   Spaced\n\nBody.\n")]);
-    assert!(run(&tmp, &["lint", "--fix", "--file", "h.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "h.md"])
+            .status
+            .success()
+    );
     assert!(
         read(&tmp, "h.md").contains("# Spaced"),
         "prose headings are still normalised"
@@ -314,7 +356,9 @@ fn no_autofixable_rule_rewrites_a_protected_region() {
         "[](empty-link)\n",
     );
 
-    let mut body = String::from("---\ntitle: audit\nnote: \"(text)[https://example.com/x] #nospace\"\n---\n\n# Audit\n\n");
+    let mut body = String::from(
+        "---\ntitle: audit\nnote: \"(text)[https://example.com/x] #nospace\"\n---\n\n# Audit\n\n",
+    );
     body.push_str("```text\n");
     body.push_str(SAMPLES);
     body.push_str("```\n\n");
@@ -332,7 +376,11 @@ fn no_autofixable_rule_rewrites_a_protected_region() {
 
     let tmp = vault(&[("audit.md", body.as_str())]);
     let out = run(&tmp, &["lint", "--fix", "--file", "audit.md"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(
         read(&tmp, "audit.md"),
         body,
@@ -359,7 +407,11 @@ fn markdownlint_disable_protects_a_region_by_alias() {
         "only the tab outside the disabled region is reported: {v}"
     );
 
-    assert!(run(&tmp, &["lint", "--fix", "--file", "mdn.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "mdn.md"])
+            .status
+            .success()
+    );
     let after = read(&tmp, "mdn.md");
     assert!(
         after.contains("\ttabbed sample"),
@@ -383,7 +435,11 @@ fn markdownlint_disable_next_line_scopes_to_one_line() {
         "n.md",
         "---\ntitle: t\n---\n\n# T\n\n<!-- markdownlint-disable-next-line MD009 -->\nkept   \nfixed   \n",
     )]);
-    assert!(run(&tmp, &["lint", "--fix", "--file", "n.md"]).status.success());
+    assert!(
+        run(&tmp, &["lint", "--fix", "--file", "n.md"])
+            .status
+            .success()
+    );
     let after = read(&tmp, "n.md");
     assert!(
         after.contains("kept   \n"),
@@ -415,7 +471,8 @@ fn a_site_prefix_link_is_not_a_case_mismatch() {
         "guides/anchor_positioning/index.md",
         "---\ntitle: Anchor\n---\n",
     );
-    let source = "---\ntitle: Page\n---\n\nSee [Anchor](/en-US/docs/Web/CSS/Guides/Anchor_positioning).\n";
+    let source =
+        "---\ntitle: Page\n---\n\nSee [Anchor](/en-US/docs/Web/CSS/Guides/Anchor_positioning).\n";
     write_md(tmp.path(), "page.md", source);
 
     let v = json(&tmp, &["links", "fix", "--dry-run"]);
@@ -426,7 +483,11 @@ fn a_site_prefix_link_is_not_a_case_mismatch() {
     );
 
     let out = run(&tmp, &["links", "fix", "--apply"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert_eq!(read(&tmp, "page.md"), source, "--apply must write nothing");
 }
 
@@ -443,7 +504,11 @@ fn a_directory_link_fix_never_grows_an_index_segment() {
     ]);
 
     let out = run(&tmp, &["links", "fix", "--apply"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let after = read(&tmp, "page.md");
     assert!(
         !after.contains("/index"),
@@ -508,7 +573,11 @@ fn mv_skips_ambiguous_frontmatter_links_like_body_links() {
 fn mv_allow_ambiguous_rewrites_all_four() {
     let tmp = ambiguous_vault();
     let out = run(&tmp, &["mv", "a.md", "z.md", "--allow-ambiguous"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let after = read(&tmp, "c.md");
     assert!(!after.contains("[[a]]"), "no old target remains:\n{after}");
     assert!(!after.contains("[[a|al]]"), "aliases too:\n{after}");
@@ -527,7 +596,11 @@ fn batch_mv_applies_the_same_frontmatter_guard() {
     let tmp = ambiguous_vault();
     let before = read(&tmp, "c.md");
     let out = run(&tmp, &["mv", "--glob", "a.md", "--to", "moved/", "--apply"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("ambiguous"),

@@ -471,6 +471,13 @@ What follows is only what those pages do not say — the behaviour that surprise
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
   cosmetic `link-case-mismatch` rewrite plans.
+- **A `site_prefix` link is never a case mismatch** (DEC-295): a site-absolute target carrying
+  the configured prefix (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the
+  site's own URL convention, not the on-disk folder casing, so `links fix` produces no case plan
+  for it — on a copy of MDN's CSS tree that rule had proposed 5096 rewrites across 1049 files.
+  Broken site-absolute links are still fixed, and every rewrite **keeps the incoming form**: a
+  directory link stays a directory link (trailing slash included), an authored `.md` stays
+  `.md`, and neither `/index` nor `.md` is appended to a form that lacked it.
 - **A dead `#anchor` that prefixes exactly one heading gets a `suggested_fragment`** (DEC-268):
   `[[decision-log#DEC-068]]` reports `"DEC-068: Snapshot index format"` as the text to write.
   Reported, never applied — an ambiguous prefix suggests nothing.
@@ -507,6 +514,30 @@ corrupt a vault; `hyalo lint-rules show <ID>` states each deviation:
 - **MD001** reports a skipped heading level but is **not autofixable**: renumbering a
   deliberate `######` caption rewrites authored structure. Silence the warning with
   `hyalo lint-rules set MD001 --enabled false`.
+
+**Code blocks are content, not defects (iter-271).** A rule that lints prose does not fire on
+a line inside a fenced (```` ``` ```` / `~~~`) or indented code block, or inside an HTML
+comment — MD019 used to rewrite `#   three` inside a ```` ```text ```` sample. The exceptions
+are the rules whose subject *is* the block: **MD031/MD040/MD046/MD048** (the fence itself),
+**MD047** (the file's final newline) and **MD010** (a hard tab in a sample is a real
+portability problem, as markdownlint also holds). **MD031** additionally stays quiet at the
+opener of a fence that never closes, where its "blank line after" would land inside the sample.
+
+**Suppression comments (DEC-294).** markdownlint's own directives are honoured, taking rule
+ids or aliases, case-insensitively; with no ids a directive covers every rule, HYALO ones
+included:
+
+```markdown
+<!-- markdownlint-disable no-hard-tabs -->
+	a sample whose point is the tab
+<!-- markdownlint-enable no-hard-tabs -->
+
+<!-- markdownlint-disable-next-line MD009 -->
+a line that keeps its trailing spaces   
+```
+
+`-disable-line`, `-disable-file` and `-enable-file` work too; `-capture`/`-restore` are not
+supported, and MDN's `-nolint` info-string suffix is not markdownlint syntax and is ignored.
 
 When two fixes want the same bytes one is deferred and reported as a conflict;
 `--fix` text output names it as `conflict <RULE> line <N>: range overlap with <RULE>`

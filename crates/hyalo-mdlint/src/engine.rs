@@ -1002,8 +1002,7 @@ impl HyaloLintEngine {
 ///   a real portability problem. A page whose *point* is showing tabs silences
 ///   it with `<!-- markdownlint-disable no-hard-tabs -->` (Part E), which is
 ///   the escape hatch markdownlint itself offers.
-const CODE_BLOCK_AWARE_RULE_IDS: &[&str] =
-    &["MD010", "MD031", "MD040", "MD046", "MD047", "MD048"];
+const CODE_BLOCK_AWARE_RULE_IDS: &[&str] = &["MD010", "MD031", "MD040", "MD046", "MD047", "MD048"];
 
 /// Rule IDs whose upstream `Violation.column` (the *reported* diagnostic
 /// position, distinct from the `Fix` range `convert_fix` handles above) is

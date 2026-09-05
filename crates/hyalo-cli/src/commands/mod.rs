@@ -569,7 +569,11 @@ pub fn require_file_or_glob(
 /// Returns `Some(CommandOutcome::UserError(...))` when the key is unusable,
 /// `None` when it is fine.
 #[must_use]
-pub fn reject_invalid_property_key(key: &str, flag: &str, format: Format) -> Option<CommandOutcome> {
+pub fn reject_invalid_property_key(
+    key: &str,
+    flag: &str,
+    format: Format,
+) -> Option<CommandOutcome> {
     let reason = if key.is_empty() {
         "property name cannot be empty"
     } else if key.trim().is_empty() {

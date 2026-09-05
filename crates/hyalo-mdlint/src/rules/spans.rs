@@ -137,13 +137,13 @@ impl BodySpans {
     /// must not be rewritten by a rule that lints prose.
     #[must_use]
     pub fn line_is_code(&self, line_1based: usize) -> bool {
-        self.at(line_1based, &self.in_code)
+        Self::at(line_1based, &self.in_code)
     }
 
     /// Whether the 1-based body line sits inside an HTML comment.
     #[must_use]
     pub fn line_is_html_comment(&self, line_1based: usize) -> bool {
-        self.at(line_1based, &self.in_html_comment)
+        Self::at(line_1based, &self.in_html_comment)
     }
 
     /// Whether the 1-based body line opens a fenced code block that is never
@@ -151,7 +151,7 @@ impl BodySpans {
     /// inside the sample, so MD031 must stay quiet (BUG-3).
     #[must_use]
     pub fn opens_unterminated_fence(&self, line_1based: usize) -> bool {
-        self.at(line_1based, &self.unterminated_fence_open)
+        Self::at(line_1based, &self.unterminated_fence_open)
     }
 
     /// Whether the body carries any `markdownlint-…` directive at all — the
@@ -169,7 +169,11 @@ impl BodySpans {
     /// the caller supplies it because only the engine knows a rule's id *and*
     /// its alias (`MD010` / `no-hard-tabs`), and markdownlint accepts either.
     #[must_use]
-    pub fn rule_disabled_at(&self, line_1based: usize, matches_token: impl Fn(&str) -> bool) -> bool {
+    pub fn rule_disabled_at(
+        &self,
+        line_1based: usize,
+        matches_token: impl Fn(&str) -> bool,
+    ) -> bool {
         if self.disable_events.is_empty() {
             return false;
         }
@@ -197,7 +201,7 @@ impl BodySpans {
         region_disabled || file_disabled
     }
 
-    fn at(&self, line_1based: usize, flags: &[bool]) -> bool {
+    fn at(line_1based: usize, flags: &[bool]) -> bool {
         line_1based
             .checked_sub(1)
             .and_then(|i| flags.get(i))
@@ -253,8 +257,6 @@ fn scan_html_comment(line: &str, index: usize, in_comment: &mut bool, spans: &mu
 /// deliberately not supported (DEC-294) and parse to `None`, as does MDN's
 /// `-nolint` info-string convention, which is not markdownlint syntax at all.
 fn parse_directive(inner: &str, line: usize) -> Option<DisableEvent> {
-    let inner = inner.trim();
-    let rest = inner.strip_prefix("markdownlint-")?;
     // Longest keyword first: `disable-next-line` must not be read as
     // `disable` followed by a rule named `-next-line`.
     const KEYWORDS: &[(&str, DisableKind)] = &[
@@ -265,6 +267,9 @@ fn parse_directive(inner: &str, line: usize) -> Option<DisableEvent> {
         ("disable", DisableKind::Disable),
         ("enable", DisableKind::Enable),
     ];
+
+    let inner = inner.trim();
+    let rest = inner.strip_prefix("markdownlint-")?;
     let (tail, kind) = KEYWORDS.iter().find_map(|(word, kind)| {
         let tail = rest.strip_prefix(word)?;
         // The keyword must end the directive or be followed by whitespace,
@@ -340,7 +345,9 @@ mod tests {
 
     #[test]
     fn disable_and_enable_bracket_a_region() {
-        let s = spans("a\n<!-- markdownlint-disable no-hard-tabs -->\nb\n<!-- markdownlint-enable no-hard-tabs -->\nc\n");
+        let s = spans(
+            "a\n<!-- markdownlint-disable no-hard-tabs -->\nb\n<!-- markdownlint-enable no-hard-tabs -->\nc\n",
+        );
         let hard_tabs = |t: &str| t.eq_ignore_ascii_case("MD010") || t == "no-hard-tabs";
         assert!(!s.rule_disabled_at(1, hard_tabs));
         assert!(s.rule_disabled_at(3, hard_tabs));

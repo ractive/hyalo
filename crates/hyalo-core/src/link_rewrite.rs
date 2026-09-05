@@ -1628,7 +1628,7 @@ fn plan_frontmatter_wikilink_rewrites(
         // own stem, rewrote it. The same `mv` therefore both refused and
         // performed the guess, in the same file.
         if let Some(guard) = ambiguity.as_deref_mut()
-            && let Some(candidates) = guard.ambiguous_candidates(target_path, case_index)
+            && let Some(candidates) = ambiguous_frontmatter_candidates(target_path, case_index)
         {
             guard.skipped.push(SkippedAmbiguous {
                 source: guard.source.to_owned(),
@@ -1668,24 +1668,21 @@ struct FrontmatterAmbiguityGuard<'a> {
     skipped: &'a mut Vec<SkippedAmbiguous>,
 }
 
-impl FrontmatterAmbiguityGuard<'_> {
-    /// The candidate paths a bare frontmatter target is ambiguous between, or
-    /// `None` when the target is a path (which asserts a location), when there
-    /// is no case index to ask, or when the stem is unique.
-    fn ambiguous_candidates(
-        &self,
-        target_path: &str,
-        case_index: Option<&CaseInsensitiveIndex>,
-    ) -> Option<Vec<String>> {
-        if target_path.contains('/') || target_path.contains('\\') {
-            return None;
-        }
-        let idx = case_index?;
-        let normalized = target_path.to_ascii_lowercase();
-        let stem = normalized.strip_suffix(".md").unwrap_or(&normalized);
-        let candidates = idx.lookup_stem_all(stem);
-        (candidates.len() > 1).then(|| candidates.to_vec())
+/// The candidate paths a bare frontmatter target is ambiguous between, or
+/// `None` when the target is a path (which asserts a location), when there is
+/// no case index to ask, or when the stem is unique.
+fn ambiguous_frontmatter_candidates(
+    target_path: &str,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Option<Vec<String>> {
+    if target_path.contains('/') || target_path.contains('\\') {
+        return None;
     }
+    let idx = case_index?;
+    let normalized = target_path.to_ascii_lowercase();
+    let stem = normalized.strip_suffix(".md").unwrap_or(&normalized);
+    let candidates = idx.lookup_stem_all(stem);
+    (candidates.len() > 1).then(|| candidates.to_vec())
 }
 
 /// The frontmatter property a line declares (`related:`, `  - ` continues the
