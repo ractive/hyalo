@@ -125,7 +125,7 @@ pub(super) fn build_file_object_filter(map: &serde_json::Map<String, serde_json:
     // guards JSON from a pre-215 hyalo that has no `.line`.
     if map.contains_key("links") {
         parts.push(
-            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)") | join("\n"))" else empty end"##.to_owned(),
+            r##"if (.links | length) > 0 then "  links:\n\(.links | map("    line \(.line // 0): \"\(.target)\(if .fragment then "#\(.fragment)" else "" end)\"\(if .path then " → \"\(.path)\"" else "" end)\(if .kind and .kind != "wikilink" then " (\(.kind))" else "" end)\(if .path then (if .broken_anchor then " (broken anchor)" else "" end) elif .out_of_vault then " (out of vault)" elif .kind == "external" then "" else " (unresolved)" end)\(if .via then " (via \(.via))" else "" end)\(if .suggested_fragment then " — did you mean \"#\(.suggested_fragment)\"?" else "" end)") | join("\n"))" else empty end"##.to_owned(),
         );
     }
 

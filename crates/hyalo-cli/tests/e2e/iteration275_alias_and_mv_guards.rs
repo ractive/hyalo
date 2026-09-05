@@ -384,6 +384,40 @@ fn batch_mv_prints_each_ambiguous_warning_once() {
 }
 
 // ---------------------------------------------------------------------------
+// Part A — ALIAS-6 (BUG-32): text mode prints `(via alias)`.
+// ---------------------------------------------------------------------------
+
+/// `find --help` has promised `(via alias)` in text mode since iteration 272;
+/// the file-object renderer never carried the field, so it never appeared. In
+/// the default mode it marks a broken-but-fixable link.
+#[test]
+fn text_mode_prints_via_alias_on_a_broken_but_fixable_link() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+    write(
+        &tmp,
+        "People/Leah Ferguson.md",
+        "---\ntitle: Leah Ferguson\naliases:\n  - Leah\n---\n\nbody\n",
+    );
+    write(&tmp, "s.md", "# S\n\nSee [[Leah]].\n");
+
+    let stdout = String::from_utf8_lossy(
+        &hyalo(&tmp)
+            .args([
+                "find", "--file", "s.md", "--fields", "links", "--format", "text",
+            ])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .into_owned();
+    assert!(
+        stdout.contains("(unresolved) (via alias)"),
+        "a bare alias is broken AND labelled: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Part A — ALIAS-5 (BUG-26): an alias collision reports its candidates.
 // ---------------------------------------------------------------------------
 
