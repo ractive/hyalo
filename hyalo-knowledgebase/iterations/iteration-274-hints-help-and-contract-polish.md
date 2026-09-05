@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 274 — Hints, help and contract polish sweep: every remaining LOW bug and UX item from the post-batch dogfood"
 date: 2026-09-05
-status: in-progress
+status: completed
 tags:
   - iteration
   - hints
