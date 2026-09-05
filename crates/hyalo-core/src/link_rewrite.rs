@@ -88,6 +88,12 @@ pub struct SkippedAmbiguous {
     pub target: String,
     /// All candidate vault paths that the target matches.
     pub candidates: Vec<String>,
+    /// The frontmatter property the link came from, when it was a frontmatter
+    /// link (iter-271 Part G). `None` for a body link. Best effort: the
+    /// nearest preceding `key:` in the block, which is the property that owns
+    /// a list item as well as a scalar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
 }
 
 /// A frontmatter wikilink `mv` refused to rewrite because its `[[…]]` spans a
@@ -699,14 +705,25 @@ fn plan_inbound_rewrites(
     let mut skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
     let mut scanner = LineScanner::new();
+    // Nearest preceding frontmatter key, so a skipped ambiguous list item is
+    // attributed to the property that owns it (iter-271 Part G).
+    let mut current_fm_property: Option<String> = None;
 
     for (line, rest) in lines_with_rest(content) {
         let body = match scanner.classify(line, rest) {
             LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
             LineClass::Frontmatter => {
+                if let Some(key) = frontmatter_key_on_line(line) {
+                    current_fm_property = Some(key.to_owned());
+                }
                 // H-4: also rewrite wikilinks inside frontmatter link
                 // properties so single-file mv doesn't leave dangling
                 // frontmatter links (previously only the batch path did this).
+                let mut guard = (!allow_ambiguous).then(|| FrontmatterAmbiguityGuard {
+                    source: source_rel,
+                    property: current_fm_property.clone(),
+                    skipped: &mut skipped_ambiguous,
+                });
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     line,
                     scanner.line_num(),
@@ -715,6 +732,7 @@ fn plan_inbound_rewrites(
                     new_rel,
                     new_stem,
                     case_index,
+                    guard.as_mut(),
                 );
                 replacements.extend(fm_repls);
                 // FM-2 (iter-262): a `[[…]]` whose brackets straddle a line
@@ -805,6 +823,7 @@ fn plan_inbound_rewrites(
                                     line: line_num,
                                     target: t.clone(),
                                     candidates: candidates.clone(),
+                                    property: None,
                                 });
                                 continue;
                             }
@@ -909,6 +928,7 @@ fn plan_outbound_rewrites(
                     new_rel,
                     new_stem,
                     Some(case_index),
+                    None,
                 );
                 replacements.extend(fm_repls);
                 continue;
@@ -1550,6 +1570,7 @@ fn scan_split_frontmatter_links(
 ///
 /// Uses the same form-preserving approach as body link rewrites: path-form
 /// wikilinks in frontmatter stay path-form after the rename (BUG-1 fix).
+#[allow(clippy::too_many_arguments)]
 fn plan_frontmatter_wikilink_rewrites(
     line: &str,
     line_num: usize,
@@ -1558,8 +1579,10 @@ fn plan_frontmatter_wikilink_rewrites(
     new_rel: &str,
     _new_stem: &str,
     case_index: Option<&CaseInsensitiveIndex>,
+    ambiguity: Option<&mut FrontmatterAmbiguityGuard<'_>>,
 ) -> Vec<Replacement> {
     let mut replacements = Vec::new();
+    let mut ambiguity = ambiguity;
 
     for occ in find_frontmatter_wikilinks(line) {
         let target = occ.target;
@@ -1593,7 +1616,31 @@ fn plan_frontmatter_wikilink_rewrites(
             false
         };
 
-        if matches && let Some(new_text) = rewrite_frontmatter_wikilink_text(target, new_rel) {
+        if !matches {
+            continue;
+        }
+
+        // BUG-7 (dogfood v0.22.0), iter-271 Part G: the DEC-288 ambiguity
+        // guard applies to a frontmatter link exactly as it does to a body
+        // one. `related: "[[a]]"` names a bare stem, and a bare stem shared by
+        // `a.md` and `x/a.md` names neither — the body rewriter skipped it
+        // while the frontmatter rewriter, which matched on the moved file's
+        // own stem, rewrote it. The same `mv` therefore both refused and
+        // performed the guess, in the same file.
+        if let Some(guard) = ambiguity.as_deref_mut()
+            && let Some(candidates) = guard.ambiguous_candidates(target_path, case_index)
+        {
+            guard.skipped.push(SkippedAmbiguous {
+                source: guard.source.to_owned(),
+                line: line_num,
+                target: target.to_owned(),
+                candidates,
+                property: guard.property.clone(),
+            });
+            continue;
+        }
+
+        if let Some(new_text) = rewrite_frontmatter_wikilink_text(target, new_rel) {
             replacements.push(Replacement {
                 line: line_num,
                 byte_offset: occ.full_start,
@@ -1604,6 +1651,57 @@ fn plan_frontmatter_wikilink_rewrites(
     }
 
     replacements
+}
+
+/// The ambiguity guard state a frontmatter rewrite pass carries (iter-271
+/// Part G): where to record a skip, and which property the current line
+/// belongs to.
+///
+/// Constructed only when the guard is active — `--allow-ambiguous` and the
+/// batch outbound self-link pass (which matches a file against its *own* old
+/// path, never a shared stem) pass `None` and keep the previous behaviour.
+struct FrontmatterAmbiguityGuard<'a> {
+    source: &'a str,
+    /// Nearest preceding `key:` in the frontmatter block, so a list item is
+    /// attributed to the property that owns it.
+    property: Option<String>,
+    skipped: &'a mut Vec<SkippedAmbiguous>,
+}
+
+impl FrontmatterAmbiguityGuard<'_> {
+    /// The candidate paths a bare frontmatter target is ambiguous between, or
+    /// `None` when the target is a path (which asserts a location), when there
+    /// is no case index to ask, or when the stem is unique.
+    fn ambiguous_candidates(
+        &self,
+        target_path: &str,
+        case_index: Option<&CaseInsensitiveIndex>,
+    ) -> Option<Vec<String>> {
+        if target_path.contains('/') || target_path.contains('\\') {
+            return None;
+        }
+        let idx = case_index?;
+        let normalized = target_path.to_ascii_lowercase();
+        let stem = normalized.strip_suffix(".md").unwrap_or(&normalized);
+        let candidates = idx.lookup_stem_all(stem);
+        (candidates.len() > 1).then(|| candidates.to_vec())
+    }
+}
+
+/// The frontmatter property a line declares (`related:`, `  - ` continues the
+/// previous one), used to attribute a skipped ambiguous link to its key.
+fn frontmatter_key_on_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('-') || trimmed.starts_with('#') {
+        return None;
+    }
+    let key = trimmed.split_once(':')?.0.trim_end();
+    let key = key.trim_matches(['"', '\'']);
+    (!key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ' ')))
+    .then_some(key)
 }
 
 /// Outbound rewrite for batch mode: like `plan_outbound_rewrites` but uses the
@@ -1629,6 +1727,10 @@ fn plan_outbound_rewrites_batch(
                 // self-reference in frontmatter.
                 let old_stem = old_rel.strip_suffix(".md").unwrap_or(old_rel);
                 let new_stem = new_rel.strip_suffix(".md").unwrap_or(new_rel);
+                // No ambiguity guard on an outbound self-link: the file being
+                // rewritten IS the moved file, so `[[old]]` in its own
+                // frontmatter names itself the way Obsidian resolves it —
+                // same folder first. Nothing is being guessed.
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
                     line,
                     scanner.line_num(),
@@ -1636,6 +1738,7 @@ fn plan_outbound_rewrites_batch(
                     old_stem,
                     new_rel,
                     new_stem,
+                    None,
                     None,
                 );
                 replacements.extend(fm_repls);
