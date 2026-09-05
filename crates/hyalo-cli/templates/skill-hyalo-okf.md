@@ -118,7 +118,7 @@ deterministically (no LLM). Run these after adding, editing, moving, or removing
 # Regenerate every directory's index.md from concept frontmatter.
 # Concepts are grouped by `type`; entries are `* [title](relative-link) - description`
 # (title falls back to the filename; description optional); subdirectories are listed too.
-hyalo okf index --dry-run          # preview (default); exits non-zero if any index.md is stale
+hyalo okf index --dry-run          # preview (default); exits 0 — drift is `results.changed`
 hyalo okf index --apply            # write the regenerated index.md files
 hyalo okf index tables --apply     # scope to a single subtree
 hyalo okf index --apply --replace  # overwrite a marker-less index.md (destructive; rarely needed)
@@ -145,8 +145,11 @@ Key rules for these generators:
   `.hyalo.toml`.
 - It **preserves the bundle-root `index.md`'s `okf_version`** key and never adds frontmatter
   to nested `index.md`/`log.md` files.
-- It is **idempotent** (running `--apply` twice changes nothing) and **CI-friendly**:
-  `hyalo okf index --dry-run` exits non-zero when the committed `index.md` files are stale.
+- It is **idempotent** (running `--apply` twice changes nothing) and **CI-friendly**: gate on
+  the payload, not the exit code — a dry run exits 0 like every other dry run in hyalo
+  (DEC-307, iter-274), and reports drift as `results.changed`:
+  `hyalo okf index --format json --jq '.results.changed'` is `0` when the committed
+  `index.md` files are current.
 - Both default to `--dry-run`; pass `--apply` to write. Do the concept edits first (with
   `hyalo set` / `hyalo new` / `hyalo mv`), then regenerate the reserved files.
 

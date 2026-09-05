@@ -2288,12 +2288,13 @@ Repeatable (AND).\n\
             - log: Prepend a dated entry under today's `YYYY-MM-DD` heading (newest first)\n\
               to a scope-selectable `log.md` (bundle-root by default; §7 directory-local).\n\n\
             Both default to --dry-run and mutate only with --apply (the `links fix`/`links\n\
-            auto` convention). `okf index --dry-run` exits non-zero on drift, so it doubles\n\
-            as a CI check that the committed `index.md` files are up to date.\n\n\
+            auto` convention). A dry run exits 0 like every other dry run (DEC-307): gate CI\n\
+            on the payload instead, `okf index --format json --jq '.results.changed'` == 0\n\
+            when the committed `index.md` files are up to date.\n\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile okf` to check the\n\
             bundle against the OKF §9 conformance rules (warn-not-reject per the spec).\n\n\
             EXAMPLES:\n\
-            hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
+            hyalo okf index --dry-run          # preview; drift is results.changed\n\
             hyalo okf index --apply            # regenerate all index.md files\n\
             hyalo okf index tables --apply     # scope to a subtree\n\
             hyalo okf log --message \"Added blocks table\" --apply\n\
