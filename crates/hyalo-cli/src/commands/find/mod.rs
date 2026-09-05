@@ -964,6 +964,14 @@ pub fn find(
                                 .map(str::to_owned),
                             _ => None,
                         };
+                        // iter-272 Part B (DEC-296): say so when the target
+                        // only resolved because a note declares it as a
+                        // frontmatter alias — the reader otherwise has no way
+                        // to tell `[[Leah]]` from a filename match.
+                        let via = (path.is_some()
+                            && !link.external
+                            && discovery::resolves_via_alias(&link.target, case_index))
+                        .then(|| hyalo_core::types::LINK_VIA_ALIAS.to_owned());
                         LinkInfo {
                             target: link.target.clone(),
                             path,
@@ -981,6 +989,7 @@ pub fn find(
                             broken_anchor,
                             suggested_fragment,
                             out_of_vault,
+                            via,
                         }
                     })
                     // iter-211 / BUG-8: same-file anchors (`[b](#nope)`,
@@ -1000,7 +1009,8 @@ pub fn find(
                     // entries (`path == entry.rel_path`) are excluded from
                     // the `--orphan`/`--dead-end` outbound-edge count below so
                     // this does not change those verdicts.
-                    .chain(entry.self_anchors.iter().map(|(line, fragment)| {
+                    .chain(entry.self_anchors.iter().map(|anchor| {
+                        let fragment = &anchor.fragment;
                         let broken_anchor = !hyalo_core::anchor::fragment_matches_headings(
                             fragment,
                             &entry.sections,
@@ -1008,12 +1018,17 @@ pub fn find(
                         LinkInfo {
                             target: String::new(),
                             path: Some(entry.rel_path.clone()),
-                            label: None,
-                            // A same-file heading jump is a wikilink-shaped
-                            // reference to this very file, never an attachment.
-                            kind: LinkKindLabel::Wikilink,
+                            label: anchor.label.clone(),
+                            // A same-file heading jump names this very file,
+                            // never an attachment — but it keeps the syntax it
+                            // was written in (iter-272 Part C / BUG-8): a
+                            // vault with no wikilinks must not report any.
+                            kind: match anchor.kind {
+                                hyalo_core::links::LinkKind::Wikilink => LinkKindLabel::Wikilink,
+                                hyalo_core::links::LinkKind::Markdown => LinkKindLabel::Markdown,
+                            },
                             property: None,
-                            line: *line,
+                            line: anchor.line,
                             fragment: Some(fragment.clone()),
                             broken_anchor,
                             // DEC-268: same unique-prefix suggestion as for a
@@ -1028,6 +1043,8 @@ pub fn find(
                                 .flatten()
                                 .map(str::to_owned),
                             out_of_vault: false,
+                            // A same-file anchor names no target to alias.
+                            via: None,
                         }
                     }))
                     .collect::<Vec<_>>(),

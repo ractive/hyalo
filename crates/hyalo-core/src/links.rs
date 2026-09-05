@@ -127,10 +127,58 @@ impl Link {
 }
 
 /// The kind of link syntax used in the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LinkKind {
+    #[default]
     Wikilink,
     Markdown,
+}
+
+impl LinkKind {
+    /// Whether this is the `Wikilink` variant. Used as a serde
+    /// `skip_serializing_if` so the default kind costs no snapshot bytes.
+    #[must_use]
+    pub fn is_wikilink(&self) -> bool {
+        matches!(self, Self::Wikilink)
+    }
+}
+
+/// A same-file heading anchor — `[[#Heading]]` or `[label](#heading)` — with
+/// the syntax it was written in.
+///
+/// These are not graph edges (they point at the file they appear in), so they
+/// are collected apart from [`Link`]. iter-272 Part C: the syntax kind and the
+/// markdown link text ride along, because reporting every same-file anchor as
+/// a `wikilink` made vaults with no wikilinks at all (MDN, GitHub Docs) claim
+/// thousands of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelfAnchor {
+    /// 1-based line the anchor was written on. Filled in by the scanner; the
+    /// extractor leaves it at `0`.
+    pub line: usize,
+    /// Fragment text without the leading `#`, exactly as written.
+    pub fragment: String,
+    /// The syntax the anchor was written in. Defaulted (and omitted from the
+    /// snapshot) when `Wikilink`, so snapshots written by an older hyalo keep
+    /// deserializing into the pre-iter-272 meaning.
+    #[serde(default, skip_serializing_if = "LinkKind::is_wikilink")]
+    pub kind: LinkKind,
+    /// Display text — the `[label]` of `[label](#frag)`, or the alias of
+    /// `[[#frag|alias]]`. `None` when the anchor carries none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl SelfAnchor {
+    /// A same-file anchor without a line number (filled in by the scanner).
+    fn new(fragment: String, kind: LinkKind, label: Option<String>) -> Self {
+        Self {
+            line: 0,
+            fragment,
+            kind,
+            label,
+        }
+    }
 }
 
 /// A parsed link together with its byte-offset span within the source text.
@@ -207,7 +255,7 @@ pub(crate) fn extract_links_and_self_anchors(
     cleaned: &str,
     original: &str,
     out: &mut Vec<Link>,
-    anchors: &mut Vec<String>,
+    anchors: &mut Vec<SelfAnchor>,
 ) {
     extract_links_and_anchors(cleaned, original, out, Some(anchors));
 }
@@ -216,7 +264,7 @@ fn extract_links_and_anchors(
     cleaned: &str,
     original: &str,
     out: &mut Vec<Link>,
-    mut anchors: Option<&mut Vec<String>>,
+    mut anchors: Option<&mut Vec<SelfAnchor>>,
 ) {
     let bytes = cleaned.as_bytes();
     let len = bytes.len();
@@ -257,21 +305,30 @@ fn extract_links_and_anchors(
             && i + 1 < len
             && bytes[i + 1] == b'['
             && !is_escaped(bytes, i)
-            && let Some((frag, end)) = try_parse_self_anchor_wikilink_at(cleaned, i)
+            && let Some((anchor, end)) = try_parse_self_anchor_wikilink_at(cleaned, i)
         {
-            anchors.push(frag);
+            anchors.push(anchor);
             i = end;
             continue;
         }
 
-        // Check for markdown link: [text](target)
-        // Skip if preceded by `!` — that's image syntax: ![alt](img.png)
+        // Check for markdown link: [text](target), and the image form
+        // `![alt](img.png)`.
+        //
+        // iter-272 Part E: the image form used to be dropped outright, so an
+        // `![alt](diagram.png)` naming a file that does not exist was invisible
+        // — MDN's whole-vault histogram reported 2 attachments against
+        // thousands of images — while `![[img.png]]` and `[alt](img.png)` were
+        // both inventoried. It is extracted like any other markdown link and
+        // marked `embed`, which puts it in the same bucket as `![[img.png]]`:
+        // reported as `attachment` when it resolves to a vault file, never a
+        // graph edge, and visible when it resolves to nothing.
         // L-16: skip when the `[` is backslash-escaped.
         if bytes[i] == b'['
-            && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
-            && let Some((link, end)) = try_parse_markdown_link_at(cleaned, original, i)
+            && let Some((mut link, end)) = try_parse_markdown_link_at(cleaned, original, i)
         {
+            link.embed = i > 0 && bytes[i - 1] == b'!' && !is_escaped(bytes, i - 1);
             out.push(link);
             i = end;
             continue;
@@ -281,9 +338,9 @@ fn extract_links_and_anchors(
             && bytes[i] == b'['
             && (i == 0 || bytes[i - 1] != b'!')
             && !is_escaped(bytes, i)
-            && let Some((frag, end)) = try_parse_self_anchor_markdown_at(cleaned, i)
+            && let Some((anchor, end)) = try_parse_self_anchor_markdown_at(cleaned, original, i)
         {
-            anchors.push(frag);
+            anchors.push(anchor);
             i = end;
             continue;
         }
@@ -292,44 +349,71 @@ fn extract_links_and_anchors(
     }
 }
 
-/// Parse `[label](#fragment)` at `start`, returning the fragment (without the
-/// leading `#`) and the byte offset just past the closing `)`.
+/// Parse `[label](#fragment)` at `start`, returning the anchor and the byte
+/// offset just past the closing `)`.
 ///
 /// Returns `None` for anything that is not a fragment-only markdown link —
 /// including `[a](p.md#frag)`, which is a real file reference and is handled
 /// by [`try_parse_markdown_link_at`].
-fn try_parse_self_anchor_markdown_at(text: &str, start: usize) -> Option<(String, usize)> {
+///
+/// iter-272 Part C: the anchor carries `kind: Markdown` and the link text, so
+/// an anchor-only markdown link is no longer reported as a wikilink. The label
+/// is read from `original` (the un-stripped line) so backtick-wrapped text
+/// survives inline-code stripping, exactly as [`try_parse_markdown_link_at`]
+/// does.
+fn try_parse_self_anchor_markdown_at(
+    text: &str,
+    original: &str,
+    start: usize,
+) -> Option<(SelfAnchor, usize)> {
     let rest = &text[start..];
     let close_bracket = find_label_close_bracket(rest)?;
     let after_bracket = start + close_bracket + 1;
     if text.as_bytes().get(after_bracket).copied() != Some(b'(') {
         return None;
     }
+    let label_text = original.get(start + 1..start + close_bracket)?;
     let paren_start = after_bracket + 1;
     let dest = parse_destination(&text[paren_start..])?;
     let frag = dest.target_raw.strip_prefix('#')?;
     if frag.is_empty() {
         return None;
     }
-    Some((frag.to_owned(), paren_start + dest.end))
+    Some((
+        SelfAnchor::new(
+            frag.to_owned(),
+            LinkKind::Markdown,
+            (!label_text.is_empty()).then(|| label_text.to_owned()),
+        ),
+        paren_start + dest.end,
+    ))
 }
 
 /// Parse `[[#fragment]]` (optionally `[[#fragment|alias]]`) at `start`,
-/// returning the fragment without the leading `#`.
-fn try_parse_self_anchor_wikilink_at(text: &str, start: usize) -> Option<(String, usize)> {
+/// returning the anchor (fragment without the leading `#`, plus the alias as
+/// its label when one is written).
+fn try_parse_self_anchor_wikilink_at(text: &str, start: usize) -> Option<(SelfAnchor, usize)> {
     let content_start = start + 2;
     let rest = &text[content_start..];
-    let close = rest.find("]]")?;
+    let close = find_wikilink_close(rest)?;
     let inner = &rest[..close];
-    if inner.is_empty() || inner.contains('\n') {
+    if inner.trim().is_empty() {
         return None;
     }
-    let target_part = inner.split('|').next().unwrap_or(inner);
+    let (target_end, alias_start) = split_wikilink_alias(inner);
+    let target_part = &inner[..target_end];
     let frag = target_part.strip_prefix('#')?;
     if frag.is_empty() {
         return None;
     }
-    Some((frag.to_owned(), content_start + close + 2))
+    let label = alias_start
+        .map(|s| inner[s..].trim())
+        .filter(|a| !a.is_empty())
+        .map(str::to_owned);
+    Some((
+        SelfAnchor::new(frag.to_owned(), LinkKind::Wikilink, label),
+        content_start + close + 2,
+    ))
 }
 
 /// Whether the byte at `pos` is backslash-escaped, i.e. preceded by an odd
@@ -593,10 +677,10 @@ fn try_parse_wikilink_span_at(text: &str, start: usize) -> Option<(LinkSpan, usi
     let content_start = start + 2; // skip [[
     let rest = &text[content_start..];
 
-    let close = rest.find("]]")?;
+    let close = find_wikilink_close(rest)?;
     let inner = &rest[..close];
 
-    if inner.is_empty() || inner.contains('\n') {
+    if inner.trim().is_empty() {
         return None;
     }
 
@@ -707,18 +791,62 @@ fn try_parse_wikilink_at(text: &str, start: usize) -> Option<(Link, usize)> {
     let content_start = start + 2;
     let rest = &text[content_start..];
 
-    // Find closing ]]
-    let close = rest.find("]]")?;
+    // Find the closing `]]`, stopping at any boundary a wikilink target cannot
+    // contain (iter-272 BOUND-1/BOUND-2).
+    let close = find_wikilink_close(rest)?;
     let inner = &rest[..close];
 
-    // Reject empty or multiline
-    if inner.is_empty() || inner.contains('\n') {
+    // Reject an empty or whitespace-only capture: `[[]]` and `[[ ]]` name
+    // nothing.
+    if inner.trim().is_empty() {
         return None;
     }
 
     let link = parse_wikilink(inner)?;
     let end_pos = content_start + close + 2;
     Some((link, end_pos))
+}
+
+/// Find the `]]` that closes a wikilink opened just before `rest`, refusing to
+/// scan across a boundary a wikilink target can never contain.
+///
+/// `rest` is the text after the opening `[[`. Returns the byte offset of the
+/// first `]` of the closing `]]`, or `None` when this `[[` does not open a
+/// wikilink at all.
+///
+/// iter-272 BOUND-1/BOUND-2 (BUG-16, BUG-15): a plain `rest.find("]]")` walked
+/// over every intervening character, so `see [[Leah] here and [[Target]]`
+/// produced one link whose target was `Leah] here and [[Target` — a target
+/// containing prose, a stray `]` and a second opener. Three boundaries end the
+/// capture:
+///
+/// - a **single `]`** — the author closed a different bracket, so the `[[` was
+///   prose (`[[a] b [[c]]` is one link, `c`);
+/// - a **nested `[[`** — the real opener is the inner one;
+/// - a **newline** — a wikilink never straddles a line.
+///
+/// A capture that would *begin* with `[` is likewise refused, so a YAML flow
+/// list written `related: [[[a]], [[b]]]` is read as `[` + `[[a]]` rather than
+/// as a link to `[a`. Callers advance one byte and retry, which lands on the
+/// real opener.
+pub(crate) fn find_wikilink_close(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    // BOUND-2: `[[[x]]` opens at the *second* bracket, not the first.
+    if bytes.first() == Some(&b'[') {
+        return None;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b']' => {
+                return (bytes.get(i + 1) == Some(&b']')).then_some(i);
+            }
+            b'[' if bytes.get(i + 1) == Some(&b'[') => return None,
+            b'\n' => return None,
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Split a wikilink's inner text at the alias pipe.
@@ -973,7 +1101,18 @@ pub fn is_external_target(target: &str) -> bool {
 
 /// Internal alias kept for the parser's own call sites.
 fn is_external(target: &str) -> bool {
-    is_external_target(target)
+    if is_external_target(target) {
+        return true;
+    }
+    // iter-272 BOUND-3 (BUG-21): the Obsidian Hub's "2021 Roundup" note writes
+    // `[y](<(https://example.com)>)` — an angle-bracket destination whose text
+    // is a parenthesised URL. The parens are not part of any vault path, but
+    // they hid the scheme from the check above, so the whole thing was parsed
+    // as a relative path and reported broken (and offered to `--apply-fuzzy`).
+    // A destination whose first non-`(` character starts a URI scheme names
+    // something outside the vault, parentheses and all.
+    let unwrapped = target.trim_start_matches('(');
+    unwrapped.len() != target.len() && is_external_target(unwrapped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,11 +1777,18 @@ mod tests {
 
     // --- iter-211 / BUG-8: same-file anchors ---
 
-    fn anchors_of(text: &str) -> Vec<String> {
+    fn self_anchors_of(text: &str) -> Vec<SelfAnchor> {
         let mut links = Vec::new();
         let mut anchors = Vec::new();
         extract_links_and_self_anchors(text, text, &mut links, &mut anchors);
         anchors
+    }
+
+    fn anchors_of(text: &str) -> Vec<String> {
+        self_anchors_of(text)
+            .into_iter()
+            .map(|a| a.fragment)
+            .collect()
     }
 
     #[test]
@@ -1657,6 +1803,28 @@ mod tests {
             anchors_of("see [[#Nope|alias]] here"),
             vec!["Nope".to_owned()]
         );
+    }
+
+    /// iter-272 Part C (BUG-8): an anchor-only *markdown* link is markdown.
+    /// MDN and GitHub Docs have no wikilinks at all, yet their link histograms
+    /// claimed thousands, because every same-file anchor was reported as one.
+    #[test]
+    fn anchor_only_markdown_link_is_markdown_kind_with_its_label() {
+        let anchors = self_anchors_of("see [Browser compatibility](#browser_compat) here");
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].kind, LinkKind::Markdown);
+        assert_eq!(anchors[0].fragment, "browser_compat");
+        assert_eq!(anchors[0].label.as_deref(), Some("Browser compatibility"));
+    }
+
+    #[test]
+    fn anchor_only_wikilink_keeps_wikilink_kind_and_carries_its_alias() {
+        let anchors = self_anchors_of("see [[#Nope]] and [[#Other|alias]]");
+        assert_eq!(anchors.len(), 2);
+        assert_eq!(anchors[0].kind, LinkKind::Wikilink);
+        assert_eq!(anchors[0].label, None);
+        assert_eq!(anchors[1].kind, LinkKind::Wikilink);
+        assert_eq!(anchors[1].label.as_deref(), Some("alias"));
     }
 
     #[test]
@@ -1677,7 +1845,13 @@ mod tests {
         );
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "p.md");
-        assert_eq!(anchors, vec!["nope".to_owned(), "other".to_owned()]);
+        assert_eq!(
+            anchors
+                .iter()
+                .map(|a| a.fragment.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nope", "other"]
+        );
     }
 
     // --- inert link zones (iter-200) ---
@@ -2388,16 +2562,86 @@ mod tests {
 
     #[test]
     fn nested_brackets_wikilink() {
-        // [[outer [[inner]]]] — the parser finds the first ]] closing "outer [[inner",
-        // so "inner" is parsed as the target after the second [[, stopping at the first ]]
+        // iter-272 BOUND-1: the outer `[[` is tried first, but its capture runs
+        // into a nested `[[` before any `]]`, which no wikilink target can
+        // contain — so the outer opener is prose and the *inner* link wins.
+        // (Before iter-272 this yielded one link targeting `outer [[inner`.)
         let text = "[[outer [[inner]]]]";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        // The outer [[ is tried first; rest is "outer [[inner]]]]",
-        // find("]]") hits the first ]] → inner = "outer [[inner" → no pipe → target = "outer [[inner"
-        // (fragment strip on # only; this is the pinned behavior)
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "outer [[inner");
+        assert_eq!(links[0].target, "inner");
+    }
+
+    // --- iter-272 Part D: scanner capture boundaries ---
+
+    #[test]
+    fn bound1_stray_close_bracket_ends_the_capture() {
+        // BUG-16, `Obsidian Community Talks.md:64`: one link, target `c`.
+        let mut links = Vec::new();
+        extract_links_from_text("[[a] b [[c]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "c");
+    }
+
+    #[test]
+    fn bound1_unclosed_and_blank_wikilinks_are_not_links() {
+        for text in ["[[a]", "[[ ]]", "[[]]", "[[a\nb]]"] {
+            let mut links = Vec::new();
+            extract_links_from_text(text, &mut links);
+            assert!(
+                links.is_empty(),
+                "{text:?} must not yield a link: {links:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bound1_extra_close_bracket_after_a_link_is_prose() {
+        let mut links = Vec::new();
+        extract_links_from_text("[[a]]]", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "a");
+    }
+
+    #[test]
+    fn bound1_table_escaped_alias_pipe_still_parses() {
+        let mut links = Vec::new();
+        extract_links_from_text("| [[a\\|Label]] | x |", &mut links);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "a");
+        assert_eq!(links[0].label.as_deref(), Some("Label"));
+    }
+
+    #[test]
+    fn bound2_flow_list_opening_with_three_brackets() {
+        // BUG-15: `related: [[[a]], [[b]]]` is `[` + two wikilinks, not a link
+        // to `[a`.
+        let mut links = Vec::new();
+        extract_links_from_text("[[[a]], [[b]]]", &mut links);
+        assert_eq!(
+            links.iter().map(|l| l.target.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn bound3_parenthesised_url_in_an_angle_destination_is_external() {
+        // BUG-21, the Hub's 2021 Roundup line.
+        let mut links = Vec::new();
+        extract_links_from_text("[y](<(https://example.com/a)>)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].external, "{:?}", links[0]);
+        assert_eq!(links[0].kind, LinkKind::Markdown);
+        assert_eq!(links[0].target, "(https://example.com/a)");
+    }
+
+    #[test]
+    fn bound3_a_parenthesised_relative_path_stays_a_vault_path() {
+        let mut links = Vec::new();
+        extract_links_from_text("[y](<(notes/a.md)>)", &mut links);
+        assert_eq!(links.len(), 1);
+        assert!(!links[0].external);
     }
 
     #[test]
@@ -2412,13 +2656,36 @@ mod tests {
         assert!(parse_markdown_link("text", "#heading").is_none());
     }
 
+    /// iter-272 Part E: `![alt](img.png)` is an inventoried embed, not a
+    /// dropped link. Before this it was skipped outright, so a missing image
+    /// never surfaced anywhere.
     #[test]
-    fn markdown_image_skipped() {
+    fn markdown_image_is_extracted_as_an_embed() {
         let text = "![alt text](image.png) and [[real link]]";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
+        assert_eq!(links.len(), 2, "{links:?}");
+        assert_eq!(links[0].target, "image.png");
+        assert!(links[0].embed);
+        assert_eq!(links[0].label.as_deref(), Some("alt text"));
+        assert_eq!(links[1].target, "real link");
+        assert!(!links[1].embed);
+    }
+
+    #[test]
+    fn a_plain_markdown_link_is_not_an_embed() {
+        let mut links = Vec::new();
+        extract_links_from_text("[alt](image.png)", &mut links);
         assert_eq!(links.len(), 1);
-        assert_eq!(links[0].target, "real link");
+        assert!(!links[0].embed);
+    }
+
+    #[test]
+    fn an_escaped_bang_leaves_a_plain_markdown_link() {
+        let mut links = Vec::new();
+        extract_links_from_text(r"\![alt](image.png)", &mut links);
+        assert_eq!(links.len(), 1, "{links:?}");
+        assert!(!links[0].embed, "{links:?}");
     }
 
     // --- LinkSpan / extract_link_spans tests ---

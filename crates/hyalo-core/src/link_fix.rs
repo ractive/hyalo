@@ -111,6 +111,57 @@ pub struct FixPlan {
     pub strategy: FixStrategy,
     /// Similarity confidence in `[0.0, 1.0]`.
     pub confidence: f64,
+    /// The link-target text `--apply` actually writes for this plan
+    /// (iter-272 Part F / CASE-2).
+    ///
+    /// [`new_target`](Self::new_target) is always the *vault-relative path*,
+    /// which is the coordinate system detection works in — but the writer
+    /// emits the form the author wrote: a wikilink loses the `.md`, a markdown
+    /// destination is re-expressed file-relative or site-absolute, and a
+    /// directory-index rewrite keeps the author's directory spelling. Reading
+    /// the dry-run JSON therefore did not tell you the bytes that would land
+    /// on disk. Both `--dry-run` and `--apply` fill this in from the *same*
+    /// `build_replacements_for_file` pass, so the two can never disagree.
+    ///
+    /// `None` on a freshly detected plan (nothing has consulted the file yet)
+    /// and on a plan whose occurrence was not found on disk; skipped from JSON
+    /// in that case, so an unannotated report keeps its previous shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitted_target: Option<String>,
+}
+
+/// Identity of a fix plan for emitted-target lookup: `(source, line,
+/// old_target, new_target)`.
+pub type FixPlanKey = (String, usize, String, String);
+
+/// The text `--apply` writes, keyed by [`FixPlanKey`] (iter-272 Part F).
+pub type EmittedTargets = HashMap<FixPlanKey, String>;
+
+impl FixPlan {
+    /// This plan's lookup key in an [`EmittedTargets`] map.
+    #[must_use]
+    pub fn key(&self) -> FixPlanKey {
+        (
+            self.source.clone(),
+            self.line,
+            self.old_target.clone(),
+            self.new_target.clone(),
+        )
+    }
+}
+
+/// Copy the emitted target text onto every plan in `fixes` that the planner
+/// produced one for (iter-272 Part F).
+///
+/// Called by the reporting layer once per bucket, so every `links fix` list —
+/// `fixes`, `fuzzy_fixes`, `case_mismatch_fixes`, `relocation_fixes`,
+/// `applied_fixes` — carries the string that lands on disk.
+pub fn annotate_emitted_targets(fixes: &mut [FixPlan], emitted: &EmittedTargets) {
+    for fix in fixes {
+        if let Some(text) = emitted.get(&fix.key()) {
+            fix.emitted_target = Some(text.clone());
+        }
+    }
 }
 
 /// How a candidate file was matched to a broken link target.
@@ -214,11 +265,18 @@ pub fn is_templated_target(target: &str) -> bool {
 /// Tuple order: `(applied_plans, unapplied, failed, rejected)` — see
 /// [`apply_fixes`] for what each bucket means. Named so the four-way split
 /// stays readable at the call site.
-pub type ApplyOutcome = (Vec<RewritePlan>, Vec<FixPlan>, Vec<FailedFix>, Vec<FixPlan>);
+pub type ApplyOutcome = (
+    Vec<RewritePlan>,
+    Vec<FixPlan>,
+    Vec<FailedFix>,
+    Vec<FixPlan>,
+    EmittedTargets,
+);
 
-/// What one dry-run pass would do: `(would_modify, unapplied, rejected)` —
-/// see [`plan_fixes_dry_run`].
-pub type DryRunOutcome = (Vec<String>, Vec<FixPlan>, Vec<FixPlan>);
+/// What one dry-run pass would do: `(would_modify, unapplied, rejected,
+/// emitted)` — see [`plan_fixes_dry_run`]. `emitted` maps each planned fix to
+/// the link text `--apply` would write for it (iter-272 Part F).
+pub type DryRunOutcome = (Vec<String>, Vec<FixPlan>, Vec<FixPlan>, EmittedTargets);
 
 /// A fix whose source file's on-disk write failed during `--apply` (L-11).
 ///
@@ -444,6 +502,7 @@ pub fn detect_broken_links_from_index(
                         new_target: canonical_str,
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
+                        emitted_target: None,
                     });
                 }
                 LinkResolution::StemRelocation(canonical_str) => {
@@ -489,6 +548,7 @@ pub fn detect_broken_links_from_index(
                         new_target: canonical_str,
                         strategy: FixStrategy::ShortestPath,
                         confidence: SHORTEST_PATH_CONFIDENCE,
+                        emitted_target: None,
                     });
                 }
                 LinkResolution::ShortFormStemMismatch(correct_stem) => {
@@ -499,6 +559,7 @@ pub fn detect_broken_links_from_index(
                         new_target: correct_stem,
                         strategy: FixStrategy::LinkCaseMismatch,
                         confidence: 1.0,
+                        emitted_target: None,
                     });
                 }
                 LinkResolution::ShortFormAmbiguous => {
@@ -993,6 +1054,7 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
                 new_target: result.matched_file,
                 strategy: result.strategy,
                 confidence: result.confidence,
+                emitted_target: None,
             });
         } else {
             unfixable.push(info.clone());
@@ -1053,6 +1115,9 @@ pub fn apply_fixes(
     // file whose read fails do not abort the batch; the remaining source
     // files still get their plans built and applied.
     let mut io_failed: Vec<FailedFix> = Vec::new();
+    // iter-272 Part F: the emitted link text per plan, so the caller can
+    // report the exact string that was written.
+    let mut emitted: EmittedTargets = HashMap::new();
     // Map each plan's rel_path → the fixes it carries, so a mid-batch write
     // failure can be reported against the specific fixes that did not land.
     let mut fixes_by_plan: HashMap<String, Vec<FixPlan>> = HashMap::new();
@@ -1085,8 +1150,11 @@ pub fn apply_fixes(
             }
         };
 
-        let (replacements, satisfied, guard_rejected) =
+        let (replacements, satisfied, guard_rejected, file_emitted) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+        for (idx, text) in file_emitted {
+            emitted.insert(file_fixes[idx].key(), text);
+        }
 
         let mut satisfied_fixes: Vec<FixPlan> = Vec::new();
         for (idx, fix) in file_fixes.iter().enumerate() {
@@ -1142,7 +1210,7 @@ pub fn apply_fixes(
     }
 
     rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    Ok((applied_plans, unapplied, failed, rejected))
+    Ok((applied_plans, unapplied, failed, rejected, emitted))
 }
 
 /// Outcome of reading a source file's on-disk content for fix planning.
@@ -1214,6 +1282,9 @@ pub fn plan_fixes_dry_run(
     let mut would_modify: Vec<String> = Vec::new();
     let mut unapplied: Vec<FixPlan> = Vec::new();
     let mut rejected: Vec<FixPlan> = Vec::new();
+    // iter-272 Part F: the same emitted-text map `apply_fixes` builds, from
+    // the same pass — this is what makes the preview byte-accurate.
+    let mut emitted: EmittedTargets = HashMap::new();
 
     for (source_rel, file_fixes) in &by_source {
         let abs_path = dir.join(source_rel.replace('\\', "/"));
@@ -1231,8 +1302,11 @@ pub fn plan_fixes_dry_run(
             }
         };
 
-        let (replacements, satisfied, guard_rejected) =
+        let (replacements, satisfied, guard_rejected, file_emitted) =
             build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+        for (idx, text) in file_emitted {
+            emitted.insert(file_fixes[idx].key(), text);
+        }
 
         for (idx, fix) in file_fixes.iter().enumerate() {
             if guard_rejected.contains(&idx) {
@@ -1250,7 +1324,7 @@ pub fn plan_fixes_dry_run(
     would_modify.sort();
     unapplied.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
     rejected.sort_by(|a, b| a.source.cmp(&b.source).then_with(|| a.line.cmp(&b.line)));
-    Ok((would_modify, unapplied, rejected))
+    Ok((would_modify, unapplied, rejected, emitted))
 }
 
 // ---------------------------------------------------------------------------
@@ -1452,6 +1526,7 @@ fn build_replacements_for_file(
     Vec<Replacement>,
     std::collections::HashSet<usize>,
     std::collections::HashSet<usize>,
+    HashMap<usize, String>,
 ) {
     // Index fixes by line number for O(1) lookup during the scan, carrying
     // each plan's index into `fixes` for per-occurrence satisfaction
@@ -1464,6 +1539,11 @@ fn build_replacements_for_file(
     let mut replacements = Vec::new();
     let mut satisfied: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut rejected: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // iter-272 Part F: the *emitted* target per plan — the bytes that land on
+    // disk, which are not the plan's vault-relative `new_target`. Recorded
+    // here, in the one pass both `--dry-run` and `--apply` share, so the two
+    // can never report different strings for the same fix.
+    let mut emitted_by_fix: HashMap<usize, String> = HashMap::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B): one lexer
     // for frontmatter, fences, `%%` comments, and cross-line code/HTML spans.
     let mut scanner = LineScanner::new();
@@ -1611,6 +1691,10 @@ fn build_replacements_for_file(
                 }
             };
 
+            emitted_by_fix
+                .entry(fix_idx)
+                .or_insert_with(|| new_target_text.clone());
+
             // A fix whose emitted target would not resolve is never written:
             // it is consumed (so a duplicate plan is not re-matched) and
             // reported as unfixable instead of corrupting the link.
@@ -1641,7 +1725,7 @@ fn build_replacements_for_file(
         }
     }
 
-    (replacements, satisfied, rejected)
+    (replacements, satisfied, rejected, emitted_by_fix)
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,6 +2028,7 @@ mod tests {
             new_target: new_target.to_string(),
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
+            emitted_target: None,
         }
     }
 
@@ -1954,7 +2039,7 @@ mod tests {
         // `[[decision-log#DEC-041]]` into `[[decision-log-archive]]`.
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1, "one frontmatter link repaired: {repls:?}");
         assert_eq!(repls[0].old_text, "[[decision-log#DEC-041]]");
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041]]");
@@ -1964,7 +2049,7 @@ mod tests {
     fn build_replacements_frontmatter_repair_preserves_anchor_and_alias() {
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041|Log]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(repls.len(), 1);
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041|Log]]");
     }
@@ -1996,8 +2081,9 @@ See [broken](old-name.md) here.
             new_target: "new-name.md".to_string(),
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
+            emitted_target: None,
         };
-        let (repls, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
         assert_eq!(
             repls.len(),
             1,
@@ -2497,9 +2583,11 @@ See [broken](old-name.md) here.
             new_target: "how-tos/new-home/moved-page.md".to_string(),
             strategy: FixStrategy::BasenameFallback,
             confidence: BASENAME_FALLBACK_CONFIDENCE,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
         assert!(rejected.is_empty(), "unexpected rejected: {rejected:?}");
@@ -2543,9 +2631,11 @@ See [broken](old-name.md) here.
             new_target: "a/../b.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty(), "nothing may be written: {plans:?}");
         assert!(unapplied.is_empty(), "not a stale-text case: {unapplied:?}");
         assert_eq!(rejected.len(), 1, "guard must reject the fix: {rejected:?}");
@@ -2571,9 +2661,10 @@ See [broken](old-name.md) here.
             new_target: "a/../b.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (would_modify, unapplied, rejected) =
+        let (would_modify, unapplied, rejected, _emitted) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(would_modify.is_empty(), "nothing would change");
         assert!(unapplied.is_empty());
@@ -2679,9 +2770,11 @@ See [broken](old-name.md) here.
             new_target: "correct-name.md".to_string(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2711,9 +2804,11 @@ See [broken](old-name.md) here.
             new_target: "correct.md".to_string(),
             strategy: FixStrategy::CaseInsensitive,
             confidence: 1.0,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2725,6 +2820,98 @@ See [broken](old-name.md) here.
             written.contains("[text](correct.md)"),
             "expected rewritten link, got: {written}"
         );
+    }
+
+    // --- iter-272 Part F / CASE-2: dry-run reports the string apply writes ---
+
+    /// A directory-index rewrite under a `site_prefix`: the plan's
+    /// `new_target` is the `.md`-suffixed vault-relative path, but what lands
+    /// on disk keeps the author's site-absolute directory form. Both modes
+    /// must report that same emitted string.
+    #[test]
+    fn dry_run_and_apply_report_the_same_emitted_target() {
+        let tmp = vault_with_files(&[
+            (
+                "sub/src.md",
+                "See [x](wrong.md) and [y](/site/deep) here.\n",
+            ),
+            ("sub/Right.md", ""),
+            ("deep/index.md", ""),
+        ]);
+        let fixes = vec![
+            FixPlan {
+                source: "sub/src.md".to_string(),
+                line: 1,
+                old_target: "wrong.md".to_string(),
+                new_target: "sub/Right.md".to_string(),
+                strategy: FixStrategy::CaseInsensitive,
+                confidence: 1.0,
+                emitted_target: None,
+            },
+            FixPlan {
+                source: "sub/src.md".to_string(),
+                line: 1,
+                old_target: "/site/deep".to_string(),
+                new_target: "deep/index.md".to_string(),
+                strategy: FixStrategy::ShortestPath,
+                confidence: 1.0,
+                emitted_target: None,
+            },
+        ];
+
+        let (_would, _unapplied, _rejected, dry_emitted) =
+            plan_fixes_dry_run(tmp.path(), &fixes, Some("site")).unwrap();
+        // The dry run reports the *written* form, not the vault-relative path.
+        assert_eq!(
+            dry_emitted.get(&fixes[0].key()).map(String::as_str),
+            Some("Right.md"),
+            "{dry_emitted:?}"
+        );
+
+        let (plans, _unapplied, _failed, _rejected, apply_emitted) =
+            apply_fixes(tmp.path(), &fixes, Some("site")).unwrap();
+        assert_eq!(dry_emitted, apply_emitted, "dry-run and apply disagreed");
+
+        // And every emitted string is literally the text now on disk.
+        let written = fs::read_to_string(tmp.path().join("sub/src.md")).unwrap();
+        assert_eq!(plans.len(), 1);
+        for fix in &fixes {
+            if let Some(text) = apply_emitted.get(&fix.key()) {
+                assert!(
+                    written.contains(text.as_str()),
+                    "emitted {text:?} is not in the applied text {written:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn annotate_emitted_targets_stamps_matching_plans_only() {
+        let mut plans = vec![
+            FixPlan {
+                source: "a.md".to_string(),
+                line: 1,
+                old_target: "x".to_string(),
+                new_target: "sub/X.md".to_string(),
+                strategy: FixStrategy::ShortestPath,
+                confidence: 1.0,
+                emitted_target: None,
+            },
+            FixPlan {
+                source: "a.md".to_string(),
+                line: 2,
+                old_target: "y".to_string(),
+                new_target: "sub/Y.md".to_string(),
+                strategy: FixStrategy::ShortestPath,
+                confidence: 1.0,
+                emitted_target: None,
+            },
+        ];
+        let mut emitted = EmittedTargets::new();
+        emitted.insert(plans[0].key(), "sub/X".to_string());
+        annotate_emitted_targets(&mut plans, &emitted);
+        assert_eq!(plans[0].emitted_target.as_deref(), Some("sub/X"));
+        assert_eq!(plans[1].emitted_target, None);
     }
 
     // --- apply_fixes: frontmatter wikilink rewrite (H-bug: frontmatter fixes
@@ -2747,9 +2934,11 @@ See [broken](old-name.md) here.
             new_target: "sub/real-target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1, "frontmatter fix must produce a RewritePlan");
         assert!(
@@ -2781,9 +2970,11 @@ See [broken](old-name.md) here.
             new_target: "sub/real-target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2815,6 +3006,7 @@ See [broken](old-name.md) here.
                 new_target: "sub/real-target.md".to_string(),
                 strategy: FixStrategy::ShortestPath,
                 confidence: 0.95,
+                emitted_target: None,
             },
             FixPlan {
                 source: "a.md".to_string(),
@@ -2823,10 +3015,12 @@ See [broken](old-name.md) here.
                 new_target: "sub/real-target.md".to_string(),
                 strategy: FixStrategy::ShortestPath,
                 confidence: 0.95,
+                emitted_target: None,
             },
         ];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2868,9 +3062,11 @@ See [broken](old-name.md) here.
             new_target: "target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2898,9 +3094,11 @@ See [broken](old-name.md) here.
             new_target: "target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(
@@ -2931,9 +3129,11 @@ See [broken](old-name.md) here.
             new_target: "target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert!(plans.is_empty(), "no replacement should have been produced");
         assert_eq!(unapplied.len(), 1);
@@ -2963,10 +3163,12 @@ See [broken](old-name.md) here.
             new_target: "sub/target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 1);
@@ -2999,9 +3201,11 @@ See [broken](old-name.md) here.
             new_target: "sub/target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         }];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert!(unapplied.is_empty(), "unexpected unapplied: {unapplied:?}");
@@ -3033,10 +3237,12 @@ See [broken](old-name.md) here.
             new_target: "sub/target.md".to_string(),
             strategy: FixStrategy::ShortestPath,
             confidence: 0.95,
+            emitted_target: None,
         };
         let fixes = vec![plan.clone(), plan];
 
-        let (plans, unapplied, _failed, _rejected) = apply_fixes(tmp.path(), &fixes, None).unwrap();
+        let (plans, unapplied, _failed, _rejected, _emitted) =
+            apply_fixes(tmp.path(), &fixes, None).unwrap();
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].replacements.len(), 2);
@@ -3274,7 +3480,12 @@ See [broken](old-name.md) here.
             sections: Vec::new(),
             tasks: Vec::new(),
             links: Vec::new(),
-            self_anchors: vec![(1, "nope".to_string())],
+            self_anchors: vec![crate::links::SelfAnchor {
+                line: 1,
+                fragment: "nope".to_string(),
+                kind: crate::links::LinkKind::Wikilink,
+                label: None,
+            }],
             bm25_tokens: None,
             bm25_language: None,
             bm25_tokenizer_version: None,
@@ -3803,9 +4014,10 @@ See [broken](old-name.md) here.
             new_target: "correct-name.md".to_string(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
+            emitted_target: None,
         }];
 
-        let (would_modify, unapplied, _rejected) =
+        let (would_modify, unapplied, _rejected, _emitted) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert_eq!(would_modify, vec!["index.md"]);
         assert!(unapplied.is_empty(), "fresh text: nothing stale");
@@ -3835,9 +4047,10 @@ See [broken](old-name.md) here.
             new_target: "correct-name.md".to_string(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
+            emitted_target: None,
         }];
 
-        let (would_modify_dry, unapplied_dry, _rejected_dry) =
+        let (would_modify_dry, unapplied_dry, _rejected_dry, _emitted) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(would_modify_dry.is_empty(), "stale fix modifies nothing");
         assert_eq!(
@@ -3847,7 +4060,7 @@ See [broken](old-name.md) here.
         );
 
         // apply must report the identical unapplied set.
-        let (plans, unapplied_apply, failed, _rejected) =
+        let (plans, unapplied_apply, failed, _rejected, _emitted) =
             apply_fixes(tmp.path(), &fixes, None).unwrap();
         assert!(plans.is_empty());
         assert!(failed.is_empty());
@@ -3881,6 +4094,7 @@ See [broken](old-name.md) here.
                 new_target: "correct-name.md".to_string(),
                 strategy: FixStrategy::FuzzyMatch,
                 confidence: 0.9,
+                emitted_target: None,
             },
             FixPlan {
                 source: "still-here.md".to_string(),
@@ -3889,10 +4103,11 @@ See [broken](old-name.md) here.
                 new_target: "correct-name.md".to_string(),
                 strategy: FixStrategy::FuzzyMatch,
                 confidence: 0.9,
+                emitted_target: None,
             },
         ];
 
-        let (plans, unapplied, failed, _rejected) = apply_fixes(tmp.path(), &fixes, None)
+        let (plans, unapplied, failed, _rejected, _emitted) = apply_fixes(tmp.path(), &fixes, None)
             .expect("apply_fixes must not abort on a per-file I/O error");
 
         assert_eq!(
@@ -3937,9 +4152,10 @@ See [broken](old-name.md) here.
             new_target: "correct-name.md".to_string(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
+            emitted_target: None,
         }];
 
-        let (would_modify, unapplied, _rejected) =
+        let (would_modify, unapplied, _rejected, _emitted) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),
@@ -3970,9 +4186,10 @@ See [broken](old-name.md) here.
             new_target: "correct-name.md".to_string(),
             strategy: FixStrategy::FuzzyMatch,
             confidence: 0.9,
+            emitted_target: None,
         }];
 
-        let (would_modify, unapplied, _rejected) =
+        let (would_modify, unapplied, _rejected, _emitted) =
             plan_fixes_dry_run(tmp.path(), &fixes, None).unwrap();
         assert!(
             would_modify.is_empty(),

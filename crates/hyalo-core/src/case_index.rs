@@ -66,6 +66,14 @@ pub struct CaseInsensitiveIndex {
     /// Stem lookups are unaffected. Set by [`set_case_insensitive_paths`] from
     /// the resolved `[links] case_insensitive` mode.
     case_insensitive_paths: bool,
+    /// Map from lowercased frontmatter `aliases:` value → list of real paths
+    /// declaring that alias (iter-272 Part B, DEC-296).
+    ///
+    /// Obsidian resolves `[[Leah]]` to the note whose frontmatter declares
+    /// `aliases: [Leah]`. The map is consulted only after path and stem
+    /// lookups have failed, so a real filename always wins, and an alias
+    /// claimed by two notes is ambiguous rather than resolved.
+    alias_map: HashMap<String, Vec<String>>,
 }
 
 impl CaseInsensitiveIndex {
@@ -82,6 +90,7 @@ impl CaseInsensitiveIndex {
             map: HashMap::with_capacity(capacity),
             stem_map: HashMap::with_capacity(capacity),
             case_insensitive_paths: false,
+            alias_map: HashMap::new(),
         }
     }
 
@@ -191,6 +200,68 @@ impl CaseInsensitiveIndex {
         }
         let key = rel_path.to_ascii_lowercase();
         self.map.get(&key).map_or(&[], Vec::as_slice)
+    }
+
+    /// Record a note's declared frontmatter `aliases:` (iter-272 Part B).
+    ///
+    /// `rel_path` is the vault-relative, forward-slash path of the note that
+    /// declares them. Aliases are keyed case-folded (DEC-267), and an alias
+    /// declared by more than one note is kept ambiguous — never silently
+    /// resolved to the first declarer. An empty or whitespace-only alias is
+    /// ignored, as is a note aliasing itself under its own stem (the stem map
+    /// already answers that, and cheaper).
+    pub fn insert_aliases<I, S>(&mut self, rel_path: &str, aliases: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        for alias in aliases {
+            let alias = alias.as_ref().trim();
+            if alias.is_empty() {
+                continue;
+            }
+            let key = alias.to_ascii_lowercase();
+            let paths = self.alias_map.entry(key).or_default();
+            if paths.iter().any(|p| p == rel_path) {
+                continue;
+            }
+            paths.push(rel_path.to_owned());
+        }
+    }
+
+    /// Look up a declared frontmatter alias (case-folded). Returns the path of
+    /// the declaring note only when exactly one note declares it.
+    ///
+    /// Returns `None` for an unknown alias and for one declared by two or more
+    /// notes — the alias equivalent of an ambiguous bare stem.
+    #[must_use]
+    pub fn lookup_alias(&self, alias: &str) -> Option<&str> {
+        match self.alias_map.get(&alias.to_ascii_lowercase())?.as_slice() {
+            [only] => Some(only.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Every note declaring `alias` (case-folded), for ambiguity diagnostics
+    /// and for `links fix`, which must not fuzzy-rewrite a target that is a
+    /// declared alias of any note.
+    #[must_use]
+    pub fn lookup_alias_all(&self, alias: &str) -> &[String] {
+        self.alias_map
+            .get(&alias.to_ascii_lowercase())
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether any note in the vault declares `alias` (case-folded).
+    #[must_use]
+    pub fn has_alias(&self, alias: &str) -> bool {
+        !self.lookup_alias_all(alias).is_empty()
+    }
+
+    /// Number of distinct declared aliases in the vault.
+    #[must_use]
+    pub fn alias_count(&self) -> usize {
+        self.alias_map.len()
     }
 
     /// Return all candidate paths for a bare filename stem (case-insensitive).

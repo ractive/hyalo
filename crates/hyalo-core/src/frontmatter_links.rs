@@ -313,6 +313,31 @@ mod tests {
         assert!(targets("note: \"[[not closed\"\n").is_empty());
     }
 
+    /// iter-272 BOUND-2 (BUG-15): a YAML flow list written without spaces
+    /// starts `[[[`. The raw-text scanner used to capture `[iterations/x`.
+    #[test]
+    fn flow_list_opening_with_three_brackets_yields_both_links() {
+        assert_eq!(
+            targets("related: [[[iterations/x]], [[research/y]]]\n")
+                .into_iter()
+                .map(|(_, _, t)| t)
+                .collect::<Vec<_>>(),
+            vec!["iterations/x".to_string(), "research/y".to_string()]
+        );
+    }
+
+    /// iter-272 BOUND-1 (BUG-16): a stray `]` ends the capture.
+    #[test]
+    fn stray_close_bracket_in_frontmatter_does_not_swallow_prose() {
+        assert_eq!(
+            targets("note: \"[[Leah] here and [[Target]]\"\n")
+                .into_iter()
+                .map(|(_, _, t)| t)
+                .collect::<Vec<_>>(),
+            vec!["Target".to_string()]
+        );
+    }
+
     #[test]
     fn non_string_values_are_ignored() {
         assert!(targets("count: 3\ndone: true\nempty:\n").is_empty());

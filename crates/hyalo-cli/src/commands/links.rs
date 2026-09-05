@@ -269,7 +269,7 @@ pub fn links_fix(
     // excluded from `--apply` unless the user opts in via `--apply-fuzzy` /
     // `--min-confidence`. The remaining `certain_fixes` are the ones plain
     // `--apply` writes.
-    let (fuzzy_fixes, certain_fixes): (Vec<_>, Vec<_>) =
+    let (mut fuzzy_fixes, mut certain_fixes): (Vec<_>, Vec<_>) =
         fix_report.fixes.iter().cloned().partition(|f| {
             matches!(
                 f.strategy,
@@ -295,7 +295,7 @@ pub fn links_fix(
 
     // Collect all fixes: broken-link fixes + case-mismatch fixes.
     // Case-mismatch fixes come from the detection phase (not from plan_fixes).
-    let case_mismatches: Vec<_> = report
+    let mut case_mismatches: Vec<_> = report
         .case_mismatches
         .into_iter()
         .filter(|f| in_scope(f.source.as_str()))
@@ -305,7 +305,7 @@ pub fn links_fix(
     // are their own bucket, not folded into `case_mismatches` — a relocation
     // is not a cosmetic casing fix. Still applied by plain `--apply` (same
     // certainty as before), just reported and counted honestly.
-    let relocations: Vec<_> = report
+    let mut relocations: Vec<_> = report
         .relocations
         .into_iter()
         .filter(|f| in_scope(f.source.as_str()))
@@ -318,6 +318,81 @@ pub fn links_fix(
         .filter(|b| in_scope(b.source.as_str()))
         .collect();
     let ambiguous_count = ambiguous.len();
+
+    let mut modified_files = Vec::new();
+    // Fixes that were part of the plan but produced no on-disk change (e.g. a
+    // frontmatter occurrence whose text no longer matched what detection saw).
+    // L-25: dry-run also populates this by running the identical plan-building
+    // phase against on-disk text, so it reports exactly the fixes `--apply`
+    // would refuse — one code path, parity guaranteed.
+    let mut unapplied_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
+    // Fixes whose file produced a valid plan but the durable write failed
+    // mid-batch (L-11). Non-empty ⇒ partial failure ⇒ non-zero exit code.
+    let mut failed_fixes: Vec<hyalo_core::link_fix::FailedFix> = Vec::new();
+    // Fixes the H-1 round-trip guard refused: the target hyalo would have
+    // written does not resolve, so nothing was written and they are reported
+    // as unfixable rather than fixed (iter-200). A non-empty list here means a
+    // writer/resolver asymmetry was caught before it could corrupt a link.
+    let mut rejected_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
+    // iter-272 Part F / CASE-2: the exact link text `--apply` writes for each
+    // planned fix, filled in by the same planning pass in both modes so a
+    // `--dry-run` preview is byte-accurate about what will land on disk.
+    let mut emitted_targets = hyalo_core::link_fix::EmittedTargets::new();
+
+    // Merge broken-link fixes and case-mismatch fixes into a single batch so the
+    // apply/dry-run planner reads and rewrites each source file once — two
+    // separate passes over the same file would see the first pass's rewrites
+    // and could misbehave on overlapping edits.
+    let mut all_fixes = certain_fixes.clone();
+    all_fixes.extend(applicable_fuzzy.iter().cloned());
+    all_fixes.extend(case_mismatches.iter().cloned());
+    all_fixes.extend(relocations.iter().cloned());
+
+    if dry_run {
+        if !all_fixes.is_empty() {
+            // L-25: validate plans against on-disk text without writing, so the
+            // dry-run `unapplied` set matches what `--apply` would report.
+            // `modified_files` stays empty here — dry-run must NOT patch the
+            // index; `_would_modify` is informational only.
+            let (_would_modify, unapplied, rejected, emitted) =
+                hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?;
+            unapplied_fixes = unapplied;
+            rejected_fixes = rejected;
+            emitted_targets = emitted;
+        }
+    } else if !all_fixes.is_empty() {
+        let (plans, unapplied, failed, rejected, emitted) =
+            apply_fixes(dir, &all_fixes, site_prefix)?;
+        unapplied_fixes = unapplied;
+        failed_fixes = failed;
+        rejected_fixes = rejected;
+        emitted_targets = emitted;
+
+        // Only files that actually received a durable rewrite are "modified" —
+        // do not patch the index for files whose fixes were all unapplied or
+        // whose write failed.
+        modified_files = plans.into_iter().map(|p| p.rel_path).collect();
+    }
+    // iter-272 Part F: stamp the emitted text onto every reported bucket
+    // before any of them is serialized, so `new_target` (vault-relative, the
+    // detection coordinate system) and `emitted_target` (what gets written)
+    // are both visible and always agree between `--dry-run` and `--apply`.
+    for bucket in [
+        &mut certain_fixes,
+        &mut fuzzy_fixes,
+        &mut case_mismatches,
+        &mut relocations,
+        &mut unapplied_fixes,
+        &mut rejected_fixes,
+    ] {
+        hyalo_core::link_fix::annotate_emitted_targets(bucket, &emitted_targets);
+    }
+    // Rebuilt after annotation so the applied set carries `emitted_target` too.
+    let applicable_fuzzy: Vec<_> = fuzzy_fixes
+        .iter()
+        .filter(|f| fuzzy.accepts(f.confidence))
+        .cloned()
+        .collect();
 
     // iter-211 / BUG-12: carry each fix's own kebab-case rule code into the
     // payload. The text renderer used to hard-code `[link-case-mismatch]` for
@@ -345,53 +420,6 @@ pub fn links_fix(
         }
     }
 
-    let mut modified_files = Vec::new();
-    // Fixes that were part of the plan but produced no on-disk change (e.g. a
-    // frontmatter occurrence whose text no longer matched what detection saw).
-    // L-25: dry-run also populates this by running the identical plan-building
-    // phase against on-disk text, so it reports exactly the fixes `--apply`
-    // would refuse — one code path, parity guaranteed.
-    let mut unapplied_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
-    // Fixes whose file produced a valid plan but the durable write failed
-    // mid-batch (L-11). Non-empty ⇒ partial failure ⇒ non-zero exit code.
-    let mut failed_fixes: Vec<hyalo_core::link_fix::FailedFix> = Vec::new();
-    // Fixes the H-1 round-trip guard refused: the target hyalo would have
-    // written does not resolve, so nothing was written and they are reported
-    // as unfixable rather than fixed (iter-200). A non-empty list here means a
-    // writer/resolver asymmetry was caught before it could corrupt a link.
-    let mut rejected_fixes: Vec<hyalo_core::link_fix::FixPlan> = Vec::new();
-
-    // Merge broken-link fixes and case-mismatch fixes into a single batch so the
-    // apply/dry-run planner reads and rewrites each source file once — two
-    // separate passes over the same file would see the first pass's rewrites
-    // and could misbehave on overlapping edits.
-    let mut all_fixes = certain_fixes.clone();
-    all_fixes.extend(applicable_fuzzy.iter().cloned());
-    all_fixes.extend(case_mismatches.iter().cloned());
-    all_fixes.extend(relocations.iter().cloned());
-
-    if dry_run {
-        if !all_fixes.is_empty() {
-            // L-25: validate plans against on-disk text without writing, so the
-            // dry-run `unapplied` set matches what `--apply` would report.
-            // `modified_files` stays empty here — dry-run must NOT patch the
-            // index; `_would_modify` is informational only.
-            let (_would_modify, unapplied, rejected) =
-                hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?;
-            unapplied_fixes = unapplied;
-            rejected_fixes = rejected;
-        }
-    } else if !all_fixes.is_empty() {
-        let (plans, unapplied, failed, rejected) = apply_fixes(dir, &all_fixes, site_prefix)?;
-        unapplied_fixes = unapplied;
-        failed_fixes = failed;
-        rejected_fixes = rejected;
-
-        // Only files that actually received a durable rewrite are "modified" —
-        // do not patch the index for files whose fixes were all unapplied or
-        // whose write failed.
-        modified_files = plans.into_iter().map(|p| p.rel_path).collect();
-    }
     let unapplied_count = unapplied_fixes.len();
     let failed_count = failed_fixes.len();
 

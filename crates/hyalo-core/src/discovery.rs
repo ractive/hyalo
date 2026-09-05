@@ -216,6 +216,27 @@ fn glob_dir_prefix(glob: &str) -> String {
     kept.join("/")
 }
 
+/// Process-wide switch for frontmatter-`aliases:` link resolution
+/// (iter-272 Part B, DEC-296). Default **on**, like DEC-267 case folding.
+static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
+
+/// Install the effective `[links] aliases` setting for this process.
+///
+/// Idempotent-once, exactly like [`set_scan_include`]: the CLI calls it once
+/// after config resolution, before any command runs. Following that pattern
+/// keeps the setting off the signature of every resolver, index builder and
+/// graph pass that would otherwise have to forward it.
+pub fn set_link_aliases(enabled: bool) {
+    let _ = LINK_ALIASES.set(enabled);
+}
+
+/// Whether frontmatter `aliases:` resolve links in this process. Defaults to
+/// `true` when nothing configured it (library callers, tests).
+#[must_use]
+pub fn link_aliases_enabled() -> bool {
+    LINK_ALIASES.get().copied().unwrap_or(true)
+}
+
 /// Install the `[scan] include` glob set for this process.
 ///
 /// Idempotent-once: only the first call takes effect (the walker reads it
@@ -1551,6 +1572,23 @@ fn classify_short_form_wikilink(
         stem_index.lookup(target)
     };
 
+    // iter-272 Part B (DEC-296): no file carries that stem — but a note may
+    // declare it as a frontmatter alias, which is how Obsidian resolves
+    // `[[Leah]]` to `Leah Ferguson.md`. An alias-resolved link is *valid as
+    // written*: it needs no rewrite, so it is `ShortFormValid` rather than a
+    // relocation, and it never reaches the fuzzy matcher — which used to offer
+    // `Leah → Lewuathe.md` at confidence 0.87 on the Obsidian Hub. Two notes
+    // claiming one alias is ambiguous, exactly like two files sharing a stem.
+    if matches.is_empty()
+        && let Some(idx) = case_index
+    {
+        match idx.lookup_alias_all(target).len() {
+            0 => {}
+            1 => return Some(LinkResolution::ShortFormValid),
+            _ => return Some(LinkResolution::ShortFormAmbiguous),
+        }
+    }
+
     match matches.len() {
         0 => Some(LinkResolution::Broken),
         1 => {
@@ -2072,15 +2110,258 @@ pub fn resolve_target(
                 return Some(canonical_path.to_owned());
             }
         }
+        // iter-272 Part B (DEC-296): last resort — a frontmatter `aliases:`
+        // entry. Obsidian resolves `[[Leah]]` to the note declaring
+        // `aliases: [Leah]`, and 7 of the Obsidian Hub's 47 genuinely-broken
+        // targets were exactly that. Deliberately *after* every path and stem
+        // attempt, so a real filename always wins over someone else's alias;
+        // `lookup_alias` answers `None` when two notes claim the same alias,
+        // which keeps the link ambiguous rather than resolving it to whichever
+        // note happened to be scanned first.
+        if let Some(canonical_path) = idx.lookup_alias(stem) {
+            let full_resolved = canonical_dir.join(canonical_path);
+            if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
+                return Some(canonical_path.to_owned());
+            }
+        }
     }
 
     None
+}
+
+/// Visitor that reads a file's frontmatter `aliases:` and stops before the
+/// body — the cheapest scan the scanner offers (iter-272 Part B).
+struct AliasVisitor {
+    aliases: Vec<String>,
+}
+
+impl crate::scanner::FileVisitor for AliasVisitor {
+    fn on_frontmatter(
+        &mut self,
+        props: indexmap::IndexMap<String, serde_json::Value>,
+    ) -> crate::scanner::ScanAction {
+        self.aliases = crate::filter::extract_aliases(&props);
+        // Nothing below the frontmatter matters, so the body is never read.
+        crate::scanner::ScanAction::Stop
+    }
+}
+
+/// Read one file's declared frontmatter `aliases:` without reading its body.
+///
+/// Returns an empty vec for a file with no frontmatter, no `aliases:` key, or
+/// unparseable YAML — an alias map is an optimisation of resolution, never a
+/// reason to fail a command.
+#[must_use]
+pub fn read_aliases(path: &Path) -> Vec<String> {
+    let mut visitor = AliasVisitor {
+        aliases: Vec::new(),
+    };
+    match crate::scanner::scan_file_multi(path, &mut [&mut visitor]) {
+        Ok(()) => visitor.aliases,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Populate `idx` with every note's declared frontmatter `aliases:` by
+/// scanning the vault's frontmatter (iter-272 Part B, DEC-296).
+///
+/// Only the frontmatter of each file is read — the visitor stops the scan the
+/// moment the properties are parsed — so the pass costs one `open` + one short
+/// `read` per note and touches no body bytes.
+pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
+    if !link_aliases_enabled() {
+        return;
+    }
+    let Ok(files) = discover_files(dir) else {
+        return;
+    };
+    // Read in parallel, like `ScannedIndex::build` does: the pass is pure I/O
+    // latency over thousands of small reads, and serially it cost 0.19 s of
+    // the 0.66 s `find --broken-links --count` takes on the Obsidian Hub
+    // (6393 notes). Insertion stays serial and in `discover_files` order, so
+    // the alias map — and therefore every ambiguity verdict — is
+    // deterministic.
+    #[cfg(not(miri))]
+    let collected: Vec<(String, Vec<String>)> = {
+        use rayon::prelude::*;
+        files
+            .par_iter()
+            .filter_map(|file| {
+                let aliases = read_aliases(file);
+                (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+            })
+            .collect()
+    };
+    #[cfg(miri)]
+    let collected: Vec<(String, Vec<String>)> = files
+        .iter()
+        .filter_map(|file| {
+            let aliases = read_aliases(file);
+            (!aliases.is_empty()).then(|| (relative_path(dir, file), aliases))
+        })
+        .collect();
+
+    for (rel, aliases) in collected {
+        idx.insert_aliases(&rel, aliases);
+    }
+}
+
+/// Whether `target`, written in `source_rel`, resolves only because some note
+/// declares it as a frontmatter alias (iter-272 Part B).
+///
+/// Used to label a resolved link with `via: "alias"` and to stop `links fix`
+/// from fuzzy-rewriting a target that is a perfectly good alias. Answers
+/// `false` for every target that a path or stem lookup would have resolved.
+#[must_use]
+pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> bool {
+    let Some(idx) = case_index else {
+        return false;
+    };
+    // Only a bare, non-site-absolute target can name an alias — the same guard
+    // `resolve_target` applies before its stem and alias lookups.
+    if target.is_empty() || target.contains('/') || target.contains('\\') {
+        return false;
+    }
+    let stem = target
+        .strip_suffix(".md")
+        .or_else(|| target.strip_suffix(".MD"))
+        .unwrap_or(target);
+    let stem = stem.split('#').next().unwrap_or(stem);
+    if stem.is_empty() || !idx.has_alias(stem) {
+        return false;
+    }
+    // A filename always beats an alias, so a target the stem map already
+    // answers did not resolve "via alias" even when an alias also matches.
+    idx.lookup_stem(stem).is_none() && idx.lookup_alias(stem).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    // --- iter-272 Part B (DEC-296): frontmatter `aliases:` resolution ---
+
+    /// Build a vault whose notes declare aliases, plus the matching index.
+    fn alias_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, CaseInsensitiveIndex) {
+        let tmp = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            let p = tmp.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(p, body).unwrap();
+        }
+        let canon = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for f in discover_files(tmp.path()).unwrap() {
+            idx.insert(&relative_path(tmp.path(), &f));
+        }
+        populate_aliases_from_dir(tmp.path(), &mut idx);
+        (tmp, canon, idx)
+    }
+
+    #[test]
+    fn a_unique_alias_resolves_and_reports_via_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            (
+                "Leah Ferguson.md",
+                "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n",
+            ),
+            ("src.md", "see [[Leah]]\n"),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+        assert!(resolves_via_alias("Leah", Some(&idx)));
+        // Case folds like every other lookup (DEC-267).
+        assert_eq!(
+            resolve_target(&canon, "leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn a_filename_always_beats_someone_elses_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("Leah.md", "---\ntitle: The real Leah\n---\n"),
+            (
+                "Leah Ferguson.md",
+                "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n",
+            ),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah.md")
+        );
+        assert!(
+            !resolves_via_alias("Leah", Some(&idx)),
+            "a filename match is not a `via: alias` resolution"
+        );
+    }
+
+    #[test]
+    fn an_alias_claimed_by_two_notes_is_ambiguous_not_resolved() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("a.md", "---\ntitle: A\naliases:\n- Shared\n---\n"),
+            ("b.md", "---\ntitle: B\naliases: Shared\n---\n"),
+        ]);
+        assert_eq!(idx.lookup_alias_all("shared").len(), 2);
+        assert_eq!(resolve_target(&canon, "Shared", None, Some(&idx)), None);
+        assert!(!resolves_via_alias("Shared", Some(&idx)));
+    }
+
+    #[test]
+    fn the_string_form_of_aliases_is_accepted() {
+        let (_tmp, canon, idx) =
+            alias_vault(&[("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n")]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn an_alias_with_a_fragment_or_label_still_resolves() {
+        let (_tmp, canon, idx) = alias_vault(&[(
+            "Leah Ferguson.md",
+            "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
+        )]);
+        // `resolve_target` strips the fragment; the alias half is what is left.
+        assert_eq!(
+            resolve_target(&canon, "Leah#Work", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+        // A `[[alias|label]]` never reaches the resolver with its label — the
+        // extractor splits it off — so the target is the bare alias.
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn a_note_aliasing_its_own_stem_changes_nothing() {
+        let (_tmp, canon, idx) =
+            alias_vault(&[("note.md", "---\ntitle: N\naliases:\n- note\n---\n")]);
+        assert_eq!(
+            resolve_target(&canon, "note", None, Some(&idx)).as_deref(),
+            Some("note.md")
+        );
+        assert!(!resolves_via_alias("note", Some(&idx)));
+    }
+
+    #[test]
+    fn a_path_qualified_target_never_consults_aliases() {
+        let (_tmp, canon, idx) = alias_vault(&[(
+            "sub/Leah Ferguson.md",
+            "---\ntitle: L\naliases:\n- Leah\n---\n",
+        )]);
+        assert_eq!(resolve_target(&canon, "sub/Leah", None, Some(&idx)), None);
+        assert!(!resolves_via_alias("sub/Leah", Some(&idx)));
+    }
 
     // --- iter-265: `[scan] exclude` glob matching ---
 

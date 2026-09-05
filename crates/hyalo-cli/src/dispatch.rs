@@ -55,6 +55,9 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
             idx.insert(rel);
         }
     }
+    // iter-272 Part B (DEC-296): frontmatter `aliases:` are resolution targets.
+    // Frontmatter-only scan — no body bytes are read.
+    discovery::populate_aliases_from_dir(dir, &mut idx);
     idx
 }
 
@@ -75,6 +78,17 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
     // written by an older hyalo, which simply degrades to the old behaviour).
     for rel in snap.attachments() {
         idx.insert(rel);
+    }
+    // iter-272 Part B: the snapshot already carries every note's frontmatter,
+    // so the alias map is built at load from indexed properties — no on-disk
+    // format change, and `--index` parity with a disk scan for free.
+    if hyalo_core::discovery::link_aliases_enabled() {
+        for entry in snap.entries() {
+            let aliases = hyalo_core::filter::extract_aliases(&entry.properties);
+            if !aliases.is_empty() {
+                idx.insert_aliases(&entry.rel_path, aliases);
+            }
+        }
     }
     idx
 }

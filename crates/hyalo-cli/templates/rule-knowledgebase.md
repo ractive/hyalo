@@ -184,6 +184,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `.base`). `external` and `attachment` links are never broken: they stay out of
   `find --broken-links`, `summary.links.broken` and HYALO006, and are not graph edges for
   `--orphan`/`--dead-end`. Text mode prints the kind after the arrow unless it is `wikilink`.
+  `![alt](img.png)` is inventoried as an `embed` (DEC-297, iter-272) so a missing image
+  surfaces, and a same-file anchor keeps its syntax: `[text](#frag)` is `kind: "markdown"` with
+  its link text, `[[#H]]` stays `wikilink`.
 - **Frontmatter wikilinks are graph edges** (DEC-269, iter-262): a `[[wikilink]]` in **any**
   frontmatter value — `categories: ["[[Books]]"]`, `type: "[[Author]]"`, a nested map, quoted
   or bare — counts for `backlinks`, `find --orphan`/`--dead-end`/`--broken-links`,
@@ -196,6 +199,14 @@ Prefer `hyalo` CLI for operations on files in this directory:
 - **`set` on a list property** (DEC-270, iter-262): `set K=<scalar>` on a property that holds a
   list replaces it — `set` means replace — and says so on stderr, with the affected files under
   `list_collapsed` in JSON. Use `hyalo append` when the list should stay a list.
+- **Frontmatter `aliases:` resolve wikilinks** (DEC-296, iter-272): `[[Leah]]` resolves to the
+  note declaring `aliases: [Leah]` — a list or a bare string, matched case-folded. A filename or
+  path match always wins, an alias claimed by two notes is ambiguous rather than resolved, and
+  `[[alias#Heading]]` / `[[alias|label]]` work. `kind` stays `wikilink`; the entry carries
+  `via: "alias"`. Alias links count for `backlinks`, `--orphan`/`--dead-end`,
+  `summary.links` and HYALO006; `links fix` never proposes or fuzzy-matches a rewrite for one,
+  and `mv` leaves them alone (the alias moves with the note). `[links] aliases = false` restores
+  filename-only resolution; `hyalo config --jq '.results.links.aliases'` reports it.
 - **Resolution folds case everywhere** (DEC-267): `[[AidenLx]]` resolves to `People/aidenlx.md`
   on every platform, not only on a case-insensitive filesystem. Opt out with
   `[links] case_insensitive = "false"`; `links fix --case-insensitive` now only suppresses the

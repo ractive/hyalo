@@ -18,7 +18,7 @@ use crate::case_index::CaseInsensitiveIndex;
 use crate::filter::extract_tags;
 use crate::frontmatter;
 use crate::link_graph::{FileLinks, LinkGraph, LinkGraphVisitor};
-use crate::links::Link;
+use crate::links::{Link, SelfAnchor};
 use crate::scanner::{self, FileVisitor, FrontmatterCollector, ScanAction};
 use crate::tasks::TaskExtractor;
 use crate::types::{FindTaskInfo, OutlineSection, TaskCount};
@@ -63,7 +63,7 @@ pub struct IndexEntry {
     /// (iter-211 / BUG-8). Defaulted + skipped when empty so snapshots written
     /// by older hyalo versions keep loading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub self_anchors: Vec<(usize, String)>,
+    pub self_anchors: Vec<SelfAnchor>,
     /// Pre-tokenized BM25 tokens (body + title, stemmed). Populated by `create-index`
     /// when `scan_body` is `true`. `None` when the index was created before BM25
     /// support or with `scan_body = false`.
@@ -255,7 +255,23 @@ impl ScannedIndex {
         entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
         let graph = if options.scan_body {
-            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix);
+            // iter-272 Part B (DEC-296): every entry's frontmatter is already
+            // parsed, so the declared `aliases:` come for free — the graph
+            // resolves an alias-named wikilink to the same file
+            // `find --fields links` reports, and `backlinks` / `--orphan` /
+            // `--dead-end` / `summary.links` all agree with it.
+            let aliases: Vec<(String, Vec<String>)> = if crate::discovery::link_aliases_enabled() {
+                entries
+                    .iter()
+                    .filter_map(|e| {
+                        let declared = crate::filter::extract_aliases(&e.properties);
+                        (!declared.is_empty()).then(|| (e.rel_path.clone(), declared))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix, &aliases);
             graph_build.graph
         } else {
             LinkGraph::default()

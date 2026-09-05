@@ -360,6 +360,12 @@ and this project adheres to
 - No prose rule (MD019 among them) fires inside a fenced or indented code block or an HTML comment; MD010, MD031, MD040, MD046, MD047 and MD048 keep checking them on purpose.
 - `links fix` no longer reports a case mismatch for a site-absolute link carrying the configured `site_prefix`, and never appends `/index` or `.md` to a link form that lacked it (DEC-295).
 - `mv` applies its ambiguity guard to frontmatter links too: a bare `related: "[[a]]"` matching two files is skipped and reported with its property, not rewritten.
+- A one-element list `type: ["[[Author]]"]` no longer fails the implicit string constraint that every declared schema type carries — the shape Obsidian's property editor writes now lints clean wherever DEC-281 binding already accepted it.
+- An anchor-only markdown link `[text](#frag)` is reported with `kind: "markdown"` and its link text, not as a wikilink — vaults with no wikilinks at all (MDN, GitHub Docs) claimed thousands.
+- A wikilink capture stops at the first stray `]` or nested `[[`, and never starts inside `[[[`: `see [[Leah] here and [[Target]]` is one link to `Target`, and a YAML flow list `related: [[[a]], [[b]]]` yields both links instead of `[a`.
+- A markdown destination in angle brackets whose text is a parenthesised URL — `[y](<(https://…)>)` — is external: never broken, never fuzzy-matched.
+- `![alt](img.png)` is inventoried like `![[img.png]]` (DEC-297), so a missing image surfaces in `find --fields links`, `--broken-links` and `summary` instead of being dropped at extraction.
+- The DEC-268 heading suggestion folds `-`, `_` and space (DEC-298), so an underscore-slugged fragment such as `#Browser_compatibility` now suggests the `Browser compatibility` heading it prefixes.
 
 ### Added
 
@@ -386,6 +392,8 @@ and this project adheres to
 - `links auto` reports `default_excluded_titles` / `default_excluded_mentions` (DEC-286)
 - Schema: `object-list` property type with `required-keys`, `allowed-keys`, `key-patterns` for lists of maps; lint reports the item index and key, and a plain-string item gets a `- ref: <value>` fix-it hint
 - `lint` honours markdownlint's suppression comments — `markdownlint-disable`, `-enable`, `-disable-line`, `-disable-next-line`, `-disable-file`, `-enable-file` — with rule ids or aliases (DEC-294).
+- Frontmatter `aliases:` resolve wikilinks (DEC-296): `[[Leah]]` finds the note declaring `aliases: [Leah]`, reported as `via: "alias"`. A filename always wins, a shared alias is ambiguous, matching folds case, and alias links are real graph edges. Opt out with `[links] aliases = false`.
+- `links fix` reports `emitted_target` — the exact link text `--apply` writes — on every fix bucket, filled by the same planning pass in both modes so a `--dry-run` preview is byte-accurate (`new_target` stays vault-relative).
 
 ## [0.21.0] - 2026-08-28
 
