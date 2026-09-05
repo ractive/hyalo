@@ -228,7 +228,18 @@ fn glob_dir_prefix(glob: &str) -> String {
 }
 
 /// Process-wide switch for frontmatter-`aliases:` link resolution
-/// (iter-272 Part B, DEC-296). Default **on**, like DEC-267 case folding.
+/// (iter-272 Part B, DEC-296 as amended by DEC-308).
+///
+/// Default **off** since iteration 275: Obsidian does not resolve a bare
+/// `[[alias]]` — aliases feed the link *suggester*, which inserts
+/// `[[Note|alias]]`, and a hand-typed `[[alias]]` is an unresolved link whose
+/// click creates a new note. Turning it on is for vaults running the Alias
+/// Linker community plugin, which patches Obsidian to do what DEC-296
+/// assumed it already did.
+///
+/// The alias **map** is built either way: `links fix` uses it to propose the
+/// rewrite that is actually right (`[[Leah]]` → `[[Leah Ferguson|Leah]]`),
+/// and `find` uses it to label such a link `via: "alias"`.
 static LINK_ALIASES: OnceLock<bool> = OnceLock::new();
 
 /// Install the effective `[links] aliases` setting for this process.
@@ -242,10 +253,10 @@ pub fn set_link_aliases(enabled: bool) {
 }
 
 /// Whether frontmatter `aliases:` resolve links in this process. Defaults to
-/// `true` when nothing configured it (library callers, tests).
+/// `false` (Obsidian's own behaviour, DEC-308) when nothing configured it.
 #[must_use]
 pub fn link_aliases_enabled() -> bool {
-    LINK_ALIASES.get().copied().unwrap_or(true)
+    LINK_ALIASES.get().copied().unwrap_or(false)
 }
 
 /// Install the `[scan] include` glob set for this process.
@@ -1613,7 +1624,14 @@ fn classify_short_form_wikilink(
     {
         match idx.lookup_alias_all(target).len() {
             0 => {}
-            1 => return Some(LinkResolution::ShortFormValid),
+            // DEC-308 (iter-275): a unique alias resolves the link only when
+            // the vault opted in. In the default mode it is broken — and
+            // `links fix` turns it into an `alias_fixes` plan.
+            1 if link_aliases_enabled() => return Some(LinkResolution::ShortFormValid),
+            1 => return Some(LinkResolution::Broken),
+            // ALIAS-5 (iter-275, BUG-26): two notes claiming one alias is
+            // *ambiguous* in either mode, so `links fix` reports the
+            // candidates rather than "does not resolve".
             _ => return Some(LinkResolution::ShortFormAmbiguous),
         }
     }
@@ -2161,6 +2179,17 @@ pub fn resolve_target(
                 return Some(canonical_path.to_owned());
             }
         }
+        // BUG-2 (dogfood v0.22.0), iter-275 ALIAS-4: an *ambiguous* filename
+        // match is still a filename match. `[[avatar]]` on the Obsidian Hub
+        // names both `Plugins/avatar.md` and `Themes/Avatar.md`; the alias
+        // `Avatar` on the first one used to break the tie, so `find` claimed
+        // the plugin while `mv` — which never consults aliases — called the
+        // link ambiguous, and a rename silently repointed all four links at
+        // the theme. DEC-296 says a filename beats an alias; two filenames
+        // beat it too, and leave the link unresolved.
+        if idx.lookup_stem_all(stem).len() > 1 {
+            return None;
+        }
         // iter-272 Part B (DEC-296): last resort — a frontmatter `aliases:`
         // entry. Obsidian resolves `[[Leah]]` to the note declaring
         // `aliases: [Leah]`, and 7 of the Obsidian Hub's 47 genuinely-broken
@@ -2169,7 +2198,13 @@ pub fn resolve_target(
         // `lookup_alias` answers `None` when two notes claim the same alias,
         // which keeps the link ambiguous rather than resolving it to whichever
         // note happened to be scanned first.
-        if let Some(canonical_path) = idx.lookup_alias(stem) {
+        // DEC-308 (iter-275): consulted only when `[links] aliases = true`.
+        // Obsidian leaves a bare `[[alias]]` unresolved by design, so the
+        // default answers the way Obsidian renders it and `links fix` offers
+        // the alias-backed rewrite instead.
+        if link_aliases_enabled()
+            && let Some(canonical_path) = idx.lookup_alias(stem)
+        {
             let full_resolved = canonical_dir.join(canonical_path);
             if ensure_within_vault(canonical_dir, &full_resolved).unwrap_or(false) {
                 return Some(canonical_path.to_owned());
@@ -2220,9 +2255,10 @@ pub fn read_aliases(path: &Path) -> Vec<String> {
 /// moment the properties are parsed — so the pass costs one `open` + one short
 /// `read` per note and touches no body bytes.
 pub fn populate_aliases_from_dir(dir: &Path, idx: &mut CaseInsensitiveIndex) {
-    if !link_aliases_enabled() {
-        return;
-    }
+    // DEC-308 (iter-275): built regardless of `[links] aliases`. The flag
+    // governs *resolution*; the map itself is what lets `links fix` propose
+    // `[[Leah]]` → `[[Leah Ferguson|Leah]]` and `find` label the link
+    // `via: "alias"` in the default mode, where it is broken-but-fixable.
     let Ok(files) = discover_files(dir) else {
         return;
     };
@@ -2284,8 +2320,10 @@ pub fn resolves_via_alias(target: &str, case_index: Option<&CaseInsensitiveIndex
         return false;
     }
     // A filename always beats an alias, so a target the stem map already
-    // answers did not resolve "via alias" even when an alias also matches.
-    idx.lookup_stem(stem).is_none() && idx.lookup_alias(stem).is_some()
+    // answers did not resolve "via alias" even when an alias also matches —
+    // and an *ambiguous* filename match beats it too (ALIAS-4, iter-275),
+    // which is why the whole bucket is tested rather than `lookup_stem`.
+    idx.lookup_stem_all(stem).is_empty() && idx.lookup_alias(stem).is_some()
 }
 
 #[cfg(test)]
@@ -2315,8 +2353,12 @@ mod tests {
         (tmp, canon, idx)
     }
 
+    /// DEC-308 (iter-275): with `[links] aliases` at its default (off, the
+    /// Obsidian behaviour) a bare `[[Leah]]` does **not** resolve — but the
+    /// alias map is still built, and `resolves_via_alias` still labels the
+    /// link so `links fix` can offer `[[Leah Ferguson|Leah]]`.
     #[test]
-    fn a_unique_alias_resolves_and_reports_via_alias() {
+    fn a_unique_alias_is_labelled_but_does_not_resolve_by_default() {
         let (_tmp, canon, idx) = alias_vault(&[
             (
                 "Leah Ferguson.md",
@@ -2324,15 +2366,28 @@ mod tests {
             ),
             ("src.md", "see [[Leah]]\n"),
         ]);
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert_eq!(resolve_target(&canon, "Leah", None, Some(&idx)), None);
         assert!(resolves_via_alias("Leah", Some(&idx)));
         // Case folds like every other lookup (DEC-267).
-        assert_eq!(
-            resolve_target(&canon, "leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
+        assert!(resolves_via_alias("leah", Some(&idx)));
+        assert_eq!(idx.lookup_alias("leah"), Some("Leah Ferguson.md"));
+    }
+
+    /// ALIAS-4 (iter-275, BUG-2): two files sharing a stem leave the link
+    /// unresolved; the alias on one of them never breaks the tie.
+    #[test]
+    fn an_ambiguous_stem_is_never_tie_broken_by_an_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            (
+                "Plugins/avatar.md",
+                "---\ntitle: plugin\naliases:\n- Avatar\n---\n",
+            ),
+            ("Themes/Avatar.md", "---\ntitle: theme\n---\n"),
+        ]);
+        assert_eq!(resolve_target(&canon, "avatar", None, Some(&idx)), None);
+        assert!(
+            !resolves_via_alias("avatar", Some(&idx)),
+            "an ambiguous filename match is still a filename match"
         );
     }
 
@@ -2368,31 +2423,22 @@ mod tests {
 
     #[test]
     fn the_string_form_of_aliases_is_accepted() {
-        let (_tmp, canon, idx) =
+        let (_tmp, _canon, idx) =
             alias_vault(&[("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n")]);
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert_eq!(idx.lookup_alias("leah"), Some("Leah Ferguson.md"));
     }
 
     #[test]
-    fn an_alias_with_a_fragment_or_label_still_resolves() {
-        let (_tmp, canon, idx) = alias_vault(&[(
+    fn an_alias_with_a_fragment_or_label_is_still_recognised_as_an_alias() {
+        let (_tmp, _canon, idx) = alias_vault(&[(
             "Leah Ferguson.md",
             "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
         )]);
-        // `resolve_target` strips the fragment; the alias half is what is left.
-        assert_eq!(
-            resolve_target(&canon, "Leah#Work", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        // The fragment is split off before the alias lookup.
+        assert!(resolves_via_alias("Leah#Work", Some(&idx)));
         // A `[[alias|label]]` never reaches the resolver with its label — the
         // extractor splits it off — so the target is the bare alias.
-        assert_eq!(
-            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
-            Some("Leah Ferguson.md")
-        );
+        assert!(resolves_via_alias("Leah", Some(&idx)));
     }
 
     #[test]

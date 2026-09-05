@@ -122,6 +122,17 @@ fn part_a_multi_element_and_empty_type_lists_are_still_rejected() {
 // Part B — frontmatter `aliases:` as link targets (DEC-296)
 // ---------------------------------------------------------------------------
 
+/// A vault whose notes declare aliases. `aliases_resolve` opts the vault into
+/// the Alias Linker mode (`[links] aliases = true`); without it the default —
+/// Obsidian's own behaviour, DEC-308 — leaves a bare `[[alias]]` unresolved.
+fn alias_vault_with(aliases_resolve: bool) -> TempDir {
+    let tmp = alias_vault();
+    if aliases_resolve {
+        write(&tmp, ".hyalo.toml", "[links]\naliases = true\n");
+    }
+    tmp
+}
+
 fn alias_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
     write(
@@ -139,7 +150,8 @@ fn alias_vault() -> TempDir {
 
 #[test]
 fn part_b_a_declared_alias_resolves_and_is_labelled_via_alias() {
-    let tmp = alias_vault();
+    // DEC-308 (iter-275): only under `[links] aliases = true`.
+    let tmp = alias_vault_with(true);
     let links = links_of(&tmp, "src.md");
     assert_eq!(
         links[0],
@@ -158,9 +170,90 @@ fn part_b_a_declared_alias_resolves_and_is_labelled_via_alias() {
     assert_eq!(links[2].3, None);
 }
 
+/// DEC-308 (iter-275, BUG-1): Obsidian does not resolve a bare `[[alias]]` —
+/// aliases feed its link *suggester*, which writes `[[Note|alias]]`. hyalo
+/// reports the link the way Obsidian renders it: broken, but labelled
+/// `via: "alias"` so the reader knows an exact fix exists.
+#[test]
+fn part_b_a_bare_alias_is_broken_by_default_but_labelled_via_alias() {
+    let tmp = alias_vault();
+    let links = links_of(&tmp, "src.md");
+    assert_eq!(links[0].0, "Leah");
+    assert_eq!(links[0].1, None, "a bare alias does not resolve by default");
+    assert_eq!(links[0].3.as_deref(), Some("alias"));
+    assert_eq!(links[1].1, None);
+    assert_eq!(links[1].3.as_deref(), Some("alias"));
+    // The unknown target carries no `via` — nothing declares it.
+    assert_eq!(links[2].1, None);
+    assert_eq!(links[2].3, None);
+
+    let cfg = run_json(&tmp, &["config"]);
+    assert_eq!(cfg["results"]["links"]["aliases"].as_bool(), Some(false));
+}
+
+/// ALIAS-2 (iter-275): the alias map's job in the default mode is to give
+/// `links fix` the one rewrite that is right — Obsidian's own suggester form.
+#[test]
+fn part_b_links_fix_proposes_the_alias_backed_rewrite() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        &tmp,
+        "Leah Ferguson.md",
+        "---\ntitle: Leah Ferguson\naliases:\n  - Leah\n---\n",
+    );
+    write(&tmp, "src.md", "See [[Leah]].\n\nAnd [[Leah|the boss]].\n");
+
+    let out = run_json(&tmp, &["links", "fix", "--dry-run"]);
+    let r = &out["results"];
+    assert_eq!(r["alias_fixes"].as_u64(), Some(2), "{r}");
+    let plans = r["alias_fix_plans"].as_array().unwrap();
+    assert_eq!(plans[0]["strategy"], "Alias", "{r}");
+    assert_eq!(plans[0]["confidence"].as_f64(), Some(1.0), "{r}");
+    assert_eq!(plans[0]["new_target"], "Leah Ferguson.md", "{r}");
+    assert_eq!(
+        plans[0]["emitted_target"], "Leah Ferguson|Leah",
+        "the label is the alias the author wrote: {r}"
+    );
+    // The author's own label survives.
+    assert_eq!(plans[1]["emitted_target"], "Leah Ferguson", "{r}");
+
+    // Plain `--apply` writes them; the fuzzy path is never involved.
+    run_json(&tmp, &["links", "fix", "--apply"]);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("src.md")).unwrap(),
+        "See [[Leah Ferguson|Leah]].\n\nAnd [[Leah Ferguson|the boss]].\n"
+    );
+}
+
+/// ALIAS-4 (iter-275, BUG-2): an ambiguous filename match is still a filename
+/// match — an alias never breaks the tie, in either mode.
+#[test]
+fn part_b_an_ambiguous_stem_is_never_tie_broken_by_an_alias() {
+    for aliases_resolve in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        if aliases_resolve {
+            write(&tmp, ".hyalo.toml", "[links]\naliases = true\n");
+        }
+        write(
+            &tmp,
+            "Plugins/avatar.md",
+            "---\ntitle: Avatar plugin\naliases:\n  - Avatar\n---\n",
+        );
+        write(&tmp, "Themes/Avatar.md", "---\ntitle: Avatar theme\n---\n");
+        write(&tmp, "src.md", "See [[avatar]].\n");
+
+        let links = links_of(&tmp, "src.md");
+        assert_eq!(
+            links[0].1, None,
+            "two files carry the stem, so the link names neither \
+             (aliases_resolve = {aliases_resolve})"
+        );
+    }
+}
+
 #[test]
 fn part_b_alias_links_are_graph_edges_and_are_not_counted_broken() {
-    let tmp = alias_vault();
+    let tmp = alias_vault_with(true);
     let backlinks = run_json(&tmp, &["backlinks", "people/Leah Ferguson.md"]);
     assert_eq!(
         backlinks["results"]["backlinks"][0]["source"]
@@ -177,6 +270,7 @@ fn part_b_alias_links_are_graph_edges_and_are_not_counted_broken() {
 #[test]
 fn part_b_links_fix_never_proposes_a_rewrite_for_a_declared_alias() {
     let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "[links]\naliases = true\n");
     // `Lewuathe.md` is the Obsidian Hub's real fuzzy trap for `[[Leah]]`.
     write(&tmp, "Lewuathe.md", "---\ntitle: Lewuathe\n---\n");
     write(
@@ -200,6 +294,7 @@ fn part_b_links_fix_never_proposes_a_rewrite_for_a_declared_alias() {
 #[test]
 fn part_b_a_filename_beats_an_alias_and_a_shared_alias_is_ambiguous() {
     let tmp = TempDir::new().unwrap();
+    write(&tmp, ".hyalo.toml", "[links]\naliases = true\n");
     write(&tmp, "Leah.md", "---\ntitle: The real Leah\n---\n");
     write(
         &tmp,
@@ -221,7 +316,7 @@ fn part_b_a_filename_beats_an_alias_and_a_shared_alias_is_ambiguous() {
 
 #[test]
 fn part_b_mv_does_not_rewrite_a_link_written_through_an_alias() {
-    let tmp = alias_vault();
+    let tmp = alias_vault_with(true);
     let out = run_json(
         &tmp,
         &["mv", "people/Leah Ferguson.md", "archive/Leah Ferguson.md"],
@@ -251,7 +346,7 @@ fn part_b_links_aliases_false_restores_filename_only_resolution() {
 
 #[test]
 fn part_b_index_and_disk_agree_on_alias_resolution() {
-    let tmp = alias_vault();
+    let tmp = alias_vault_with(true);
     let index = tmp.path().join("vault.hyalo-index");
     let index_str = index.to_str().unwrap();
     hyalo(&tmp)
