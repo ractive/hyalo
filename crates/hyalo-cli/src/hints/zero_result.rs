@@ -547,7 +547,9 @@ mod tests {
         observed_with(&mut ctx, "status", &[("[[Published]]", 3, false)]);
         let hints = zero_result_hints(&ctx);
         assert!(
-            !hints.iter().any(|h| h.description.starts_with("Did you mean")),
+            !hints
+                .iter()
+                .any(|h| h.description.starts_with("Did you mean")),
             "{hints:?}"
         );
     }

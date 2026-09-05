@@ -524,6 +524,10 @@ fn zero_result_body_search(
 /// vocabulary, so naming them all would be noise rather than a correction.
 const MAX_OBSERVED_VALUES: usize = 50;
 
+/// Per-key tally while collecting: files carrying the key, then each rendered
+/// value with its count and whether it is typeable.
+type ObservedBucket = (u64, std::collections::BTreeMap<String, (u64, bool)>);
+
 /// What every key named by an equality `--property` filter actually carries in
 /// the vault: how many files declare it, and its distinct values by frequency.
 ///
@@ -573,8 +577,7 @@ fn observed_property_values(
     keys.extend(roots);
 
     // key -> (files carrying the key, rendered value -> (count, typeable))
-    type Bucket = (u64, std::collections::BTreeMap<String, (u64, bool)>);
-    let mut out: std::collections::BTreeMap<String, Bucket> = keys
+    let mut out: std::collections::BTreeMap<String, ObservedBucket> = keys
         .iter()
         .map(|k| ((*k).to_owned(), (0, std::collections::BTreeMap::new())))
         .collect();
@@ -611,7 +614,11 @@ fn observed_property_values(
             // Most frequent first so the named-values hint leads with what the
             // vault mostly uses; ties keep the deterministic alphabetical order
             // the BTreeMap already gave us.
-            values.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.rendered.cmp(&b.rendered)));
+            values.sort_by(|a, b| {
+                b.count
+                    .cmp(&a.count)
+                    .then_with(|| a.rendered.cmp(&b.rendered))
+            });
             (key, ObservedProperty { files, values })
         })
         .collect()

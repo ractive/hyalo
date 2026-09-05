@@ -82,9 +82,11 @@ pub(crate) fn list_rules(
     // entry and no severity to set; severity comes from the schema itself —
     // and it is not autofixable as a unit, so it carries no override columns.
     let mut results = results;
-    let schema_row_matches = rule_prefix
-        .is_none_or(|p| SCHEMA_PSEUDO_RULE.to_ascii_lowercase().starts_with(&p.to_ascii_lowercase()))
-        && !disabled_only;
+    let schema_row_matches = rule_prefix.is_none_or(|p| {
+        SCHEMA_PSEUDO_RULE
+            .to_ascii_lowercase()
+            .starts_with(&p.to_ascii_lowercase())
+    }) && !disabled_only;
     if schema_row_matches {
         results.push(serde_json::json!({
             "id": SCHEMA_PSEUDO_RULE,

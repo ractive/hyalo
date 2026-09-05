@@ -22,9 +22,6 @@ use crate::dispatch::{
 };
 use hyalo_core::mode_enabled;
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::fn_params_excessive_bools)] // moved verbatim from the dispatch arm
-#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 /// The id the frontmatter/schema findings are reported under, and — since
 /// iter-274 (UX-5) — a selectable `--rule` / `--rule-prefix` value.
 ///
@@ -34,6 +31,9 @@ use hyalo_core::mode_enabled;
 /// catalog and the selectable set agree.
 pub(crate) const SCHEMA_PSEUDO_RULE: &str = "SCHEMA";
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::fn_params_excessive_bools)] // moved verbatim from the dispatch arm
+#[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut CommandContext<'_>,
     file_positional: Vec<String>,

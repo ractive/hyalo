@@ -454,7 +454,10 @@ mod tests {
         let err = parse_property_filter("key=a=b").expect_err("must be rejected");
         let msg = err.to_string();
         assert!(msg.contains("more than one '='"), "{msg}");
-        assert!(msg.contains("key~=/a=b/"), "names the regex spelling: {msg}");
+        assert!(
+            msg.contains("key~=/a=b/"),
+            "names the regex spelling: {msg}"
+        );
         // A regex filter is still the way to match a literal `=`.
         assert!(parse_property_filter("key~=/a=b/").is_ok());
         // An inequality keeps its value verbatim — only `=` is ambiguous.
@@ -473,10 +476,7 @@ mod tests {
             let err = parse_property_filter(input)
                 .err()
                 .unwrap_or_else(|| panic!("{input} must be rejected"));
-            assert!(
-                err.to_string().contains("empty value"),
-                "{input}: {err}"
-            );
+            assert!(err.to_string().contains("empty value"), "{input}: {err}");
         }
         // The spellings that DO express those intents keep working.
         assert!(parse_property_filter("a").is_ok());

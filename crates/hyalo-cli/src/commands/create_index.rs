@@ -45,12 +45,11 @@ pub fn create_index(
         // caller's mistake — envelope and exit 1, not exit 2.
         let canonical_parent = dunce::canonicalize(parent).map_err(|e| {
             hyalo_core::user_error_with(
-                format!(
-                    "output directory does not exist: {}",
-                    parent.display()
+                format!("output directory does not exist: {}", parent.display()),
+                Some(
+                    "create the directory first, or write the snapshot somewhere that exists"
+                        .to_owned(),
                 ),
-                Some("create the directory first, or write the snapshot somewhere that exists"
-                    .to_owned()),
                 Some(e.to_string()),
             )
         })?;

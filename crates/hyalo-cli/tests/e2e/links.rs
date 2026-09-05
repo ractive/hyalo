@@ -6098,7 +6098,6 @@ fn links_text_and_json_buckets_sum_to_broken() {
         .lines()
         .find_map(|l| l.strip_prefix("Low-confidence matches:"))
         .unwrap_or_else(|| panic!("text output has no low-confidence line:\n{text}"))
-        .trim()
         .split_whitespace()
         .next()
         .and_then(|n| n.parse().ok())

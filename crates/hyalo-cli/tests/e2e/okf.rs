@@ -820,11 +820,7 @@ fn okf_index_dangling_marker_dry_run_reports_and_drifts() {
         .unwrap();
     // iter-274 (UX-20): a dry run exits 0; the malformed marker is reported in
     // the envelope (`skipped_markers`), which is what a gate reads.
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "a dry run has not failed"
-    );
+    assert_eq!(out.status.code(), Some(0), "a dry run has not failed");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\"skipped_markers\": 1"),

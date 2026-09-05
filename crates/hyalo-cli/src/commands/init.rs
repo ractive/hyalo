@@ -790,8 +790,10 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     if !root.is_dir() {
         return Err(hyalo_core::user_error_with(
             format!("target directory does not exist: {}", root.display()),
-            Some("pass --dir with a path that exists, or omit it to clean the current directory"
-                .to_owned()),
+            Some(
+                "pass --dir with a path that exists, or omit it to clean the current directory"
+                    .to_owned(),
+            ),
             None,
         ));
     }

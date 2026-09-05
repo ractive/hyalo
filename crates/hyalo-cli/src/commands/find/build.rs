@@ -87,14 +87,13 @@ fn strip_html_comments(heading: &str) -> String {
     let mut rest = heading;
     while let Some(open) = rest.find("<!--") {
         out.push_str(&rest[..open]);
-        match rest[open..].find("-->") {
-            Some(close) => rest = &rest[open + close + 3..],
-            // Unterminated: everything after the opener is comment.
-            None => {
-                rest = "";
-                break;
-            }
-        }
+        // An unterminated `<!--` swallows the rest of the heading, which is
+        // what a renderer does with it too.
+        let Some(close) = rest[open..].find("-->") else {
+            rest = "";
+            break;
+        };
+        rest = &rest[open + close + 3..];
     }
     out.push_str(rest);
     out.trim().to_owned()
@@ -129,10 +128,7 @@ pub(super) fn extract_title_with_source(
             {
                 let cleaned = strip_html_comments(heading);
                 if !cleaned.is_empty() {
-                    return (
-                        serde_json::Value::String(cleaned),
-                        Some(TitleSource::H1),
-                    );
+                    return (serde_json::Value::String(cleaned), Some(TitleSource::H1));
                 }
             }
         }

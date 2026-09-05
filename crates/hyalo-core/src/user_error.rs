@@ -71,7 +71,8 @@ mod tests {
     fn marker_survives_added_context() {
         let err = user_error("invalid glob pattern").context_note();
         assert_eq!(
-            err.downcast_ref::<UserFacingError>().map(|u| u.message.as_str()),
+            err.downcast_ref::<UserFacingError>()
+                .map(|u| u.message.as_str()),
             Some("invalid glob pattern")
         );
     }
