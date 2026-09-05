@@ -67,7 +67,11 @@ pub(crate) const GLOB_FLAG_SHORT_DOC: &str = "Glob(s) relative to --dir, repeata
 pub(crate) const FILES_FROM_FLAG_DOC: &str = "Read file paths from PATH (one per line); use '-' to read from \
      stdin. Mutually exclusive with --file and --glob. Non-.md paths and paths outside the vault \
      are silently skipped. Repo-relative paths with the configured vault dir prefix are resolved \
-     automatically. Input is deduplicated; results follow first-seen order.";
+     automatically. Input is deduplicated; results follow first-seen order.\n\n\
+     MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from \
+     list keeps batch semantics and merely counts a missing entry under files_missing, exit 0. \
+     An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q \
+     does not silence — in a gate, \"no input\" and \"no findings\" must not look alike.";
 
 /// One-line `-h` form of [`FILES_FROM_FLAG_DOC`] (iter-254, HELP-2).
 pub(crate) const FILES_FROM_FLAG_SHORT_DOC: &str =
@@ -491,6 +495,9 @@ pub(crate) struct FindFilters {
     /// when both are ISO dates, and as text only when both are plain strings — a value of a
     /// different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
     /// The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
+    /// K=V tests the RAW frontmatter value, while type binding normalises: a file whose
+    /// `type: ["[[Iteration]]"]` binds to the `Iteration` schema is not matched by
+    /// `--property type=Iteration`. Use `--property 'type~=Iteration'` to span every spelling.
     #[arg(
         short,
         long = "property",
@@ -507,6 +514,10 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tag: Vec<String>,
     /// Task presence: 'todo', 'done', 'any', or a single status character
+    ///
+    /// A FILE filter, not a task projection: it selects files that contain at least one
+    /// matching task, and `--fields tasks` then returns every task in those files, not only
+    /// the matching ones.
     #[arg(long, value_name = "STATUS", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
@@ -551,6 +562,10 @@ pub(crate) struct FindFilters {
     /// CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
     /// restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
     /// hyalo shells out to nothing and has no VCS-specific flag).
+    /// MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from
+    /// list keeps batch semantics and merely counts a missing entry under files_missing, exit 0.
+    /// An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
+    /// does not silence — in a gate, "no input" and "no findings" must not look alike.
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
@@ -1058,6 +1073,8 @@ pub(crate) enum Commands {
     },
     /// Tag operations: summary or bulk rename
     #[command(long_about = "Tag operations across matched files.\n\n\
+        SCOPE: frontmatter `tags:` only. Inline `#body/tags` written in prose are not\n\
+        inventoried by `tags summary` and are not rewritten by `tags rename`.\n\n\
         Subcommands:\n\
         - summary: Unique tags with file counts (read-only).\n\
         - rename: Rename a tag across files (mutates files).\n\n\
@@ -3372,6 +3389,8 @@ pub(crate) enum TagsAction {
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
+        SCOPE: frontmatter `tags:` only — an inline `#body/tag` written in prose is left\n\
+        untouched.\n\n\
         NESTED TAGS: renaming a parent renames its whole subtree (Obsidian\n\
         semantics) — `--from music --to audio` also moves `music/genres` to\n\
         `audio/genres`, and works even when the bare `music` tag appears\n\

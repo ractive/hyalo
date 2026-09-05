@@ -380,8 +380,6 @@ const FIND_FIELD_ORDER: &[&str] = &[
     "tasks",
     "links",
     "backlinks",
-    "matches",
-    "score",
 ];
 
 /// Keys that ride along with a `--fields` field rather than being selectable
@@ -390,7 +388,13 @@ const FIND_FIELD_ORDER: &[&str] = &[
 ///
 /// iter-267 (DEC-283): `title_source` is emitted whenever `title` is, and
 /// naming it in the footer would imply `--fields title_source` works.
-const FIND_COMPANION_KEYS: &[&str] = &["title_source"];
+///
+/// iter-274 (BUG-27): `matches` and `score` joined it. Both ride along with a
+/// body search and neither is selectable — `--fields score` is rejected with
+/// "unknown field" — so listing them in a footer that reads as the `--fields`
+/// vocabulary broke the DEC-275 round-trip promise: everything the footer
+/// names must be nameable back.
+const FIND_COMPANION_KEYS: &[&str] = &["title_source", "matches", "score"];
 
 /// The `fields:` footer under a `--format text` find listing (iter-252).
 ///
@@ -425,9 +429,7 @@ fn find_fields_summary(results: &serde_json::Value) -> Option<String> {
     let missing: Vec<&str> = FIND_FIELD_ORDER
         .iter()
         .copied()
-        .filter(|k| {
-            !first.contains_key(*k) && !matches!(*k, "matches" | "score" | "properties_typed")
-        })
+        .filter(|k| !first.contains_key(*k) && *k != "properties_typed")
         .collect();
     let mut line = format!("fields: {}", present.join(", "));
     if !missing.is_empty() {
