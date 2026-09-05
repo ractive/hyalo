@@ -1607,7 +1607,7 @@ pub(crate) fn resolve_effective(
 /// auto-derived value is the difference between a vault of resolved links and
 /// a vault of broken ones (iter-203, dogfood UX-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SitePrefixSource {
+pub enum SitePrefixSource {
     /// From the `--site-prefix` CLI flag.
     Flag,
     /// From `site_prefix = "…"` in `.hyalo.toml`.

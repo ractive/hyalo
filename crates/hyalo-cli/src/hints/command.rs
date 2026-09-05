@@ -34,7 +34,7 @@ pub(super) fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     // command that printed it. Threaded on the same terms as `--dir` and
     // `--format`, and only onto commands that declare the flag.
     if let Some(prefix) = &ctx.site_prefix
-        && command_accepts_site_prefix(parts)
+        && site_prefix_is_global()
     {
         parts.push("--site-prefix".to_owned());
         parts.push(shell_quote(prefix));
@@ -77,31 +77,20 @@ fn command_accepts_index(parts: &[String]) -> bool {
     cmd.get_arguments().any(|a| a.get_long() == Some("index"))
 }
 
-/// Whether the `hyalo` (sub)command spelled by `parts` accepts
-/// `--site-prefix`.
+/// Whether `--site-prefix` reaches every subcommand.
 ///
-/// The flag is `global = true`, so clap attaches it to every subcommand and
-/// this is effectively always true — the check is kept so a future
-/// de-globalisation cannot silently produce hints that fail to parse.
-fn command_accepts_site_prefix(parts: &[String]) -> bool {
+/// The flag is declared `global = true` on the root command, so clap accepts
+/// it after any subcommand name. The check reads that declaration rather than
+/// assuming it, so de-globalising the flag turns the threading off instead of
+/// producing hints that fail to parse. Deliberately *not* a per-subcommand
+/// `get_arguments()` walk: clap propagates globals into subcommands only after
+/// the whole command tree is built, so such a walk answers `false` for every
+/// subcommand and silently drops the flag.
+fn site_prefix_is_global() -> bool {
     use clap::CommandFactory;
-
-    let mut cmd = crate::cli::args::Cli::command();
-    for token in parts.iter().skip(1) {
-        if token.starts_with('-') {
-            break;
-        }
-        let Some(sub) = cmd
-            .get_subcommands()
-            .find(|s| s.get_name() == token || s.get_all_aliases().any(|a| a == token))
-            .cloned()
-        else {
-            break;
-        };
-        cmd = sub;
-    }
-    cmd.get_arguments()
-        .any(|a| a.get_long() == Some("site-prefix"))
+    crate::cli::args::Cli::command()
+        .get_arguments()
+        .any(|a| a.get_long() == Some("site-prefix") && a.is_global_set())
 }
 
 /// Push the graph/title filters that scope a `find` query (`--broken-links`,

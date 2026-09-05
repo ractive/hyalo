@@ -206,6 +206,9 @@ and this project adheres to
 - A bare `[[alias]]` naming a note's frontmatter `aliases:` is now reported **broken** by default, the way Obsidian renders it (DEC-308, amends DEC-296) — `[links] aliases` defaults to `false`; set it `true` for vaults running the Alias Linker plugin to restore iteration 272's resolution. `links fix` gains an `alias_fixes` bucket that plans Obsidian's own suggester rewrite (`[[Leah]]` → `[[Leah Ferguson|Leah]]`, confidence 1.0, written by plain `--apply`, never fuzzy), `find` labels such links `via: "alias"` whether or not they resolved (BUG-32), an ambiguous stem is never tie-broken by an alias (BUG-2), and an alias collision reports its `candidates` in `links fix` and in HYALO006's message (BUG-26).
 - `cargo run -p xtask -- check-jq-recipes` now FAILS on a shipped mutating recipe that lacks `--dry-run` instead of appending one before running it; every mutating example in the shipped skill and rule templates carries `--dry-run` in its text (BUG-6)
 - `required = ["title"]` means present and non-empty, not `string` — `title: 2024` passes `lint` and `set --validate` under a required-only schema; `type = "string"` is the explicit opt-in (DEC-312, BUG-42)
+- A fuzzy match whose runner-up scores within a narrow margin has its confidence damped below the apply floor, so a contested guess is reported for review rather than written by `--apply-fuzzy` (DEC-319).
+- `links fix`'s site_prefix warning says when the offending prefix was auto-derived from the directory name rather than configured.
+- `find --broken-links --format text` prints only each file's broken links. JSON keeps the full inventory with its per-link `path`/`broken_anchor` verdicts.
 
 ### Removed
 
@@ -411,6 +414,16 @@ and this project adheres to
 - ordered-list tasks (`1. [ ]`, `2) [x]`) and markers followed by more than one space (`-  [ ]`) are tasks for `--fields tasks`, `summary` and `task toggle` (BUG-40)
 - `summary`s near-duplicate-value warning requires a real similarity (at most a third of the shorter value differing, both at least four characters) and at least ten files carrying the property, so unrelated short values no longer get a confident "did you mean" (BUG-44)
 - `lint-rules show SCHEMA` prints no `lint-rules set` hint for a non-configurable rule (BUG-27); `--help` describes exit 2 as a usage or internal error per DEC-307 (BUG-29); `--index --help` and DEC-302 put the stale-index blind spot at ~2 s (BUG-30); `mv --help` says why `--on-conflict` has no `overwrite` (UX-3); `set --help` documents the scalar coercion table (G5)
+- A bulk write phase (`lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename`, `tags rename`) pays the durability fsync once per directory instead of once per file, and runs its rewrites in parallel (DEC-317). The Obsidian Hub's `lint --fix` went from 48.1 s to 2.35 s. Every write is still atomic; a phase of 8 files or fewer, and every single-file mutation, keep the full per-file guarantee.
+- Link resolution answers "does this path exist?" from the in-memory file set whenever the case index covers the whole vault, instead of stat-ing the filesystem once per candidate. Site-absolute resolution on a large indexed corpus no longer leaves the snapshot.
+- `summary --index` reports the same `skipped` count — and the same per-directory attribution — as a disk scan: the snapshot now records the files whose frontmatter would not parse. Snapshot format version 2; an older index is refused with a named version pair and the run falls back to disk.
+- `summary.orphans`/`summary.dead_ends` and `find --orphan`/`find --dead-end` share one edge definition (DEC-318). A note whose only outbound link is an image was a dead end to one and a linked note to the other.
+- `links fix` reports `broken_anchors` as the count `find --broken-links` computes, instead of a hard-coded 0 whenever any target was broken.
+- `links fix`'s "stripped 0 of N" and "skipped fuzzy scoring for M" warnings count the same set of site-absolute links; M could previously exceed N.
+- Every entry in `links fix`'s `fuzzy_fixes` carries `emitted_target`, including the below-floor proposals the bucket exists to show.
+- Hints thread `--site-prefix` when it was given on the CLI, so a follow-up command answers the same question as the one that printed it.
+- The `find --broken-links` hint no longer offers `links fix` when every genuinely broken link is site-absolute: external URIs carry a null `path` but are not broken and used to out-vote them.
+- `find --index --file <missing>` reports the missing file without a spurious "index older than vault" warning first, and the stale-index warning names which probe fired (a directory mtime, or a specific file).
 
 ### Added
 
@@ -442,6 +455,9 @@ and this project adheres to
 - `hyalo lint --rule SCHEMA` / `--rule-prefix SCHEMA` run the frontmatter schema pass alone, and `lint-rules list`/`show` carry a non-configurable `SCHEMA` row (UX-5). `lint --fix` JSON gains `rules_fixed: {rule: n}` (UX-13).
 - the snapshot index carries a format version; one written by an older binary is refused with a warning naming both versions and the run falls back to disk. `hyalo config` reports `snapshot_format_version` and `summary --index` reports the snapshot`s own `index_format_version` (BUG-12, G4)
 - bulk `set`/`append`/`remove` envelopes carry `skipped_detail`, listing every scanned-but-unwritten file with a reason (`unchanged`, `unparsable`), so a same-value write is distinguishable from a refusal (UX-1)
+- Long write phases report progress on stderr past a few hundred files, so a bulk rewrite no longer reads as a hang. `-q` silences it.
+- CommonMark autolinks (`<https://…>`, `<obsidian://…>`) are inventoried in `--fields links` as `external`, so an external-target histogram is complete.
+- `hyalo find <existing-file.md>` with no other filters hints both the `--file` form and `hyalo read` instead of answering "No results".
 
 ## [0.21.0] - 2026-08-28
 

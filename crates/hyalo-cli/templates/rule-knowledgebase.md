@@ -375,6 +375,42 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `skipped_detail` (`{file, reason}` with `unchanged` or `unparsable`), so a same-value write is
   distinguishable from a refusal; and `summary`'s near-duplicate-value warning needs a real
   similarity and at least ten files carrying the property before it speaks.
+- **A bulk write is durable per directory, not per file** (DEC-317, iter-277): `lint --fix`,
+  `mv`, `links fix --apply`, `set`/`append`/`remove --glob`, `properties rename` and
+  `tags rename` still replace every file atomically (temp file + `rename`), but a phase
+  writing more than 8 files fsyncs each touched *directory* once at the end instead of every
+  file before its rename. On macOS that barrier is `F_FULLFSYNC`, ~5.5 ms per file whatever
+  its size — the Obsidian Hub's `lint --fix` fell from 48.1 s to 2.35 s. A phase past a few
+  hundred files reports progress on stderr; `-q` silences it. Single-file mutations keep the
+  full guarantee.
+- **One graph, one answer** (DEC-318, iter-277): `summary.orphans`/`summary.dead_ends` and
+  `find --orphan`/`find --dead-end` share one edge predicate. An external URI, a same-file
+  anchor and any target with an explicit non-`.md` extension are not note-graph edges —
+  including a *broken* `![[missing.png]]`, which resolution could never have matched to a
+  note anyway. It is still a broken link and still reported by `find --broken-links`.
+- **A contested fuzzy match is damped, not applied** (DEC-319, iter-277): when a fuzzy
+  winner beats its runner-up by only a narrow margin its confidence is scaled down below the
+  0.8 floor, so it is listed in `fuzzy_fixes` for review instead of written by
+  `--apply-fuzzy`. Every `fuzzy_fixes` entry — below-floor ones included — carries
+  `emitted_target`, and `links fix`'s `broken_anchors` is now always the count
+  `find --broken-links` computes rather than 0 whenever a target was broken.
+- **Hints keep `--site-prefix`** (iter-277): a `--site-prefix` given on the CLI is threaded
+  into every hint, like `--dir`, `--format` and `--index-file`, so the follow-up answers the
+  same question. `hyalo config` reports `site_prefix_source`, and `links fix` says
+  "derived from the directory name" when the prefix that stripped nothing was never set.
+- **Read-side polish** (iter-277): `find --broken-links --format text` prints only each
+  file's broken links (JSON keeps the full inventory); CommonMark autolinks
+  (`<https://…>`, `<obsidian://…>`) are inventoried as `external`; `K!=V` tests a *value*,
+  so a file lacking K entirely does not match — use `!K` for absence; and
+  `summary --index` reports the same `skipped` count as a disk scan (snapshot format v2, so
+  rebuild an older index).
+- **Link-kind histogram and missing images** (iter-277, G6): the whole external/attachment
+  picture in one query, no new flag —
+  `hyalo find --fields links --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
+  counts every link by kind (`wikilink`, `embed`, `markdown`, `frontmatter`, `external`,
+  `attachment`), and
+  `hyalo find --fields links --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+  lists every image or embed that resolves to nothing, as `file:line target`.
 
 Fall back to Edit for body prose changes, Write for new files, and Read when
 hyalo doesn't cover the operation (e.g., reading raw markdown for rewriting).

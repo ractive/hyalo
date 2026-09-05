@@ -5685,3 +5685,144 @@ false` vault-wide would switch the rule off in the one place it earns its keep.
 **Where:** `CODE_BLOCK_AWARE_RULE_IDS` in `hyalo_mdlint::engine`,
 `rules::spans`. See
 [[iterations/iteration-276-autofix-config-and-index-honesty]].
+
+## DEC-317: a bulk write phase trades the per-file durability fsync for one per directory (2026-09-05)
+
+**Decision:** Every hyalo write is still atomic: a temp file in the destination
+directory, then a `rename` into place. What a *bulk* phase — more than
+`DURABLE_BATCH_MAX` (8) files in one `lint --fix`, `mv`, `links fix --apply`,
+`set`/`append`/`remove --glob`, `properties rename` or `tags rename` — no
+longer pays is the per-file `sync_all` before that rename. Instead each touched
+directory is fsynced once when the phase's `WritePhase` guard drops. A
+single-file mutation, and any phase at or below the threshold, keeps the full
+guarantee unchanged.
+
+**Why.** On macOS `File::sync_all` is `fcntl(F_FULLFSYNC)`, a whole-device
+barrier that costs ~5.5 ms regardless of how many bytes were written, and it
+does not amortize across threads — measured on APFS: 5.25 ms/file serial,
+4.08 ms/file on four threads, 4.78 ms on sixteen. That barrier was the entire
+cost of the 49 s the Obsidian Hub's `lint --fix` took (iteration 271 added it;
+BUG-14 of the post-batch dogfood reported the consequence). Parallelising the
+phase, which iteration 277 also did, could never have reached the ≤ 10 s target
+on its own. Measured after: 48.11 s → 2.35 s on the same corpus.
+
+The guarantee actually given up is durability against power loss or kernel
+panic *during* a bulk rewrite, and only for files already renamed. Atomicity —
+no reader and no crashed process ever sees a truncated note — is untouched,
+because `rename` is atomic without any fsync. The trade is deliberate: a bulk
+rewrite is a reproducible operation over version-tracked markdown, recovered by
+running the command again, whereas an interactive `set one.md` is the moment a
+user might plausibly pull the plug next, and that one still pays the barrier.
+
+On Windows a directory handle cannot be fsynced at all, so `sync_parent_dir` is
+already a no-op there and a bulk phase rests on the filesystem's own ordering;
+atomicity is identical on both platforms.
+
+The phase is installed ambiently (a process-global guard) rather than threaded
+as a parameter, matching `discovery::set_scan_exclude`,
+`warn::set_verbose_skips` and `discovery::set_link_aliases`: the write sites sit
+five commands deep, several of them inside rayon workers, and a parameter would
+have touched every signature between them for no behavioural difference.
+
+**Where:** `fs_util::{WritePhase, write_no_dir_sync}`, `link_rewrite::
+execute_plans{,_partial}`, `commands::lint::engine`, `commands::{set, remove,
+append, properties, tags}`. See
+[[iterations/iteration-277-link-graph-parity-and-write-performance]].
+
+## DEC-318: attachment and external references are not note-graph edges, and one predicate says so (2026-09-05) — amends DEC-297
+
+**Decision:** `summary.orphans` / `summary.dead_ends` and `find --orphan` /
+`find --dead-end` answer the same question through the same function,
+`types::is_note_graph_edge`. A target is an edge unless it is an external URI,
+the empty self-anchor marker, or carries an explicit non-`.md` extension. The
+extension rule applies whether or not the attachment exists: resolution never
+crosses an explicit extension (DEC-266), so `![[missing.png]]` names an
+attachment either way. It remains a **broken link** — `find --broken-links`,
+`summary.links.broken` and HYALO006 all still report it (DEC-297 stands); it is
+simply not a link to another note.
+
+**Why.** The link graph excluded attachments by asking its own case index
+whether the target resolved to one — and the graph's index holds notes only, so
+the exclusion fired for `find` (whose index includes attachments) and never for
+`summary`. A note whose single outbound link was `![[real.png]]` was therefore a
+dead end to one command and a linked note to the other (BUG-16; 25 such files on
+MDN). Rebuilding the graph's index with the vault's attachments would have cost
+a second disk walk on every scanning command; a predicate that needs neither
+index nor filesystem cannot drift between call sites at all.
+
+`find --help` already promised that external and attachment links "are not graph
+edges", so making `summary` agree with the documented contract was the default
+choice the iteration plan named.
+
+**Where:** `types::is_note_graph_edge`, `link_graph::insert_file_links`,
+`commands::find` (`has_real_outbound`). See
+[[iterations/iteration-277-link-graph-parity-and-write-performance]].
+
+## DEC-319: a contested fuzzy match is damped below the floor, not declined (2026-09-05)
+
+**Decision:** When a fuzzy winner beats its runner-up by less than
+`CONTESTED_DELTA` (0.05) but more than `TIE_DELTA` (0.01), its reported
+confidence is scaled by `margin / CONTESTED_DELTA` instead of being reported at
+face value. A contested guess therefore lands below the 0.8 apply floor and is
+listed in `fuzzy_fixes` for review rather than written by `--apply-fuzzy`. A
+runner-up inside `TIE_DELTA` still declines outright, and an uncontested winner
+keeps its score untouched.
+
+**Why.** The composite score says how good the winner looks; it says nothing
+about how many other notes look almost as good. On the Obsidian Hub `[[Cat]]`
+scored 0.87 against `CatMuse.md` with five other `cat*` notes present,
+`[[jamesb]]` scored 0.885 against `jamesgreenblue.md` with eight `james*` notes,
+and on a directory-index corpus `…/tabindex` scored 0.9125 against
+`global_attributes/index.md` — all above the floor, all wrong, all written by
+`--apply-fuzzy` (BUG-18). Declining them outright would have hidden proposals a
+human might still want; damping keeps them visible while taking them out of the
+automatic path. `[[Obsidian Publish.]]` → `Obsidian Publish.md` at 1.0, whose
+runner-up is nowhere near, is unaffected.
+
+**Where:** `link_fix::LinkMatcher::find_match`. See
+[[iterations/iteration-277-link-graph-parity-and-write-performance]].
+
+## DEC-320: no `[links] slug_map`; MDN's encoded slugs stay unresolved (2026-09-05)
+
+**Decision:** Won't do. MDN encodes reserved characters in its directory names
+(`:` → `_colon_`, `*` → `_star_`, `::` → `_doublecolon_`), so 267 of the 450
+site-absolute links its corpus leaves unresolved would resolve through a
+character-substitution table. hyalo will not grow a `[links] slug_map` config
+key for it.
+
+**Why.** A substitution table is one corpus's URL-building convention, not a
+markdown or Obsidian one, and it is applied by MDN's *site generator* rather
+than written by any author. Encoding it in `.hyalo.toml` puts a rendering
+pipeline's private escaping rules inside a vault-shape config that every other
+knowledgebase would carry and never set — and the table is open-ended, so the
+first vault whose generator escapes one more character reopens the question. The
+267 links are correctly reported as unresolved: on disk there is no file at the
+path the link names.
+
+A vault that genuinely needs this can normalise the links themselves once
+(`links fix` is not the tool; a one-line `sed` over the corpus is), or point
+`site_prefix` at the encoded tree. The count stays in the dogfood report as a
+known, explained gap.
+
+**Where:** no code. See
+[[iterations/iteration-277-link-graph-parity-and-write-performance]].
+
+## DEC-321: no basename fallback into `**/x/index.md` (2026-09-05)
+
+**Decision:** Won't do. On a directory-index corpus a broken `[[Anchor_positioning]]`
+would resolve to `guides/anchor_positioning/index.md` under a basename fallback
+that matched a *directory* name rather than a file stem. It scores 0.76 today
+and stays below the floor.
+
+**Why.** Candidate generation already tries `<target>.md` and
+`<target>/index.md` against real paths (iteration 203), which is the honest,
+unambiguous form of this. Matching a bare stem against every directory basename
+in the vault is a different operation: on MDN it makes almost every one-word
+link a candidate for some directory somewhere, and it is exactly the
+"throw away the location the author wrote" case the composite scorer was built
+to penalise (DEC-098's `/actions` → `graphql/reference/actions.md`). DEC-319,
+shipped in the same iteration, moves in the opposite direction — fewer
+above-floor guesses, not more.
+
+**Where:** no code; `link_score` weighting unchanged. See
+[[iterations/iteration-277-link-graph-parity-and-write-performance]].

@@ -373,8 +373,15 @@ fn links_fix_warns_when_site_prefix_strips_nothing_plausible() {
         .unwrap();
     let derived_stderr = String::from_utf8_lossy(&derived.stderr);
     assert!(
-        derived_stderr.contains("site_prefix 'en-us' stripped 0 of"),
+        derived_stderr.contains("site_prefix 'en-us'") && derived_stderr.contains("stripped 0 of"),
         "expected the misconfiguration warning, naming the prefix: {derived_stderr}"
+    );
+    // UX-9 (iter-277): this prefix was never configured — it is the vault
+    // folder's own name. Say so, or the advice to "check --site-prefix" reads
+    // as if the reader had set one.
+    assert!(
+        derived_stderr.contains("derived from the directory name"),
+        "an auto-derived prefix must say where it came from: {derived_stderr}"
     );
     assert!(
         derived_stderr.contains("--site-prefix"),
