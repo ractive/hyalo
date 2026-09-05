@@ -260,7 +260,8 @@ pub(crate) struct CommandContext<'a> {
     /// this costs no extra I/O; `run.rs` copies it into the hint context so the
     /// zero-result did-you-mean can be computed without a second scan. Empty
     /// for every command other than an empty `find`.
-    pub zero_result_values: std::collections::BTreeMap<String, Vec<String>>,
+    pub zero_result_values:
+        std::collections::BTreeMap<String, crate::hints::ObservedProperty>,
     /// A `--property K~=RE` filter whose regex matched no frontmatter value but
     /// *does* match body prose, confirmed by the bounded probe `find` runs on
     /// the zero-result path (iter-258). `run.rs` moves it into the hint context

@@ -130,6 +130,48 @@ pub enum HintSource {
     LintRulesShow,
 }
 
+/// One distinct frontmatter value a zero-result `find` scan saw for a filtered
+/// property key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedValue {
+    /// How the value reads in a hint — a scalar as written, a list as
+    /// `[[Published]]`, a YAML null as `null`.
+    pub rendered: String,
+    /// How many files carry this value.
+    pub count: u64,
+    /// Whether the value can be typed back into `--property K=V`. Only scalars
+    /// can, so only they are offered as did-you-mean corrections.
+    pub typeable: bool,
+}
+
+/// What a zero-result `find` scan saw for one filtered property key.
+///
+/// iter-274 (BUG-17): the zero-result hint used to say "No file has a `status`
+/// property" whenever it collected no *typeable* value — which is exactly what
+/// happens on a vault whose `status:` values are YAML nulls or wikilink lists
+/// (`status: [[Published]]` is a nested flow sequence, not a scalar). Key-absent
+/// and value-absent are different diagnoses and now read differently.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObservedProperty {
+    /// Files carrying the key at all, whatever its value — a YAML null and a
+    /// list both count.
+    pub files: u64,
+    /// Distinct values, most frequent first, capped by the scan.
+    pub values: Vec<ObservedValue>,
+}
+
+impl ObservedProperty {
+    /// The values that can be typed back into `--property K=V`.
+    #[must_use]
+    pub fn typeable_values(&self) -> Vec<String> {
+        self.values
+            .iter()
+            .filter(|v| v.typeable)
+            .map(|v| v.rendered.clone())
+            .collect()
+    }
+}
+
 /// Which snapshot index a `find` query used, for re-emission in derived hints.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FindIndexHint {
@@ -240,11 +282,11 @@ pub struct HintContext {
     /// `[lint] profiles` in `.hyalo.toml`. When true the `okf` validate hint
     /// drops the redundant `--profile okf` flag (plain `hyalo lint` runs it).
     pub okf_profile_active: bool,
-    /// Distinct frontmatter values observed for each property key named by a
+    /// Frontmatter values observed for each property key named by a
     /// `--property K=V` filter, collected by the `find` scan when it matched
     /// nothing (iter-251). Feeds the zero-result did-you-mean and the
     /// "values of `K` in this vault" hint; empty on every non-empty result.
-    pub observed_property_values: std::collections::BTreeMap<String, Vec<String>>,
+    pub observed_property_values: std::collections::BTreeMap<String, ObservedProperty>,
     /// Set when a zero-result `find` carried a `--property K~=RE` filter whose
     /// regex matches body text somewhere in the vault (iteration 258).
     /// Confirmed by a bounded body probe on the zero-result path, never
