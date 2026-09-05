@@ -11,7 +11,7 @@ tags:
   - lint
   - config
   - dogfooding
-branch: iter-274/hints-help-and-contract-polish
+branch: iter-274/hints-help-contract-polish
 priority: 4
 related:
   - "[[dogfood-results/dogfood-v0220-post-batch-261-270]]"
