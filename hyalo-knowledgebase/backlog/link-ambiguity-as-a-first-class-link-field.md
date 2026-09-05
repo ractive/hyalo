@@ -5,9 +5,6 @@ date: 2026-09-05
 status: planned
 priority: medium
 origin: "iter-277 GRAPH-4 (G3 of the post-batch-271-274 dogfood report), deferred 2026-09-05"
-related:
-  - "[[iterations/iteration-277-link-graph-parity-and-write-performance]]"
-  - "[[decision-log]]"
 ---
 
 ## Problem

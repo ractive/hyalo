@@ -154,6 +154,84 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       yields the same count as the command that printed it.
 - [ ] Gates green; changelog; DECs.
 
+## Outcome
+
+Shipped as PR against `iter-277/link-graph-parity-and-write-performance`. Five DECs
+(317–321), 16 changelog entries, 14 new e2e tests in
+`crates/hyalo-cli/tests/e2e/iteration277_graph_parity_and_write_perf.rs`.
+
+### Performance — measured, before and after
+
+`BEFORE` is `origin/main` built into a worktree; `AFTER` is this branch. Both release
+builds, same machine (macOS / APFS), corpora copied fresh for each write run.
+
+**Write phase (Obsidian Hub, 6 437 files)**
+
+| operation | before | after | target |
+|---|---|---|---|
+| `lint --fix` | 48.11 s | **2.35 s** | ≤ 10 s |
+
+The 2190-backlink `mv` could not be reproduced as a timing case: the Hub's most-linked note
+completes in 0.03 s on *both* binaries, because a single-file `mv` rewrites only the files
+that link to it and that set is small enough (≤ 8 files in the sampled case) to stay on the
+durable path. The `lint --fix` figure is the honest measurement of the same cost.
+
+Root cause, established before the fix (PERF-1): `File::sync_all` on macOS is
+`fcntl(F_FULLFSYNC)` at **5.5 ms per file regardless of size**, and it does **not** amortize
+across threads — 5.25 ms/file on one thread, 4.08 ms on four, 4.78 ms on sixteen. Parallelising
+the rewrite phase, which this iteration also did, could never have reached the target alone;
+DEC-317 (one durability fsync per touched directory, atomicity untouched) is what did.
+
+**Site-prefix resolution (MDN, `files/en-us`, 14 375 files, `--site-prefix en-US/docs`)**
+
+| operation | before | after | target |
+|---|---|---|---|
+| `summary --index` | 4.47 s | **2.42 s** | ≤ 0.8 s |
+| `find --broken-links --count` | 4.75 s | **1.71 s** | ≤ 0.6 s |
+| `create-index` | 3.08 s | **2.59 s** | ≤ 4 s |
+
+Roughly halved, but the two aggressive targets were **not** met. Two rounds were needed: the
+first (exact-path membership only) bought 11 %, because MDN writes `/en-US/docs/Web/CSS/...`
+against lowercase directories, so almost every link missed the exact-path check and fell
+through to the filesystem anyway. Resolving the *case-folded* hit from the index too — which
+returns the identical canonical path the disk probe would have — is what produced the numbers
+above. What remains is not filesystem work: it is the per-link allocation in `resolve_target`
+(`replace`, `strip_site_prefix`, `to_ascii_lowercase` per probe, `format!` for the `.md` and
+`/index.md` candidates) across ~51 000 links and three probes each. Reducing that means a
+borrow-based resolution path, which is its own iteration — filed as a follow-up rather than
+rushed in beside a write-safety change.
+
+**Parity held throughout.** On MDN, disk and `--index` report identical
+`find --broken-links` totals (1 370) and identical `summary` (orphans 3 446, dead ends 854,
+files 14 375 with the same per-directory breakdown).
+
+### Graph parity
+
+`summary.orphans` == `find --orphan --count` == **3 446** and `summary.dead_ends` ==
+`find --dead-end --count` == **854** on MDN, through the one predicate DEC-318 introduced
+(`types::is_note_graph_edge`). The root cause was not what the plan guessed: the link graph
+*did* exclude attachments, but by asking its own case index — which holds notes only — whether
+the target resolved to one. The exclusion therefore fired for `find` and never for `summary`.
+A predicate needing neither index nor filesystem cannot drift between call sites at all.
+
+### Deferred
+
+- **GRAPH-4** (`ambiguous` + `candidates` on every link record) →
+  [[backlog/link-ambiguity-as-a-first-class-link-field]]. The reporting half is small; the
+  plan's real requirement — that `mv`, `backlinks` and HYALO006 read the same field — is a
+  cross-module convergence of the same shape DEC-318 turned out to be, and shipping only the
+  reporting half would have added a *fourth* place that computes ambiguity.
+- **FIX-3** and **FIX-4** closed as won't-do (DEC-321, DEC-320), which the plan named as
+  acceptable outcomes for both.
+
+### Gates
+
+`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace -q`, and every xtask `check-*` gate
+(`check-feature-fanout`, `check-help-drift`, `check-command-reference`,
+`check-bundled-skills`, `check-pi-package-sync`, `check-jq-recipes` — 42 recipes,
+`check-mutation-journal`) all green.
+
 ## Links
 
 - [[dogfood-results/dogfood-v0220-post-batch-271-274]] — BUG-13, 14, 15, 16, 17, 18, 24, 45, 46, 47; UX-6, 8, 9, 10, 11, 12, 13; G1, G2, G3, G6
