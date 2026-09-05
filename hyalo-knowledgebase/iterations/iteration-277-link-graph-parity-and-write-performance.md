@@ -31,7 +31,7 @@ Rules: **no new CLI flags** (the four gaps close as DEC won't-do, a `--jq` recip
 key, never a flag); measure before and after on the Hub and MDN and record the numbers in the
 Outcome; WIP commit after each part; leftovers to `backlog/`.
 
-## Part A — Write performance (BUG-14)
+## Part A — Write performance (BUG-14) [3/3]
 
 - [x] PERF-1: profile one `lint --fix` on a Hub copy and one 2190-backlink `mv`; confirm the
       per-file temp+fsync+rename path from iteration 271 is the cost (report: 8–11 ms per
@@ -45,7 +45,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
 - [x] PERF-3: a progress line on stderr (`-q`-silenced) once a write phase passes a few
       hundred files, so 49 s of silence never reads as a hang.
 
-## Part B — `site_prefix` resolution from memory (BUG-13, 24)
+## Part B — `site_prefix` resolution from memory (BUG-13, 24) [2/2]
 
 - [x] PREFIX-1: `classify_link`/site-absolute resolution consults the in-memory file set (the
       scan's or the snapshot's) instead of `Path::is_file()`; on the snapshot path no
@@ -56,7 +56,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       `summary --index` matches the disk scan (Hub 1, kepano 28) and keeps the skipped
       directory row.
 
-## Part C — One graph, one answer (BUG-16, 45, 46; G3)
+## Part C — One graph, one answer (BUG-16, 45, 46; G3) [3/4]
 
 - [x] GRAPH-1 (BUG-16): `summary`, `find --orphan` and `find --dead-end` share one edge
       definition. Decide in a DEC whether attachment links are edges (the report's 25 MDN
@@ -72,7 +72,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       stem or alias collides, so ambiguous and missing can be told apart without `links fix`;
       `mv`, `backlinks` and HYALO006 read the same field.
 
-## Part D — `links fix` reporting (BUG-17, 18; G2)
+## Part D — `links fix` reporting (BUG-17, 18; G2) [4/4]
 
 - [x] FIX-1 (BUG-17): every `fuzzy_fixes[]` entry carries `emitted_target`, computed by the
       same function as the other buckets (`links fix --help` already promises it).
@@ -91,7 +91,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       slug_map` table in `.hyalo.toml` applied before resolution, reported by `hyalo config`;
       if declined, the DEC says why and the count stays in the report.
 
-## Part E — Hints that keep the answer stable (BUG-15, 47; UX-8, 9, 11, 13)
+## Part E — Hints that keep the answer stable (BUG-15, 47; UX-8, 9, 11, 13) [6/6]
 
 - [x] HINT-1 (BUG-15): every hint threads `--site-prefix <value>` when it was given on the
       CLI, exactly as `--dir`, `--format` and `--index-file` are threaded (UX-2 of the
@@ -112,7 +112,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
 - [x] HINT-6 (UX-11): `hyalo find <existing-file.md>` (positional, no other filters) hints
       the `--file` form and `hyalo read` in one line rather than "No results".
 
-## Part F — Read-side UX (UX-6, 10, 12; G6)
+## Part F — Read-side UX (UX-6, 10, 12; G6) [4/4]
 
 - [x] READ-1 (UX-6): `find --broken-links --format text` prints only the broken links of each
       file (JSON already carries `broken_anchor`/`path: null`; no shape change).
@@ -124,7 +124,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       missing images in `skill-hyalo.md` / `.claude/CLAUDE.md`, validated by
       `check-jq-recipes`; no `--links-kind` flag.
 
-## Shared closing tasks
+## Shared closing tasks [5/5]
 
 - [x] Changelog entries via `hyalo changelog add` (one per part, listing the items).
 - [x] DECs in [[decision-log]]: edge definition (GRAPH-1), fuzzy runner-up margin (FIX-2),
@@ -138,7 +138,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, every xtask `check-*`
       gate, plus `bench-scale` run once locally with the numbers in the Outcome.
 
-## Acceptance criteria
+## Acceptance criteria [3/6]
 
 - [ ] Hub copy: `lint --fix` applied ≤ 10 s (was 49 s), a 2190-backlink `mv` ≤ 5 s (was
       25 s), results byte-identical to the serial path; a progress line appears past a few
@@ -230,6 +230,23 @@ holds for one of the four; the other three are a *scorer* problem — one simila
 rated too highly on its own — and widening the ambiguity margin far enough to catch them would
 damp genuinely unique matches. Recorded in DEC-319 and left for a scorer iteration rather than
 tuned until the four examples happened to pass.
+
+### Review fix: the shared predicate over-generalised the extension rule
+
+`/review-pr` caught a regression in DEC-318's `is_note_graph_edge` before merge, verified
+empirically against an `origin/main` build: a note whose own stem contains a dotted suffix
+(`Foo.v2.md`, linked as `[[Foo.v2]]`) resolves correctly, but the predicate judged
+"attachment" purely from the target's spelling (`v2` looks like an extension), so
+`backlinks Foo.v2.md` came back empty and `find --orphan` / `summary.orphans` called it an
+orphan despite a real inbound link — the exact case the predicate's own doc comment warned
+against, now real. Fixed by making `is_note_graph_edge` take the attachment verdict as a
+caller-supplied fact rather than recomputing it from syntax: `link_graph.rs` restores an
+index-aware `target_is_attachment` (falling back to the syntactic guess only when the index
+has no opinion, which still correctly excludes a broken `![[missing.png]]`), and `find/mod.rs`
+trusts the link's already-resolved `path` when present. A regression test
+(`a_dotted_note_stem_stays_a_graph_edge`) pins it. Also fixed in the same pass: a stray run of
+~30 literal spaces in the "index older than vault" warning string (a missing
+backslash-continuation). Full workspace suite green afterward (2122 e2e).
 
 ### Deferred
 
