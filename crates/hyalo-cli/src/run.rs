@@ -502,6 +502,12 @@ fn resolve_files_from_for_command(
 }
 
 #[allow(clippy::too_many_lines)]
+/// The exit code for a hyalo-own user error (DEC-307). Named so the taxonomy
+/// reads out of the code rather than out of a bare literal.
+const fn return_code_1() -> i32 {
+    1
+}
+
 pub fn run() {
     crate::broken_pipe::install();
     match run_inner() {
@@ -518,11 +524,30 @@ pub fn run() {
                     1
                 }
                 AppError::Internal(err) => {
-                    let s = err.to_string();
-                    if !s.is_empty() {
-                        eprintln!("error: {err}");
+                    // iter-274 (BUG-25): an error carrying the `UserFacing`
+                    // marker is the caller's fault, not a hyalo failure — it
+                    // renders through the same envelope every other user error
+                    // uses and exits 1, so `--format json` stays parseable and
+                    // exit 2 keeps meaning "usage or internal".
+                    if let Some(user) = err.downcast_ref::<crate::error::UserFacing>() {
+                        let msg = crate::output::format_error(
+                            crate::error::error_format(),
+                            &user.message,
+                            None,
+                            user.hint.as_deref(),
+                            user.cause.as_deref(),
+                        );
+                        if !msg.is_empty() {
+                            eprintln!("{msg}");
+                        }
+                        return_code_1()
+                    } else {
+                        let s = err.to_string();
+                        if !s.is_empty() {
+                            eprintln!("error: {err}");
+                        }
+                        2
                     }
-                    2
                 }
                 AppError::Clap(err) => {
                     let code = err.exit_code();
@@ -1427,6 +1452,9 @@ fn run_inner() -> Result<(), AppError> {
     // still governs error envelopes, so a scripted `hyalo read` failure parses
     // like every other command's.
     let error_format = format;
+    // Publish it for the top-level handler, which renders `UserFacing` errors
+    // (iter-274, BUG-25) long after this scope has gone.
+    crate::error::set_error_format(error_format);
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
     let format =

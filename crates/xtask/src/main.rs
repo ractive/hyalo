@@ -5,6 +5,7 @@ mod bundled_skills;
 mod command_reference;
 mod feature_fanout;
 mod help_drift;
+mod jq_recipes;
 mod mutation_journal;
 mod pi_package_sync;
 mod stubs;
@@ -34,6 +35,9 @@ enum Commands {
     /// Gate: verify the vendored `crates/hyalo-cli/templates/pi/` copies
     /// match the canonical `pi-package/` files byte-for-byte.
     CheckPiPackageSync,
+    /// Gate (iter-274, BUG-29): every `--jq` recipe in a shipped document
+    /// executes against this repo's own knowledgebase without a jq error.
+    CheckJqRecipes,
     /// Stub — not yet implemented (iter-142b).
     CheckDeadPrimitives(stubs::StubArgs),
     /// Stub — not yet implemented (iter-142b).
@@ -55,6 +59,7 @@ fn main() {
         Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckPiPackageSync => pi_package_sync::run(),
+        Commands::CheckJqRecipes => jq_recipes::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
         Commands::CheckMutationJournal => mutation_journal::run(),

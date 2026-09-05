@@ -469,7 +469,7 @@ What follows is only what those pages do not say — the behaviour that surprise
   `external` and `attachment` are **never broken** — they stay out of `find --broken-links`,
   `summary.links.broken` and HYALO006, and are not graph edges for `--orphan` / `--dead-end`.
   So bucket broken links with
-  `select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
+  `select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
 - **Frontmatter `aliases:` resolve wikilinks** (DEC-296): `[[Leah]]` finds the note declaring
   `aliases: [Leah]` (list or bare string). A filename or path always wins; an alias claimed by
   two notes is ambiguous, not resolved; matching folds case like DEC-267; `[[alias#Heading]]`
