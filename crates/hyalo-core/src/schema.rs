@@ -1344,8 +1344,8 @@ values = ["active", "archived", "draft"]
             2,
             "only the two explicitly declared constraints"
         );
-        assert!(merged.properties.get("title").is_none());
-        assert!(merged.properties.get("type").is_none());
+        assert!(!merged.properties.contains_key("title"));
+        assert!(!merged.properties.contains_key("type"));
         // Explicit definitions are still preserved.
         assert!(matches!(
             merged.properties.get("date"),
