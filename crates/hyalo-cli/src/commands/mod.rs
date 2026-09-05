@@ -285,6 +285,30 @@ pub(crate) fn single_named_file_unparseable(
     )))
 }
 
+/// Turn "the file you named will not parse" into an error for a *reading*
+/// command (iter-273, DEC-298).
+///
+/// The mutation twin is [`single_named_file_unparseable`], whose message ends
+/// in "nothing was modified" because a write had been asked for. A read has
+/// nothing to undo, so the message states the defect and the diagnostic is
+/// carried in `cause` — the same YAML text the skip summary would have hidden.
+pub(crate) fn named_file_unparseable_outcome(
+    rel: &str,
+    detail: &str,
+    format: Format,
+) -> CommandOutcome {
+    CommandOutcome::UserError(crate::output::format_error(
+        format,
+        &format!("{rel}: unparseable frontmatter"),
+        Some(rel),
+        Some(&format!(
+            "run `hyalo lint --rule HYALO005 --file {rel}` for the full diagnostic, \
+             or drop the path to scan the rest of the vault"
+        )),
+        Some(detail),
+    ))
+}
+
 /// Resolve the set of files to operate on based on `--file` / `--glob` / all files.
 /// Returns a user-error outcome for invalid inputs (e.g. file not found).
 /// A glob that matches no files returns an empty file list with exit 0, not an error.
@@ -439,10 +463,8 @@ pub(crate) fn resolve_index<'a>(
     needs_full_vault: bool,
     options: &ScanOptions<'_>,
 ) -> Result<IndexResolution<'a>> {
-    if let Some(idx) = snapshot {
-        return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)));
-    }
-    let outcome = build_scanned_index(
+    resolve_index_named(
+        snapshot,
         dir,
         files,
         globs,
@@ -450,6 +472,47 @@ pub(crate) fn resolve_index<'a>(
         site_prefix,
         needs_full_vault,
         options,
+        NamedFilePolicy::Skip,
+    )
+}
+
+/// How a scan should treat a file the caller *named* whose frontmatter will not
+/// parse (iter-273, DEC-298).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NamedFilePolicy {
+    /// Historic behaviour: the file is dropped from the result set and folded
+    /// into the end-of-run skip summary (DEC-278).
+    Skip,
+    /// The named path is a promise about *that* file, so an answer that
+    /// silently omits it is a wrong answer: fail the run instead (exit 1).
+    Fatal,
+}
+
+/// [`resolve_index`] with an explicit [`NamedFilePolicy`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_index_named<'a>(
+    snapshot: Option<&'a SnapshotIndex>,
+    dir: &Path,
+    files: &[String],
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions<'_>,
+    named_policy: NamedFilePolicy,
+) -> Result<IndexResolution<'a>> {
+    if let Some(idx) = snapshot {
+        return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)));
+    }
+    let outcome = build_scanned_index_named(
+        dir,
+        files,
+        globs,
+        format,
+        site_prefix,
+        needs_full_vault,
+        options,
+        named_policy,
     )?;
     match outcome {
         ScannedIndexOutcome::Index(build) => {
@@ -473,6 +536,36 @@ pub fn build_scanned_index(
     needs_full_vault: bool,
     options: &ScanOptions<'_>,
 ) -> Result<ScannedIndexOutcome> {
+    build_scanned_index_named(
+        dir,
+        files_arg,
+        globs,
+        format,
+        site_prefix,
+        needs_full_vault,
+        options,
+        NamedFilePolicy::Skip,
+    )
+}
+
+/// [`build_scanned_index`] with an explicit [`NamedFilePolicy`] for files the
+/// caller named by hand.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_scanned_index_named(
+    dir: &Path,
+    files_arg: &[String],
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions<'_>,
+    named_policy: NamedFilePolicy,
+) -> Result<ScannedIndexOutcome> {
+    // Vault-relative paths of the files the caller named by hand, in the order
+    // they resolved. Empty whenever the file list came from a glob or a whole-
+    // vault sweep, so the [`NamedFilePolicy::Fatal`] check below can never fire
+    // for a file the caller did not actually type (iter-273).
+    let mut named_rel: Vec<String> = Vec::new();
     let files: Vec<(PathBuf, String)> = if needs_full_vault {
         // Validate --file arguments even when doing a full-vault scan.
         // Without this, missing files silently produce zero results instead
@@ -494,6 +587,7 @@ pub fn build_scanned_index(
                     e, format, dir,
                 )));
             }
+            named_rel = resolved.into_iter().map(|(_, rel)| rel).collect();
         }
         discovery::discover_files(dir)?
             .into_iter()
@@ -505,11 +599,35 @@ pub fn build_scanned_index(
     } else {
         match collect_files(dir, files_arg, globs, format)? {
             FilesOrOutcome::Outcome(o) => return Ok(ScannedIndexOutcome::Outcome(o)),
-            FilesOrOutcome::Files(f) => f,
+            FilesOrOutcome::Files(f) => {
+                if !files_arg.is_empty() {
+                    named_rel = f.iter().map(|(_, rel)| rel.clone()).collect();
+                }
+                f
+            }
         }
     };
 
     let build = ScannedIndex::build(&files, site_prefix, options)?;
+
+    // DEC-298 (iter-273): a path the caller typed is a promise that the answer
+    // is about *that* file. Dropping it into the skip summary and exiting 0
+    // with `results: []` is indistinguishable, to a script, from "the file
+    // matched no filter" — the exact empty success `set` stopped producing in
+    // iteration 204. A `--files-from` list keeps batch semantics and is
+    // counted instead (DEC-284), which is why the policy is a parameter.
+    if named_policy == NamedFilePolicy::Fatal
+        && let Some(w) = build.warnings.iter().find(|w| {
+            w.message != hyalo_core::index::INVALID_UTF8_INDEX_MESSAGE
+                && named_rel.iter().any(|rel| *rel == w.rel_path)
+        })
+    {
+        return Ok(ScannedIndexOutcome::Outcome(named_file_unparseable_outcome(
+            &w.rel_path,
+            &w.message,
+            format,
+        )));
+    }
 
     // Same distinction `create_index` makes: a warning is the BUG-14
     // invalid-UTF-8 notice (`Other`) or an unparsable-frontmatter skip

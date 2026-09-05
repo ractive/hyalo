@@ -244,6 +244,16 @@ pub(crate) struct CommandContext<'a> {
     /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
     /// the output pipeline as `files_from_counters` in the envelope.
     pub files_from_counters: Option<crate::commands::files_from::FilesFromCounters>,
+    /// `true` when the command's `file` list was produced by `--files-from`
+    /// rather than typed as `--file` / positional arguments (iter-273).
+    ///
+    /// `resolve_files_from_for_command` rewrites `--files-from` into the
+    /// command's `file` field before dispatch, so by the time a handler runs
+    /// the two are indistinguishable — yet they carry opposite contracts
+    /// (DEC-284 / DEC-298): a path the caller typed is a promise the answer is
+    /// about *that* file, while a `--files-from` list is a batch whose
+    /// unusable entries are counted, not fatal.
+    pub file_list_from_files_from: bool,
     /// Distinct frontmatter values observed for each property key named by a
     /// `--property K=V` filter, collected by `find` when the query matched
     /// nothing (iter-251). The index has already been walked at that point, so

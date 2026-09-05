@@ -2323,6 +2323,10 @@ fn run_inner() -> Result<(), AppError> {
         lint_strict: lint_strict_from_config,
         lint_profiles: lint_profiles_active,
         files_from_counters: None,
+        // iter-273: remember *how* the file list arrived, because
+        // `resolve_files_from_for_command` above has already flattened
+        // `--files-from` into the command's `file` field.
+        file_list_from_files_from: files_from_counters.is_some(),
         zero_result_values: std::collections::BTreeMap::new(),
         zero_result_body_search: None,
     };
