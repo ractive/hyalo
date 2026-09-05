@@ -311,13 +311,25 @@ mod tests {
     }
 
     #[test]
-    fn indented_closing_delimiter_closes_frontmatter() {
-        // Lenient closing policy (L-4): `  ---` closes the block.
+    fn indented_closing_delimiter_does_not_close_frontmatter() {
+        // Strict column-0 closing policy (L-4 as tightened by DEC-293,
+        // iter-271): `  ---` is block-scalar content, not a delimiter, so the
+        // scanner stays inside the frontmatter until a real `---` arrives.
+        let mut s = LineScanner::new();
+        assert_eq!(s.classify("---", ""), LineClass::FrontmatterOpen);
+        assert_eq!(s.classify("k: |-", ""), LineClass::Frontmatter);
+        assert_eq!(s.classify("  ---", ""), LineClass::Frontmatter);
+        assert_eq!(s.classify("after: 1", ""), LineClass::Frontmatter);
+        assert_eq!(s.classify("---", ""), LineClass::FrontmatterClose);
+        assert!(matches!(s.classify("body", ""), LineClass::Body(_)));
+    }
+
+    #[test]
+    fn trailing_whitespace_still_closes_frontmatter() {
         let mut s = LineScanner::new();
         assert_eq!(s.classify("---", ""), LineClass::FrontmatterOpen);
         assert_eq!(s.classify("title: X", ""), LineClass::Frontmatter);
-        assert_eq!(s.classify("  ---", ""), LineClass::FrontmatterClose);
-        assert!(matches!(s.classify("body", ""), LineClass::Body(_)));
+        assert_eq!(s.classify("---  ", ""), LineClass::FrontmatterClose);
     }
 
     #[test]

@@ -159,11 +159,57 @@ fn describe_budget_breach(
     }
 }
 
-/// Build `SerializerOptions` that preserve the detected list indentation style.
-fn hyalo_serializer_options(compact_list_indent: bool) -> SerializerOptions {
+/// Serializer options that preserve the detected list indentation style, and
+/// guard against emitting a hazardous block scalar (iter-271 FENCE-2, DEC-293).
+///
+/// The stock options, except when the value contains a
+/// string whose lines include a YAML document marker (`---` or `...`). The
+/// serializer's default `prefer_block_scalars` would render such a string as
+///
+/// ```yaml
+/// k: |-
+///   a
+///   ---
+///   b
+/// ```
+///
+/// which is valid YAML but a well-known trap: any reader that closes
+/// frontmatter on a *trimmed* `---` (hyalo itself did until Part A of this
+/// iteration; Obsidian-adjacent tooling still does) truncates the block there
+/// and silently drops every key after it. Turning `prefer_block_scalars` off
+/// for exactly those values routes them through the quoting path instead, so
+/// the value is written as a double-quoted scalar with escaped newlines
+/// (`k: "a\n---\nb"`). That round-trips byte-for-byte through
+/// `read_frontmatter` and asks nothing of the user.
+///
+/// The flag is decided per serialized value, not globally: a document with no
+/// such string is emitted exactly as before, so this cannot churn formatting
+/// on unrelated files.
+pub(super) fn hyalo_serializer_options_for<'a>(
+    compact_list_indent: bool,
+    values: impl IntoIterator<Item = &'a Value>,
+) -> SerializerOptions {
+    let safe = !values.into_iter().any(has_document_marker_line);
     SerializerOptions {
         compact_list_indent,
+        prefer_block_scalars: safe,
         ..SerializerOptions::default()
+    }
+}
+
+/// Whether any string inside `value` has a line that YAML would read as a
+/// document marker (`---` or `...`) once block-scalar indentation is stripped.
+///
+/// The trailing-whitespace-tolerant `trim` matches the readers this guards
+/// against, which are the lenient ones.
+pub(super) fn has_document_marker_line(value: &Value) -> bool {
+    match value {
+        Value::String(s) => s
+            .lines()
+            .any(|line| matches!(line.trim(), "---" | "...")),
+        Value::Array(items) => items.iter().any(has_document_marker_line),
+        Value::Object(map) => map.values().any(has_document_marker_line),
+        _ => false,
     }
 }
 
@@ -396,7 +442,7 @@ impl Document {
             out.push_str("---\n");
             let yaml = serde_saphyr::to_string_with_options(
                 &self.properties,
-                hyalo_serializer_options(self.compact_list_indent),
+                hyalo_serializer_options_for(self.compact_list_indent, self.properties.values()),
             )
             .context("failed to serialize YAML")?;
             out.push_str(&yaml);
@@ -680,7 +726,7 @@ fn write_frontmatter_impl(
                 Some(yaml) => yaml,
                 None => serde_saphyr::to_string_with_options(
                     props,
-                    hyalo_serializer_options(compact_list_indent),
+                    hyalo_serializer_options_for(compact_list_indent, props.values()),
                 )
                 .context("failed to serialize YAML")?,
             })

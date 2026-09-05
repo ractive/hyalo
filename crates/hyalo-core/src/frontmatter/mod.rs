@@ -1447,4 +1447,116 @@ Body.
                 .map(|e| friendly_parse_error(&e, MAX_FRONTMATTER_BYTES))
         );
     }
+
+    // -----------------------------------------------------------------
+    // iter-271 Part A / DEC-293 — strict column-0 closing fence
+    // -----------------------------------------------------------------
+
+    /// BUG-2 (dogfood v0.22.0): the indented `  ---` inside a block scalar
+    /// used to close the frontmatter, so `after` disappeared and `REALBODY`
+    /// was replaced by the block scalar's own tail.
+    #[test]
+    fn an_indented_dashes_line_inside_a_block_scalar_does_not_close_frontmatter() {
+        let content = "---\ntitle: Ind\nk: |-\n  a\n  ---\n  b\nafter: 1\n---\nREALBODY\n";
+        let doc = Document::parse(content).expect("the block scalar must parse");
+        assert_eq!(
+            doc.get_property("k"),
+            Some(&Value::String("a\n---\nb".into())),
+            "the block scalar keeps its own `---` line"
+        );
+        assert_eq!(
+            doc.get_property("after"),
+            Some(&Value::Number(1.into())),
+            "keys after the block scalar survive"
+        );
+        assert_eq!(doc.body(), "REALBODY\n");
+    }
+
+    /// An indented `  ---` as the *last* frontmatter line closes nothing, so
+    /// the block is unclosed and must be reported (HYALO005 surfaces it),
+    /// never silently truncated.
+    #[test]
+    fn an_indented_dashes_line_never_closes_the_block() {
+        let content = "---\ntitle: t\n  ---\nbody\n";
+        let err = Document::parse(content).expect_err("an indented `---` closes nothing");
+        assert!(
+            err.to_string().contains("unclosed frontmatter"),
+            "expected an unclosed-frontmatter error, got: {err}"
+        );
+    }
+
+    /// Trailing whitespace after the dashes still closes (and so does CRLF);
+    /// the strictness is about *leading* whitespace only.
+    #[test]
+    fn trailing_whitespace_and_crlf_still_close_the_block() {
+        for content in [
+            "---\ntitle: t\n---   \nbody\n",
+            "---\ntitle: t\n---\t\nbody\n",
+            "---\r\ntitle: t\r\n---\r\nbody\r\n",
+        ] {
+            let doc = Document::parse(content).expect("a column-0 `---` closes the block");
+            assert_eq!(
+                doc.get_property("title"),
+                Some(&Value::String("t".into())),
+                "in {content:?}"
+            );
+        }
+    }
+
+    /// A `---` thematic break in the body is not a frontmatter delimiter and
+    /// must survive untouched.
+    #[test]
+    fn a_body_thematic_break_is_untouched() {
+        let content = "---\ntitle: t\n---\n\nbefore\n\n---\n\nafter\n";
+        let doc = Document::parse(content).expect("parses");
+        assert_eq!(doc.body(), "\nbefore\n\n---\n\nafter\n");
+    }
+
+    // -----------------------------------------------------------------
+    // iter-271 Part A / FENCE-2 — emitter guard
+    // -----------------------------------------------------------------
+
+    /// The emitter must never produce the shape the parser was just hardened
+    /// against: a multi-line value containing a `---` line round-trips as a
+    /// double-quoted scalar, one line, no block scalar.
+    #[test]
+    fn a_value_with_a_dashes_line_is_emitted_quoted_not_as_a_block_scalar() {
+        let mut doc = Document::parse("---\nafter: 1\n---\nREALBODY\n").expect("parses");
+        doc.set_property("k".into(), Value::String("a\n---\nb".into()));
+        let out = doc.serialize().expect("serializes");
+
+        assert!(
+            !out.contains("k: |"),
+            "a `---`-bearing value must not become a block scalar:\n{out}"
+        );
+        let reparsed = Document::parse(&out).expect("the emitted text round-trips");
+        assert_eq!(
+            reparsed.get_property("k"),
+            Some(&Value::String("a\n---\nb".into()))
+        );
+        assert_eq!(
+            reparsed.get_property("after"),
+            Some(&Value::Number(1.into()))
+        );
+        assert_eq!(reparsed.body(), "REALBODY\n");
+    }
+
+    /// A `...` line is the other YAML document marker and is guarded the same
+    /// way; a multi-line value with neither still uses the readable block
+    /// scalar, so this cannot churn unrelated files.
+    #[test]
+    fn only_document_marker_values_lose_the_block_scalar() {
+        let mut dots = Document::parse("---\nt: 1\n---\n").expect("parses");
+        dots.set_property("k".into(), Value::String("a\n...\nb".into()));
+        let out = dots.serialize().expect("serializes");
+        assert!(!out.contains("k: |"), "`...` is guarded too:\n{out}");
+
+        let mut plain = Document::parse("---\nt: 1\n---\n").expect("parses");
+        plain.set_property("k".into(), Value::String("a\nb\nc".into()));
+        let out = plain.serialize().expect("serializes");
+        assert!(
+            out.contains("k: |"),
+            "an ordinary multi-line value keeps its block scalar:\n{out}"
+        );
+    }
 }

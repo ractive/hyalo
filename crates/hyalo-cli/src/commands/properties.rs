@@ -127,6 +127,17 @@ pub fn properties_rename(
     format: Format,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<CommandOutcome> {
+    // iter-271 Part B: an empty (or whitespace-only, or control-character)
+    // key is not a property name. Renaming *to* one used to exit 0 while
+    // giving every file a `"": <value>` key, and because `title` falls back to
+    // the filename stem the loss was invisible. Validate before any file is
+    // read, so `--dry-run` refuses it too.
+    for (key, flag) in [(from, "--from"), (to, "--to")] {
+        if let Some(outcome) = crate::commands::reject_invalid_property_key(key, flag, format) {
+            return Ok(outcome);
+        }
+    }
+
     if from == to {
         let out = crate::output::format_error(
             format,
