@@ -781,9 +781,35 @@ pub fn run_deinit(dir: Option<&str>) -> Result<Report> {
 fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     // `deinit` removes integration files, never the vault itself, so the vault
     // value resolved here only decides *which tree* is the target.
+    // iter-274 (UX-18): a `--dir` naming a directory that does not exist used
+    // to report a tidy list of "skipped (not found)" lines and exit 0 — which
+    // reads as "already clean" for a path that was simply mistyped. Checked on
+    // the *named* directory rather than on the resolved scope root, because a
+    // relative `--dir sub/nope` keeps the project root at CWD (which does
+    // exist) and would otherwise slip through.
+    if let Some(raw) = dir {
+        let named = {
+            let p = Path::new(raw);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                cwd.join(p)
+            }
+        };
+        if !named.is_dir() {
+            return Err(hyalo_core::user_error_with(
+                format!("target directory does not exist: {raw}"),
+                Some(
+                    "pass --dir with a path that exists, or omit it to clean the current directory"
+                        .to_owned(),
+                ),
+                None,
+            ));
+        }
+    }
     let scope = resolve_scope(dir, cwd);
-    let root = scope.root.as_path();
     let mut report = Report::new("deinit", &scope, None);
+    let root = scope.root.as_path();
 
     // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
     let skill_path = root

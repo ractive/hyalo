@@ -40,6 +40,37 @@ fn compare_nulls_last(
     }
 }
 
+/// The collation key for `--sort title` (iter-274, UX-15).
+///
+/// DEC-273 fixed sort *direction*, not collation: `--sort title` still compared
+/// raw bytes, so `Zebra` sorted before `apple` (every uppercase letter precedes
+/// every lowercase one in ASCII) and a title written as a template expression
+/// (`{% data variables.x %}`) landed after `z` because `{` is 0x7B. Neither is
+/// how a reader expects a title list to read.
+///
+/// The key folds case and skips leading punctuation, so a lowercase title and a
+/// `{%`-prefixed one sort among their alphabetical peers. Ties fall back to the
+/// full lowercased title and then, in the callers, to the file path — so the
+/// order is still total and stable.
+fn title_sort_key(title: &str) -> (String, String) {
+    let lowered = title.to_lowercase();
+    let head = lowered
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .to_owned();
+    (head, lowered)
+}
+
+/// Compare two optional titles by [`title_sort_key`], nulls last in both
+/// directions (matching [`compare_nulls_last`]).
+fn compare_titles(a: Option<&str>, b: Option<&str>, reverse: bool) -> Ordering {
+    match (a.filter(|t| !t.is_empty()), b.filter(|t| !t.is_empty())) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(a), Some(b)) => dir(title_sort_key(a).cmp(&title_sort_key(b)), reverse),
+    }
+}
+
 /// Apply the requested sort order to the results.
 ///
 /// Every key orders **ascending** and `--reverse` inverts it (iter-264,
@@ -79,8 +110,9 @@ pub(super) fn apply_sort(
         }
         SortField::Title => {
             results.sort_by(|a, b| {
-                compare_nulls_last(a.title.as_ref(), b.title.as_ref(), reverse)
-                    .then_with(|| a.file.cmp(&b.file))
+                let a_title = a.title.as_ref().and_then(|v| v.as_str());
+                let b_title = b.title.as_ref().and_then(|v| v.as_str());
+                compare_titles(a_title, b_title, reverse).then_with(|| a.file.cmp(&b.file))
             });
         }
         SortField::Property(key) => {
@@ -145,7 +177,7 @@ pub(super) fn presort_index_entries(
             entries.sort_by(|a, b| {
                 let a_val = extract_title(&a.properties, Some(&a.sections), &a.rel_path);
                 let b_val = extract_title(&b.properties, Some(&b.sections), &b.rel_path);
-                compare_nulls_last(Some(&a_val), Some(&b_val), false)
+                compare_titles(a_val.as_str(), b_val.as_str(), false)
                     .then_with(|| a.rel_path.cmp(&b.rel_path))
             });
         }

@@ -524,20 +524,28 @@ fn zero_result_body_search(
 /// vocabulary, so naming them all would be noise rather than a correction.
 const MAX_OBSERVED_VALUES: usize = 50;
 
-/// Distinct scalar values of every key named by an equality `--property`
-/// filter, in first-seen-sorted order.
+/// Per-key tally while collecting: files carrying the key, then each rendered
+/// value with its count and whether it is typeable.
+type ObservedBucket = (u64, std::collections::BTreeMap<String, (u64, bool)>);
+
+/// What every key named by an equality `--property` filter actually carries in
+/// the vault: how many files declare it, and its distinct values by frequency.
 ///
 /// Only equality (`K=V`) filters are probed: an existence, absence, or regex
 /// filter has no misspelled value to correct. Non-scalar values (maps,
-/// sequences) are skipped — a did-you-mean over `[a, b]` would suggest
-/// something the user cannot type back into `--property`.
+/// sequences) and YAML nulls are *counted and rendered* but flagged
+/// `typeable: false`, so they inform the reader without ever being offered as a
+/// did-you-mean correction the user cannot type back (iter-274, BUG-17). Before
+/// that they were dropped outright, which made a vault whose `status:` values
+/// are all `[[Wikilinks]]` report "No file has a `status` property".
 fn observed_property_values(
     index: &dyn hyalo_core::index::VaultIndex,
     filters: &[hyalo_core::filter::PropertyFilter],
-) -> std::collections::BTreeMap<String, Vec<String>> {
+) -> std::collections::BTreeMap<String, crate::hints::ObservedProperty> {
+    use crate::hints::{ObservedProperty, ObservedValue};
     use hyalo_core::filter::{FilterOp, PropertyFilter};
 
-    let keys: Vec<&str> = filters
+    let mut keys: Vec<&str> = filters
         .iter()
         .filter_map(|f| match f {
             PropertyFilter::Scalar {
@@ -551,38 +559,92 @@ fn observed_property_values(
     if keys.is_empty() {
         return std::collections::BTreeMap::new();
     }
+    // iter-274 (UX-21): a dot- or index-path filter (`title.b.c=1`,
+    // `title[0]=1`) that matches nothing is usually a path into a value that is
+    // not a map or a list at all. Observe the ROOT segment too, so the hint can
+    // say what `title` actually holds instead of reporting the whole path as an
+    // absent property.
+    let mut roots: Vec<&str> = Vec::new();
+    for key in &keys {
+        let Some(end) = key.find(['.', '[']) else {
+            continue;
+        };
+        let root = &key[..end];
+        if !root.is_empty() && !keys.contains(&root) && !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    keys.extend(roots);
 
-    let mut out: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> = keys
+    // key -> (files carrying the key, rendered value -> (count, typeable))
+    let mut out: std::collections::BTreeMap<String, ObservedBucket> = keys
         .iter()
-        .map(|k| ((*k).to_owned(), std::collections::BTreeSet::new()))
+        .map(|k| ((*k).to_owned(), (0, std::collections::BTreeMap::new())))
         .collect();
     for entry in index.entries() {
         for key in &keys {
             let Some(value) = entry.properties.get(*key) else {
                 continue;
             };
-            let Some(rendered) = scalar_to_string(value) else {
-                continue;
-            };
             let bucket = out.entry((*key).to_owned()).or_default();
-            if bucket.len() < MAX_OBSERVED_VALUES {
-                bucket.insert(rendered);
+            bucket.0 = bucket.0.saturating_add(1);
+            let rendered = render_property_value(value);
+            let typeable = matches!(
+                value,
+                serde_json::Value::String(_)
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Number(_)
+            );
+            if bucket.1.len() < MAX_OBSERVED_VALUES || bucket.1.contains_key(&rendered) {
+                let slot = bucket.1.entry(rendered).or_insert((0, typeable));
+                slot.0 = slot.0.saturating_add(1);
             }
         }
     }
     out.into_iter()
-        .map(|(k, v)| (k, v.into_iter().collect()))
+        .map(|(key, (files, values))| {
+            let mut values: Vec<ObservedValue> = values
+                .into_iter()
+                .map(|(rendered, (count, typeable))| ObservedValue {
+                    rendered,
+                    count,
+                    typeable,
+                })
+                .collect();
+            // Most frequent first so the named-values hint leads with what the
+            // vault mostly uses; ties keep the deterministic alphabetical order
+            // the BTreeMap already gave us.
+            values.sort_by(|a, b| {
+                b.count
+                    .cmp(&a.count)
+                    .then_with(|| a.rendered.cmp(&b.rendered))
+            });
+            (key, ObservedProperty { files, values })
+        })
         .collect()
 }
 
-/// Render a scalar JSON value the way `--property K=V` would accept it back.
-/// Returns `None` for maps and sequences, which have no single typeable form.
-fn scalar_to_string(value: &serde_json::Value) -> Option<String> {
+/// Render a frontmatter value the way it reads in a hint: a scalar as written,
+/// a YAML null as `null`, a sequence in flow style (so the nested sequence that
+/// `status: [[Published]]` really is reads back as `[[Published]]`), a map as
+/// `{k: v}`.
+fn render_property_value(value: &serde_json::Value) -> String {
     match value {
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Bool(b) => Some(b.to_string()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        _ => None,
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => "null".to_owned(),
+        serde_json::Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(render_property_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        serde_json::Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", render_property_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
     }
 }
 

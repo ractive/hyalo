@@ -73,7 +73,33 @@ fn filename_stem(rel_path: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// Extract the title value for `--fields title`, with its provenance.
+/// Remove `<!-- … -->` spans from a heading promoted to a title (iter-274,
+/// UX-16).
+///
+/// Authors park editor directives and TODO notes inside an H1
+/// (`# Release notes <!-- markdownlint-disable-line MD013 -->`); the comment is
+/// invisible in every renderer, but it used to become part of the promoted
+/// title — polluting `--fields title`, `--property 'title~=…'` and
+/// `--sort title` alike. An unterminated `<!--` swallows the rest of the
+/// heading, which is exactly what a renderer does with it too.
+fn strip_html_comments(heading: &str) -> String {
+    let mut out = String::with_capacity(heading.len());
+    let mut rest = heading;
+    while let Some(open) = rest.find("<!--") {
+        out.push_str(&rest[..open]);
+        // An unterminated `<!--` swallows the rest of the heading, which is
+        // what a renderer does with it too.
+        let Some(close) = rest[open..].find("-->") else {
+            rest = "";
+            break;
+        };
+        rest = &rest[open + close + 3..];
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
+}
+
+/// Extract the title value for `--fields title`, with its provenance./// Extract the title value for `--fields title`, with its provenance.
 ///
 /// Priority (DEC-283, iteration 267):
 /// 1. `title` frontmatter property, when it is a promotable scalar (see
@@ -100,10 +126,10 @@ pub(super) fn extract_title_with_source(
             if sec.level == 1
                 && let Some(ref heading) = sec.heading
             {
-                return (
-                    serde_json::Value::String(heading.clone()),
-                    Some(TitleSource::H1),
-                );
+                let cleaned = strip_html_comments(heading);
+                if !cleaned.is_empty() {
+                    return (serde_json::Value::String(cleaned), Some(TitleSource::H1));
+                }
             }
         }
     }

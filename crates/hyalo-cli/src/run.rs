@@ -502,6 +502,12 @@ fn resolve_files_from_for_command(
 }
 
 #[allow(clippy::too_many_lines)]
+/// The exit code for a hyalo-own user error (DEC-307). Named so the taxonomy
+/// reads out of the code rather than out of a bare literal.
+const fn return_code_1() -> i32 {
+    1
+}
+
 pub fn run() {
     crate::broken_pipe::install();
     match run_inner() {
@@ -518,11 +524,30 @@ pub fn run() {
                     1
                 }
                 AppError::Internal(err) => {
-                    let s = err.to_string();
-                    if !s.is_empty() {
-                        eprintln!("error: {err}");
+                    // iter-274 (BUG-25): an error carrying the `UserFacing`
+                    // marker is the caller's fault, not a hyalo failure — it
+                    // renders through the same envelope every other user error
+                    // uses and exits 1, so `--format json` stays parseable and
+                    // exit 2 keeps meaning "usage or internal".
+                    if let Some(user) = err.downcast_ref::<crate::error::UserFacing>() {
+                        let msg = crate::output::format_error(
+                            crate::error::error_format(),
+                            &user.message,
+                            None,
+                            user.hint.as_deref(),
+                            user.cause.as_deref(),
+                        );
+                        if !msg.is_empty() {
+                            eprintln!("{msg}");
+                        }
+                        return_code_1()
+                    } else {
+                        let s = err.to_string();
+                        if !s.is_empty() {
+                            eprintln!("error: {err}");
+                        }
+                        2
                     }
-                    2
                 }
                 AppError::Clap(err) => {
                     let code = err.exit_code();
@@ -760,17 +785,37 @@ fn run_inner() -> Result<(), AppError> {
             // Only fires when the flag names a real property in the effective
             // schema (checked via suggest::is_schema_property), so unrelated
             // typos keep clap's normal error.
+            //
+            // iter-274 (UX-8): the tip now consults the invoked subcommand's
+            // real flags. `hyalo changelog add --type entry` used to be told to
+            // use `--property type=entry` — which `changelog add` does not
+            // accept either, so the corrected command failed the same way. When
+            // the command has no `--property`, name the flags it does have.
             if e.kind() == clap::error::ErrorKind::UnknownArgument
                 && let Some(name) = crate::suggest::unknown_long_flag_name(&e)
                 && crate::suggest::is_schema_property(&config.schema, &name)
             {
-                eprintln!(
-                    "error: unexpected argument '--{name}' found\n\n\
-                     tip: '{name}' is a frontmatter property, not a flag — did you mean \
-                     '--property {name}=<value>'?\n\n\
-                     Example: hyalo find --property {name}=<value>\n"
-                );
-                return Err(AppError::Exit(2));
+                let root = Cli::command();
+                if crate::suggest::command_has_long_flag(&raw_args, &root, "property") {
+                    eprintln!(
+                        "error: unexpected argument '--{name}' found\n\n\
+                         tip: '{name}' is a frontmatter property, not a flag — did you mean \
+                         '--property {name}=<value>'?\n\n\
+                         Example: hyalo find --property {name}=<value>\n"
+                    );
+                    return Err(AppError::Exit(2));
+                }
+                let invoked = crate::suggest::invoked_command(&raw_args, &root);
+                let label = crate::suggest::invoked_command_path(&raw_args, &root);
+                let flags = crate::suggest::long_flag_list(&invoked);
+                if !flags.is_empty() {
+                    eprintln!(
+                        "error: unexpected argument '--{name}' found\n\n\
+                         tip: '{name}' is a frontmatter property, but `hyalo {label}` takes no \
+                         --property; its own flags are: {flags}\n"
+                    );
+                    return Err(AppError::Exit(2));
+                }
             }
 
             // Intercept `--tag` / `-t` on the `append` subcommand. Tags are
@@ -815,6 +860,33 @@ fn run_inner() -> Result<(), AppError> {
                      --property/--tag\n\n\
                      hint: create the file, then set what the schema does not declare:\n\n    \
                      hyalo new --type <TYPE> --file <FILE> && hyalo set <FILE> --property k=v\n"
+                );
+                return Err(AppError::Exit(2));
+            }
+
+            // iter-274 (UX-25): `--index` on `create-index` / `drop-index`.
+            // Those two commands WRITE (or delete) a snapshot; `--index` is the
+            // read-side flag that says "answer this query from a snapshot", so
+            // the combination is meaningless rather than misspelled. clap's
+            // generic "unexpected argument '--index' found / tip: a similar
+            // argument exists: '--index-file'" pointed at the very flag the
+            // caller had already passed. Say what is actually wrong.
+            if e.kind() == clap::error::ErrorKind::UnknownArgument
+                && crate::suggest::unknown_arg_is(&e, "--index")
+                && let Some(sub @ ("create-index" | "drop-index")) =
+                    crate::suggest::top_level_subcommand(&raw_args, &Cli::command())
+            {
+                let (verb, path_flag) = if sub == "create-index" {
+                    ("writes", "-o/--output PATH")
+                } else {
+                    ("deletes", "-p/--path PATH")
+                };
+                eprintln!(
+                    "error: `hyalo {sub} --index` cannot be combined — `--index` reads a \
+                     snapshot, and `{sub}` {verb} one\n\n\
+                     hint: name the snapshot with {path_flag} (the global --index-file PATH is \
+                     accepted as a synonym); use `--index` on a querying command such as \
+                     `hyalo find --index`\n"
                 );
                 return Err(AppError::Exit(2));
             }
@@ -908,6 +980,18 @@ fn run_inner() -> Result<(), AppError> {
     // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
     // covers the common case but this ensures correctness after full parsing).
     crate::warn::init(cli.quiet);
+
+    // iter-274 (BUG-25): publish a provisional error format now, so the
+    // commands dispatched before the full format resolution below — `init`,
+    // `deinit`, `config` — still render a user error as an envelope when the
+    // caller asked for JSON. Refined once the config's `format` key is known.
+    crate::error::set_error_format(if let Some(f) = cli.format {
+        f
+    } else if cli.jq.is_some() {
+        Format::Json
+    } else {
+        resolve_format_by_tty(std::io::stdout().is_terminal())
+    });
 
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
@@ -1380,6 +1464,9 @@ fn run_inner() -> Result<(), AppError> {
     // still governs error envelopes, so a scripted `hyalo read` failure parses
     // like every other command's.
     let error_format = format;
+    // Publish it for the top-level handler, which renders `UserFacing` errors
+    // (iter-274, BUG-25) long after this scope has gone.
+    crate::error::set_error_format(error_format);
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
     let format =
@@ -2012,13 +2099,15 @@ fn run_inner() -> Result<(), AppError> {
         {
             ctx.pattern_names_a_file = Some(pat.to_owned());
         }
-        // Preserve the active index into derived `find` hints so they query the
+        // Preserve the active index into every derived hint so it queries the
         // same snapshot rather than silently rescanning the vault (BUG-7
-        // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
-        // as bare `--index`; any other path re-emits as `--index-file <path>`.
-        if matches!(ctx.source, HintSource::Find)
-            && let Some(ref p) = index_path_buf
-        {
+        // audit; widened from `find` to every command in iter-274 / UX-2 —
+        // `summary`'s `find --orphan` / `find --broken-links` hints were the
+        // worst offenders, costing a full rescan each). A path equal to the
+        // default `<vault>/.hyalo-index` re-emits as bare `--index`; any other
+        // path re-emits as `--index-file <path>`. Hints whose command does not
+        // accept the flag drop it — see `command_accepts_index`.
+        if let Some(ref p) = index_path_buf {
             let default_path = dir.join(".hyalo-index");
             ctx.find_index = if *p == default_path {
                 HintContext::default_find_index()
@@ -2138,6 +2227,7 @@ fn run_inner() -> Result<(), AppError> {
     let changelog_path = config.changelog_path;
     let case_insensitive_mode = config.case_insensitive_mode;
     let case_insensitive_resolve = config.case_insensitive_resolve;
+    let auto_link_exclude_titles_set = config.auto_link_exclude_titles_set;
     let auto_link_exclude_titles = config.auto_link_exclude_titles;
     let auto_link_exclude_target_globs = config.auto_link_exclude_target_globs;
     let auto_link_first_only = config.auto_link_first_only;
@@ -2209,13 +2299,20 @@ fn run_inner() -> Result<(), AppError> {
             .chain(file_positional.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ");
-        eprintln!(
-            "error: '{bad}' is not a file; did you mean hyalo find '{quoted}'?\n\n\
-             tip: the FIRST positional is the body-search PATTERN; every later one is a FILE \
-             target, so an unquoted multi-word query is read as a query plus file names. \
-             Quote the whole phrase.\n"
-        );
-        return Err(AppError::Exit(2));
+        // iter-274 (UX-1, DEC-307): hyalo's own did-you-mean error is a user
+        // error — exit 1, like `--sort nope` — and renders as an envelope under
+        // `--format json` rather than as bare text a script cannot parse.
+        return Err(AppError::User(crate::output::format_error(
+            error_format,
+            &format!("'{bad}' is not a file; did you mean hyalo find '{quoted}'?"),
+            None,
+            Some(
+                "the FIRST positional is the body-search PATTERN; every later one is a FILE \
+                 target, so an unquoted multi-word query is read as a query plus file names. \
+                 Quote the whole phrase.",
+            ),
+            None,
+        )));
     }
 
     // Propagate the configured frontmatter-link property list into the loaded
@@ -2333,6 +2430,7 @@ fn run_inner() -> Result<(), AppError> {
         case_insensitive_mode,
         case_insensitive_resolve,
         auto_link_exclude_titles: &auto_link_exclude_titles,
+        auto_link_exclude_titles_set,
         auto_link_exclude_target_globs: &auto_link_exclude_target_globs,
         auto_link_first_only,
         config_fuzzy_min_confidence,

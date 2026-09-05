@@ -87,6 +87,19 @@ impl PropertyFilter {
 ///
 /// An empty regex (`name~=` or `name~=//`) is rejected too: it matches every
 /// value, which is never what the caller meant — bare `name` tests presence.
+/// Escape the regex metacharacters in a value quoted back inside a suggested
+/// `K~=/…/` filter, so the hint is a command the reader can paste.
+fn regex_escape_for_hint(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if "\\.+*?()|[]{}^$/".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
     // Normalize `\!K` → `!K` so that zsh-escaped absence filters work.
     // zsh escapes `!` to `\!` even in single quotes in some contexts.
@@ -181,6 +194,37 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
             bail!("property filter name must not be empty");
         }
 
+        // iter-274 (UX-21, DEC-276 family): an operand the caller left empty
+        // is a typo, not a query. `status=` used to compare against the empty
+        // string and match nothing at all, silently — the same class of quiet
+        // wrong answer `=~` and an empty regex were rejected for in iter-264.
+        // Presence is `K`; a YAML null is `K=null`.
+        if value.trim().is_empty() {
+            if matches!(op, FilterOp::Gte | FilterOp::Lte) {
+                bail!(
+                    "property filter {input:?} has an empty value: an ordering operator needs \
+                     something to compare against (e.g. '{name}>=2026-01-01')"
+                );
+            }
+            bail!(
+                "property filter {input:?} has an empty value: use '{name}' to test presence, \
+                 '{name}=null' for a YAML null, or '!{name}' for absence"
+            );
+        }
+
+        // A second `=` in the value is almost always a mistyped filter
+        // (`a=b=c`), and reading it as equality against the literal `b=c`
+        // matched nothing without saying why. A value that genuinely contains
+        // '=' is expressible as a regex.
+        if op == FilterOp::Eq && value.contains('=') {
+            bail!(
+                "property filter {input:?} has more than one '=': did you mean two filters \
+                 (--property '{name}=…' --property '…') or a literal '=' in the value \
+                 (--property '{name}~=/{}/')?",
+                regex_escape_for_hint(&value)
+            );
+        }
+
         // `K=null` / `K!=null` / `K=[]` / `K!=[]` are value *syntax*, not
         // string comparisons (iter-264, DEC-274): a YAML null has no text form
         // a string compare could match, and `[]` is a shape, not a value.
@@ -226,6 +270,12 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         if name.is_empty() {
             bail!("property filter name must not be empty");
         }
+        if value.trim().is_empty() {
+            bail!(
+                "property filter {input:?} has an empty value: an ordering operator needs \
+                 something to compare against (e.g. '{name}>2026-01-01')"
+            );
+        }
         return Ok(PropertyFilter::Scalar {
             name: name.to_owned(),
             op: FilterOp::Gt,
@@ -238,6 +288,12 @@ pub fn parse_property_filter(input: &str) -> Result<PropertyFilter> {
         let value = &input[lt_pos + 1..];
         if name.is_empty() {
             bail!("property filter name must not be empty");
+        }
+        if value.trim().is_empty() {
+            bail!(
+                "property filter {input:?} has an empty value: an ordering operator needs \
+                 something to compare against (e.g. '{name}<2026-01-01')"
+            );
         }
         return Ok(PropertyFilter::Scalar {
             name: name.to_owned(),

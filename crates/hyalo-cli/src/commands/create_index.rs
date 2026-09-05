@@ -1,5 +1,5 @@
 #![allow(clippy::missing_errors_doc)]
-use anyhow::{Context, Result};
+use anyhow::Result;
 use hyalo_core::bm25::Bm25InvertedIndex;
 use hyalo_core::discovery;
 use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
@@ -41,10 +41,16 @@ pub fn create_index(
                 anyhow::bail!("output path has no parent directory");
             }
         };
-        let canonical_parent = dunce::canonicalize(parent).with_context(|| {
-            format!(
-                "failed to canonicalize parent of output path: {}",
-                parent.display()
+        // iter-274 (BUG-25): a --output whose directory does not exist is the
+        // caller's mistake — envelope and exit 1, not exit 2.
+        let canonical_parent = dunce::canonicalize(parent).map_err(|e| {
+            hyalo_core::user_error_with(
+                format!("output directory does not exist: {}", parent.display()),
+                Some(
+                    "create the directory first, or write the snapshot somewhere that exists"
+                        .to_owned(),
+                ),
+                Some(e.to_string()),
             )
         })?;
         if !canonical_parent.starts_with(&canonical_dir) {
@@ -52,7 +58,15 @@ pub fn create_index(
                 format,
                 &hyalo_core::outside_vault_message("output path", Some(&canonical_parent)),
                 Some(&index_path.display().to_string()),
-                Some("use --allow-outside-vault to override"),
+                // iter-274 (UX-25): name the two real ways forward and nothing
+                // else. `create-index` WRITES the snapshot, so the reader's
+                // options are an in-vault output path or the override — never
+                // a read-side `--index` flag this command does not have.
+                Some(&format!(
+                    "write the snapshot inside the vault (-o {}/<name>) or pass \
+                     --allow-outside-vault to write here anyway",
+                    dir.display()
+                )),
                 None,
             );
             return Ok(CommandOutcome::UserError(out));

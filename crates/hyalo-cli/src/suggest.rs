@@ -100,6 +100,95 @@ pub fn is_schema_property(schema: &hyalo_core::schema::SchemaConfig, name: &str)
     check(&schema.default) || schema.types.values().any(check)
 }
 
+/// The clap `Command` for the (sub)command `args` actually invoked, walking as
+/// deep as the tokens name real subcommands (`types set` → the `set` action).
+///
+/// Returns the root command when no subcommand token is present.
+pub fn invoked_command(args: &[String], root: &clap::Command) -> clap::Command {
+    let Some(start) = top_level_subcommand_index(args, root) else {
+        return root.clone();
+    };
+    let mut cmd = root.clone();
+    for token in args.iter().skip(start) {
+        if token == "--" {
+            break;
+        }
+        if token.starts_with('-') {
+            continue;
+        }
+        let Some(sub) = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == token || s.get_all_aliases().any(|a| a == token))
+            .cloned()
+        else {
+            break;
+        };
+        cmd = sub;
+    }
+    cmd
+}
+
+/// Whether the invoked (sub)command declares the long flag `long` (without
+/// dashes), counting clap's global flags inherited from the root.
+///
+/// iter-274 (UX-8): the unknown-flag tips used to assume every command has the
+/// flag they recommend. `hyalo changelog add --type entry` was answered with
+/// "did you mean '--property type=entry'?" — `changelog add` has no
+/// `--property`, so the corrected command clap suggested fails too. A tip that
+/// cannot be pasted back is worse than clap's own error, which at least names
+/// the real neighbour (`--category`).
+pub fn command_has_long_flag(args: &[String], root: &clap::Command, long: &str) -> bool {
+    let cmd = invoked_command(args, root);
+    if cmd.get_arguments().any(|a| a.get_long() == Some(long)) {
+        return true;
+    }
+    // Globals are declared once on the root and inherited by every subcommand;
+    // `get_arguments` on the child does not list them.
+    root.get_arguments()
+        .any(|a| a.is_global_set() && a.get_long() == Some(long))
+}
+
+/// The space-joined subcommand path `args` invoked (`"changelog add"`), or an
+/// empty string when no subcommand token is present.
+pub fn invoked_command_path(args: &[String], root: &clap::Command) -> String {
+    let Some(start) = top_level_subcommand_index(args, root) else {
+        return String::new();
+    };
+    let mut cmd = root.clone();
+    let mut path: Vec<String> = Vec::new();
+    for token in args.iter().skip(start) {
+        if token == "--" {
+            break;
+        }
+        if token.starts_with('-') {
+            continue;
+        }
+        let Some(sub) = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == token || s.get_all_aliases().any(|a| a == token))
+            .cloned()
+        else {
+            break;
+        };
+        path.push(sub.get_name().to_owned());
+        cmd = sub;
+    }
+    path.join(" ")
+}
+
+/// The long flags `cmd` declares itself, `--`-prefixed and comma-joined, with
+/// `--help` and `--version` dropped (every command has them, so naming them
+/// tells the reader nothing). Globals are excluded for the same reason.
+pub fn long_flag_list(cmd: &clap::Command) -> String {
+    cmd.get_arguments()
+        .filter(|a| !a.is_global_set())
+        .filter_map(clap::Arg::get_long)
+        .filter(|l| *l != "help" && *l != "version")
+        .map(|l| format!("--{l}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Given the raw CLI args and the clap Command tree, detect when an unknown
 /// `--flag` matches a known subcommand name and return a corrected command suggestion.
 ///

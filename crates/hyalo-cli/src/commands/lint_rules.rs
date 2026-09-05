@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::commands::lint::SCHEMA_PSEUDO_RULE;
 use crate::output::{CommandOutcome, Format, format_error, format_success};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
@@ -75,6 +76,42 @@ pub(crate) fn list_rules(
         })
         .collect();
 
+    // iter-274 (UX-5): the schema pass is selectable with `--rule SCHEMA` /
+    // `--rule-prefix SCHEMA`, so it belongs in the catalog that documents what
+    // is selectable. It is not configurable — there is no `[lint.rules.SCHEMA]`
+    // entry and no severity to set; severity comes from the schema itself —
+    // and it is not autofixable as a unit, so it carries no override columns.
+    let mut results = results;
+    let schema_row_matches = rule_prefix.is_none_or(|p| {
+        SCHEMA_PSEUDO_RULE
+            .to_ascii_lowercase()
+            .starts_with(&p.to_ascii_lowercase())
+    }) && !disabled_only;
+    if schema_row_matches {
+        results.push(serde_json::json!({
+            "id": SCHEMA_PSEUDO_RULE,
+            "name": "frontmatter-schema",
+            "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections. Not configurable through lint-rules — edit the schema with `hyalo types set`.",
+            "default_enabled": true,
+            "default_severity": "error",
+            "effective_enabled": true,
+            "effective_severity": "error",
+            "autofixable": false,
+            "source": "hyalo-schema",
+            "has_override": false,
+            "configurable": false,
+        }));
+        results.sort_by(|a, b| {
+            let key = |v: &serde_json::Value| {
+                v.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            key(a).cmp(&key(b))
+        });
+    }
+
     let _ = config_dir; // not used currently, kept for potential future hints
     let total = results.len() as u64;
     let val = serde_json::json!(results);
@@ -93,6 +130,27 @@ pub(crate) fn show_rule(
     schema: &hyalo_core::schema::SchemaConfig,
     format: Format,
 ) -> CommandOutcome {
+    // UX-5 (iter-274): `SCHEMA` is listed and selectable, so it must also be
+    // inspectable — a catalog entry `show` refuses is worse than no entry.
+    if rule_id.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) {
+        return CommandOutcome::success(format_success(
+            Format::Json,
+            &serde_json::json!({
+                "id": SCHEMA_PSEUDO_RULE,
+                "name": "frontmatter-schema",
+                "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
+                "default_enabled": true,
+                "default_severity": "error",
+                "effective_enabled": true,
+                "effective_severity": "error",
+                "autofixable": false,
+                "source": "hyalo-schema",
+                "configurable": false,
+                "override": serde_json::Value::Null,
+                "note": "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
+            }),
+        ));
+    }
     let Some(entry) = engine.rule_entry(rule_id) else {
         return CommandOutcome::UserError(format_error(
             format,
@@ -118,11 +176,21 @@ pub(crate) fn show_rule(
         "effective_severity": format!("{}", eff_sev),
         "autofixable": entry.autofixable,
         "source": entry.source,
+        // iter-274 (UX-14): report what the override actually SETS. A rule
+        // whose `.hyalo.toml` entry pins only the severity used to render
+        // `enabled: null`, which reads as "unknown" rather than "not
+        // overridden" — and the reader then had to know that `effective_enabled`
+        // is the answer. An unset dimension is now simply absent from the
+        // object, so every key present in `override` is a value the config set.
         "override": override_entry.map(|ov| {
-            serde_json::json!({
-                "enabled": ov.enabled(),
-                "severity": ov.severity(),
-            })
+            let mut o = serde_json::Map::new();
+            if let Some(enabled) = ov.enabled() {
+                o.insert("enabled".to_owned(), serde_json::json!(enabled));
+            }
+            if let Some(severity) = ov.severity() {
+                o.insert("severity".to_owned(), serde_json::json!(severity));
+            }
+            serde_json::Value::Object(o)
         }),
     });
     if let Some(act) = activation {

@@ -232,6 +232,20 @@ fn resolve_files_from(
         crate::warn::note(hint);
     }
 
+    // iter-274 (UX-9): an EMPTY `--files-from` list — an empty file, or a `git
+    // diff` that produced nothing — used to be a silent, successful zero. That
+    // reads exactly like "your gate passed" while nothing was ever checked, so
+    // a CI step whose upstream command failed silently reports clean. Warn
+    // through `warn_always`, since a gate is the one place a `-q` run still
+    // needs to hear that it examined nothing.
+    if total_inputs == 0 {
+        let source_label = if source == "-" { "stdin" } else { source };
+        crate::warn::warn_always(format!(
+            "--files-from {source_label} listed no paths — nothing was examined (exit 0 here \
+             means \"no input\", not \"no findings\")"
+        ));
+    }
+
     Ok((files, counters))
 }
 

@@ -82,7 +82,17 @@ as text only when both are plain strings. A value of any other kind never matche
 is now a hard error naming `~=` (it used to be silently read as equality against the literal
 value `~/pat/`, which matched every YAML null in the vault). An empty pattern (`title~=` or
 `title~=//`) and an empty selection (`--fields ''`, `--fields ,`) are errors too; all of them
-exit 1, like every other bad argument.
+exit 1, like every other bad argument. iter-274 extends the family: an **empty operand**
+(`K=`, `K>=`, `K>`), a **second `=`** (`a=b=c`) and an empty filter name (`=b`) are errors
+rather than filters that quietly match nothing. Say what you meant instead: `K` for presence,
+`K=null` for a YAML null, `!K` for absence, `K~=/a=b/` for a value containing a literal `=`.
+
+**Exit codes (DEC-307):** **0** the command answered — a dry run and a zero-result query have
+both answered, and drift or findings are reported in the payload (`okf index` →
+`results.changed`), not in the exit code, unless a `--strict`-style flag asked for a gate;
+**1** every hyalo-own user error, always rendered as the standard error envelope so
+`--format json` parses; **2** clap usage errors and internal errors. The distinction that
+matters to a script is 1 ("I typed it wrong") versus 2 ("hyalo broke").
 
 `K` may be a **dot-path** into nested frontmatter. A literal dotted key in a flat map is
 tried first; otherwise the path is walked. Maps descend by key, and sequences descend too:
@@ -469,7 +479,7 @@ What follows is only what those pages do not say — the behaviour that surprise
   `external` and `attachment` are **never broken** — they stay out of `find --broken-links`,
   `summary.links.broken` and HYALO006, and are not graph edges for `--orphan` / `--dead-end`.
   So bucket broken links with
-  `select((.kind | IN("external","attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
+  `select(((.kind == "external" or .kind == "attachment") | not) and ((.path == null and (.out_of_vault | not)) or .broken_anchor))`.
 - **Frontmatter `aliases:` resolve wikilinks** (DEC-296): `[[Leah]]` finds the note declaring
   `aliases: [Leah]` (list or bare string). A filename or path always wins; an alias claimed by
   two notes is ambiguous, not resolved; matching folds case like DEC-267; `[[alias#Heading]]`
@@ -481,7 +491,11 @@ What follows is only what those pages do not say — the behaviour that surprise
 - **Link resolution folds case on every platform** (DEC-267), so `[[AidenLx]]` resolves to
   `People/aidenlx.md` whatever the filesystem does. Opt out with `[links] case_insensitive =
   "false"`. `links fix --case-insensitive` no longer changes what resolves; it only hides the
-  cosmetic `link-case-mismatch` rewrite plans.
+  cosmetic `link-case-mismatch` rewrite plans. `hyalo config --jq
+  '.results.links.case_insensitive'` reports the effective mode. `false` disables hyalo's
+  case-folding index only: the literal path probe that runs first belongs to the filesystem, so
+  on a case-insensitive volume the link still resolves — to the canonical on-disk path.
+  Exact-match resolution is guaranteed only on a case-sensitive filesystem.
 - **A `site_prefix` link is never a case mismatch** (DEC-295): a site-absolute target carrying
   the configured prefix (`/en-US/docs/Web/CSS/Guides/Anchor_positioning`) is written in the
   site's own URL convention, not the on-disk folder casing, so `links fix` produces no case plan
@@ -597,6 +611,15 @@ you can add a real filter like `orphan = true` or `tag = [...]` (saved views
 store tags under the `tag` key).
 
 Exit codes: 0 = clean, 1 = errors found, 2 = internal error.
+
+`hyalo lint --rule SCHEMA` (or `--rule-prefix SCHEMA`) runs the frontmatter/schema pass alone —
+the id its findings are already reported under, and what `summary`'s schema hint points at.
+`lint-rules list`/`show` carry a `SCHEMA` row marked `configurable: false`: its severity comes
+from the schema, so change it with `hyalo types set`, never `lint-rules set`. `lint --fix` JSON
+also reports `rules_fixed: {rule: n}` beside `rules_fired`, and a truncated text listing says
+`pass --limit 0 for the full list`. An **empty** `--files-from` list examines nothing and still
+exits 0, so it warns on stderr (`-q` does not silence it): in a gate, "no input" and "no
+findings" must not look alike.
 
 **Schema format:**
 

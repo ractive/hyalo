@@ -343,6 +343,21 @@ impl OutputPipeline<'_> {
                 1
             }
             Err(e) => {
+                // iter-274 (BUG-25 / DEC-307): an error carrying the
+                // `UserFacingError` marker is the caller's mistake — it renders
+                // through the same envelope and exits 1, so `--format json`
+                // stays parseable and exit 2 keeps meaning "usage or internal".
+                if let Some(user) = e.downcast_ref::<hyalo_core::UserFacingError>() {
+                    let msg = crate::output::format_error(
+                        self.error_format,
+                        &user.message,
+                        None,
+                        user.hint.as_deref(),
+                        user.cause.as_deref(),
+                    );
+                    eprintln!("{msg}");
+                    return 1;
+                }
                 let msg = crate::output::format_error(
                     self.error_format,
                     &e.to_string(),

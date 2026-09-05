@@ -36,19 +36,30 @@ fn make_bundle() -> TempDir {
 // okf index
 // ---------------------------------------------------------------------------
 
+/// iter-274 (UX-20): a dry run exits 0 like every other dry run in hyalo, and
+/// reports drift as `results.changed` instead of through the exit code. The old
+/// exit-1-on-drift (iteration-176) made previewing look like a failure to every
+/// wrapper that checks exit codes.
 #[test]
-fn okf_index_dry_run_reports_drift_and_exits_nonzero() {
+fn okf_index_dry_run_reports_drift_and_exits_zero() {
     let tmp = make_bundle();
     let output = hyalo_no_hints()
         .current_dir(tmp.path())
-        .args(["--dir", ".", "okf", "index"])
+        .args(["--dir", ".", "okf", "index", "--format", "json"])
         .output()
         .unwrap();
-    // Dry run: three index.md files would change → exit code 1 (CI drift signal).
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "dry-run with drift must exit 1"
+        Some(0),
+        "a dry run has not failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect("json envelope");
+    assert_eq!(
+        v["results"]["changed"].as_u64(),
+        Some(3),
+        "drift is reported in the envelope: {stdout}"
     );
     // No file should have been written.
     assert!(!tmp.path().join("tables/index.md").exists());
@@ -513,7 +524,8 @@ fn okf_index_replace_overwrites_default_adopts() {
 
 /// A malformed concept file anywhere in the vault must not abort the whole run:
 /// generators skip it with a stderr warning and still generate every other
-/// index. Exit code stays a drift signal (1 on dry-run), not a hard error (2).
+/// index. The run is a dry run, so it exits 0 (iter-274, UX-20) — never 2,
+/// which would mean the generator itself failed.
 #[test]
 fn okf_index_skips_malformed_file_with_warning() {
     let tmp = make_bundle();
@@ -528,11 +540,11 @@ fn okf_index_skips_malformed_file_with_warning() {
         .args(["--dir", ".", "okf", "index"])
         .output()
         .unwrap();
-    // Dry-run with drift → exit 1 (not 2).
+    // Dry run → exit 0; the skip is a warning, not a generator failure.
     assert_eq!(
         out.status.code(),
-        Some(1),
-        "skip-warn keeps drift exit 1: {out:?}"
+        Some(0),
+        "skip-warn does not fail the run: {out:?}"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -806,11 +818,9 @@ fn okf_index_dangling_marker_dry_run_reports_and_drifts() {
         .args(["--dir", ".", "okf", "index", "--format", "json"])
         .output()
         .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "malformed markers count as drift"
-    );
+    // iter-274 (UX-20): a dry run exits 0; the malformed marker is reported in
+    // the envelope (`skipped_markers`), which is what a gate reads.
+    assert_eq!(out.status.code(), Some(0), "a dry run has not failed");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\"skipped_markers\": 1"),

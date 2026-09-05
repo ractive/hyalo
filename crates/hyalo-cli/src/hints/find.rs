@@ -472,18 +472,39 @@ pub(super) fn hints_for_find(
 
     // Suggest `links fix` when results contain broken links (e.g. from --broken-links).
     // Broken links are serialised with `"path": null` (never omitted) by find's output.
-    let has_broken_links = results.iter().any(|item| {
-        item.get("links")
-            .and_then(|l| l.as_array())
-            .is_some_and(|links| {
-                links
-                    .iter()
-                    .any(|link| link.get("path").is_some_and(serde_json::Value::is_null))
-            })
-    });
-    if has_broken_links {
-        let remaining = MAX_HINTS.saturating_sub(hints.len());
-        if remaining > 0 {
+    //
+    // iter-274 (UX-3): a broken link whose target is *site-absolute* (`/en-US/
+    // docs/...`) is almost never a path typo `links fix` can repair — it is an
+    // unconfigured or wrong `site_prefix`, and running the fixer on it costs
+    // half a minute to propose nothing. When every broken link in the result
+    // set is site-absolute, say that instead of pointing at the fixer.
+    let mut broken_total = 0usize;
+    let mut broken_site_absolute = 0usize;
+    for item in results {
+        let Some(links) = item.get("links").and_then(|l| l.as_array()) else {
+            continue;
+        };
+        for link in links {
+            if !link.get("path").is_some_and(serde_json::Value::is_null) {
+                continue;
+            }
+            broken_total += 1;
+            if link
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| t.replace('\\', "/").starts_with('/'))
+            {
+                broken_site_absolute += 1;
+            }
+        }
+    }
+    if broken_total > 0 && MAX_HINTS.saturating_sub(hints.len()) > 0 {
+        if broken_site_absolute == broken_total {
+            hints.push(Hint::without_cmd(format!(
+                "all {broken_total} broken link(s) are site-absolute — set `site_prefix` in \
+                 .hyalo.toml (or `--site-prefix`) rather than running `links fix`"
+            )));
+        } else {
             hints.push(Hint::new(
                 "Auto-fix broken links (dry run)",
                 build_command_with_glob(ctx, &["links", "fix"]),

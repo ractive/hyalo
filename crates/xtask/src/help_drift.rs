@@ -264,6 +264,53 @@ fn check_examples(root: &std::path::Path) -> Vec<String> {
     failures
 }
 
+/// Doc-comment indentation that leaked into a rendered `--help` body.
+///
+/// Gate 3f (iter-274, UX-7). A `#[command(long_about = "…")]` written as one
+/// long single-line literal has to spell its newlines `\n` — and every one of
+/// the `types` subcommands had the source file's own 12-space continuation
+/// indentation baked in after each of them, so `hyalo types set --help`
+/// rendered a wall of text indented 12 columns under an unindented first
+/// paragraph. Nothing failed; it just looked broken. The healthy spelling is
+/// clap's line-continuation form (`\n\` at end of source line), where Rust
+/// eats the indentation.
+///
+/// Only the prose body is scanned — everything before clap's `Usage:` line —
+/// because clap legitimately indents the `Arguments:` and `Options:` blocks it
+/// renders below it.
+const MAX_HELP_BODY_INDENT: usize = 7;
+
+/// 3f: no rendered `--help` body line carries leaked source indentation.
+fn check_help_body_indentation(root: &std::path::Path) -> Vec<String> {
+    let mut failures = Vec::new();
+    for argv in SHORT_HELP_PAGES {
+        let cmd_label = if argv.is_empty() {
+            "hyalo".to_owned()
+        } else {
+            format!("hyalo {}", argv.join(" "))
+        };
+        let Some(help) = help_text(root, argv) else {
+            continue;
+        };
+        for line in help.lines() {
+            if line.starts_with("Usage:") {
+                break;
+            }
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            if indent > MAX_HELP_BODY_INDENT && !line.trim().is_empty() {
+                failures.push(format!(
+                    "Help drift (3f): '{cmd_label} --help' body line is indented {indent} \
+                     columns — doc-comment indentation leaked into the rendered page. Use the \
+                     `\\n\\` line-continuation form in the long_about literal.\n    {}",
+                    line.trim_end()
+                ));
+                break;
+            }
+        }
+    }
+    failures
+}
+
 /// 3b: Check for stale wording patterns.
 fn check_stale_patterns(root: &std::path::Path, patterns: &[StalePattern]) -> Vec<String> {
     if patterns.is_empty() {
@@ -559,10 +606,14 @@ pub fn run_with_root(root: &std::path::Path) -> Result<bool> {
     let fragment_failures = check_short_help_fragments(root);
     all_failures.extend(fragment_failures);
 
+    let indent_failures = check_help_body_indentation(root);
+    all_failures.extend(indent_failures);
+
     if all_failures.is_empty() {
         println!(
-            "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, and \
-             short help within its byte ceilings with no sentence fragments."
+            "check-help-drift: all subcommands have EXAMPLES blocks, no stale patterns, \
+             short help within its byte ceilings with no sentence fragments, and no leaked \
+             doc-comment indentation."
         );
         Ok(true)
     } else {

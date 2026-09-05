@@ -52,7 +52,7 @@ use file::lint_one_file_extended;
 use fix::{apply_body_fixes, find_body_line_offset, find_body_start, schema_has_completed_status};
 pub use types::*;
 
-pub(crate) use run::run;
+pub(crate) use run::{SCHEMA_PSEUDO_RULE, run};
 
 #[cfg(test)]
 mod tests;

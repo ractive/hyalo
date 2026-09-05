@@ -213,9 +213,9 @@ impl IndexPlan {
 /// Regenerate `index.md` files across the vault (or a scoped subtree).
 ///
 /// `scope` optionally restricts regeneration to a single directory subtree
-/// (vault-relative). `apply` writes changes; otherwise this is a dry run and
-/// returns exit code 1 (via `exit_code_override`) when any `index.md` would
-/// change — the CI drift signal.
+/// (vault-relative). `apply` writes changes; otherwise this is a dry run, which
+/// exits 0 like every other dry run in hyalo (iter-274, UX-20). Drift is
+/// reported as `results.changed`, which is what a CI gate should read.
 #[allow(clippy::too_many_arguments)]
 pub fn run_index(
     dir: &Path,
@@ -415,20 +415,21 @@ pub fn run_index(
 
     // Exit code:
     // - apply with any write failure → non-zero (partial failure, BUG-11).
-    // - dry-run with drift (any changed file) → non-zero for CI.
-    // Malformed-marker skips do not by themselves fail an apply (they are a
-    // pre-existing hand-edit problem, not a generator failure), but they DO
-    // count as drift in dry-run so CI surfaces them.
-    let exit_override = if apply {
-        if write_failures.is_empty() {
-            None
-        } else {
-            Some(1)
-        }
-    } else if changed.is_empty() && skipped_markers.is_empty() {
-        None
-    } else {
+    // - dry run → 0, always (iter-274, UX-20, amending iteration-176).
+    //
+    // Every other dry run in hyalo exits 0: a preview that reports what *would*
+    // happen has not failed, and `--dry-run` is exactly how a caller checks
+    // before committing. `okf index` alone exited 1 on drift, so the safe habit
+    // of previewing first looked like an error to every wrapper script and CI
+    // step that checks exit codes — and an agent could not tell "the generator
+    // failed" from "there is work to do". The drift signal is not lost: it is
+    // `results.changed` (and `results.skipped_markers`) in the JSON envelope,
+    // which is what a gate should read:
+    //   hyalo okf index --format json --jq '.results.changed' | grep -qx 0
+    let exit_override = if apply && !write_failures.is_empty() {
         Some(1)
+    } else {
+        None
     };
 
     Ok((

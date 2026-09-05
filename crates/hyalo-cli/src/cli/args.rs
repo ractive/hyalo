@@ -67,7 +67,11 @@ pub(crate) const GLOB_FLAG_SHORT_DOC: &str = "Glob(s) relative to --dir, repeata
 pub(crate) const FILES_FROM_FLAG_DOC: &str = "Read file paths from PATH (one per line); use '-' to read from \
      stdin. Mutually exclusive with --file and --glob. Non-.md paths and paths outside the vault \
      are silently skipped. Repo-relative paths with the configured vault dir prefix are resolved \
-     automatically. Input is deduplicated; results follow first-seen order.";
+     automatically. Input is deduplicated; results follow first-seen order.\n\n\
+     MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from \
+     list keeps batch semantics and merely counts a missing entry under files_missing, exit 0. \
+     An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q \
+     does not silence — in a gate, \"no input\" and \"no findings\" must not look alike.";
 
 /// One-line `-h` form of [`FILES_FROM_FLAG_DOC`] (iter-254, HELP-2).
 pub(crate) const FILES_FROM_FLAG_SHORT_DOC: &str =
@@ -491,6 +495,9 @@ pub(crate) struct FindFilters {
     /// when both are ISO dates, and as text only when both are plain strings — a value of a
     /// different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
     /// The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
+    /// K=V tests the RAW frontmatter value, while type binding normalises: a file whose
+    /// `type: ["[[Iteration]]"]` binds to the `Iteration` schema is not matched by
+    /// `--property type=Iteration`. Use `--property 'type~=Iteration'` to span every spelling.
     #[arg(
         short,
         long = "property",
@@ -507,6 +514,10 @@ pub(crate) struct FindFilters {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tag: Vec<String>,
     /// Task presence: 'todo', 'done', 'any', or a single status character
+    ///
+    /// A FILE filter, not a task projection: it selects files that contain at least one
+    /// matching task, and `--fields tasks` then returns every task in those files, not only
+    /// the matching ones.
     #[arg(long, value_name = "STATUS", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
@@ -551,6 +562,10 @@ pub(crate) struct FindFilters {
     /// CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
     /// restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
     /// hyalo shells out to nothing and has no VCS-specific flag).
+    /// MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from
+    /// list keeps batch semantics and merely counts a missing entry under files_missing, exit 0.
+    /// An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
+    /// does not silence — in a gate, "no input" and "no findings" must not look alike.
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
     #[serde(skip)]
     pub files_from: Option<String>,
@@ -1058,6 +1073,8 @@ pub(crate) enum Commands {
     },
     /// Tag operations: summary or bulk rename
     #[command(long_about = "Tag operations across matched files.\n\n\
+        SCOPE: frontmatter `tags:` only. Inline `#body/tags` written in prose are not\n\
+        inventoried by `tags summary` and are not rewritten by `tags rename`.\n\n\
         Subcommands:\n\
         - summary: Unique tags with file counts (read-only).\n\
         - rename: Rename a tag across files (mutates files).\n\n\
@@ -2184,7 +2201,7 @@ Repeatable (AND).\n\
     },
     /// Manage document-type schemas in `.hyalo.toml`
     #[command(
-        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\n            Type schemas define required properties, default values, property constraints,\n            and filename templates for each document type.\n\n            Calling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\n            Subcommands:\n            - list:   Show all defined types and their required fields (default).\n            - show:   Show the full schema for a single type.\n            - remove: Delete a type entry.\n            - set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\n            TOML editing preserves comments and formatting.\n\n            SIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\n            EXAMPLES:\n            hyalo types list\n            hyalo types show iteration\n            hyalo types set note --required title,date\n            hyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\n            hyalo types remove draft"
+        long_about = "Manage document-type schemas stored in `.hyalo.toml`.\n\nType schemas define required properties, default values, property constraints,\nand filename templates for each document type.\n\nCalling `hyalo types` without a subcommand defaults to `hyalo types list`.\n\nSubcommands:\n- list:   Show all defined types and their required fields (default).\n- show:   Show the full schema for a single type.\n- remove: Delete a type entry.\n- set:    Create or update a type schema (upsert). Auto-creates the type if it doesn't exist.\n\nTOML editing preserves comments and formatting.\n\nSIDE EFFECTS: remove/set modify .hyalo.toml. list and show are read-only.\n\nEXAMPLES:\nhyalo types list\nhyalo types show iteration\nhyalo types set note --required title,date\nhyalo types set iteration --property-type status=enum --property-values status=planned,in-progress,completed\nhyalo types remove draft"
     )]
     Types {
         #[command(subcommand)]
@@ -2271,12 +2288,13 @@ Repeatable (AND).\n\
             - log: Prepend a dated entry under today's `YYYY-MM-DD` heading (newest first)\n\
               to a scope-selectable `log.md` (bundle-root by default; §7 directory-local).\n\n\
             Both default to --dry-run and mutate only with --apply (the `links fix`/`links\n\
-            auto` convention). `okf index --dry-run` exits non-zero on drift, so it doubles\n\
-            as a CI check that the committed `index.md` files are up to date.\n\n\
+            auto` convention). A dry run exits 0 like every other dry run (DEC-307): gate CI\n\
+            on the payload instead, `okf index --format json --jq '.results.changed'` == 0\n\
+            when the committed `index.md` files are up to date.\n\n\
             VALIDATE: after (re)generating, run `hyalo lint --profile okf` to check the\n\
             bundle against the OKF §9 conformance rules (warn-not-reject per the spec).\n\n\
             EXAMPLES:\n\
-            hyalo okf index --dry-run          # CI: fail if index.md files are stale\n\
+            hyalo okf index --dry-run          # preview; drift is results.changed\n\
             hyalo okf index --apply            # regenerate all index.md files\n\
             hyalo okf index tables --apply     # scope to a subtree\n\
             hyalo okf log --message \"Added blocks table\" --apply\n\
@@ -2747,12 +2765,12 @@ pub(crate) enum TypesAction {
     // `summary` alias — see `ViewsAction::List` (iter-192).
     #[command(
         visible_alias = "summary",
-        long_about = "List all type schemas defined in `.hyalo.toml`.\n\n          OUTPUT: JSON envelope with results array and total count.\n            SIDE EFFECTS: None (read-only)."
+        long_about = "List all type schemas defined in `.hyalo.toml`.\n\nOUTPUT: JSON envelope with results array and total count.\nSIDE EFFECTS: None (read-only)."
     )]
     List,
     /// Show the full schema for a single type
     #[command(
-        long_about = "Display the full merged schema for a named type.\n\n            OUTPUT: JSON object with type name, required fields, defaults,\n            filename template, property constraints, and required_sections.\n\
+        long_about = "Display the full merged schema for a named type.\n\nOUTPUT: JSON object with type name, required fields, defaults,\nfilename template, property constraints, and required_sections.\n\
             When declared, `item_pattern` is included in the constraint for `string-list` properties,\n\
             an `object-list` property carries `required-keys`, `allowed-keys` (omitted when any key\n\
             is allowed) and `key-patterns` (a key -> regex block, omitted when empty),\n\
@@ -2766,7 +2784,7 @@ pub(crate) enum TypesAction {
     },
     /// Remove a type entry from `.hyalo.toml`
     #[command(
-        long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\n            Fails with a user error if the type does not exist.\n\n            OUTPUT: JSON result with action and type name.\n            SIDE EFFECTS: Modifies .hyalo.toml."
+        long_about = "Remove a `[schema.types.<name>]` section from `.hyalo.toml`.\n\nFails with a user error if the type does not exist.\n\nOUTPUT: JSON result with action and type name.\nSIDE EFFECTS: Modifies .hyalo.toml."
     )]
     Remove {
         /// Type name to remove
@@ -2775,7 +2793,7 @@ pub(crate) enum TypesAction {
     },
     /// Create or update a type schema's required fields, defaults, or property constraints
     #[command(
-        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\n            When creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\n            All mutation flags are optional and combinable in a single invocation.\n\n            FLAGS:\n            - --required <fields>: comma-separated required property names to add (repeatable).\n            - --default key=value: set a default; auto-applied to files missing the property.\n            - --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset). `string-list` and `object-list` carry constraints and are configured in `.hyalo.toml` only; see `hyalo types show`.\n            - --property-values key=val1,val2,...: set enum values; implies type=enum.\n            - --filename-template <template>: set the filename template for this type.\n            - --dry-run: preview changes without writing anything.\n\n            TYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\n            A --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\n            OUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\n            SIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
+        long_about = "Create or update a type schema in `.hyalo.toml`. If the type doesn't exist, it is created automatically.\n\nWhen creating the first type (i.e. the [schema] section is new), `validate_on_write = true` is set automatically so that `set`/`append` enforce schema constraints by default.\n\nAll mutation flags are optional and combinable in a single invocation.\n\nFLAGS:\n- --required <fields>: comma-separated required property names to add (repeatable).\n- --default key=value: set a default; auto-applied to files missing the property.\n- --property-type key=type: set a type constraint (string/date/datetime/datetime-tz/number/boolean/list/enum). `datetime-tz` accepts RFC 3339 timezone-aware values (e.g. 2026-05-28T22:44:47+00:00 or ...Z); `datetime` stays naive (no offset). `string-list` and `object-list` carry constraints and are configured in `.hyalo.toml` only; see `hyalo types show`.\n- --property-values key=val1,val2,...: set enum values; implies type=enum.\n- --filename-template <template>: set the filename template for this type.\n- --dry-run: preview changes without writing anything.\n\nTYPE BINDING: a file binds to a type when its `type:` frontmatter names it. The value may be a plain string, a [[Wikilink]] (bare or quoted, aliases and paths resolved to the note name), or a ONE-element list of either — the shape Obsidian's property editor writes for a link-typed property. A multi-element list names no type and is reported by `lint`.\n\nA --required field with no constraint of its own gets one auto-declared; its type is inferred from the values the vault already holds for that key on files of this type (falling back to `string` when there are none).\n\nOUTPUT: JSON result with action, dry_run, defaults_applied, constraint_violations.\nSIDE EFFECTS: Modifies .hyalo.toml and may write to vault files (unless --dry-run)."
     )]
     Set {
         /// Type name to update
@@ -3372,6 +3390,8 @@ pub(crate) enum TagsAction {
     },
     /// Rename a tag across all matched files
     #[command(long_about = "Rename a tag across all matched files.\n\n\
+        SCOPE: frontmatter `tags:` only — an inline `#body/tag` written in prose is left\n\
+        untouched.\n\n\
         NESTED TAGS: renaming a parent renames its whole subtree (Obsidian\n\
         semantics) — `--from music --to audio` also moves `music/genres` to\n\
         `audio/genres`, and works even when the bare `music` tag appears\n\

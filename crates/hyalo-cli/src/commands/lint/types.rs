@@ -158,6 +158,15 @@ pub struct ExtLintFixOutput {
     pub total_remaining: usize,
     pub total_conflicts: usize,
     pub rules_fired: usize,
+    /// How many violations each rule actually fixed, keyed by rule id.
+    ///
+    /// iter-274 (UX-13): `rules_fired` says how many distinct rules had
+    /// findings, and `total_fixed` how many violations were repaired — but
+    /// nothing said *which* rules did the repairing, so a caller reviewing a
+    /// `--fix` run had to re-aggregate `files[].fixed_groups` itself. Always
+    /// present (an empty object when nothing was fixed), like every other
+    /// top-level `results` key.
+    pub rules_fixed: std::collections::BTreeMap<String, usize>,
     pub files_with_violations: usize,
     pub files_checked: usize,
     pub files_truncated: bool,

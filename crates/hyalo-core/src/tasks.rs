@@ -79,7 +79,13 @@ fn extract_task_text(line: &str) -> &str {
     // close_idx is 0-based index of `]` inside after_bracket
     let after_close = &after_bracket[close_idx + 1..];
     // Strip the optional space after `]`
-    after_close.strip_prefix(' ').unwrap_or(after_close)
+    let text = after_close.strip_prefix(' ').unwrap_or(after_close);
+    // iter-274 (UX-17): a CRLF file's lines carry a trailing `\r` that is a
+    // line terminator, not task text. It leaked into `task read`/`task toggle`
+    // JSON, so a Windows-authored vault produced `"text": "one\r"` — which
+    // does not compare equal to the `"one"` the same vault yields on LF, and
+    // shows up as a stray character in any UI that renders the value.
+    text.strip_suffix('\r').unwrap_or(text)
 }
 
 // ---------------------------------------------------------------------------

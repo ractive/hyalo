@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Hint, HintBuilder, HintContext, HintSource};
+use super::{Hint, HintBuilder, HintContext, HintSource, ObservedProperty};
 
 /// Maximum hints emitted for a zero-result query (plan: 1–3).
 pub(super) const MAX_ZERO_RESULT_HINTS: usize = 3;
@@ -246,6 +246,29 @@ fn rebuild_find(ctx: &HintContext, filters: &[ActiveFilter], skip_index: Option<
     b.finish(ctx)
 }
 
+/// For a dot- or index-path filter key, the observation of its ROOT segment
+/// when that root exists in the vault and holds only scalars — i.e. when the
+/// path could never resolve (iter-274, UX-21).
+fn path_root_observation<'a>(
+    key: &str,
+    observed: &'a BTreeMap<String, ObservedProperty>,
+) -> Option<(&'a str, &'a ObservedProperty)> {
+    let end = key.find(['.', '['])?;
+    let root = &key[..end];
+    let (name, observation) = observed.get_key_value(root)?;
+    if observation.files == 0 || observation.values.is_empty() {
+        return None;
+    }
+    // Every observed value is typeable ⇒ every one is a scalar ⇒ no descent is
+    // possible. A single map or list among them makes the path plausible, so
+    // stay quiet.
+    observation
+        .values
+        .iter()
+        .all(|v| v.typeable)
+        .then_some((name.as_str(), observation))
+}
+
 /// Build the 1–3 hints shown when a `find` query matched nothing.
 ///
 /// `observed` maps a property key to the distinct values that key carries in
@@ -254,7 +277,7 @@ fn rebuild_find(ctx: &HintContext, filters: &[ActiveFilter], skip_index: Option<
 /// the value-aware hints.
 #[must_use]
 pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
-    let observed: &BTreeMap<String, Vec<String>> = &ctx.observed_property_values;
+    let observed: &BTreeMap<String, ObservedProperty> = &ctx.observed_property_values;
     let mut hints: Vec<Hint> = Vec::new();
     let filters = active_filters(ctx);
 
@@ -279,10 +302,11 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
         if hints.len() >= MAX_ZERO_RESULT_HINTS {
             break;
         }
-        let Some(values) = observed.get(key) else {
+        let Some(observation) = observed.get(key) else {
             continue;
         };
-        if let Some(suggestion) = did_you_mean(value, values) {
+        let values = observation.typeable_values();
+        if let Some(suggestion) = did_you_mean(value, &values) {
             let corrected = format!("{key}={suggestion}");
             let mut b = HintBuilder::cmd("find");
             for f in &filters {
@@ -309,21 +333,29 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
             break;
         }
         match observed.get(key) {
-            Some(values) if !values.is_empty() => {
-                let shown: Vec<&str> = values
+            // The key exists somewhere in the vault: name what it actually
+            // carries, with counts, whether or not those values are typeable
+            // (iter-274, BUG-17). A `status` whose only values are YAML nulls
+            // and `[[Wikilink]]` lists is a real, findable key — saying "no
+            // file has it" sent the reader looking for a typo that isn't there.
+            Some(observation) if observation.files > 0 && !observation.values.is_empty() => {
+                let shown: Vec<String> = observation
+                    .values
                     .iter()
                     .take(MAX_NAMED_VALUES)
-                    .map(String::as_str)
+                    .map(|v| format!("{} ({})", v.rendered, v.count))
                     .collect();
-                let more = values.len().saturating_sub(shown.len());
+                let more = observation.values.len().saturating_sub(shown.len());
                 let suffix = if more > 0 {
                     format!(", … (+{more})")
                 } else {
                     String::new()
                 };
+                let files = observation.files;
+                let files_label = if files == 1 { "file" } else { "files" };
                 hints.push(Hint::new(
                     format!(
-                        "Values of `{key}` in this vault: {}{suffix}",
+                        "`{key}` is set in {files} {files_label}, but never to that value: {}{suffix}",
                         shown.join(", ")
                     ),
                     HintBuilder::cmd("find")
@@ -333,10 +365,30 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 ));
             }
             _ => {
-                hints.push(Hint::new(
-                    format!("No file has a `{key}` property — list the ones that exist"),
-                    HintBuilder::cmd("properties summary").finish(ctx),
-                ));
+                // iter-274 (UX-21): a dot- or index-path whose ROOT key does
+                // exist is not an absent property — it is a path into a value
+                // that is not a map or a list, which can never match. Say that
+                // instead of sending the reader to the property listing to
+                // discover a key that is already there.
+                if let Some((root, observation)) = path_root_observation(key, observed) {
+                    let files = observation.files;
+                    let files_label = if files == 1 { "file" } else { "files" };
+                    hints.push(Hint::new(
+                        format!(
+                            "`{root}` holds a scalar in all {files} {files_label} that set it, \
+                             so the path `{key}` can never match — inspect the values"
+                        ),
+                        HintBuilder::cmd("find")
+                            .flag_value("--property", root)
+                            .flag_value("--fields", "properties")
+                            .finish(ctx),
+                    ));
+                } else {
+                    hints.push(Hint::new(
+                        format!("No file has a `{key}` property — list the ones that exist"),
+                        HintBuilder::cmd("properties summary").finish(ctx),
+                    ));
+                }
             }
         }
     }
@@ -380,11 +432,28 @@ mod tests {
         ctx
     }
 
+    /// Record `values` as typeable scalars, one file each.
     fn observed(ctx: &mut HintContext, key: &str, values: &[&str]) {
-        ctx.observed_property_values.insert(
-            key.to_owned(),
-            values.iter().map(|s| (*s).to_owned()).collect(),
+        observed_with(
+            ctx,
+            key,
+            &values.iter().map(|v| (*v, 1, true)).collect::<Vec<_>>(),
         );
+    }
+
+    /// Record `(rendered, count, typeable)` triples for `key`.
+    fn observed_with(ctx: &mut HintContext, key: &str, values: &[(&str, u64, bool)]) {
+        let values: Vec<crate::hints::ObservedValue> = values
+            .iter()
+            .map(|(rendered, count, typeable)| crate::hints::ObservedValue {
+                rendered: (*rendered).to_owned(),
+                count: *count,
+                typeable: *typeable,
+            })
+            .collect();
+        let files = values.iter().map(|v| v.count).sum();
+        ctx.observed_property_values
+            .insert(key.to_owned(), ObservedProperty { files, values });
     }
 
     #[test]
@@ -412,8 +481,76 @@ mod tests {
         let hints = zero_result_hints(&ctx);
         assert!(!hints.is_empty(), "empty result must still hint");
         assert!(
-            hints.iter().any(|h| h.description.contains("Values of")),
-            "should name the observed values: {hints:?}"
+            hints
+                .iter()
+                .any(|h| h.description.contains("draft (1), completed (1)")),
+            "should name the observed values with their counts: {hints:?}"
+        );
+    }
+
+    /// BUG-17 (iter-274): a key whose values are all non-scalar — the nested
+    /// flow sequence `status: [[Published]]` really is — used to be reported as
+    /// "No file has a `status` property", sending the reader after a typo that
+    /// does not exist.
+    #[test]
+    fn non_typeable_values_are_named_not_reported_as_a_missing_key() {
+        let mut ctx = ctx_with(&["status=Published"], &[]);
+        observed_with(
+            &mut ctx,
+            "status",
+            &[
+                ("[[Published]]", 3, false),
+                ("[[Active]]", 1, false),
+                ("null", 1, false),
+            ],
+        );
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            hints.iter().any(|h| h
+                .description
+                .contains("`status` is set in 5 files, but never to that value")),
+            "{hints:?}"
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("[[Published]] (3)")),
+            "the values must be named with their counts: {hints:?}"
+        );
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("No file has a `status`")),
+            "the key exists — do not claim otherwise: {hints:?}"
+        );
+    }
+
+    /// A key nothing declares still reads as key-absent.
+    #[test]
+    fn absent_key_still_reports_no_file_has_it() {
+        let mut ctx = ctx_with(&["status=x"], &[]);
+        observed_with(&mut ctx, "status", &[]);
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("No file has a `status` property")),
+            "{hints:?}"
+        );
+    }
+
+    /// A non-typeable value must never be offered as a did-you-mean the caller
+    /// cannot type back into `--property K=V`.
+    #[test]
+    fn did_you_mean_ignores_non_typeable_values() {
+        let mut ctx = ctx_with(&["status=Publishd"], &[]);
+        observed_with(&mut ctx, "status", &[("[[Published]]", 3, false)]);
+        let hints = zero_result_hints(&ctx);
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.starts_with("Did you mean")),
+            "{hints:?}"
         );
     }
 

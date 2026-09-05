@@ -198,9 +198,12 @@ pub(super) fn format_lint_output_text(map: &serde_json::Map<String, serde_json::
         });
 
     if limited {
+        // iter-274 (UX-13): say how to lift the cap. The line used to state
+        // the truncation and leave the reader to guess the flag.
         let _ = writeln!(
             s,
-            "… (showing {shown_files} of {files_with_issues} files with issues)"
+            "… (showing {shown_files} of {files_with_issues} files with issues — \
+             pass --limit 0 for the full list)"
         );
     }
 
@@ -507,7 +510,8 @@ pub(super) fn format_lint_fix_output_text(
         });
         let _ = writeln!(
             s,
-            "… (showing {shown_files} of {files_with_violations} files with issues)"
+            "… (showing {shown_files} of {files_with_violations} files with issues — \
+             pass --limit 0 for the full list)"
         );
     }
 

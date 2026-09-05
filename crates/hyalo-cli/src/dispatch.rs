@@ -206,6 +206,9 @@ pub(crate) struct CommandContext<'a> {
     /// `[links.auto]` in `.hyalo.toml` (iter-195a). Unioned with the CLI flags
     /// in the `links auto` dispatch arm.
     pub auto_link_exclude_titles: &'a [String],
+    /// Whether `[links.auto] exclude_titles` was declared at all (an explicit
+    /// `[]` included) — see [`crate::commands::links::AutoFilters`].
+    pub auto_link_exclude_titles_set: bool,
     /// See [`CommandContext::auto_link_exclude_titles`].
     pub auto_link_exclude_target_globs: &'a [String],
     /// `[links.auto] first_only` — `--first-only` for every run.
@@ -260,7 +263,7 @@ pub(crate) struct CommandContext<'a> {
     /// this costs no extra I/O; `run.rs` copies it into the hint context so the
     /// zero-result did-you-mean can be computed without a second scan. Empty
     /// for every command other than an empty `find`.
-    pub zero_result_values: std::collections::BTreeMap<String, Vec<String>>,
+    pub zero_result_values: std::collections::BTreeMap<String, crate::hints::ObservedProperty>,
     /// A `--property K~=RE` filter whose regex matched no frontmatter value but
     /// *does* match body prose, confirmed by the bounded probe `find` runs on
     /// the zero-result path (iter-258). `run.rs` moves it into the hint context

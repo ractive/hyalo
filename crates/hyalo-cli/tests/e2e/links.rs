@@ -5209,9 +5209,11 @@ fn links_auto_stays_silent_when_no_title_clears_the_frequency_floor() {
 }
 
 #[test]
-fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
-    // Dogfood L-12: with more offenders than the note lists, the flag list
-    // still has to cover all of them, and the note has to admit it truncated.
+fn links_auto_note_truncates_the_prose_list_and_the_flags() {
+    // Dogfood L-12, amended by iter-274 (UX-11): the note admits it truncated,
+    // and the flag list is capped at the same count the prose says it shows —
+    // a sentence reading "showing the 5 noisiest of 40" followed by 40 flags
+    // contradicted itself.
     let tmp = TempDir::new().expect("tempdir creation should succeed");
     let words = [
         "access", "account", "action", "active", "address", "agree", "answer",
@@ -5236,8 +5238,12 @@ fn links_auto_note_truncates_the_prose_list_but_not_the_flags() {
     );
     assert_eq!(
         stderr.matches("--exclude-title ").count(),
-        7,
-        "every offender needs a flag so one paste-back extinguishes the note: {stderr}"
+        5,
+        "the flag list is capped at the count the prose says it shows: {stderr}"
+    );
+    assert!(
+        stderr.contains("those flags ADD to the built-in stop-list"),
+        "the note must say flags add while [links.auto] exclude_titles replaces: {stderr}"
     );
 }
 
@@ -6086,7 +6092,16 @@ fn links_text_and_json_buckets_sum_to_broken() {
     };
     let broken = count_line("Broken links:");
     let fixable = count_line("Fixable:");
-    let fuzzy = count_line("Low-confidence matches (excluded from plain --apply):");
+    // iter-274 (UX-10): the header now reports the candidate count and how
+    // many clear the floor, so read the leading number off it.
+    let fuzzy: u64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("Low-confidence matches:"))
+        .unwrap_or_else(|| panic!("text output has no low-confidence line:\n{text}"))
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("low-confidence line has no leading count in:\n{text}"));
     let unfixable = count_line("Unfixable:");
     assert_eq!(
         broken,
@@ -6119,30 +6134,41 @@ fn links_text_lists_unfixable_links() {
 /// `--dry-run`/plain-`--apply` wording that describes matches left on the
 /// table.
 #[test]
-fn links_text_apply_fuzzy_summary_says_applied_not_excluded() {
+fn links_text_apply_fuzzy_summary_counts_candidates_and_the_floor() {
     let tmp = setup_bucket_vault();
 
     let text = links_fix_text(tmp.path(), &["--apply", "--apply-fuzzy"]);
+    // iter-274 (UX-10): the header states how many candidates there are and
+    // how many cleared the floor. "applied: N" was ambiguous — N counted every
+    // candidate, including the ones the floor suppressed.
     assert!(
-        text.contains("Low-confidence matches (applied via --apply-fuzzy):"),
-        "summary line must say the fuzzy matches were applied, not excluded:\n{text}"
+        text.contains("at or above the confidence floor"),
+        "the summary must name the floor and how many cleared it:\n{text}"
     );
     assert!(
-        !text.contains("Low-confidence matches (excluded from plain --apply):"),
-        "the plain---apply wording must not appear once --apply-fuzzy is active:\n{text}"
+        text.contains("(written — --apply-fuzzy)"),
+        "under --apply-fuzzy the summary must say the matches were written:\n{text}"
+    );
+    assert!(
+        !text.contains("not written — pass --apply-fuzzy"),
+        "the not-written wording must not appear once --apply-fuzzy is active:\n{text}"
     );
 }
 
 /// Without `--apply-fuzzy` the original wording still applies — fuzzy
 /// matches really are excluded from what gets written.
 #[test]
-fn links_text_apply_without_fuzzy_summary_says_excluded() {
+fn links_text_apply_without_fuzzy_summary_says_not_written() {
     let tmp = setup_bucket_vault();
 
     let text = links_fix_text(tmp.path(), &["--apply"]);
     assert!(
-        text.contains("Low-confidence matches (excluded from plain --apply):"),
-        "without --apply-fuzzy, fuzzy matches are genuinely excluded:\n{text}"
+        text.contains("(not written — pass --apply-fuzzy)"),
+        "without --apply-fuzzy, fuzzy matches are genuinely not written:\n{text}"
+    );
+    assert!(
+        text.contains("at or above the confidence floor"),
+        "the floor is named in both modes:\n{text}"
     );
 }
 
