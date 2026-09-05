@@ -325,8 +325,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   probe finds nothing, hyalo compares each indexed file's recorded mtime against disk and names
   the first drift in `index older than vault (<file> changed on disk …)` — this is what catches
   an in-place overwrite, which moves no directory's mtime. It costs one `stat` per indexed file
-  (~0.03 s over MDN's 14,375) and only runs on a vault the cheap probe called clean; an edit
-  inside the same whole second as the snapshot is still invisible. A snapshot also records how
+  (~0.03 s over MDN's 14,375) and only runs on a vault the cheap probe called clean. The blind
+  spot is **up to ~2 s** (whole-second mtimes plus a one-second tolerance), not one second. A snapshot also records how
   many files `[scan] exclude` dropped when it was built, so `summary --index` reports the same
   `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
 

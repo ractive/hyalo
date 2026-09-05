@@ -166,11 +166,15 @@ fn vault_dir_relative_to_cwd(dir: &std::path::Path, cwd: &std::path::Path) -> St
 /// `global_index_file` is the value of the top-level `--index-file` flag; it
 /// is used as a fallback when the subcommand does not specify its own path.
 /// The subcommand value always takes precedence.
+/// The returned flag is `true` when the path was **named** by `--index-file`
+/// rather than derived from a bare `--index`. A named path is a promise
+/// (DEC-301): when it cannot be read, the run fails instead of silently
+/// falling back to a full disk scan (BUG-11, dogfood v0.22.0).
 fn effective_index_path_for(
     cmd: &Commands,
     vault_dir: &std::path::Path,
     global_index_file: Option<&std::path::Path>,
-) -> Option<std::path::PathBuf> {
+) -> Option<(std::path::PathBuf, bool)> {
     use crate::cli::args::{LinksAction, PropertiesAction, TagsAction, TaskAction};
 
     let flags: Option<&IndexFlags> = match cmd {
@@ -265,7 +269,7 @@ fn effective_index_path_for(
     } else {
         raw
     };
-    Some(resolved)
+    Some((resolved, came_from_index_file))
 }
 
 /// Derive the task selector string for hint context.
@@ -2070,8 +2074,11 @@ fn run_inner() -> Result<(), AppError> {
     // Extract the effective index path from the subcommand's IndexFlags.
     // --index-file PATH wins; bare --index resolves to vault_dir/.hyalo-index.
     // Relative --index-file paths are resolved against CWD (caller convention).
-    let index_path_buf: Option<std::path::PathBuf> =
-        effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref());
+    let (index_path_buf, index_path_named): (Option<std::path::PathBuf>, bool) =
+        match effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref()) {
+            Some((p, named)) => (Some(p), named),
+            None => (None, false),
+        };
 
     // Propagate --quiet and has-index into hint context now that we know both.
     // `quiet` suppresses the slow-query hint; `has_index` suppresses all
@@ -2126,7 +2133,22 @@ fn run_inner() -> Result<(), AppError> {
                 // site-prefix — the index data may not match the current run.
                 let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
                 let vault_dir_str = canonical_dir.to_string_lossy();
-                if idx.validate(&vault_dir_str, site_prefix) {
+                if !idx.format_is_current() {
+                    // BUG-12 / G4 (dogfood v0.22.0): a snapshot written by an
+                    // older binary decodes fine and then answers differently
+                    // from disk — MDN's Sep 3 index reported 49 774 links
+                    // against disk's 51 075, with no attachment kind and no
+                    // warning at all. Refuse it the way a site-prefix mismatch
+                    // is refused, naming the version pair so the reader knows
+                    // what to re-run.
+                    crate::warn::warn(format!(
+                        "index format is older than this binary (index v{}, binary v{}); \
+                         falling back to disk scan — re-run create-index",
+                        idx.format_version(),
+                        hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+                    ));
+                    None
+                } else if idx.validate(&vault_dir_str, site_prefix) {
                     // M-6: a snapshot is a point-in-time copy — edits made
                     // outside it (by hand, by another tool, or by hyalo itself
                     // without `--index`) are simply invisible, and the run
@@ -2202,9 +2224,53 @@ fn run_inner() -> Result<(), AppError> {
                     None
                 }
             }
-            Ok(None) => None, // incompatible schema — already warned; fall back to disk scan
+            // BUG-11 (dogfood v0.22.0): a path the caller *named* with
+            // `--index-file` is a promise, exactly as `--files-from` and
+            // `--dir` are (DEC-301). When it cannot be read, the run used to
+            // exit 0 after a full disk scan — the expensive answer the flag
+            // existed to avoid, with `-q` hiding the only clue. Fail instead.
+            // A missing *in-vault* `.hyalo-index` under bare `--index` keeps
+            // the fallback: nothing was named, and the vault is right there.
+            Ok(None) if index_path_named => {
+                return Err(AppError::Internal(crate::error::user_error_with(
+                    format!("could not read index file: {}", p.display()),
+                    Some(
+                        "build it with `hyalo create-index --output <path>`, or drop \
+                         --index-file to scan the vault"
+                            .to_owned(),
+                    ),
+                    Some(if p.exists() {
+                        "the file exists but is not a hyalo snapshot this binary can read"
+                            .to_owned()
+                    } else {
+                        "no such file".to_owned()
+                    }),
+                )));
+            }
+            Ok(None) => {
+                // No named path: bare `--index` against a vault with no
+                // snapshot. Serve from disk, but say so where `-q` cannot
+                // hide it — the caller asked for the cheap path and is not
+                // getting it.
+                crate::warn::warn_always(format!(
+                    "no index at {}; falling back to a disk scan — run `hyalo create-index`",
+                    p.display()
+                ));
+                None
+            }
+            Err(e) if index_path_named => {
+                return Err(AppError::Internal(crate::error::user_error_with(
+                    format!("could not read index file: {}", p.display()),
+                    Some(
+                        "build it with `hyalo create-index --output <path>`, or drop \
+                         --index-file to scan the vault"
+                            .to_owned(),
+                    ),
+                    Some(e.to_string()),
+                )));
+            }
             Err(e) => {
-                crate::warn::warn(format!(
+                crate::warn::warn_always(format!(
                     "failed to load index: {e}; falling back to disk scan"
                 ));
                 None

@@ -159,9 +159,13 @@ pub(crate) struct IndexFlags {
     /// that probe finds nothing, a second pass compares each indexed file's
     /// recorded mtime against disk and stops at the first drift, so an
     /// in-place overwrite (which moves no directory mtime) is named in the
-    /// warning rather than silently served. Remaining blind spot: an edit
-    /// within the same whole second as the snapshot. The warning never stops
-    /// the run: stale results are still served.
+    /// warning rather than silently served. Remaining blind spot: **up to
+    /// about two seconds** — mtimes are compared as whole seconds and a
+    /// one-second tolerance is applied on top, so an edit made within the
+    /// snapshot's own second or the one after it is invisible (BUG-30,
+    /// iter-276: the old wording said "the same whole second", which
+    /// understated it by half). The warning never stops the run: stale
+    /// results are still served.
     #[arg(long)]
     pub index: bool,
 

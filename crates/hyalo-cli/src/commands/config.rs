@@ -322,6 +322,11 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             "malformed": report.malformed.is_some() || report.schema_error.is_some(),
             "parse_error": report.malformed.clone().or_else(|| report.schema_error.clone()),
             "schema_error": report.schema_error,
+            // G4 (iter-276): the snapshot format this binary writes and
+            // accepts. `summary --index` reports the loaded snapshot's own
+            // `index_format_version`; a lower number there means the index
+            // predates this binary and is refused with a fallback to disk.
+            "snapshot_format_version": hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
             // `true` when `dir` below was salvaged from an otherwise
             // unusable file rather than defaulted (NEW-17, dogfood pre3) —
             // meaningful only alongside `malformed: true`.
@@ -527,13 +532,14 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     };
 
     let mut out = format!(
-        "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nexempt: {exempt_str}\n\
+        "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nsnapshot_format_version: {snapshot_format_version}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
          links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n\
          links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
+        snapshot_format_version = hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
         scan_include = list_or_none(&report.scan.include),
         scan_exclude = list_or_none(&report.scan.exclude),
         scan_verbose_skips = report.scan.verbose_skips,

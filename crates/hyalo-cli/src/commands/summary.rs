@@ -481,6 +481,7 @@ pub fn summary(
         tasks,
         recent_files,
         schema: lint_summary,
+        index_format_version: index.snapshot_format_version(),
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
