@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::cli::inputs::InputSelection;
 use crate::list_commands::list_commands_phrase;
@@ -17,6 +17,29 @@ pub(crate) const LIST_COMMANDS_PLACEHOLDER: &str = "{LIST_COMMANDS}";
 /// Distinct from [`LIST_COMMANDS_PLACEHOLDER`]: "emits a total" and "caps at
 /// `default_limit` and takes `--limit`" are different sets (M-8).
 pub(crate) const LIMITED_COMMANDS_PLACEHOLDER: &str = "{LIMITED_COMMANDS}";
+
+/// What `hyalo mv --on-conflict` does when a destination is already taken
+/// (iter-273, MV-3).
+///
+/// A plain `String` here accepted anything: `--on-conflict overwrite` parsed
+/// cleanly and then silently behaved as `error`, which is the worst possible
+/// answer to a flag whose whole job is to say what happens to your files. As a
+/// value enum, an unknown policy is a usage error that lists the real ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ConflictPolicy {
+    /// Refuse the move and report every collision (default).
+    Error,
+    /// Leave the colliding file(s) alone and move whatever else was selected.
+    Skip,
+}
+
+impl ConflictPolicy {
+    /// Whether colliding moves are skipped rather than refused.
+    #[must_use]
+    pub fn is_skip(self) -> bool {
+        matches!(self, Self::Skip)
+    }
+}
 
 /// Shared `--file` doc string used on every command that accepts `--file`,
 /// `--glob`, and `--files-from` as mutually exclusive input sources (NEW-4).
@@ -1295,9 +1318,18 @@ pub(crate) enum Commands {
         /// Rejected in single-file mode, which applies by default — use --dry-run to preview.
         #[arg(long, conflicts_with = "dry_run")]
         apply: bool,
-        /// How to handle destination basename collisions: 'error' (default) or 'skip'
-        #[arg(long = "on-conflict", value_name = "POLICY", default_value = "error")]
-        on_conflict: String,
+        /// How to handle destination collisions: 'error' (default) or 'skip'
+        ///
+        /// Honoured in both modes (iter-273): in single-file mode `skip` leaves the
+        /// source where it is and reports the collision instead of failing; in batch
+        /// mode it moves everything that does not collide.
+        #[arg(
+            long = "on-conflict",
+            value_name = "POLICY",
+            value_enum,
+            default_value_t = ConflictPolicy::Error
+        )]
+        on_conflict: ConflictPolicy,
         /// Allow rewriting bare wikilinks ([[note]]) even when the stem is ambiguous
         ///
         /// (matches multiple vault files). By default, ambiguous bare wikilinks are

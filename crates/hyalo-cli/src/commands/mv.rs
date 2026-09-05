@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
+use crate::cli::args::ConflictPolicy;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::discovery::{canonicalize_vault_dir, discover_files, match_globs};
 use hyalo_core::filter::{PropertyFilter, matches_frontmatter_filters};
@@ -34,6 +35,11 @@ struct MvResult {
     /// FM-2). Omitted when empty, so the ordinary result shape is unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     frontmatter_links_skipped: Vec<SkippedFrontmatterLink>,
+    /// The source, when `--on-conflict skip` left it where it was (iter-273,
+    /// MV-3). Same key batch mode uses, so one `.results.skipped` read answers
+    /// "did anything get skipped?" in either mode.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skipped: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -46,6 +52,12 @@ struct UpdatedFile {
 struct MoveEntry {
     from: String,
     to: String,
+    /// Frontmatter wikilinks naming *this* move's source that could not be
+    /// rewritten because their `[[…]]` spans a line break (iter-273, MV-2).
+    /// Same key and shape single-file `mv` reports; omitted when empty, so the
+    /// ordinary batch result is byte-identical to before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    frontmatter_links_skipped: Vec<SkippedFrontmatterLink>,
 }
 
 #[derive(Serialize)]
@@ -86,6 +98,7 @@ pub fn mv(
     site_prefix: Option<&str>,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
     allow_ambiguous: bool,
+    on_conflict: ConflictPolicy,
 ) -> Result<CommandOutcome> {
     // 1. Validate source exists
     let (_src_full, old_rel) = match super::resolve_file_user(dir, file_arg) {
@@ -94,8 +107,32 @@ pub fn mv(
     };
 
     // 2. Validate target path
-    let new_rel = match validate_target_single(dir, to_arg, &old_rel, format) {
-        Ok(rel) => rel,
+    let new_rel = match validate_target_single(dir, to_arg, &old_rel, format, on_conflict) {
+        Ok(TargetSingle::Path(rel)) => rel,
+        // BUG-26 (iter-273, MV-3): `--on-conflict skip` was accepted in
+        // single-file mode and then ignored, so the run failed with "target
+        // file already exists" — the very outcome the flag exists to avoid. A
+        // skipped single move is a success that moved nothing, reported in the
+        // same envelope shape as batch mode's `skipped`.
+        Ok(TargetSingle::Skipped(dest)) => {
+            crate::warn::warn(format!(
+                "{old_rel} not moved: {dest} already exists (--on-conflict skip)"
+            ));
+            let result = MvResult {
+                from: old_rel.clone(),
+                to: dest,
+                dry_run,
+                updated_files: Vec::new(),
+                total_files_updated: 0,
+                total_links_updated: 0,
+                skipped_ambiguous: Vec::new(),
+                frontmatter_links_skipped: Vec::new(),
+                skipped: vec![old_rel],
+            };
+            return Ok(CommandOutcome::success(
+                serde_json::to_string_pretty(&result).context("failed to serialize")?,
+            ));
+        }
         Err(outcome) => return Ok(outcome),
     };
 
@@ -156,6 +193,7 @@ pub fn mv(
         total_links_updated: total_links,
         skipped_ambiguous: mv_plan.skipped_ambiguous,
         frontmatter_links_skipped: mv_plan.skipped_frontmatter,
+        skipped: Vec::new(),
     };
 
     // 6. If not dry-run, execute the move and rewrites, then update the index.
@@ -189,7 +227,7 @@ pub fn mv_batch(
     tag_filters: &[String],
     to_arg: &str,
     apply: bool,
-    on_conflict: &str,
+    on_conflict: ConflictPolicy,
     format: Format,
     site_prefix: Option<&str>,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
@@ -236,11 +274,24 @@ pub fn mv_batch(
         };
 
     // 5. Plan rewrites (build link graph once).
-    let plans = if renames.is_empty() {
-        vec![]
+    let mut plan_result = if renames.is_empty() {
+        link_rewrite::BatchMvPlanResult::default()
     } else {
         link_rewrite::plan_batch_mv(dir, &renames, site_prefix, allow_ambiguous)?
     };
+    let plans = std::mem::take(&mut plan_result.plans);
+
+    // MV-2 (iter-273): batch mode now runs the same split-frontmatter-link
+    // sweep single-file `mv` has run since iteration 269, so a link the move
+    // cannot rewrite is announced instead of left dangling in silence.
+    let total_split_links: usize = plan_result.skipped_frontmatter.values().map(Vec::len).sum();
+    if total_split_links > 0 {
+        eprintln!(
+            "warning: {total_split_links} frontmatter wikilink{} not rewritten \
+             (see --format json for the files)",
+            if total_split_links == 1 { "" } else { "s" }
+        );
+    }
 
     // 6. Build result.
     let moves: Vec<MoveEntry> = renames
@@ -248,6 +299,11 @@ pub fn mv_batch(
         .map(|(f, t)| MoveEntry {
             from: f.clone(),
             to: t.clone(),
+            frontmatter_links_skipped: plan_result
+                .skipped_frontmatter
+                .get(f)
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect();
     let updated_files: Vec<UpdatedFile> = plans
@@ -376,7 +432,7 @@ fn build_rename_map(
     dir: &Path,
     sources: &[String],
     to_dir: &str,
-    on_conflict: &str,
+    on_conflict: ConflictPolicy,
     format: Format,
 ) -> std::result::Result<(Vec<(String, String)>, Vec<String>, Vec<String>), CommandOutcome> {
     // Build proposed rename map: source → dest (old_rel → new_rel).
@@ -467,7 +523,7 @@ fn build_rename_map(
         collision_dests.union(&pre_existing).cloned().collect();
 
     if !all_collision_dests.is_empty() {
-        if on_conflict == "skip" {
+        if on_conflict.is_skip() {
             // For each collision dest, keep the lexicographically first source.
             let mut skipped = Vec::new();
             let mut final_renames = Vec::new();
@@ -503,7 +559,15 @@ fn build_rename_map(
                 .collect();
             return Ok((final_renames, vec![], skipped));
         }
-        // Default: error
+        // Default: error.
+        //
+        // BUG-24 (iter-273, MV-3): "multiple sources map to the same
+        // destination" was printed for *both* kinds of collision, so a single
+        // file colliding with a note already sitting in the target directory
+        // was reported as an internal clash between two sources the caller
+        // could not find. The two have different fixes — rename one source vs
+        // deal with the file already there — so they get different sentences,
+        // and a batch hitting both says so.
         let mut conflict_msgs: Vec<String> = all_collision_dests
             .iter()
             .flat_map(|dst| {
@@ -513,9 +577,17 @@ fn build_rename_map(
             .collect();
         conflict_msgs.sort();
         let desc = conflict_msgs.join(", ");
+        let has_source_clash = !collision_dests.is_empty();
+        let has_pre_existing = !pre_existing.is_empty();
+        let message = match (has_source_clash, has_pre_existing) {
+            (true, false) => "destination collision: multiple sources map to the same destination",
+            (false, true) => "destination collision: a file already exists at the destination",
+            _ => "destination collision: some sources share a destination and some destinations \
+                  are already taken",
+        };
         let out = crate::output::format_error(
             format,
-            "destination collision: multiple sources map to the same destination",
+            message,
             Some(&desc),
             Some("use --on-conflict=skip to skip colliding files"),
             None,
@@ -783,14 +855,54 @@ fn ensure_dest_within_vault(
     }
 }
 
+/// Strip a CWD-relative vault-dir prefix from a `mv` destination, exactly as
+/// `resolve_file` already does for the *source* (iter-273, MV-1 / BUG-14).
+///
+/// With `dir = "kb"` in `.hyalo.toml`, `hyalo mv kb/a.md kb/sub/a.md` run from
+/// the project root resolved the source to `a.md` and the destination to the
+/// literal `kb/sub/a.md`, which is vault-relative — so the file landed in
+/// `kb/kb/sub/a.md`. Every destination form had the bug (positional DEST, `--to
+/// file`, `--to dir/`, batch), because all four bypassed the normalisation the
+/// source goes through. Applied once, in the dispatch arm, so the four forms
+/// cannot drift apart again.
+///
+/// A trailing slash is preserved: single mode reads it as "this is a
+/// directory", and losing it would turn a directory destination into a
+/// `.md`-less filename.
+fn strip_vault_prefix_from_destination(dir: &Path, to_arg: &str) -> String {
+    let normalized = to_arg.replace('\\', "/");
+    let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
+    let bare = normalized.trim_end_matches('/');
+    let had_trailing_slash = bare.len() != normalized.len();
+    match hyalo_core::discovery::strip_dir_prefix(dir, bare) {
+        Some(stripped) if had_trailing_slash => format!("{stripped}/"),
+        Some(stripped) => stripped,
+        // No prefix to strip (or stripping would leave nothing, i.e. the
+        // destination *is* the vault root): keep what the caller typed.
+        None => normalized.to_owned(),
+    }
+}
+
+/// Outcome of validating a single-file `mv` destination.
+enum TargetSingle {
+    /// The vault-relative destination path to move to.
+    Path(String),
+    /// The destination is taken and `--on-conflict skip` was asked for, so the
+    /// move is a no-op rather than a failure. Carries the destination that was
+    /// already occupied.
+    Skipped(String),
+}
+
 /// Validate the `--to` argument for single-file mode.
-/// Returns vault-relative normalized path or a CommandOutcome error.
+/// Returns the vault-relative normalized path, a skip verdict, or a
+/// `CommandOutcome` error.
 fn validate_target_single(
     dir: &Path,
     to_arg: &str,
     src_rel: &str,
     format: Format,
-) -> std::result::Result<String, CommandOutcome> {
+    on_conflict: ConflictPolicy,
+) -> std::result::Result<TargetSingle, CommandOutcome> {
     let normalized = to_arg.replace('\\', "/");
     let normalized = normalized
         .strip_prefix("./")
@@ -811,7 +923,28 @@ fn validate_target_single(
             } else {
                 format!("{normalized}/{basename}")
             };
-            return validate_target_single(dir, &with_basename, src_rel, format);
+            return validate_target_single(dir, &with_basename, src_rel, format, on_conflict);
+        }
+        // MV-1 (iter-273, BUG-24): a trailing slash is directory syntax, so
+        // `--to sub/` on a directory that does not exist used to be answered
+        // with `did you mean sub/.md?` — a path nothing can ever name. Say
+        // what is actually wrong: the directory is missing.
+        if normalized.ends_with('/') {
+            let bare = normalized.trim_end_matches('/');
+            let basename = Path::new(src_rel)
+                .file_name()
+                .map_or_else(|| src_rel.to_string(), |n| n.to_string_lossy().into_owned());
+            let out = crate::output::format_error(
+                format,
+                "destination directory does not exist",
+                Some(&normalized),
+                Some(&format!(
+                    "create {bare}/ first, or name the destination file directly \
+                     (--to {bare}/{basename})"
+                )),
+                None,
+            );
+            return Err(CommandOutcome::UserError(out));
         }
         let out = crate::output::format_error(
             format,
@@ -880,11 +1013,14 @@ fn validate_target_single(
             .zip(src_path.canonicalize().ok())
             .is_some_and(|(d, s)| d == s);
         if !same_file {
+            if on_conflict.is_skip() {
+                return Ok(TargetSingle::Skipped(normalized));
+            }
             let out = crate::output::format_error(
                 format,
                 "target file already exists",
                 Some(&normalized),
-                None,
+                Some("pass --on-conflict skip to leave the source in place instead"),
                 None,
             );
             return Err(CommandOutcome::UserError(out));
@@ -913,7 +1049,7 @@ fn validate_target_single(
         return Err(CommandOutcome::UserError(out));
     }
 
-    Ok(normalized)
+    Ok(TargetSingle::Path(normalized))
 }
 
 /// Validate the `--to` argument for batch mode: must be directory-shaped.
@@ -1058,7 +1194,7 @@ pub(crate) fn run(
     r#type: Vec<String>,
     dry_run: bool,
     apply: bool,
-    on_conflict: String,
+    on_conflict: ConflictPolicy,
     allow_ambiguous: bool,
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
@@ -1082,6 +1218,10 @@ pub(crate) fn run(
             None,
         )));
     };
+    // MV-1 (iter-273): the destination goes through the same CWD-relative →
+    // vault-relative normalisation the source does, so `hyalo mv kb/a.md
+    // kb/sub/a.md` from the project root stops creating `kb/kb/sub/a.md`.
+    let to = strip_vault_prefix_from_destination(dir, &to);
     // Parse property filters for batch mode
     let prop_filters: Vec<hyalo_core::filter::PropertyFilter> = match properties
         .iter()
@@ -1156,7 +1296,7 @@ pub(crate) fn run(
             &tag,
             &to,
             effective_apply,
-            &on_conflict,
+            on_conflict,
             effective_format,
             site_prefix,
             &mut journal,
@@ -1202,6 +1342,7 @@ pub(crate) fn run(
             site_prefix,
             &mut journal,
             allow_ambiguous,
+            on_conflict,
         )
     }
 }
