@@ -533,6 +533,9 @@ pub fn set(
 
     // L-2: relative paths skipped because their frontmatter would not parse.
     let mut skipped_unparseable: Vec<String> = Vec::new();
+    // BUG-35 (iter-276): the YAML diagnostic for a single named file rides
+    // in the error envelope's `cause` instead of a bare stderr line.
+    let mut unparseable_cause: Option<String> = None;
 
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
@@ -540,7 +543,11 @@ pub fn set(
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
-                super::report_unparseable_skip(files_arg, globs, rel_path, &e);
+                if let Some(detail) =
+                    super::report_unparseable_skip(files_arg, globs, rel_path, &e)
+                {
+                    unparseable_cause = Some(detail);
+                }
                 skipped_unparseable.push(rel_path.clone());
                 continue;
             }
@@ -628,7 +635,13 @@ pub fn set(
     // L-2: the single file the user named by hand was unparseable — report it
     // as an error rather than a 0-modified success.
     if let Some(outcome) =
-        super::single_named_file_unparseable(files_arg, globs, &skipped_unparseable, format)
+        super::single_named_file_unparseable(
+            files_arg,
+            globs,
+            &skipped_unparseable,
+            unparseable_cause.as_deref(),
+            format,
+        )
     {
         return Ok(outcome);
     }

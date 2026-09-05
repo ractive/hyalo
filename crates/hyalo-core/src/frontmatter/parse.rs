@@ -294,11 +294,14 @@ impl LineEnding {
 
 /// What [`opening_delimiter`] reports about a recognized opening `---` line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct OpeningDelimiter {
+pub(super) struct OpeningDelimiter<'a> {
     /// Whether the line was prefixed with a UTF-8 BOM.
     pub(super) has_bom: bool,
     /// The line ending following the `---` (irrelevant at end-of-input).
     pub(super) line_ending: LineEnding,
+    /// ASCII whitespace between the `---` and the line terminator, kept so a
+    /// rewrite reproduces the opener byte for byte (BUG-33/34, iter-276).
+    pub(super) trailing_ws: &'a str,
 }
 
 /// Single source of truth for "does this line open a frontmatter block?"
@@ -307,9 +310,16 @@ pub(super) struct OpeningDelimiter {
 /// `\r\n`, or none at end-of-input), optionally prefixed by a single UTF-8
 /// BOM. A line opens frontmatter only when — after stripping at most one
 /// leading BOM — it is exactly `---` followed by a line terminator or
-/// end-of-input. Leading whitespace before `---` is deliberately **not**
-/// accepted (e.g. `" ---"` does not open frontmatter): this matches
-/// Obsidian/Jekyll and keeps the check unambiguous.
+/// end-of-input, optionally followed by ASCII whitespace. Leading whitespace
+/// before `---` is deliberately **not** accepted (e.g. `" ---"` does not open
+/// frontmatter): this matches Obsidian/Jekyll and keeps the check unambiguous.
+///
+/// *Trailing* whitespace is accepted (BUG-34, iter-276, amending DEC-293).
+/// `--- ` is a valid YAML directives-end marker, [`is_closing_delimiter`] has
+/// always tolerated it, and the asymmetry meant a file opening with `--- ` was
+/// read as having no frontmatter at all — so `set` prepended a *second* block
+/// above the one already there. The tolerated bytes are carried in
+/// [`OpeningDelimiter::trailing_ws`] and re-emitted verbatim.
 ///
 /// `extract_frontmatter`, `read_frontmatter_from_reader`, and
 /// `find_body_offset` all call this helper instead of hand-rolling their own
@@ -317,7 +327,7 @@ pub(super) struct OpeningDelimiter {
 /// file has frontmatter — a prior drift between the three caused file
 /// corruption on `set`/`remove`/`append` for BOM-prefixed and
 /// leading-whitespace files (iter-158 C-1).
-pub(super) fn opening_delimiter(line: &str) -> Option<OpeningDelimiter> {
+pub(super) fn opening_delimiter(line: &str) -> Option<OpeningDelimiter<'_>> {
     let (has_bom, rest) = match line.strip_prefix(BOM) {
         Some(rest) => (true, rest),
         None => (false, line),
@@ -326,9 +336,11 @@ pub(super) fn opening_delimiter(line: &str) -> Option<OpeningDelimiter> {
         Some(r) => (r, LineEnding::CrLf),
         None => (rest.strip_suffix('\n').unwrap_or(rest), LineEnding::Lf),
     };
-    (dashes == "---").then_some(OpeningDelimiter {
+    let trailing_ws = dashes.strip_prefix("---")?;
+    (trailing_ws.bytes().all(|b| b == b' ' || b == b'\t')).then_some(OpeningDelimiter {
         has_bom,
         line_ending,
+        trailing_ws,
     })
 }
 
@@ -762,9 +774,11 @@ fn write_frontmatter_impl(
         check_frontmatter_size_budget(&yaml, path).map_err(anyhow::Error::new)?;
 
         out.extend_from_slice(b"---");
+        out.extend_from_slice(span.opening_trailing_ws.as_bytes());
         out.extend_from_slice(eol.as_bytes());
         out.extend_from_slice(yaml.as_bytes());
         out.extend_from_slice(b"---");
+        out.extend_from_slice(span.closing_trailing_ws.as_bytes());
         // iter-219 NEW-16a: a file whose last bytes are literally `---` with
         // no trailing newline (no body, closing delimiter unterminated)
         // must round-trip that way — not gain a newline it never had. Any
@@ -903,6 +917,12 @@ struct FrontmatterSpan {
     /// with nothing after them (iter-219 NEW-16a) — rewriting such a file
     /// must not invent a trailing newline that was never there.
     closing_has_trailing_newline: bool,
+    /// ASCII whitespace between the opening `---` and its line terminator.
+    /// Re-emitted verbatim so a rewrite touches only the lines the caller
+    /// addressed (BUG-34, iter-276).
+    opening_trailing_ws: String,
+    /// The same for the closing `---` (BUG-33): `--- ` stays `--- `.
+    closing_trailing_ws: String,
 }
 
 /// `true` when `raw_line` (a line as returned by `BufRead::read_line`,
@@ -939,6 +959,8 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
         line_ending: LineEnding::Lf,
         mixed_line_endings: false,
         closing_has_trailing_newline: true,
+        opening_trailing_ws: String::new(),
+        closing_trailing_ws: String::new(),
     };
 
     // Peek at the first line.
@@ -946,15 +968,17 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
     if n == 0 {
         return Ok(no_frontmatter);
     }
-    let Some(opening) = opening_delimiter(&line) else {
+    let Some(opening) = opening_delimiter(&line).map(|o| (o.has_bom, o.line_ending, o.trailing_ws.to_owned())) else {
         // No frontmatter — body starts at offset 0
         return Ok(no_frontmatter);
     };
+    let (opening_has_bom, opening_line_ending, opening_trailing_ws) = opening;
 
     let mut content_bytes: usize = 0;
     let mut line_count: usize = 0;
     let mut mixed_line_endings = false;
     let closing_has_trailing_newline;
+    let closing_trailing_ws;
 
     loop {
         line.clear();
@@ -975,13 +999,16 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
                 "unclosed frontmatter: file starts with `---` but no closing `---` was found"
             );
         }
-        if !line_ending_matches(&line, opening.line_ending) {
+        if !line_ending_matches(&line, opening_line_ending) {
             mixed_line_endings = true;
         }
         let trimmed = line.trim_end_matches(['\n', '\r']);
         if is_closing_delimiter(trimmed) {
             // Consumed up to and including the closing `---\n`
             closing_has_trailing_newline = line.ends_with('\n');
+            // BUG-33 (iter-276): the closer's own trailing spaces are bytes
+            // the caller did not address, so a `set` must not drop them.
+            closing_trailing_ws = trimmed.strip_prefix("---").unwrap_or("").to_owned();
             break;
         }
         line_count += 1;
@@ -999,10 +1026,12 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
         .context("failed to get stream position")?;
     Ok(FrontmatterSpan {
         body_offset: pos,
-        has_bom: opening.has_bom,
-        line_ending: opening.line_ending,
+        has_bom: opening_has_bom,
+        line_ending: opening_line_ending,
         mixed_line_endings,
         closing_has_trailing_newline,
+        opening_trailing_ws,
+        closing_trailing_ws,
     })
 }
 

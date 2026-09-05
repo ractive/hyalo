@@ -300,24 +300,30 @@ pub enum FilesOrOutcome {
 /// named exactly one file has nothing left to do and exits 1 via
 /// [`single_named_file_unparseable`] — there, `warning:` contradicted the exit
 /// code and the "nothing was modified" error that followed (iter-213, UX-5).
+/// Returns the diagnostic for the single-named-file case so the caller can put
+/// it in the error envelope's `cause`. Nothing is printed there (BUG-35,
+/// iter-276): a bare `error:` line ahead of the JSON envelope makes the output
+/// unparseable for the very consumer `--format json` exists to serve, and the
+/// envelope's own hint then said "see the error above" about a line that no
+/// longer needs to exist.
 pub(crate) fn report_unparseable_skip(
     files: &[String],
     globs: &[String],
     rel: &str,
     detail: &impl std::fmt::Display,
-) {
+) -> Option<String> {
     if globs.is_empty() && files.len() == 1 {
-        crate::warn::error(format!("{rel}: {detail}"));
-    } else {
-        // A batch run continues, so the diagnostic is collected and collapsed
-        // into the end-of-run summary line (iter-265, DEC-278) rather than
-        // streamed per file.
-        hyalo_core::warn::record_skip(
-            rel,
-            detail.to_string(),
-            hyalo_core::warn::SkipKind::Frontmatter,
-        );
+        return Some(detail.to_string());
     }
+    // A batch run continues, so the diagnostic is collected and collapsed
+    // into the end-of-run summary line (iter-265, DEC-278) rather than
+    // streamed per file.
+    hyalo_core::warn::record_skip(
+        rel,
+        detail.to_string(),
+        hyalo_core::warn::SkipKind::Frontmatter,
+    );
+    None
 }
 
 /// L-2 (iter-204): turn "the one file you named is unparseable" into an error.
@@ -336,6 +342,7 @@ pub(crate) fn single_named_file_unparseable(
     files: &[String],
     globs: &[String],
     skipped_unparseable: &[String],
+    cause: Option<&str>,
     format: Format,
 ) -> Option<CommandOutcome> {
     if !globs.is_empty() || files.len() != 1 || skipped_unparseable.len() != 1 {
@@ -346,8 +353,8 @@ pub(crate) fn single_named_file_unparseable(
         format,
         &format!("{rel}: unparseable frontmatter; nothing was modified"),
         None,
-        Some("fix the YAML frontmatter (see the error above), then re-run"),
-        None,
+        Some("fix the YAML frontmatter shown in `cause`, then re-run"),
+        cause,
     )))
 }
 
