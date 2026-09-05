@@ -89,7 +89,7 @@ pub(crate) fn list_rules(
         results.push(serde_json::json!({
             "id": SCHEMA_PSEUDO_RULE,
             "name": "frontmatter-schema",
-            "description": "Frontmatter validated against the [schema] types in .hyalo.toml:                             missing required properties, undeclared properties, type and enum                             constraints, and required sections. Not configurable through                             lint-rules — edit the schema with `hyalo types set`.",
+            "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections. Not configurable through lint-rules — edit the schema with `hyalo types set`.",
             "default_enabled": true,
             "default_severity": "error",
             "effective_enabled": true,
@@ -128,6 +128,27 @@ pub(crate) fn show_rule(
     schema: &hyalo_core::schema::SchemaConfig,
     format: Format,
 ) -> CommandOutcome {
+    // UX-5 (iter-274): `SCHEMA` is listed and selectable, so it must also be
+    // inspectable — a catalog entry `show` refuses is worse than no entry.
+    if rule_id.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) {
+        return CommandOutcome::success(format_success(
+            Format::Json,
+            &serde_json::json!({
+                "id": SCHEMA_PSEUDO_RULE,
+                "name": "frontmatter-schema",
+                "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
+                "default_enabled": true,
+                "default_severity": "error",
+                "effective_enabled": true,
+                "effective_severity": "error",
+                "autofixable": false,
+                "source": "hyalo-schema",
+                "configurable": false,
+                "override": serde_json::Value::Null,
+                "note": "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
+            }),
+        ));
+    }
     let Some(entry) = engine.rule_entry(rule_id) else {
         return CommandOutcome::UserError(format_error(
             format,
