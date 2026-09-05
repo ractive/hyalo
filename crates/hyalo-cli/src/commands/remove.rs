@@ -258,6 +258,10 @@ pub fn remove(
     // in the error envelope's `cause` instead of a bare stderr line.
     let mut unparseable_cause: Option<String> = None;
 
+    // BUG-14 (iter-277): one write phase for the whole batch, so the
+    // durability fsync is paid once per directory instead of once per file
+    // (DEC-317), and a long run reports progress instead of going silent.
+    let _write_phase = (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "removing properties"));
     // Outer loop: one read-modify-write per file
     for (full_path, rel_path) in &files {
         let mtime = frontmatter::read_mtime(full_path)?;

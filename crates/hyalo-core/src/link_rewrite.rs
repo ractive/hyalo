@@ -594,10 +594,40 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
     let canonical_vault = canonicalize_vault_dir(vault_dir)
         .context("failed to canonicalize vault directory for write safety check")?;
 
-    for plan in plans {
-        write_single_plan(&canonical_vault, plan)?;
+    // iter-277 (BUG-14): one shared write phase — every plan keeps its own
+    // atomic temp+rename, and the durability fsyncs are paid once per
+    // directory when the guard drops (DEC-317).
+    let phase = crate::fs_util::WritePhase::begin(plans.len(), "rewriting links");
+    let results = write_plans_in_parallel(&canonical_vault, plans);
+    drop(phase);
+    for result in results {
+        result?;
     }
     Ok(())
+}
+
+/// Run every plan's write on the rayon pool, preserving input order in the
+/// returned results.
+///
+/// The writes are independent — one plan per file, paths already validated —
+/// so the only shared state is the [`BatchWriter`]'s directory set, which is
+/// behind its own mutex.
+fn write_plans_in_parallel(canonical_vault: &Path, plans: &[RewritePlan]) -> Vec<Result<()>> {
+    #[cfg(not(miri))]
+    {
+        use rayon::prelude::*;
+        plans
+            .par_iter()
+            .map(|plan| write_single_plan(canonical_vault, plan))
+            .collect()
+    }
+    #[cfg(miri)]
+    {
+        plans
+            .iter()
+            .map(|plan| write_single_plan(canonical_vault, plan))
+            .collect()
+    }
 }
 
 /// Execute rewrite plans, continuing past per-file failures (L-11).
@@ -618,9 +648,13 @@ pub fn execute_plans_partial(
     let canonical_vault = canonicalize_vault_dir(vault_dir)
         .context("failed to canonicalize vault directory for write safety check")?;
 
+    let phase = crate::fs_util::WritePhase::begin(plans.len(), "rewriting links");
+    let results = write_plans_in_parallel(&canonical_vault, plans);
+    drop(phase);
+
     let mut outcomes = Vec::with_capacity(plans.len());
-    for plan in plans {
-        match write_single_plan(&canonical_vault, plan) {
+    for (plan, result) in plans.iter().zip(results) {
+        match result {
             Ok(()) => outcomes.push(PlanOutcome {
                 rel_path: plan.rel_path.clone(),
                 applied: true,

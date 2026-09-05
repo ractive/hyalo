@@ -1,7 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tempfile::NamedTempFile;
 
 /// Maximum number of symlink hops followed when resolving a write destination.
@@ -244,6 +247,33 @@ pub fn atomic_write_within(vault_root: &Path, path: &Path, data: &[u8]) -> Resul
 }
 
 fn write_impl(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Result<()> {
+    // Inside a bulk [`WritePhase`] the durability fsyncs are the phase's to
+    // pay, once per directory at the end (DEC-317); outside one, every write
+    // carries the full guarantee on its own.
+    let Some(phase) = active_phase() else {
+        let parent = write_no_dir_sync(vault_root, path, data, true)?;
+        sync_parent_dir(&parent);
+        return Ok(());
+    };
+    let parent = write_no_dir_sync(vault_root, path, data, phase.durable_per_file)?;
+    if let Ok(mut dirs) = phase.dirs.lock() {
+        dirs.insert(parent);
+    }
+    phase.tick();
+    Ok(())
+}
+
+/// The body of [`write_impl`] up to — but not including — the parent-directory
+/// fsync, returning the directory that still needs syncing.
+///
+/// Split out for [`BatchWriter`], which collects those directories and syncs
+/// each one *once* at the end of a write phase instead of once per file.
+fn write_no_dir_sync(
+    vault_root: Option<&Path>,
+    path: &Path,
+    data: &[u8],
+    fsync_data: bool,
+) -> Result<PathBuf> {
     let dest = resolve_write_target(path)?;
     // The boundary re-check only matters when resolution actually moved the
     // destination — an ordinary write pays no extra syscalls for it.
@@ -279,9 +309,13 @@ fn write_impl(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Result<()>
 
     // Flush the data before the rename: without this, a crash right after the
     // rename can leave the new directory entry pointing at unwritten blocks.
-    tmp.as_file()
-        .sync_all()
-        .with_context(|| format!("failed to flush temp file for {}", dest.display()))?;
+    // A bulk phase (DEC-317, iter-277) opts out of this barrier — see
+    // [`BatchWriter`] for what it trades and why.
+    if fsync_data {
+        tmp.as_file()
+            .sync_all()
+            .with_context(|| format!("failed to flush temp file for {}", dest.display()))?;
+    }
 
     tmp.persist(dest)
         .with_context(|| format!("failed to persist temp file to {}", dest.display()))?;
@@ -292,9 +326,163 @@ fn write_impl(vault_root: Option<&Path>, path: &Path, data: &[u8]) -> Result<()>
             .with_context(|| format!("failed to restore permissions on {}", dest.display()))?;
     }
 
-    sync_parent_dir(parent);
+    Ok(parent.to_path_buf())
+}
 
-    Ok(())
+/// Largest write phase that still pays the per-file durability fsync.
+///
+/// A `mv` touching a handful of backlinks, or a `set` over three files, costs
+/// well under a tenth of a second at the full guarantee, so it keeps it. Past
+/// this the phase is a bulk rewrite and DEC-317 applies.
+const DURABLE_BATCH_MAX: usize = 8;
+
+/// How many files a write phase must reach before it reports progress.
+///
+/// Below this a bulk write finishes faster than a reader notices, and a
+/// progress line would be noise on every two-file `set`.
+const PROGRESS_THRESHOLD: usize = 200;
+
+/// How often, in files, the progress line is refreshed past the threshold.
+const PROGRESS_INTERVAL: usize = 200;
+
+/// Shared state of the write phase currently in progress, if any.
+struct PhaseState {
+    dirs: Mutex<BTreeSet<PathBuf>>,
+    done: AtomicUsize,
+    reported: AtomicUsize,
+    total: usize,
+    label: &'static str,
+    quiet: bool,
+    durable_per_file: bool,
+}
+
+/// The active phase. `None` outside a bulk command, which is the state every
+/// single-file mutation and every test runs in.
+static PHASE: Mutex<Option<Arc<PhaseState>>> = Mutex::new(None);
+
+/// Read the active phase, if one is installed.
+fn active_phase() -> Option<Arc<PhaseState>> {
+    PHASE.lock().ok().and_then(|p| p.clone())
+}
+
+/// A command's bulk write phase (iter-277, BUG-14).
+///
+/// Every file written while this guard is alive still gets a temp file in the
+/// destination directory and an atomic `rename` into place, so a reader — and
+/// a crashed process — never sees a half-written note. That is the guarantee
+/// [`atomic_write`] documents as *atomicity*, and it holds here unchanged.
+///
+/// **DEC-317 — what a bulk phase trades.** [`atomic_write`] additionally
+/// `sync_all`s each temp file before the rename, which buys *durability*
+/// against power loss and kernel panic. On macOS `sync_all` is
+/// `fcntl(F_FULLFSYNC)`, a whole-device barrier costing ~5.5 ms per file
+/// regardless of size, and it does **not** amortize across threads (measured
+/// on APFS: 5.25 ms/file serial, 4.08 ms/file on four threads). That barrier
+/// was the entirety of the 49 s the Obsidian Hub's `lint --fix` and the 25 s a
+/// 2190-backlink `mv` took. A phase declaring more than [`DURABLE_BATCH_MAX`]
+/// files therefore skips the per-file barrier and fsyncs each touched
+/// *directory* once when the guard drops (~0.13 ms each), making the renames
+/// durable and leaving the last-written data blocks to the filesystem's own
+/// flush. A power cut mid-phase can then lose the content of files already
+/// renamed — recovered by re-running a command that is reproducible by
+/// construction, over version-tracked markdown. Small phases, and every
+/// single-file mutation outside a phase, keep the full guarantee.
+///
+/// The guard is *ambient*: it installs itself process-wide so that
+/// [`atomic_write_within`] picks it up wherever the write happens, including
+/// from rayon workers. It is the same shape as
+/// [`crate::warn::set_verbose_skips`] and `discovery::set_scan_exclude`, and
+/// it exists for the same reason — the write sites are five commands deep and
+/// threading a parameter through every one of them buys nothing.
+///
+/// Nesting is a no-op: a phase begun while another is active returns an inert
+/// guard, so an inner command cannot end the outer command's phase early.
+///
+/// **Windows:** directory handles cannot be `fsync`ed there, so
+/// [`sync_parent_dir`] is a no-op and a bulk phase's durability rests on the
+/// filesystem's own ordering. Atomicity is unchanged on both platforms.
+#[must_use = "the phase ends when the guard is dropped"]
+pub struct WritePhase {
+    /// `false` for a nested guard, which must not tear down the outer phase.
+    owns: bool,
+}
+
+impl WritePhase {
+    /// Begin a write phase over `total` files.
+    ///
+    /// `label` names the phase in the progress line ("rewriting links",
+    /// "applying fixes"). `total` decides both whether the phase is small
+    /// enough to keep the per-file durability fsync (see
+    /// [`DURABLE_BATCH_MAX`]) and whether it is long enough to be worth
+    /// reporting progress for; `-q` silences the report either way, via
+    /// [`crate::warn::quiet_progress`].
+    pub fn begin(total: usize, label: &'static str) -> Self {
+        let Ok(mut slot) = PHASE.lock() else {
+            return Self { owns: false };
+        };
+        if slot.is_some() {
+            return Self { owns: false };
+        }
+        *slot = Some(Arc::new(PhaseState {
+            dirs: Mutex::new(BTreeSet::new()),
+            done: AtomicUsize::new(0),
+            reported: AtomicUsize::new(0),
+            total,
+            label,
+            quiet: crate::warn::quiet_progress(),
+            durable_per_file: total <= DURABLE_BATCH_MAX,
+        }));
+        Self { owns: true }
+    }
+}
+
+impl Drop for WritePhase {
+    fn drop(&mut self) {
+        if !self.owns {
+            return;
+        }
+        let Some(state) = PHASE.lock().ok().and_then(|mut slot| slot.take()) else {
+            return;
+        };
+        let dirs = state
+            .dirs
+            .lock()
+            .map(|d| d.clone())
+            .unwrap_or_else(|p| p.into_inner().clone());
+        for dir in &dirs {
+            sync_parent_dir(dir);
+        }
+        let done = state.done.load(Ordering::Relaxed);
+        if !state.quiet && state.total >= PROGRESS_THRESHOLD && done > 0 {
+            eprintln!("{}: {done}/{} files, done", state.label, state.total);
+        }
+    }
+}
+
+impl PhaseState {
+    /// Count one completed write and print a progress line when the phase is
+    /// long enough to be mistaken for a hang (PERF-3: 49 s of silence reads as
+    /// a crash).
+    fn tick(&self) {
+        let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.quiet || self.total < PROGRESS_THRESHOLD {
+            return;
+        }
+        // One reporter at a time: `reported` advances only when this thread
+        // wins the compare-exchange, so concurrent workers never interleave
+        // two lines for the same milestone.
+        let last = self.reported.load(Ordering::Relaxed);
+        if done < last + PROGRESS_INTERVAL {
+            return;
+        }
+        if self
+            .reported
+            .compare_exchange(last, done, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            eprintln!("{}: {done}/{} files", self.label, self.total);
+        }
+    }
 }
 
 /// Best-effort fsync of the directory holding a just-renamed file, so the

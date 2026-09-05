@@ -1287,12 +1287,24 @@ pub fn find(
         // iter-261: an external URI and an attachment embed are not edges in
         // the note graph either — a note whose only links are `![[img.png]]`
         // and `[docs](https://…)` is still a dead end.
+        //
+        // DEC-318 (iter-277): the predicate itself lives in core and is the
+        // same one the link graph applies, so `summary.orphans` /
+        // `summary.dead_ends` can no longer disagree with these filters
+        // (BUG-16). Note it also excludes a *broken* `![[missing.png]]`:
+        // resolution never crosses an explicit extension, so that target names
+        // an attachment either way. It is still a broken link, and
+        // `find --broken-links` still reports it.
         let has_real_outbound = || {
-            obj.links
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .any(|l| !l.target.is_empty() && l.kind.is_resolvable_vault_link())
+            obj.links.as_deref().unwrap_or(&[]).iter().any(|l| {
+                // `is_resolvable_vault_link() == false` is exactly the
+                // external-or-attachment case the predicate's `external` flag
+                // (and its extension rule) reject.
+                hyalo_core::types::is_note_graph_edge(
+                    &l.target,
+                    !l.kind.is_resolvable_vault_link(),
+                )
+            })
         };
 
         // --- Apply orphan filter (no inbound AND no outbound links) ---

@@ -160,6 +160,11 @@ pub fn properties_rename(
     let mut skipped_count: usize = 0;
     let mut conflicts = Vec::new();
 
+    // BUG-14 (iter-277): one write phase for the whole rename, so the
+    // durability fsync is paid once per directory (DEC-317) and a long run
+    // reports progress instead of going silent.
+    let _write_phase = (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "renaming property"));
+
     for (full_path, rel_path) in &files {
         let mut props = match frontmatter::read_frontmatter(full_path) {
             Ok(p) => p,

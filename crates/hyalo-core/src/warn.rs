@@ -75,6 +75,26 @@ pub fn verbose_skips() -> bool {
     VERBOSE_SKIPS.load(Ordering::Relaxed)
 }
 
+/// Whether progress reporting on long write phases is suppressed (`-q`).
+static QUIET_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Suppress (or restore) the progress line long write phases print
+/// (iter-277, PERF-3).
+///
+/// The CLI calls this once at startup from its `--quiet` flag. Core code has
+/// no other way to see it, and a 49-second bulk write that says nothing is
+/// indistinguishable from a hang — so the line is on by default and `-q` is
+/// what turns it off.
+pub fn set_quiet_progress(quiet: bool) {
+    QUIET_PROGRESS.store(quiet, Ordering::Relaxed);
+}
+
+/// Whether write-phase progress reporting is suppressed.
+#[must_use]
+pub fn quiet_progress() -> bool {
+    QUIET_PROGRESS.load(Ordering::Relaxed)
+}
+
 /// Whether `RUST_LOG` asks for hyalo debug/trace output.
 ///
 /// Accepts the shapes an operator actually types: `hyalo=debug`, `debug`,

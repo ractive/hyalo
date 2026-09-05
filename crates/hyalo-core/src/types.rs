@@ -141,6 +141,36 @@ impl LinkKindLabel {
     }
 }
 
+/// The one definition of an edge in the **note** graph (DEC-318, iter-277).
+///
+/// `summary.orphans` / `summary.dead_ends` and `find --orphan` /
+/// `find --dead-end` answer the same question and must therefore apply the
+/// same predicate. Before this they did not: the link graph excluded an
+/// attachment reference only when its own case index happened to list the
+/// attachment — and the graph's index holds notes only — so a note whose
+/// single outbound link was `![[real.png]]` was a dead end to `find` and a
+/// linked note to `summary` (BUG-16; 25 such files on MDN).
+///
+/// A target is an edge when all three hold:
+///
+/// - it is not an external URI — `https:`, `obsidian://`, `mailto:` name
+///   nothing in the vault;
+/// - it is not the empty self-anchor marker — `[[#Heading]]` is a jump inside
+///   one note, not a link to another;
+/// - it carries no explicit non-`.md` extension — `![[img.png]]`,
+///   `[[Books.base]]`, `[spec](a.pdf)`. Resolution never crosses an explicit
+///   extension (DEC-266), so such a target can only ever name an attachment;
+///   whether the attachment happens to exist is a question about the vault's
+///   files, not about the note graph, and a **missing** image is still a
+///   broken link that `find --broken-links` reports.
+///
+/// Deliberately answerable with no filesystem access and no index, so the
+/// graph builder and the `find` filter can share it verbatim.
+#[must_use]
+pub fn is_note_graph_edge(target: &str, external: bool) -> bool {
+    !external && !target.is_empty() && !crate::discovery::has_non_md_extension(target)
+}
+
 /// A single link with its resolution status.
 /// Used by `find` (links field).
 #[derive(Debug, Clone, Serialize, Deserialize)]

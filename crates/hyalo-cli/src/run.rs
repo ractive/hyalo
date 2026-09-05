@@ -981,6 +981,9 @@ fn run_inner() -> Result<(), AppError> {
         Err(e) => return Err(AppError::Clap(e)),
     };
 
+    // PERF-3 (iter-277): long write phases report progress on stderr; `-q`
+    // silences them, exactly as it silences warnings.
+    hyalo_core::warn::set_quiet_progress(cli.quiet);
     // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
     // covers the common case but this ensures correctness after full parsing).
     crate::warn::init(cli.quiet);

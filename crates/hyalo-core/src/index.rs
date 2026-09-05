@@ -337,7 +337,11 @@ impl VaultIndex for ScannedIndex {
 /// | 0 | ≤ iter-275 | no stamp; every pre-276 snapshot reads as 0 |
 /// | 1 | iter-276 | iter-272 self-anchor links + iter-273 `scan_excluded` /
 /// |   |          | `scan_exclude` / `attachments` header fields |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+/// | 2 | iter-277 | `skipped` header field (BUG-24) — a v1 snapshot has no
+/// |   |          | witness for the files whose frontmatter would not parse,
+/// |   |          | so `summary --index` reported `0 skipped` where the disk
+/// |   |          | scan reported 1 (Hub) and 28 (kepano) |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]
@@ -385,6 +389,18 @@ struct SnapshotHeader {
     /// changed since the index was built", where the count would be a lie.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     scan_exclude: Vec<String>,
+    /// Vault-relative paths of the files this build **skipped** because their
+    /// YAML frontmatter would not parse (iter-277, BUG-24).
+    ///
+    /// Sibling of [`Self::scan_excluded`], and recorded for the same reason: a
+    /// skipped file never enters `entries`, so a load has no way to recount
+    /// them without the vault walk `--index` exists to avoid. Paths rather
+    /// than a bare count, because `summary` attributes skips to directories
+    /// (`results.files.directories[].skipped`) and a count cannot rebuild that
+    /// row. Defaulted and skipped when empty, so a vault with no unparsable
+    /// file writes the same bytes as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skipped: Vec<String>,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -1448,6 +1464,20 @@ impl SnapshotIndex {
                 usize::try_from(header.scan_excluded).unwrap_or(usize::MAX),
             );
         }
+        // BUG-24 (iter-277): replay the build-time skips so `summary --index`
+        // reports the same `skipped` figure — and the same per-directory
+        // attribution — as a disk scan. The original YAML diagnostic is not
+        // carried in the snapshot (it would bloat every index for a message
+        // `lint` prints better), so the replayed reason points at the rule
+        // that explains it.
+        for path in &header.skipped {
+            crate::warn::record_skip(
+                path.clone(),
+                "unparsable frontmatter (recorded when the index was built — \
+                 run `hyalo lint --rule HYALO005` for the diagnostic)",
+                crate::warn::SkipKind::Frontmatter,
+            );
+        }
 
         let path_index: HashMap<String, usize> = entries
             .iter()
@@ -1639,6 +1669,11 @@ fn write_snapshot(
         // loaded in this same process re-seeded them from the header it read,
         // so both write paths record the figure that describes these bytes.
         scan_excluded: crate::discovery::scan_excluded_count() as u64,
+        skipped: crate::warn::skipped_files()
+            .into_iter()
+            .filter(|f| f.kind == crate::warn::SkipKind::Frontmatter)
+            .map(|f| f.path)
+            .collect(),
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
@@ -3208,6 +3243,7 @@ Content.
                 pid: std::process::id(),
                 attachments: Vec::new(),
                 scan_excluded: 0,
+                skipped: Vec::new(),
                 scan_exclude: Vec::new(),
             },
             entries,
@@ -3506,6 +3542,7 @@ Content.
                 pid: std::process::id(),
                 attachments: Vec::new(),
                 scan_excluded: 0,
+                skipped: Vec::new(),
                 scan_exclude: Vec::new(),
             },
             bm25_index: Some(&original),
