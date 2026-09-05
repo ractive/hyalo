@@ -67,8 +67,8 @@ pub use case_index::{
 pub use common_words::is_common_word;
 /// Vault-boundary file writing and refusal messaging (was `hyalo_core::fs_util`).
 pub use fs_util::{
-    atomic_write_within, escaping_write_target, outside_vault_hint, outside_vault_message,
-    outside_vault_message_with_dir,
+    WritePhase, atomic_write_within, escaping_write_target, outside_vault_hint,
+    outside_vault_message, outside_vault_message_with_dir,
 };
 /// Date-validation and string-distance helpers used by CLI lint rules.
 pub use user_error::{UserFacingError, user_error, user_error_with};

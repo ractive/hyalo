@@ -536,7 +536,39 @@ What follows is only what those pages do not say — the behaviour that surprise
   `[[a #Heading]]` and `[[./a]]` all report `path: "a.md"`; `target` keeps the written text.
 - **`links fix` reports the string it will write** (iter-272): every plan carries
   `emitted_target` beside the vault-relative `new_target`, filled by the same planning pass in
-  `--dry-run` and `--apply`, so a preview is byte-accurate about what lands on disk.
+  `--dry-run` and `--apply`, so a preview is byte-accurate about what lands on disk. Since
+  iter-277 that includes the *below-floor* entries in `fuzzy_fixes`, which are the ones a
+  reader inspects before opting in.
+- **One graph, one answer** (DEC-318, iter-277): `summary.orphans` / `summary.dead_ends` equal
+  `find --orphan --count` / `find --dead-end --count`. An external URI, a same-file anchor and
+  any target with an explicit non-`.md` extension are not note-graph edges — a *broken*
+  `![[missing.png]]` included, since resolution never crosses an explicit extension. It is
+  still a broken link and still reported by `find --broken-links`.
+- **A contested fuzzy match is damped below the floor** (DEC-319, iter-277): a winner that
+  beats its runner-up by only a narrow margin has its confidence scaled down, so it is
+  reported in `fuzzy_fixes` for review rather than written by `--apply-fuzzy`. A unique match
+  keeps its score. `links fix`'s `broken_anchors` is always the count `find --broken-links`
+  computes (it used to be a hard-coded 0 whenever any target was broken); `null` still means
+  "could not check".
+- **`links fix`'s two site-prefix warnings count the same set** (iter-277), and the
+  "stripped 0 of N" one says "derived from the directory name" when nothing configured the
+  prefix it is blaming.
+- **Autolinks are inventoried** (iter-277): `<https://…>` and `<obsidian://…>` appear in
+  `--fields links` with `kind: "external"`, so an external-target histogram is complete. A
+  bare URL in prose is deliberately not inventoried — it carries no link syntax.
+- **Link-kind histogram, and missing images** — no flag, two `--jq` recipes:
+  `hyalo find --fields links --jq '[.results[].links[].kind] | group_by(.) | map({kind: .[0], n: length})'`
+  and
+  `hyalo find --fields links --jq '.results[] as $f | $f.links[] | select(.kind == "embed" and .path == null) | "\($f.file):\($f.line) \(.target)"'`
+- **`find --broken-links --format text` prints only the broken links** of each matched file
+  (iter-277). JSON is unchanged: it carries every link with its own `path` / `broken_anchor`
+  verdict.
+- **A bulk write phase is durable per directory, not per file** (DEC-317, iter-277):
+  `lint --fix`, `mv`, `links fix --apply`, `set`/`append`/`remove --glob`,
+  `properties rename` and `tags rename` still replace every file atomically, but a phase over
+  8 files fsyncs each touched directory once at the end rather than every file before its
+  rename — the Obsidian Hub's `lint --fix` went from 48.1 s to 2.35 s. Past a few hundred
+  files the phase reports progress on stderr; `-q` silences it.
 - **`config` reports a broken config rather than failing.** `results.malformed` /
   `results.parse_error` mean every other value shown is a built-in default.
 - **`views run <name>` is exactly `find --view <name>`** — same merge rules, same output.

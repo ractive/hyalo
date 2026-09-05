@@ -141,6 +141,42 @@ impl LinkKindLabel {
     }
 }
 
+/// The one definition of an edge in the **note** graph (DEC-318, iter-277).
+///
+/// `summary.orphans` / `summary.dead_ends` and `find --orphan` /
+/// `find --dead-end` answer the same question and must therefore apply the
+/// same predicate. Before this they did not: the link graph excluded an
+/// attachment reference only when its own case index happened to list the
+/// attachment — and the graph's index holds notes only — so a note whose
+/// single outbound link was `![[real.png]]` was a dead end to `find` and a
+/// linked note to `summary` (BUG-16; 25 such files on MDN).
+///
+/// A target is an edge when all three hold:
+///
+/// - it is not an external URI — `https:`, `obsidian://`, `mailto:` name
+///   nothing in the vault;
+/// - it is not the empty self-anchor marker — `[[#Heading]]` is a jump inside
+///   one note, not a link to another;
+/// - `is_attachment` is `false` — the caller's own verdict on whether this
+///   target names an attachment rather than a note.
+///
+/// `is_attachment` is deliberately a caller-supplied fact rather than
+/// recomputed here from `target`'s syntax alone: a dotted note stem
+/// (`Foo.v2.md`, linked as `[[Foo.v2]]`) carries what looks like a non-`.md`
+/// extension but resolves to a real note, and a syntax-only check excluded it
+/// from the graph — `backlinks Foo.v2.md` came back empty and `find --orphan`
+/// called it an orphan even with a real inbound link (iter-277 regression,
+/// caught in review). A caller with a resolved path in hand should trust
+/// it (`!has_md_extension(path)`) over the target's spelling; only when the
+/// target is unresolved does the syntactic rule apply — resolution never
+/// crosses an explicit extension (DEC-266), so `![[missing.png]]` can only
+/// ever have named an attachment, missing or not, and `find --broken-links`
+/// still reports it broken.
+#[must_use]
+pub fn is_note_graph_edge(target: &str, external: bool, is_attachment: bool) -> bool {
+    !external && !target.is_empty() && !is_attachment
+}
+
 /// A single link with its resolution status.
 /// Used by `find` (links field).
 #[derive(Debug, Clone, Serialize, Deserialize)]

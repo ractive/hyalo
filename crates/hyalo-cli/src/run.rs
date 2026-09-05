@@ -981,6 +981,9 @@ fn run_inner() -> Result<(), AppError> {
         Err(e) => return Err(AppError::Clap(e)),
     };
 
+    // PERF-3 (iter-277): long write phases report progress on stderr; `-q`
+    // silences them, exactly as it silences warnings.
+    hyalo_core::warn::set_quiet_progress(cli.quiet);
     // Re-apply quiet flag from the fully-parsed CLI (the early pre-scan
     // covers the common case but this ensures correctness after full parsing).
     crate::warn::init(cli.quiet);
@@ -1378,7 +1381,7 @@ fn run_inner() -> Result<(), AppError> {
     //
     // Empty strings in (1) and (2) short-circuit the chain and result in
     // site_prefix = None, suppressing all absolute-link resolution.
-    let (site_prefix_owned, _site_prefix_source) = crate::config::resolve_site_prefix(
+    let (site_prefix_owned, site_prefix_source) = crate::config::resolve_site_prefix(
         cli.site_prefix.as_deref(),
         config.site_prefix.as_deref(),
         &dir,
@@ -1632,6 +1635,9 @@ fn run_inner() -> Result<(), AppError> {
                 None
             },
             hints: hints_from_cli,
+            // BUG-15 (iter-277): only the CLI value is threaded; a prefix that
+            // came from `.hyalo.toml` already applies to the follow-up.
+            site_prefix: cli.site_prefix.clone(),
         };
 
         match &cli.command {
@@ -2104,7 +2110,18 @@ fn run_inner() -> Result<(), AppError> {
         // told to *use* the snapshot, not to build another one. Only probed
         // when no index was requested, so the common `--index` path pays
         // nothing for the stat.
-        ctx.snapshot_on_disk = index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
+        // BUG-15 (iter-277), second half: a snapshot built under a different
+        // `site_prefix` answers a different question than this run, so
+        // following the hint would change the count it was printed beside.
+        // Whether it matches cannot be known without deserializing the whole
+        // snapshot — far too much work for a hint on a 14 000-file vault — so
+        // an explicit `--site-prefix` on this run suppresses the suggestion
+        // rather than risking a misleading one. A prefix that came from
+        // `.hyalo.toml` is the same one `create-index` would have used, and
+        // still hints normally.
+        ctx.snapshot_on_disk = index_path_buf.is_none()
+            && cli.site_prefix.is_none()
+            && dir.join(".hyalo-index").is_file();
         // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
         // existing `.md` path is a body search for that literal text. Record
         // it so `find`'s hints can offer `--file`.
@@ -2185,7 +2202,18 @@ fn run_inner() -> Result<(), AppError> {
                         false
                     } else {
                         targets.iter().all(|rel| {
-                            hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
+                            // UX-13 (iter-277): a named target that is not on
+                            // disk at all is not evidence of a stale index —
+                            // the command is about to report `file not found`
+                            // for it, and prefixing that with "index older
+                            // than vault; results may be stale" sends the
+                            // reader off to rebuild a snapshot that was never
+                            // the problem. Nothing to refresh is not a failure
+                            // to refresh.
+                            !dir.join(rel).exists()
+                                || hyalo_core::index::refresh_if_changed_on_disk(
+                                    &mut idx, &dir, rel,
+                                )
                         })
                     };
                     if !refreshed_all_targets && !cli.command.write_repairs_named_targets() {
@@ -2197,8 +2225,15 @@ fn run_inner() -> Result<(), AppError> {
                                         .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
                             });
                         if dirs_moved {
+                            // UX-8 (iter-277): name the probe that fired. Two
+                            // different checks produce this warning and only
+                            // one of them names a witness file, so the same
+                            // vault appeared to report a filename on one run
+                            // and nothing on the next, with no way to tell
+                            // that a different check had spoken.
                             crate::warn::warn(
-                                "index older than vault; results may be stale — re-run create-index",
+                                "index older than vault (a directory's mtime moved since the \
+                                 index was built); results may be stale — re-run create-index",
                             );
                         } else if let Some(rel) =
                             // INDEX-1 (iter-273, BUG-12): the directory probe
@@ -2214,8 +2249,8 @@ fn run_inner() -> Result<(), AppError> {
                                 )
                         {
                             crate::warn::warn(format!(
-                                "index older than vault ({rel} changed on disk since the index \
-                                 was built); results may be stale — re-run create-index"
+                                "index older than vault (file {rel} changed on disk since the \
+                                 index was built); results may be stale — re-run create-index"
                             ));
                         }
                     }
@@ -2491,6 +2526,7 @@ fn run_inner() -> Result<(), AppError> {
         config_dir: &config_dir,
         configured_dir_str,
         site_prefix,
+        site_prefix_source,
         effective_format,
         user_format: format,
         snapshot_index: &mut snapshot_index,

@@ -97,10 +97,18 @@ pub fn lint_files_extended(
             link_ctx,
         )
     };
+    // BUG-14 (iter-277): `--fix` rewrites every file it fixes, and each of
+    // those writes used to pay its own `F_FULLFSYNC` — 5.5 ms apiece on APFS,
+    // 49 s over the Obsidian Hub. One phase for the whole run pays the
+    // durability fsync once per directory instead (DEC-317) and reports
+    // progress so a long run does not read as a hang.
+    let write_phase = matches!(opts.fix, FixMode::Apply)
+        .then(|| hyalo_core::WritePhase::begin(files.len(), "applying fixes"));
     #[cfg(not(miri))]
     let per_file: Vec<Result<PerFileLintResult>> = files.par_iter().map(lint_file).collect();
     #[cfg(miri)]
     let per_file: Vec<Result<PerFileLintResult>> = files.iter().map(lint_file).collect();
+    drop(write_phase);
 
     // Merge results serially.
     let mut all_results: Vec<PerFileLintResult> = Vec::with_capacity(files.len());

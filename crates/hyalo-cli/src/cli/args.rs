@@ -862,6 +862,12 @@ pub(crate) enum Commands {
                 K=[] / K!=[]      present and an empty list / present and not an empty list\n\
               A list CONTAINING a null (`aliases: [null]`) does not match `K=null` — the value's own\n\
               type is what is tested, so `K=null` and `--fields properties-typed` (type \"null\") agree.\n\
+              ABSENT KEYS AND `!=`: `K!=V` tests a value, so a file that does not carry K at all does\n\
+              NOT match — `versions.fpt!=*` skips the 1,249 GitHub-Docs pages with no `versions.fpt`\n\
+              rather than listing them. Use `!K` for absence, and combine with a second query when you\n\
+              want both (`--property '!K'` then `--property 'K!=V'`). The same rule governs the\n\
+              sequence case above: `contacts.email!=x` matches when the sequence exists and no element\n\
+              has that email, never when there is no `contacts` at all.\n\
               TYPED COMPARISONS: >, >=, < and <= compare numerically when both sides parse as numbers\n\
               (so `rating>=6` matches `rating: \"7\"`), by date when both parse as ISO dates, and as text\n\
               only when both are plain strings. A value of any other kind never matches, so\n\
@@ -1905,10 +1911,12 @@ Repeatable (AND).\n\
             relocations is a bare-stem link (no directory in the written target) whose stem \
             resolved to a file in a different directory — a move, not a casing fix, so it is \
             reported apart from case_mismatches (both are written by plain --apply).\n\
-            ANCHORS: broken_anchors (and its one-line note in --format text output) is populated only when \
-            broken is 0 — a link whose target resolves but whose #fragment names no heading is \
-            not a broken *link* in this command's sense, and the count only runs the extra check \
-            when targets are otherwise clean. `find --broken-links --strict` is the CI gate for \
+            ANCHORS: broken_anchors is always the count find --broken-links computes — the links \
+            whose target resolves but whose #fragment names no heading. It used to be reported only \
+            when broken was 0, so on any corpus with a broken target it was a hard-coded 0 that \
+            contradicted find (iter-277, BUG-45); the check is answered from the in-memory file set \
+            and costs nothing to always run. null (never 0) means the vault directory could not be \
+            canonicalized, so the check never ran. `find --broken-links --strict` is the CI gate for \
             anchors; this command does not fix them (NEW-15 / UX-2).\n\
             CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
@@ -2968,7 +2976,14 @@ pub(crate) enum LinksAction {
             is produced.\n\n\
             EMITTED TARGET: every reported plan carries emitted_target — the exact link text\n\
             --apply writes — beside the vault-relative new_target. Both are filled by the\n\
-            same planning pass in --dry-run and --apply, so the preview is byte-accurate.\n\n\
+            same planning pass in --dry-run and --apply, so the preview is byte-accurate.\n\
+            This includes the below-floor entries in fuzzy_fixes, which are precisely the ones\n\
+            a reader inspects before opting in (iter-277, BUG-17).\n\n\
+            CONTESTED FUZZY MATCHES (DEC-319): when a fuzzy winner beats its runner-up by only a\n\
+            narrow margin, its reported confidence is scaled down toward the runner-up's, so a\n\
+            contested guess falls below the floor and is reported rather than applied. A vault\n\
+            with five cat* notes no longer offers [[Cat]] -> CatMuse.md at 0.87; a unique match\n\
+            keeps its score untouched.\n\n\
             Use --expand-short-form to opt into path expansion (Obsidian-incompatible).\n\n\
             Case-mismatch detection: when case-insensitive resolution is active (controlled by\n\
             `[links] case_insensitive` in .hyalo.toml — \"auto\", \"true\", or \"false\"), broken links\n\

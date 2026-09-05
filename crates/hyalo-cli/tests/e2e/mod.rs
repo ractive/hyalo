@@ -55,6 +55,7 @@ mod iteration273_named_file_honesty;
 mod iteration274_contract_polish;
 mod iteration275_alias_and_mv_guards;
 mod iteration276_autofix_config_index_honesty;
+mod iteration277_graph_parity_and_write_perf;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

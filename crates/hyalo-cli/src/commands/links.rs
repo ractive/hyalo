@@ -141,6 +141,7 @@ pub fn links_fix(
     index: &dyn VaultIndex,
     dir: &Path,
     site_prefix: Option<&str>,
+    site_prefix_source: crate::config::SitePrefixSource,
     globs: &[String],
     dry_run: bool,
     threshold: f64,
@@ -192,10 +193,22 @@ pub fn links_fix(
             hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
         if site_absolute_links > 0 && plausibly_resolved == 0 {
             site_prefix_misconfigured = true;
+            // UX-9 (iter-277): say when the offending value was never
+            // configured. `hyalo config` has reported `site_prefix_source`
+            // since iter-203, but a reader staring at this warning has no
+            // reason to suspect a prefix they never typed — on an MDN checkout
+            // in `~/devel/mdn` the auto-derived `mdn` matches nothing, and the
+            // advice to "check --site-prefix" reads as if they had set one.
+            let origin = if site_prefix_source == crate::config::SitePrefixSource::Derived {
+                " (derived from the directory name — nothing set it)"
+            } else {
+                ""
+            };
             crate::warn::warn(format!(
-                "site_prefix '{prefix}' stripped 0 of {site_absolute_links} site-absolute \
-                 link(s) to a plausible vault path — check --site-prefix or `site_prefix` in \
-                 .hyalo.toml (see `hyalo config` for where the effective value came from)"
+                "site_prefix '{prefix}'{origin} stripped 0 of {site_absolute_links} \
+                 site-absolute link(s) to a plausible vault path — check --site-prefix or \
+                 `site_prefix` in .hyalo.toml (see `hyalo config` for where the effective \
+                 value came from)"
             ));
         }
     }
@@ -269,11 +282,15 @@ pub fn links_fix(
     // gated-off branch is a real, computed zero: no anchor check ran because
     // targets are already broken (see the NEW-15/UX-2 gate comment above the
     // JSON block), which is different from "we tried and failed to look."
-    let broken_anchor_count: Option<usize> = if broken.is_empty() {
-        hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index)
-    } else {
-        Some(0)
-    };
+    // BUG-45 (iter-277): the count used to be gated on `broken.is_empty()`,
+    // so on any corpus with a broken target — the normal case on a large
+    // vault — `broken_anchors` was a hard-coded `0` that contradicted
+    // `find --broken-links` (MDN: 529 anchors reported as 0). The gate existed
+    // because the pass re-resolved every fragment-bearing link against the
+    // filesystem; since iter-277's PREFIX-1 that resolution is answered from
+    // the in-memory file set, so the pass is cheap enough to always run.
+    let broken_anchor_count: Option<usize> =
+        hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index);
 
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
     // UX-3 (iter-274): when the `site_prefix` check above found that *no*
@@ -292,9 +309,15 @@ pub fn links_fix(
     // handful of site-absolute links in an otherwise ordinary vault are far
     // more likely to be genuine relocations a basename fallback can repair
     // than the symptom of a wrong prefix.
+    // BUG-46 (iter-277): the same membership test as the "stripped 0 of N"
+    // warning above, so the two numbers describe the same set. They used to
+    // differ by the bare `/` links the other side excludes, which made the
+    // subset (49 776) larger than its superset (49 767) on MDN.
+    let is_site_absolute =
+        |target: &str| hyalo_core::link_fix::is_prefix_bearing_site_absolute(target, site_prefix);
     let site_absolute_broken = broken
         .iter()
-        .filter(|b| b.target.replace('\\', "/").starts_with('/'))
+        .filter(|b| is_site_absolute(&b.target))
         .count();
     let skip_site_absolute_scoring =
         site_prefix_misconfigured && site_absolute_broken >= SITE_ABSOLUTE_SCORING_SKIP_MIN;
@@ -302,7 +325,7 @@ pub fn links_fix(
         let (scored, skipped): (Vec<_>, Vec<_>) = broken
             .iter()
             .cloned()
-            .partition(|b| !b.target.replace('\\', "/").starts_with('/'));
+            .partition(|b| !is_site_absolute(&b.target));
         let skipped_count = skipped.len();
         let mut report = plan_fixes(&scored, &matcher);
         report.unfixable.extend(skipped);
@@ -438,6 +461,26 @@ pub fn links_fix(
         // do not patch the index for files whose fixes were all unapplied or
         // whose write failed.
         modified_files = plans.into_iter().map(|p| p.rel_path).collect();
+    }
+    // BUG-17 (iter-277): only the *applicable* fuzzy fixes went through the
+    // planner above, so a below-floor proposal — the whole point of the
+    // `fuzzy_fixes` bucket, which exists to be reviewed before opting in —
+    // reached the reader without the `emitted_target` `links fix --help`
+    // promises for every plan. Run the same planner over the unplanned
+    // remainder, in dry-run mode so nothing is written, and merge what it
+    // computes. `or_insert` keeps a real plan's answer wherever one exists.
+    let unplanned_fuzzy: Vec<hyalo_core::link_fix::FixPlan> = fuzzy_fixes
+        .iter()
+        .filter(|f| !fuzzy.accepts(f.confidence))
+        .cloned()
+        .collect();
+    if !unplanned_fuzzy.is_empty()
+        && let Ok((_, _, _, emitted)) =
+            hyalo_core::link_fix::plan_fixes_dry_run(dir, &unplanned_fuzzy, site_prefix)
+    {
+        for (key, text) in emitted {
+            emitted_targets.entry(key).or_insert(text);
+        }
     }
     // iter-272 Part F: stamp the emitted text onto every reported bucket
     // before any of them is serialized, so `new_target` (vault-relative, the
@@ -2152,6 +2195,7 @@ pub(crate) fn run(
                         resolved.as_index(),
                         dir,
                         site_prefix,
+                        ctx.site_prefix_source,
                         &glob,
                         !apply,
                         threshold,

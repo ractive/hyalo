@@ -58,6 +58,9 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
     // iter-272 Part B (DEC-296): frontmatter `aliases:` are resolution targets.
     // Frontmatter-only scan — no body bytes are read.
     discovery::populate_aliases_from_dir(dir, &mut idx);
+    // iter-277 (BUG-13): this walk enumerated the whole vault, so a lookup
+    // miss is proof of absence and `resolve_target` may answer from memory.
+    idx.set_complete(true);
     idx
 }
 
@@ -88,6 +91,9 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
             idx.insert_aliases(&entry.rel_path, aliases);
         }
     }
+    // iter-277 (BUG-13): a snapshot lists every file `create-index` saw, so
+    // link resolution never has to leave it for the filesystem.
+    idx.set_complete(true);
     idx
 }
 
@@ -161,6 +167,15 @@ pub(crate) struct CommandContext<'a> {
     /// Used for `--files-from` prefix stripping in the unified resolver.
     pub configured_dir_str: &'a str,
     pub site_prefix: Option<&'a str>,
+    /// Where [`Self::site_prefix`] came from — flag, config, auto-derived from
+    /// the directory name, or explicitly disabled.
+    ///
+    /// UX-9 (iter-277): `hyalo config` has reported this since iter-203, but
+    /// the one place it actually bites — `links fix` warning that the prefix
+    /// stripped 0 of N links — did not say the value was a *guess* from the
+    /// vault's folder name. On an MDN checkout in `~/devel/mdn` that guess is
+    /// `mdn`, and the user has no reason to suspect a prefix they never set.
+    pub site_prefix_source: crate::config::SitePrefixSource,
     /// Internal format — always Json; commands build JSON, pipeline handles conversion.
     pub effective_format: Format,
     /// The user-requested format (Text or Json). Used by `read` to decide between

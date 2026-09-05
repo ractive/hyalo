@@ -604,24 +604,33 @@ fn directory_index_key(
     Some(strip_md_extension(canonical).to_owned())
 }
 
-/// Whether `target` names a **vault attachment** — a file with an explicit
-/// non-`.md` extension that the index actually knows (iter-261).
+/// Whether `target` names a **vault attachment**, for
+/// [`crate::types::is_note_graph_edge`]'s `is_attachment` parameter
+/// (iter-261; index-aware fix in iter-277 review).
 ///
-/// The index membership test is what keeps a note called `Foo.v2.md`, linked as
-/// `[[Foo.v2]]`, a normal graph edge: `v2` looks like an extension, but no
-/// attachment answers to it, so the link is left alone.
+/// This graph's own `case_index` holds notes only (see [`insert_file_links`]),
+/// so a real attachment like `real.png` is never a `contains_path` /
+/// `lookup_unique` / `lookup_stem` hit here — it falls through to the
+/// syntactic fallback below, same as a genuinely missing one. What the index
+/// *does* settle is the opposite case: a note called `Foo.v2.md`, linked as
+/// `[[Foo.v2]]` — `lookup_stem("Foo.v2")` finds the note, so the syntactic
+/// "`v2` looks like an extension" guess never gets a chance to misfire.
 fn target_is_attachment(target: &str, case_index: &CaseInsensitiveIndex) -> bool {
-    if !crate::discovery::has_non_md_extension(target) {
-        return false;
-    }
     let normalized = target.replace('\\', "/");
-    if case_index.contains_path(&normalized) || case_index.lookup_unique(&normalized).is_some() {
-        return true;
+    if case_index.contains_path(&normalized) {
+        return !crate::discovery::has_md_extension(&normalized);
+    }
+    if let Some(path) = case_index.lookup_unique(&normalized) {
+        return !crate::discovery::has_md_extension(path);
     }
     let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
-    case_index
-        .lookup_stem(basename)
-        .is_some_and(|path| !crate::discovery::has_md_extension(path))
+    if let Some(path) = case_index.lookup_stem(basename) {
+        return !crate::discovery::has_md_extension(path);
+    }
+    // No index hit at all: resolution never crosses an explicit extension
+    // (DEC-266), so a target that still looks like it carries a non-`.md`
+    // extension can only ever have named an attachment — existing or not.
+    crate::discovery::has_non_md_extension(target)
 }
 
 /// Normalize and insert one file's links into the shared index.
@@ -632,17 +641,17 @@ fn insert_file_links(
     case_index: &CaseInsensitiveIndex,
 ) {
     for (line, mut link) in file_links.links {
-        // iter-261 / BUG-2: an external URI (`obsidian://…`, `mailto:…`) names
-        // nothing inside the vault, so it is never a graph edge — no backlink
-        // key, no outbound edge for `--orphan` / `--dead-end`.
-        if link.external {
-            continue;
-        }
-        // iter-261 / BUG-5, BUG-6: an embed or link that resolves to an
-        // attachment (`![[img.png]]`, `[[Books.base]]`) is not an edge in the
-        // note graph — a note whose only outbound link is an image is still a
-        // dead end, and nothing ever queries `backlinks img.png`.
-        if target_is_attachment(&link.target, case_index) {
+        // DEC-318 (iter-277): one predicate decides what an edge is, shared
+        // verbatim with `find --orphan` / `find --dead-end`. It covers the
+        // external URI of iter-261 / BUG-2 (`obsidian://…`, `mailto:…` name
+        // nothing in the vault) and the attachment reference of BUG-5 / BUG-6
+        // (`![[img.png]]`, `[[Books.base]]` — a note whose only outbound link
+        // is an image is still a dead end, and nothing queries
+        // `backlinks img.png`) — decided here by [`target_is_attachment`],
+        // whose fallback keeps it agreeing with `find`'s own verdict even
+        // though this graph's own `case_index` holds notes only (BUG-16).
+        let is_attachment = target_is_attachment(&link.target, case_index);
+        if !crate::types::is_note_graph_edge(&link.target, link.external, is_attachment) {
             continue;
         }
         // Captured before normalization, which drops it: a trailing slash is

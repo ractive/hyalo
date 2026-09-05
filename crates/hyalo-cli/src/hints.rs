@@ -198,6 +198,9 @@ pub struct HintContext {
     pub format: Option<String>,
     /// Explicit `--hints` from CLI (not from config).
     pub hints: bool,
+    /// Explicit `--site-prefix` from CLI (not from config), threaded into
+    /// every hint whose command accepts the flag (BUG-15, iter-277).
+    pub site_prefix: Option<String>,
     /// Wall-clock elapsed time for the command body (set after dispatch).
     /// Used by the slow-query hint; `None` means not yet measured.
     pub elapsed_ms: Option<u64>,
@@ -306,6 +309,16 @@ pub struct CommonHintFlags {
     pub format: Option<String>,
     /// Whether `--hints` was explicitly passed on the CLI.
     pub hints: bool,
+    /// `--site-prefix` value when explicitly passed on the CLI.
+    ///
+    /// BUG-15 (iter-277): the prefix changes which links resolve, so a hint
+    /// that drops it answers a different question than the command that
+    /// printed it — on MDN, `find --broken-links --site-prefix en-US/docs`
+    /// hinted a follow-up that reported an entirely different count. Threaded
+    /// exactly like `--dir`, `--format` and `--index-file`, and only when it
+    /// came from the CLI (a value from `.hyalo.toml` applies to the follow-up
+    /// on its own).
+    pub site_prefix: Option<String>,
 }
 
 impl HintContext {
@@ -316,6 +329,7 @@ impl HintContext {
             glob: vec![],
             format: None,
             hints: false,
+            site_prefix: None,
             elapsed_ms: None,
             quiet: false,
             has_index: false,
@@ -366,6 +380,7 @@ impl HintContext {
         ctx.dir.clone_from(&common.dir);
         ctx.format.clone_from(&common.format);
         ctx.hints = common.hints;
+        ctx.site_prefix.clone_from(&common.site_prefix);
         ctx
     }
 

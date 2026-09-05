@@ -539,6 +539,7 @@ mod text_types;
 // glob re-export cannot widen it), and this is also how the submodules reach
 // each other, since each one imports this parent.
 use file_object::build_file_object_filter;
+pub(crate) use file_object::set_broken_links_only;
 use filters::{key_signature, lookup_filter};
 pub use jq::*;
 use text::format_value_as_text;

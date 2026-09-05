@@ -345,8 +345,60 @@ fn extract_links_and_anchors(
             continue;
         }
 
+        // UX-10 (iter-277): a CommonMark **autolink** — `<https://example.com>`,
+        // `<obsidian://open?vault=v>` — is a link the renderer makes clickable
+        // and `links auto` has always treated as inert, yet it never entered
+        // the inventory. A whole-vault external-target histogram built from
+        // `--fields links` therefore missed every reference written that way.
+        // Inventoried exactly like `[a](https://…)`: `kind: "external"`, never
+        // resolved, never broken, never a graph edge, target verbatim.
+        //
+        // A *bare* URL in prose is deliberately left out: it has no link
+        // syntax around it, so inventorying it would make the link list depend
+        // on prose scanning rather than on what the author marked up.
+        if bytes[i] == b'<'
+            && !is_escaped(bytes, i)
+            && let Some((link, end)) = try_parse_autolink_at(cleaned, i)
+        {
+            out.push(link);
+            i = end;
+            continue;
+        }
+
         i += 1;
     }
+}
+
+/// Parse a CommonMark autolink `<scheme:...>` at `start` (UX-10, iter-277).
+///
+/// Returns the link and the byte offset just past the closing `>`. The angle
+/// brackets are syntax, not content: `target` holds the URI verbatim, matching
+/// how a markdown link's external destination is reported.
+///
+/// Only a target [`is_external_target`] accepts qualifies — an autolink is by
+/// definition an absolute URI, so `<foo.md>` is not one, and an HTML tag
+/// (`<div>`, `<br/>`) never has a scheme and is skipped for free.
+fn try_parse_autolink_at(text: &str, start: usize) -> Option<(Link, usize)> {
+    debug_assert_eq!(text.as_bytes().get(start), Some(&b'<'));
+    let rest = text.get(start + 1..)?;
+    let close = rest.find('>')?;
+    let inner = &rest[..close];
+    if inner.is_empty() || inner.contains(char::is_whitespace) || !is_external_target(inner) {
+        return None;
+    }
+    Some((
+        Link {
+            target: inner.to_owned(),
+            label: None,
+            kind: LinkKind::Markdown,
+            fragment: None,
+            query: None,
+            embed: false,
+            external: true,
+            property: None,
+        },
+        start + 1 + close + 1,
+    ))
 }
 
 /// Parse `[label](#fragment)` at `start`, returning the anchor and the byte
