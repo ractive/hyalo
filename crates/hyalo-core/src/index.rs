@@ -2398,6 +2398,20 @@ impl FileVisitor for BodyCollector {
     }
 }
 
+/// Read one file's heading outline, and nothing else.
+///
+/// NAMED-3 (iter-273, BUG-9): the broken-anchor verdict needs the *target*
+/// file's headings, which the index supplies for free during a vault sweep but
+/// not when `--file` / `--glob` narrowed the scan to the source file alone.
+/// One targeted read per distinct anchor target is the cheap way to make the
+/// four spellings of the same question return the same answer — far cheaper
+/// than promoting every per-file link query into a whole-vault scan.
+pub fn scan_file_sections(full_path: &Path) -> Result<Vec<OutlineSection>> {
+    let mut scanner = SectionScanner::new();
+    crate::scanner::scan_file_multi(full_path, &mut [&mut scanner])?;
+    Ok(scanner.into_sections())
+}
+
 /// Visitor that builds outline sections from body events.
 struct SectionScanner {
     current: SectionBuilder,
