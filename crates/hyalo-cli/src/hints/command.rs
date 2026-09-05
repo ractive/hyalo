@@ -29,6 +29,42 @@ pub(super) fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     if ctx.hints {
         parts.push("--hints".to_owned());
     }
+    // iter-274 (UX-2): an indexed run's hints must stay indexed. `--index` /
+    // `--index-file` is threaded exactly like `--dir` and `--format` — a hint
+    // that silently drops it answers a different (and, on a large vault,
+    // vastly slower) question than the command that produced it: 0.14 s vs
+    // 1.2-1.4 s per follow-up on MDN. Only appended when the hinted command
+    // actually accepts the flag, so `create-index`-style suggestions (which
+    // build a snapshot rather than read one) are left alone.
+    if !matches!(ctx.find_index, FindIndexHint::None) && command_accepts_index(parts) {
+        push_find_index_file(parts, ctx);
+    }
+}
+
+/// Whether the `hyalo` (sub)command spelled by `parts` declares an `--index`
+/// flag, decided by walking clap's own command tree rather than a hand-kept
+/// list that would drift the moment a command gains or loses the flag.
+///
+/// The leading tokens after `hyalo` are consumed only while they name a real
+/// subcommand, so `hyalo find 'pattern'` resolves to `find` and stops.
+fn command_accepts_index(parts: &[String]) -> bool {
+    use clap::CommandFactory;
+
+    let mut cmd = crate::cli::args::Cli::command();
+    for token in parts.iter().skip(1) {
+        if token.starts_with('-') {
+            break;
+        }
+        let Some(sub) = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == token || s.get_all_aliases().any(|a| a == token))
+            .cloned()
+        else {
+            break;
+        };
+        cmd = sub;
+    }
+    cmd.get_arguments().any(|a| a.get_long() == Some("index"))
 }
 
 /// Push the graph/title filters that scope a `find` query (`--broken-links`,
@@ -278,7 +314,6 @@ pub(super) fn build_find_command_preserving_filters(
     for arg in extra_args {
         b.push_quoted(arg);
     }
-    push_find_index_file(&mut b.parts, ctx);
     for glob in &ctx.glob {
         b.push_raw("--glob");
         b.push_quoted(glob);
@@ -361,7 +396,6 @@ pub(super) fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str
     for arg in extra_args {
         b.push_quoted(arg);
     }
-    push_find_index_file(&mut b.parts, ctx);
     for glob in &ctx.glob {
         b.push_raw("--glob");
         b.push_quoted(glob);

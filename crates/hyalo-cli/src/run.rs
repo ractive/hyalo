@@ -2012,13 +2012,15 @@ fn run_inner() -> Result<(), AppError> {
         {
             ctx.pattern_names_a_file = Some(pat.to_owned());
         }
-        // Preserve the active index into derived `find` hints so they query the
+        // Preserve the active index into every derived hint so it queries the
         // same snapshot rather than silently rescanning the vault (BUG-7
-        // audit). A path equal to the default `<vault>/.hyalo-index` re-emits
-        // as bare `--index`; any other path re-emits as `--index-file <path>`.
-        if matches!(ctx.source, HintSource::Find)
-            && let Some(ref p) = index_path_buf
-        {
+        // audit; widened from `find` to every command in iter-274 / UX-2 —
+        // `summary`'s `find --orphan` / `find --broken-links` hints were the
+        // worst offenders, costing a full rescan each). A path equal to the
+        // default `<vault>/.hyalo-index` re-emits as bare `--index`; any other
+        // path re-emits as `--index-file <path>`. Hints whose command does not
+        // accept the flag drop it — see `command_accepts_index`.
+        if let Some(ref p) = index_path_buf {
             let default_path = dir.join(".hyalo-index");
             ctx.find_index = if *p == default_path {
                 HintContext::default_find_index()

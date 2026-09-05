@@ -144,7 +144,7 @@ pub(super) fn hints_for_summary(ctx: &HintContext, data: &serde_json::Value) -> 
             if hints.len() < MAX_HINTS {
                 hints.push(Hint::without_cmd(format!(
                     "{broken_links} of {total_links} links are unresolvable — they look like \
-                     absolute site URLs; set `--site-prefix` (or `[site] prefix` in .hyalo.toml) \
+                     absolute site URLs; set `--site-prefix` (or `site_prefix` in .hyalo.toml) \
                      to resolve them rather than running `links fix`"
                 )));
             }
