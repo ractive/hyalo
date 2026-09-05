@@ -158,9 +158,18 @@ pub(super) fn hints_for_find(
             hints.push(Hint::new(
                 format!(
                     "'{path}' is a file in this vault — target it instead of searching for its \
-                     name"
+                     name (or `hyalo read {path}` for its content)"
                 ),
                 build_command_no_glob(ctx, &["find", "--file", path]),
+            ));
+            // UX-11 (iter-277): the empty answer to `hyalo find notes/todo.md`
+            // is almost always someone reaching for the file, not for prose
+            // that happens to contain its path. Offer the runnable read too,
+            // so the next step is a command rather than a re-read of the
+            // hint above.
+            hints.push(Hint::new(
+                format!("Read '{path}' instead"),
+                build_command_no_glob(ctx, &["read", path]),
             ));
         }
         // Skip if the query already contains quotes (phrase search) — splitting on
@@ -486,6 +495,26 @@ pub(super) fn hints_for_find(
         };
         for link in links {
             if !link.get("path").is_some_and(serde_json::Value::is_null) {
+                continue;
+            }
+            // BUG-47 (iter-277): `path: null` alone is not "broken". An
+            // external URI names nothing in the vault and an out-of-vault
+            // target is reported as such, and neither is repairable by
+            // `links fix` — but both carry a null `path`, so on MDN without a
+            // prefix every page's outbound `https://` links out-voted the
+            // site-absolute ones and the "all broken links are site-absolute"
+            // branch could never fire. Count only what
+            // `find --broken-links` itself calls broken.
+            let kind = link
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("wikilink");
+            if matches!(kind, "external" | "attachment")
+                || link
+                    .get("out_of_vault")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            {
                 continue;
             }
             broken_total += 1;

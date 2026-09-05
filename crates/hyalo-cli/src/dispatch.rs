@@ -167,6 +167,15 @@ pub(crate) struct CommandContext<'a> {
     /// Used for `--files-from` prefix stripping in the unified resolver.
     pub configured_dir_str: &'a str,
     pub site_prefix: Option<&'a str>,
+    /// Where [`Self::site_prefix`] came from — flag, config, auto-derived from
+    /// the directory name, or explicitly disabled.
+    ///
+    /// UX-9 (iter-277): `hyalo config` has reported this since iter-203, but
+    /// the one place it actually bites — `links fix` warning that the prefix
+    /// stripped 0 of N links — did not say the value was a *guess* from the
+    /// vault's folder name. On an MDN checkout in `~/devel/mdn` that guess is
+    /// `mdn`, and the user has no reason to suspect a prefix they never set.
+    pub site_prefix_source: crate::config::SitePrefixSource,
     /// Internal format — always Json; commands build JSON, pipeline handles conversion.
     pub effective_format: Format,
     /// The user-requested format (Text or Json). Used by `read` to decide between

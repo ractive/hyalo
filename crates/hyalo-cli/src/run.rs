@@ -1381,7 +1381,7 @@ fn run_inner() -> Result<(), AppError> {
     //
     // Empty strings in (1) and (2) short-circuit the chain and result in
     // site_prefix = None, suppressing all absolute-link resolution.
-    let (site_prefix_owned, _site_prefix_source) = crate::config::resolve_site_prefix(
+    let (site_prefix_owned, site_prefix_source) = crate::config::resolve_site_prefix(
         cli.site_prefix.as_deref(),
         config.site_prefix.as_deref(),
         &dir,
@@ -2202,7 +2202,16 @@ fn run_inner() -> Result<(), AppError> {
                         false
                     } else {
                         targets.iter().all(|rel| {
-                            hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
+                            // UX-13 (iter-277): a named target that is not on
+                            // disk at all is not evidence of a stale index —
+                            // the command is about to report `file not found`
+                            // for it, and prefixing that with "index older
+                            // than vault; results may be stale" sends the
+                            // reader off to rebuild a snapshot that was never
+                            // the problem. Nothing to refresh is not a failure
+                            // to refresh.
+                            !dir.join(rel).exists()
+                                || hyalo_core::index::refresh_if_changed_on_disk(&mut idx, &dir, rel)
                         })
                     };
                     if !refreshed_all_targets && !cli.command.write_repairs_named_targets() {
@@ -2214,8 +2223,14 @@ fn run_inner() -> Result<(), AppError> {
                                         .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
                             });
                         if dirs_moved {
+                            // UX-8 (iter-277): name the probe that fired. Two
+                            // different checks produce this warning and only
+                            // one of them names a witness file, so the same
+                            // vault appeared to report a filename on one run
+                            // and nothing on the next, with no way to tell
+                            // that a different check had spoken.
                             crate::warn::warn(
-                                "index older than vault; results may be stale — re-run create-index",
+                                "index older than vault (a directory's mtime moved since the                                  index was built); results may be stale — re-run create-index",
                             );
                         } else if let Some(rel) =
                             // INDEX-1 (iter-273, BUG-12): the directory probe
@@ -2231,8 +2246,8 @@ fn run_inner() -> Result<(), AppError> {
                                 )
                         {
                             crate::warn::warn(format!(
-                                "index older than vault ({rel} changed on disk since the index \
-                                 was built); results may be stale — re-run create-index"
+                                "index older than vault (file {rel} changed on disk since the \
+                                 index was built); results may be stale — re-run create-index"
                             ));
                         }
                     }
@@ -2508,7 +2523,7 @@ fn run_inner() -> Result<(), AppError> {
         config_dir: &config_dir,
         configured_dir_str,
         site_prefix,
-        effective_format,
+        site_prefix_source,        effective_format,
         user_format: format,
         snapshot_index: &mut snapshot_index,
         index_path: index_path_buf.as_deref(),

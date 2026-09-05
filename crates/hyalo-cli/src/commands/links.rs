@@ -141,6 +141,7 @@ pub fn links_fix(
     index: &dyn VaultIndex,
     dir: &Path,
     site_prefix: Option<&str>,
+    site_prefix_source: crate::config::SitePrefixSource,
     globs: &[String],
     dry_run: bool,
     threshold: f64,
@@ -192,10 +193,22 @@ pub fn links_fix(
             hyalo_core::link_fix::site_prefix_plausible_resolution_stats(index, site_prefix);
         if site_absolute_links > 0 && plausibly_resolved == 0 {
             site_prefix_misconfigured = true;
+            // UX-9 (iter-277): say when the offending value was never
+            // configured. `hyalo config` has reported `site_prefix_source`
+            // since iter-203, but a reader staring at this warning has no
+            // reason to suspect a prefix they never typed — on an MDN checkout
+            // in `~/devel/mdn` the auto-derived `mdn` matches nothing, and the
+            // advice to "check --site-prefix" reads as if they had set one.
+            let origin = if site_prefix_source == crate::config::SitePrefixSource::Derived {
+                " (derived from the directory name — nothing set it)"
+            } else {
+                ""
+            };
             crate::warn::warn(format!(
-                "site_prefix '{prefix}' stripped 0 of {site_absolute_links} site-absolute \
-                 link(s) to a plausible vault path — check --site-prefix or `site_prefix` in \
-                 .hyalo.toml (see `hyalo config` for where the effective value came from)"
+                "site_prefix '{prefix}'{origin} stripped 0 of {site_absolute_links} \
+                 site-absolute link(s) to a plausible vault path — check --site-prefix or \
+                 `site_prefix` in .hyalo.toml (see `hyalo config` for where the effective \
+                 value came from)"
             ));
         }
     }
@@ -2183,6 +2196,7 @@ pub(crate) fn run(
                         resolved.as_index(),
                         dir,
                         site_prefix,
+                        ctx.site_prefix_source,
                         &glob,
                         !apply,
                         threshold,
