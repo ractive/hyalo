@@ -7,7 +7,7 @@
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use indexmap::IndexSet;
 
 // ---------------------------------------------------------------------------
@@ -28,15 +28,27 @@ use indexmap::IndexSet;
 ///
 /// Returns an error if the source is not valid UTF-8.
 pub fn load(source: &str) -> Result<Vec<String>> {
+    // iter-274 (BUG-25): an unreadable list is the caller's mistake, not
+    // hyalo's — it renders as an envelope and exits 1 like every other user
+    // error, instead of bare text and exit 2 even under `--format json`.
     let raw = if source == "-" {
         let mut buf = String::new();
-        io::stdin()
-            .read_to_string(&mut buf)
-            .context("failed to read --files-from stdin")?;
+        io::stdin().read_to_string(&mut buf).map_err(|e| {
+            crate::error::user_error_with(
+                "failed to read --files-from stdin",
+                None,
+                Some(e.to_string()),
+            )
+        })?;
         buf
     } else {
-        std::fs::read_to_string(source)
-            .with_context(|| format!("failed to read --files-from file: {source}"))?
+        std::fs::read_to_string(source).map_err(|e| {
+            crate::error::user_error_with(
+                format!("failed to read --files-from file: {source}"),
+                Some("pass a readable path, or '-' to read the list from stdin".to_owned()),
+                Some(e.to_string()),
+            )
+        })?
     };
 
     // Strip optional UTF-8 BOM (EF BB BF) from the very start.

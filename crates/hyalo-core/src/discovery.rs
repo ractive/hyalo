@@ -1096,7 +1096,7 @@ pub(crate) fn match_glob(
     let glob = GlobBuilder::new(pattern)
         .literal_separator(true)
         .build()
-        .context("invalid glob pattern")?
+        .map_err(|e| invalid_glob(pattern, &e))?
         .compile_matcher();
 
     let mut matched = Vec::new();
@@ -1107,6 +1107,17 @@ pub(crate) fn match_glob(
         }
     }
     Ok(matched)
+}
+
+/// A malformed `--glob` is the caller's mistake, not hyalo's (iter-274,
+/// BUG-25): it renders as the standard error envelope and exits 1, naming the
+/// pattern that would not compile.
+fn invalid_glob(pattern: &str, e: &globset::Error) -> anyhow::Error {
+    crate::user_error_with(
+        format!("invalid glob pattern: {pattern}"),
+        Some("quote the pattern so the shell does not expand it, e.g. --glob '**/*.md'".to_owned()),
+        Some(e.to_string()),
+    )
 }
 
 /// Match discovered files against multiple glob patterns.
@@ -1159,7 +1170,7 @@ pub fn match_globs(
                 GlobBuilder::new(pat)
                     .literal_separator(true)
                     .build()
-                    .context("invalid glob pattern")?,
+                    .map_err(|e| invalid_glob(pat, &e))?,
             );
         }
         Some(

@@ -47,6 +47,7 @@ pub mod scanner;
 pub mod schema;
 pub mod tasks;
 pub mod types;
+pub mod user_error;
 pub(crate) mod util;
 pub mod warn;
 
@@ -70,4 +71,5 @@ pub use fs_util::{
     outside_vault_message_with_dir,
 };
 /// Date-validation and string-distance helpers used by CLI lint rules.
+pub use user_error::{UserFacingError, user_error, user_error_with};
 pub use util::{is_iso8601_date, is_iso8601_datetime, is_iso8601_datetime_tz, levenshtein};

@@ -94,13 +94,17 @@ pub const PROFILES: &[Profile] = &[
 /// Look up a profile by name, or return a helpful error listing the available
 /// profiles.
 pub fn lookup(name: &str) -> Result<&'static Profile> {
-    PROFILES.iter().find(|p| p.name == name).with_context(|| {
+    // iter-274 (BUG-25): a misspelled profile is a user error — envelope and
+    // exit 1, not bare text and exit 2.
+    PROFILES.iter().find(|p| p.name == name).ok_or_else(|| {
         let available = PROFILES
             .iter()
             .map(|p| p.name)
             .collect::<Vec<_>>()
             .join(", ");
-        format!("unknown profile '{name}'. Available profiles: {available}")
+        crate::error::user_error(format!(
+            "unknown profile '{name}'. Available profiles: {available}"
+        ))
     })
 }
 

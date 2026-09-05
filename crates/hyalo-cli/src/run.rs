@@ -981,6 +981,18 @@ fn run_inner() -> Result<(), AppError> {
     // covers the common case but this ensures correctness after full parsing).
     crate::warn::init(cli.quiet);
 
+    // iter-274 (BUG-25): publish a provisional error format now, so the
+    // commands dispatched before the full format resolution below — `init`,
+    // `deinit`, `config` — still render a user error as an envelope when the
+    // caller asked for JSON. Refined once the config's `format` key is known.
+    crate::error::set_error_format(if let Some(f) = cli.format {
+        f
+    } else if cli.jq.is_some() {
+        Format::Json
+    } else {
+        resolve_format_by_tty(std::io::stdout().is_terminal())
+    });
+
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
@@ -2287,13 +2299,20 @@ fn run_inner() -> Result<(), AppError> {
             .chain(file_positional.iter().map(String::as_str))
             .collect::<Vec<_>>()
             .join(" ");
-        eprintln!(
-            "error: '{bad}' is not a file; did you mean hyalo find '{quoted}'?\n\n\
-             tip: the FIRST positional is the body-search PATTERN; every later one is a FILE \
-             target, so an unquoted multi-word query is read as a query plus file names. \
-             Quote the whole phrase.\n"
-        );
-        return Err(AppError::Exit(2));
+        // iter-274 (UX-1, DEC-307): hyalo's own did-you-mean error is a user
+        // error — exit 1, like `--sort nope` — and renders as an envelope under
+        // `--format json` rather than as bare text a script cannot parse.
+        return Err(AppError::User(crate::output::format_error(
+            error_format,
+            &format!("'{bad}' is not a file; did you mean hyalo find '{quoted}'?"),
+            None,
+            Some(
+                "the FIRST positional is the body-search PATTERN; every later one is a FILE \
+                 target, so an unquoted multi-word query is read as a query plus file names. \
+                 Quote the whole phrase.",
+            ),
+            None,
+        )));
     }
 
     // Propagate the configured frontmatter-link property list into the loaded
