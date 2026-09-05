@@ -58,6 +58,9 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
     // iter-272 Part B (DEC-296): frontmatter `aliases:` are resolution targets.
     // Frontmatter-only scan — no body bytes are read.
     discovery::populate_aliases_from_dir(dir, &mut idx);
+    // iter-277 (BUG-13): this walk enumerated the whole vault, so a lookup
+    // miss is proof of absence and `resolve_target` may answer from memory.
+    idx.set_complete(true);
     idx
 }
 
@@ -88,6 +91,9 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
             idx.insert_aliases(&entry.rel_path, aliases);
         }
     }
+    // iter-277 (BUG-13): a snapshot lists every file `create-index` saw, so
+    // link resolution never has to leave it for the filesystem.
+    idx.set_complete(true);
     idx
 }
 

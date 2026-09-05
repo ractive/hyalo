@@ -74,6 +74,17 @@ pub struct CaseInsensitiveIndex {
     /// lookups have failed, so a real filename always wins, and an alias
     /// claimed by two notes is ambiguous rather than resolved.
     alias_map: HashMap<String, Vec<String>>,
+    /// Whether this index holds *every* file of the vault (notes and
+    /// attachments), so a miss is proof of absence.
+    ///
+    /// Set by the vault-wide builders (a full disk walk or a snapshot load).
+    /// When it is `true`, [`crate::discovery::resolve_target`] answers
+    /// "does this path exist?" from `map` instead of `stat`ing the filesystem
+    /// — the difference between one syscall per candidate and none, which is
+    /// what made an indexed `summary` on MDN with `--site-prefix en-US/docs`
+    /// cost 4.65 s (iter-277, BUG-13). A partial index leaves it `false` and
+    /// every probe goes to disk exactly as before.
+    complete: bool,
 }
 
 impl CaseInsensitiveIndex {
@@ -91,7 +102,37 @@ impl CaseInsensitiveIndex {
             stem_map: HashMap::with_capacity(capacity),
             case_insensitive_paths: false,
             alias_map: HashMap::new(),
+            complete: false,
         }
+    }
+
+    /// Declare that this index holds every file in the vault, so a lookup miss
+    /// means the file does not exist (iter-277, BUG-13).
+    ///
+    /// Only the vault-wide builders may set this: a full `discover_files` +
+    /// `discover_attachments` walk, or a snapshot load. An index seeded from a
+    /// `--file`/`--glob` subset must leave it unset, otherwise resolution
+    /// would call every unscanned file broken.
+    pub fn set_complete(&mut self, complete: bool) {
+        self.complete = complete;
+    }
+
+    /// Whether a lookup miss in this index proves the file is absent.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// Whether the vault contains this path in **any** casing.
+    ///
+    /// Unlike [`lookup_unique`](Self::lookup_unique) it is not gated on the
+    /// `case_insensitive_paths` toggle, and unlike
+    /// [`contains_path`](Self::contains_path) it ignores casing. Used to decide
+    /// whether a filesystem probe could still succeed on a case-insensitive
+    /// volume after an exact-path miss.
+    #[must_use]
+    pub fn has_any_case(&self, rel_path: &str) -> bool {
+        self.map.contains_key(&rel_path.to_ascii_lowercase())
     }
 
     /// Enable or disable case-insensitive path lookups.

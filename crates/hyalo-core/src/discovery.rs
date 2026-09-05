@@ -1950,11 +1950,56 @@ fn hex_val(b: u8) -> Option<u8> {
 /// unambiguous case-insensitive match is accepted when the literal path is
 /// absent. Shared by the `<target>.md` and `<target>/index.md` attempts in
 /// [`resolve_target`] so the two can never drift apart (iter-203).
+/// What a vault-wide [`CaseInsensitiveIndex`] can say about a path without
+/// touching the filesystem (iter-277, BUG-13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existence {
+    /// The index lists this exact path — the file exists and is in the vault.
+    Present,
+    /// The index is complete and holds no casing of this path — it is absent.
+    Absent,
+    /// No complete index, or a case-variant exists and only the filesystem can
+    /// say whether the literal spelling opens on this volume (DEC-315).
+    Unknown,
+}
+
+/// Answer "does the vault hold this path?" from memory when it can be answered
+/// that way, and defer to the filesystem when it cannot.
+///
+/// Only a *complete* index (a full vault walk or a snapshot load — see
+/// [`CaseInsensitiveIndex::set_complete`]) may answer, because a miss in a
+/// `--file`-scoped index says nothing about the rest of the vault. When the
+/// exact spelling is missing but some casing of it exists, the answer stays
+/// `Unknown`: on a case-insensitive volume the literal probe still opens the
+/// file and must keep reporting the author's own spelling (DEC-315).
+fn indexed_existence(rel_path: &str, case_index: Option<&CaseInsensitiveIndex>) -> Existence {
+    let Some(idx) = case_index.filter(|i| i.is_complete()) else {
+        return Existence::Unknown;
+    };
+    if idx.contains_path(rel_path) {
+        Existence::Present
+    } else if idx.has_any_case(rel_path) {
+        Existence::Unknown
+    } else {
+        Existence::Absent
+    }
+}
+
 fn resolve_candidate_path(
     canonical_dir: &Path,
     candidate: &str,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
+    match indexed_existence(candidate, case_index) {
+        // The vault-wide index already lists this exact path, so the file
+        // exists and is inside the vault by construction — no `stat`, no
+        // `canonicalize` (iter-277, BUG-13).
+        Existence::Present => return Some(candidate.to_owned()),
+        // A miss in a complete index is proof of absence: skip both the
+        // filesystem probe and the (identical) case lookup below.
+        Existence::Absent => return None,
+        Existence::Unknown => {}
+    }
     let full = canonical_dir.join(candidate);
     if full.is_file() {
         if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
@@ -2113,22 +2158,31 @@ pub fn resolve_target(
         target
     };
 
-    let full = canonical_dir.join(&target);
-    if full.is_file() {
-        // Ok(true) = within vault; Ok(false) or Err = reject
-        if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
-            // If an index is provided, prefer the canonical on-disk casing from
-            // the index over the literal input casing. This matters on
-            // case-insensitive filesystems where `is_file()` succeeds even when
-            // the literal casing differs from what is stored on disk.
-            if let Some(idx) = case_index
-                && let Some(canonical_path) = idx.lookup_unique(&target)
-            {
-                return Some(canonical_path.to_owned());
-            }
-            return Some(target.clone());
+    // iter-277 (BUG-13): when the case index covers the whole vault it *is*
+    // the file set, so existence is a hash lookup rather than a `stat` plus a
+    // `canonicalize`. On MDN with `--site-prefix en-US/docs` almost every
+    // site-absolute link probed three paths that all had to go to disk.
+    match indexed_existence(&target, case_index) {
+        Existence::Present => return Some(target.clone()),
+        Existence::Absent => {
+            // Proof of absence for this literal path only; the `.md` /
+            // `/index.md` and bare-stem fallbacks below still apply.
         }
-        return None;
+        Existence::Unknown => {
+            let full = canonical_dir.join(&target);
+            if full.is_file() {
+                // Ok(true) = within vault; Ok(false) or Err = reject
+                if ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+                    if let Some(idx) = case_index
+                        && let Some(canonical_path) = idx.lookup_unique(&target)
+                    {
+                        return Some(canonical_path.to_owned());
+                    }
+                    return Some(target.clone());
+                }
+                return None;
+            }
+        }
     }
 
     // Exact literal path does not exist. Try case-insensitive index lookup.
