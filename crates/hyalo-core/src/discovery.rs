@@ -2218,6 +2218,129 @@ mod tests {
     use super::*;
     use std::fs;
 
+    // --- iter-272 Part B (DEC-288): frontmatter `aliases:` resolution ---
+
+    /// Build a vault whose notes declare aliases, plus the matching index.
+    fn alias_vault(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf, CaseInsensitiveIndex) {
+        let tmp = tempfile::tempdir().unwrap();
+        for (rel, body) in files {
+            let p = tmp.path().join(rel);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(p, body).unwrap();
+        }
+        let canon = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for f in discover_files(tmp.path()).unwrap() {
+            idx.insert(&relative_path(tmp.path(), &f));
+        }
+        populate_aliases_from_dir(tmp.path(), &mut idx);
+        (tmp, canon, idx)
+    }
+
+    #[test]
+    fn a_unique_alias_resolves_and_reports_via_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("Leah Ferguson.md", "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n"),
+            ("src.md", "see [[Leah]]\n"),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+        assert!(resolves_via_alias("Leah", Some(&idx)));
+        // Case folds like every other lookup (DEC-267).
+        assert_eq!(
+            resolve_target(&canon, "leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn a_filename_always_beats_someone_elses_alias() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("Leah.md", "---\ntitle: The real Leah\n---\n"),
+            (
+                "Leah Ferguson.md",
+                "---\ntitle: Leah Ferguson\naliases:\n- Leah\n---\n",
+            ),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah.md")
+        );
+        assert!(
+            !resolves_via_alias("Leah", Some(&idx)),
+            "a filename match is not a `via: alias` resolution"
+        );
+    }
+
+    #[test]
+    fn an_alias_claimed_by_two_notes_is_ambiguous_not_resolved() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("a.md", "---\ntitle: A\naliases:\n- Shared\n---\n"),
+            ("b.md", "---\ntitle: B\naliases: Shared\n---\n"),
+        ]);
+        assert_eq!(idx.lookup_alias_all("shared").len(), 2);
+        assert_eq!(resolve_target(&canon, "Shared", None, Some(&idx)), None);
+        assert!(!resolves_via_alias("Shared", Some(&idx)));
+    }
+
+    #[test]
+    fn the_string_form_of_aliases_is_accepted() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("Leah Ferguson.md", "---\ntitle: L\naliases: Leah\n---\n"),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn an_alias_with_a_fragment_or_label_still_resolves() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            (
+                "Leah Ferguson.md",
+                "---\ntitle: L\naliases:\n- Leah\n---\n\n## Work\n",
+            ),
+        ]);
+        // `resolve_target` strips the fragment; the alias half is what is left.
+        assert_eq!(
+            resolve_target(&canon, "Leah#Work", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+        // A `[[alias|label]]` never reaches the resolver with its label — the
+        // extractor splits it off — so the target is the bare alias.
+        assert_eq!(
+            resolve_target(&canon, "Leah", None, Some(&idx)).as_deref(),
+            Some("Leah Ferguson.md")
+        );
+    }
+
+    #[test]
+    fn a_note_aliasing_its_own_stem_changes_nothing() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("note.md", "---\ntitle: N\naliases:\n- note\n---\n"),
+        ]);
+        assert_eq!(
+            resolve_target(&canon, "note", None, Some(&idx)).as_deref(),
+            Some("note.md")
+        );
+        assert!(!resolves_via_alias("note", Some(&idx)));
+    }
+
+    #[test]
+    fn a_path_qualified_target_never_consults_aliases() {
+        let (_tmp, canon, idx) = alias_vault(&[
+            ("sub/Leah Ferguson.md", "---\ntitle: L\naliases:\n- Leah\n---\n"),
+        ]);
+        assert_eq!(resolve_target(&canon, "sub/Leah", None, Some(&idx)), None);
+        assert!(!resolves_via_alias("sub/Leah", Some(&idx)));
+    }
+
     // --- iter-265: `[scan] exclude` glob matching ---
 
     /// Compile a `[scan] exclude` set without touching the process-global
