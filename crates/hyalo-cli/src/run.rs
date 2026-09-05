@@ -1635,6 +1635,9 @@ fn run_inner() -> Result<(), AppError> {
                 None
             },
             hints: hints_from_cli,
+            // BUG-15 (iter-277): only the CLI value is threaded; a prefix that
+            // came from `.hyalo.toml` already applies to the follow-up.
+            site_prefix: cli.site_prefix.clone(),
         };
 
         match &cli.command {
@@ -2107,7 +2110,18 @@ fn run_inner() -> Result<(), AppError> {
         // told to *use* the snapshot, not to build another one. Only probed
         // when no index was requested, so the common `--index` path pays
         // nothing for the stat.
-        ctx.snapshot_on_disk = index_path_buf.is_none() && dir.join(".hyalo-index").is_file();
+        // BUG-15 (iter-277), second half: a snapshot built under a different
+        // `site_prefix` answers a different question than this run, so
+        // following the hint would change the count it was printed beside.
+        // Whether it matches cannot be known without deserializing the whole
+        // snapshot — far too much work for a hint on a 14 000-file vault — so
+        // an explicit `--site-prefix` on this run suppresses the suggestion
+        // rather than risking a misleading one. A prefix that came from
+        // `.hyalo.toml` is the same one `create-index` would have used, and
+        // still hints normally.
+        ctx.snapshot_on_disk = index_path_buf.is_none()
+            && cli.site_prefix.is_none()
+            && dir.join(".hyalo-index").is_file();
         // iter-267 (UX-3, reverse direction): a PATTERN that is itself an
         // existing `.md` path is a body search for that literal text. Record
         // it so `find`'s hints can offer `--file`.

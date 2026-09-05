@@ -29,6 +29,16 @@ pub(super) fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     if ctx.hints {
         parts.push("--hints".to_owned());
     }
+    // BUG-15 (iter-277): `--site-prefix` decides which site-absolute links
+    // resolve, so a hint that drops it reports a different set than the
+    // command that printed it. Threaded on the same terms as `--dir` and
+    // `--format`, and only onto commands that declare the flag.
+    if let Some(prefix) = &ctx.site_prefix
+        && command_accepts_site_prefix(parts)
+    {
+        parts.push("--site-prefix".to_owned());
+        parts.push(shell_quote(prefix));
+    }
     // iter-274 (UX-2): an indexed run's hints must stay indexed. `--index` /
     // `--index-file` is threaded exactly like `--dir` and `--format` — a hint
     // that silently drops it answers a different (and, on a large vault,
@@ -65,6 +75,33 @@ fn command_accepts_index(parts: &[String]) -> bool {
         cmd = sub;
     }
     cmd.get_arguments().any(|a| a.get_long() == Some("index"))
+}
+
+/// Whether the `hyalo` (sub)command spelled by `parts` accepts
+/// `--site-prefix`.
+///
+/// The flag is `global = true`, so clap attaches it to every subcommand and
+/// this is effectively always true — the check is kept so a future
+/// de-globalisation cannot silently produce hints that fail to parse.
+fn command_accepts_site_prefix(parts: &[String]) -> bool {
+    use clap::CommandFactory;
+
+    let mut cmd = crate::cli::args::Cli::command();
+    for token in parts.iter().skip(1) {
+        if token.starts_with('-') {
+            break;
+        }
+        let Some(sub) = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == token || s.get_all_aliases().any(|a| a == token))
+            .cloned()
+        else {
+            break;
+        };
+        cmd = sub;
+    }
+    cmd.get_arguments()
+        .any(|a| a.get_long() == Some("site-prefix"))
 }
 
 /// Push the graph/title filters that scope a `find` query (`--broken-links`,

@@ -373,29 +373,42 @@ pub fn site_prefix_plausible_resolution_stats(
     let mut plausible = 0usize;
     for entry in index.entries() {
         for (_, link) in &entry.links {
-            let normalized = link.target.replace('\\', "/");
-            if !normalized.starts_with('/') {
-                continue;
-            }
-            let stripped = strip_site_prefix(&normalized, site_prefix);
-            let first_segment = stripped.split('/').next().unwrap_or("");
-            // PR #251 review L5: a bare `/` (site-root link, e.g. `[home](/)`)
-            // has no path segment at all to check plausibility against —
-            // stripping the leading slash always leaves an empty string,
-            // regardless of `site_prefix`. Counting it in `absolute` only
-            // padded the denominator toward a false "stripped 0 of N"; it
-            // carries no signal either way, so it is excluded entirely
-            // rather than counted as "not plausible".
-            if first_segment.is_empty() {
+            if !is_prefix_bearing_site_absolute(&link.target, site_prefix) {
                 continue;
             }
             absolute += 1;
+            let stripped = strip_site_prefix(&link.target.replace('\\', "/"), site_prefix);
+            let first_segment = stripped.split('/').next().unwrap_or("");
             if top_level.contains(&first_segment.to_lowercase()) {
                 plausible += 1;
             }
         }
     }
     (absolute, plausible)
+}
+
+/// Whether `target` is a site-absolute link that carries a `site_prefix`
+/// signal — the one membership test behind both `site_prefix` warnings
+/// (iter-277, BUG-46).
+///
+/// `links fix` prints two numbers about site-absolute links: "stripped 0 of N"
+/// and "skipped fuzzy scoring for M". They described sets computed two
+/// different ways, so on MDN `M` (49 776) came out *larger* than `N`
+/// (49 767) — a subset bigger than its superset, which is not a rounding
+/// difference but a contradiction a reader cannot resolve. Both now call this.
+///
+/// A bare `/` (site-root link, e.g. `[home](/)`) is excluded: stripping the
+/// leading slash always leaves an empty first segment whatever `site_prefix`
+/// is, so it carries no evidence either way and only padded the denominator
+/// toward a false "stripped 0 of N" (PR #251 review L5).
+#[must_use]
+pub fn is_prefix_bearing_site_absolute(target: &str, site_prefix: Option<&str>) -> bool {
+    let normalized = target.replace('\\', "/");
+    if !normalized.starts_with('/') {
+        return false;
+    }
+    let stripped = strip_site_prefix(&normalized, site_prefix);
+    !stripped.split('/').next().unwrap_or("").is_empty()
 }
 
 /// Count links whose TARGET resolves to a real vault file but whose
@@ -916,6 +929,12 @@ impl LinkMatcher {
     pub(crate) fn find_match(&self, written_target: &str, source: &str) -> Option<MatchResult> {
         // Minimum score difference to avoid ambiguous fuzzy matches.
         const TIE_DELTA: f64 = 0.01;
+        /// Margin below which a fuzzy winner counts as *contested* and has its
+        /// reported confidence scaled down toward the runner-up's (DEC-319,
+        /// iter-277). Wide enough to catch a vault full of near-neighbour
+        /// stems (`cat*`, `james*`), narrow enough that a genuinely unique
+        /// match never notices it.
+        const CONTESTED_DELTA: f64 = 0.05;
         /// Composite confidence a fuzzy candidate must *exceed* to be reported
         /// at all (iter-261 / UX-8). Zero means "nothing in common".
         const MIN_REPORTABLE_CONFIDENCE: f64 = 0.0;
@@ -1131,8 +1150,32 @@ impl LinkMatcher {
         // ambiguous — decline rather than guessing. When there is no second
         // candidate, `second_score` is still NEG_INFINITY so the gap is
         // effectively infinite and the unique match is accepted.
-        if best_score - second_score <= TIE_DELTA {
+        let margin = best_score - second_score;
+        if margin <= TIE_DELTA {
             return None;
+        }
+
+        // DEC-319 (iter-277, BUG-18): a winner that only just outran a real
+        // runner-up is a *contested* match, and the composite score alone does
+        // not say so. On the Obsidian Hub `[[Cat]]` scored 0.87 against
+        // `CatMuse.md` with five other `cat*` notes in the vault, `[[jamesb]]`
+        // scored 0.885 against `jamesgreenblue.md` with eight `james*` notes,
+        // and on a directory-index corpus `…/tabindex` scored 0.9125 against
+        // `global_attributes/index.md` — all comfortably above the 0.8 apply
+        // floor, all wrong, all written by `--apply-fuzzy`.
+        //
+        // Rather than declining (which would hide a proposal a human might
+        // still want to see), the confidence is scaled down in proportion to
+        // how close the contest was, so a contested winner lands below the
+        // floor and is reported for review instead of applied. A clear winner
+        // — `[[Obsidian Publish.]]` → `Obsidian Publish.md` at 1.0, whose
+        // runner-up is nowhere near — keeps its score untouched.
+        if margin < CONTESTED_DELTA {
+            return Some(MatchResult {
+                matched_file: self.files[best_idx].clone(),
+                strategy: FixStrategy::FuzzyMatch,
+                confidence: best_score * (margin / CONTESTED_DELTA),
+            });
         }
 
         Some(MatchResult {
