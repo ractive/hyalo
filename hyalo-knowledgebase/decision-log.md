@@ -5836,3 +5836,100 @@ above-floor guesses, not more.
 
 **Where:** no code; `link_score` weighting unchanged. See
 [[iterations/iteration-277-link-graph-parity-and-write-performance]].
+
+## DEC-322: the site-prefix cost was the literal link probe, not allocation (2026-09-06)
+
+**Decision:** Iteration 278's premise was wrong, and the profile said so before
+any code was written. What remained of the indexed site-prefix cost after
+iteration 277 (PREFIX-1 / BUG-13) was **not** per-link allocation — it was one
+last un-indexed filesystem probe per link, run by `discovery::classify_link`.
+The fix is `discovery::resolve_target_literal`: the same literal semantics
+`resolve_target(.., case_index: None)` has always had, with a *complete* index
+allowed to answer existence from memory.
+
+**Why.** `sample` over MDN (14 375 files, ~51 000 links,
+`--site-prefix en-US/docs`), symbolicated, on the indexed
+`summary`: **930 of 979 samples (95 %)** sat under
+`classify_link` → `resolve_target` at `discovery.rs:1704` — 466 in `realpath`
+(`ensure_within_vault`) and 425 in `stat` (`Path::is_file`). Allocation —
+`replace('\\', "/")`, `strip_site_prefix`, `to_ascii_lowercase`, the two
+`format!` candidates the plan named — accounted for a few dozen samples in
+total, well inside the noise.
+
+The reason is structural, not accidental: `classify_link` asks two questions
+per link. "Is this link correct *exactly as written*?" and "what would it be
+canonicalized?". The second one has consulted the case index since
+iteration 277 and costs nothing. The first one passed `case_index: None`,
+because that was the only way to ask for the uncanonicalized answer — and
+`None` meant "no index at all", so every candidate went to disk: up to three
+`stat`s and a `realpath` per link, ~150 000 syscalls per MDN run.
+
+`resolve_target_literal` splits the two meanings apart. The index it takes
+answers existence only — never a stem, never an alias, never a canonical
+spelling — so the verdict is still the author's own spelling, and it answers
+exactly what the filesystem would have: an exact hit is present; a hit that
+differs only in case is present on a case-folding volume (that is what the
+literal probe would have opened) and absent on a case-sensitive one; anything
+else is absent, because a complete index is proof of absence. A partial index
+(a `--file` run) and no index at all keep the filesystem probes.
+
+**Measured** (Apple Silicon, MDN, `--site-prefix en-US/docs`, warm):
+
+| command | iter-277, as recorded | iter-277 binary, re-measured here | iter-278 | target |
+|---|---|---|---|---|
+| `summary --index` | 2.42 s | 2.01 s | **0.26 s** | ≤ 0.8 s |
+| `find --broken-links --count --index` | 1.71 s | 0.33 s | **0.30 s** | ≤ 0.6 s |
+| `links fix` (14 k synthetic vault) | ~3.4 s | — | **1.08 s** | — |
+
+Two honest caveats on that table. The re-measured column is this machine on
+this day (warm page cache, median of three); iteration 277's own numbers were
+taken under conditions this iteration cannot reproduce, and the
+`find --broken-links --count` row shows the gap — it was **already** inside its
+0.6 s target before this iteration touched anything, so that AC was met by
+iteration 277 and merely confirmed here. The `summary` row is the one this
+change moved: 2.01 s → 0.26 s, a 7.7× cut on identical output.
+
+Iteration 277's remaining unmet target is met with room to spare, which is why
+this DEC records a mechanism rather than the "here is why the ceiling was not
+reached" note ALLOC-3 allowed for. The allocation work the plan asked for was
+done anyway (`Cow`-based normalization in `resolve_target`,
+`strip_site_prefix_ref`, one case-fold per probe instead of three, one shared
+candidate buffer instead of two `format!`s) — it is real but small, and it is
+not what moved these numbers.
+
+**Byte-identical output** is the constraint this bought the speed under: MDN's
+`summary`, `find --broken-links` and `links fix --dry-run` JSON all compare
+`cmp`-identical against the iteration-277 binary, on the disk scan and on
+`--index` alike.
+
+**Where:** `crates/hyalo-core/src/discovery.rs`
+(`resolve_target_literal`, `literal_existence`, `probe_existence`,
+`truncate_cow`), `crates/hyalo-core/src/case_index.rs`
+(`fold_key`, `fs_folds_case_cached`, the `*_folded` lookups),
+`crates/hyalo-core/src/link_graph.rs` (`strip_site_prefix_ref`). See
+[[iterations/iteration-278-site-prefix-resolution-allocation]].
+
+## DEC-323: DEC-317's bulk write phase, measured at the fan-out it was built for (2026-09-06)
+
+**Decision:** Keep DEC-317 as it stands, with its win now verified where it
+actually applies: `xtask bench-scale` gains a `mv` case that renames one note
+**2 000** other notes link to.
+
+**Why.** Iteration 277 claimed the directory-level fsync for `mv` but never
+exercised it there: the Obsidian Hub copy's most-linked note rewrote 8 files,
+which is at the threshold hyalo deliberately keeps on the durable per-file
+path, so the number proved nothing about the parallel phase. Measured now on a
+synthetic fan-out vault (Apple Silicon, median of 3, fresh vault per run):
+
+- 2 000 backlinks: **0.52 s** end to end — scan of 2 001 files, link graph and
+  the 2 000-file rewrite — i.e. **0.26 ms per rewritten file**.
+- 8 backlinks (durable per-file path): 46 ms, i.e. **5.8 ms per file**, which
+  is the `F_FULLFSYNC` cost DEC-317 named.
+
+The same 2 000 files on the per-file path would be ≈ 2 000 × 5.5 ms ≈ 11 s. The
+gate's budget is 5 s: loud if the bulk phase is ever lost, quiet on a slow
+shared runner. It stays an on-demand gate (DEC-098), not per-PR CI.
+
+**Where:** `crates/xtask/src/bench_scale.rs` (`FANOUT_BACKLINKS`,
+`median_mv_fanout`, `generate_fanout_vault`). See
+[[iterations/iteration-278-site-prefix-resolution-allocation]].

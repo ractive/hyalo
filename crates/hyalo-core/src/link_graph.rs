@@ -956,6 +956,19 @@ impl FileVisitor for LinkGraphVisitor {
 /// With `site_prefix = None`:
 ///   `/page.md` → `page.md`
 pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> String {
+    strip_site_prefix_ref(target, site_prefix).to_owned()
+}
+
+/// Borrowing form of [`strip_site_prefix`] — the same answer as a `&str` slice
+/// of the input, with no allocation and no `format!` for the `"prefix/"` probe
+/// (iter-278).
+///
+/// `strip_site_prefix` is called once per site-absolute link, and on a
+/// static-site corpus that is nearly every link: MDN's 51 k links each built a
+/// `String` for the prefix *and* one for the result. Callers that only read the
+/// stripped target — resolution's hot path — take this form instead; the
+/// owning wrapper above keeps every caller that stores the result unchanged.
+pub(crate) fn strip_site_prefix_ref<'a>(target: &'a str, site_prefix: Option<&str>) -> &'a str {
     let without_slash = target.strip_prefix('/').unwrap_or(target);
     if let Some(prefix) = site_prefix {
         // Try stripping "prefix/" from the front.
@@ -967,17 +980,22 @@ pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> Stri
         // case-sensitive strip left every single site-absolute link
         // unresolved. Only the ASCII case is folded, which is all URL path
         // prefixes use in practice.
-        let with_slash = format!("{prefix}/");
+        //
         // `get` rather than slicing: the prefix length is a byte count, and a
-        // multibyte target could put it mid-character.
-        if without_slash
-            .get(..with_slash.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(&with_slash))
+        // multibyte target could put it mid-character. The separator is tested
+        // as a single byte *after* that guard, so it can never split a
+        // character either (a continuation byte is never `/`).
+        let plen = prefix.len();
+        if without_slash.len() > plen
+            && without_slash.as_bytes()[plen] == b'/'
+            && without_slash
+                .get(..plen)
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
         {
-            return without_slash[with_slash.len()..].to_owned();
+            return &without_slash[plen + 1..];
         }
     }
-    without_slash.to_owned()
+    without_slash
 }
 
 /// Resolve a relative markdown link target against the source file's directory,
@@ -1642,6 +1660,50 @@ mod tests {
             strip_site_prefix("/tables/customers.md", Some("docs")),
             "tables/customers.md"
         );
+    }
+
+    #[test]
+    fn strip_site_prefix_ref_agrees_with_the_owning_form() {
+        // iter-278 (ALLOC-2): the borrowing form replaced a `format!` per
+        // call, including the byte-boundary guard that `format!` + `get(..n)`
+        // used to provide. Pin the two against each other over every shape
+        // that guard exists for.
+        let targets = [
+            "/en-US/docs/Web/CSS/page",
+            "/EN-us/docs/page.md",
+            "/en-USdocs/page.md",
+            "/en-US",
+            "/en-US/",
+            "/docs/page.md",
+            "relative/page.md",
+            "/",
+            "/é/page.md",
+            "/éx/page.md",
+            "/ünïcode/page.md",
+        ];
+        let prefixes = [None, Some(""), Some("en-US"), Some("docs"), Some("é")];
+        for target in targets {
+            for prefix in prefixes {
+                assert_eq!(
+                    strip_site_prefix_ref(target, prefix),
+                    strip_site_prefix(target, prefix).as_str(),
+                    "borrowed and owning strip disagree on {target:?} with prefix {prefix:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn strip_site_prefix_needs_a_whole_segment() {
+        // A prefix that is only a leading substring of the first segment must
+        // not strip: `/en-USdocs/x` is not under `en-US`.
+        assert_eq!(
+            strip_site_prefix_ref("/en-USdocs/page.md", Some("en-US")),
+            "en-USdocs/page.md"
+        );
+        // …and an exact segment with nothing after it strips to empty, as the
+        // owning form has always done.
+        assert_eq!(strip_site_prefix_ref("/en-US/", Some("en-US")), "");
     }
 
     #[test]
