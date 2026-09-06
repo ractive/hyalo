@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 278 — Allocation-free site-prefix resolution
 date: 2026-09-05
-status: in-progress
+status: completed
 tags:
   - iteration
   - links
@@ -32,7 +32,7 @@ Rule: no behavior change — every result must stay byte-identical to iteration 
 scan and `--index` alike); this is purely a hot-path rewrite from owned `String`s to borrowed
 `&str` / `Cow<str>` wherever the input is already normalized.
 
-## Tasks
+## Tasks [5/5]
 
 - [x] ALLOC-1: profile `resolve_target` on MDN with `--site-prefix en-US/docs` (e.g.
       `cargo flamegraph` or `perf record` on the indexed path) to confirm allocation, not
@@ -103,7 +103,7 @@ measurement: renaming a note with **2 000** backlinks takes 0.52 s end to end
 (0.26 ms per rewritten file) against 5.8 ms/file on the 8-file durable path —
 DEC-323.
 
-## Acceptance criteria
+## Acceptance criteria [4/4]
 
 - [x] MDN with `--site-prefix en-US/docs`: indexed `summary` ≤ 0.8 s, `find --broken-links
       --count` ≤ 0.6 s (iteration 277's unmet targets) — or, if still unmet, a DEC recording
