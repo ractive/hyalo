@@ -101,7 +101,11 @@ fn a_shared_given_name_does_not_buy_token_identity() {
 fn a_dropped_word_costs_its_character_share() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "Plugins/obsidian-plugin-toc.md", "x\n");
-    write_md(tmp.path(), "src.md", "see [[obsidian-floating-toc-plugin]]\n");
+    write_md(
+        tmp.path(),
+        "src.md",
+        "see [[obsidian-floating-toc-plugin]]\n",
+    );
 
     for (target, confidence, below_floor) in fuzzy_plans(&tmp) {
         assert!(
@@ -151,18 +155,20 @@ fn a_typo_is_still_fixed() {
     );
 }
 
-/// camelCase splitting also *helps*: it makes the two note-naming conventions
-/// comparable, so a link written in kebab-case finds the prose-case note.
+/// A basename that gains a whole word is a different document, so it is
+/// reported for review rather than written by `--apply-fuzzy`. This is the
+/// deliberate narrowing DEC-324 buys: `explained_mass` charges `archive` for
+/// its seven of twenty-nine characters.
 #[test]
-fn camel_case_splitting_bridges_the_naming_conventions() {
+fn a_basename_that_gains_a_word_is_reported_not_applied() {
     let tmp = TempDir::new().unwrap();
-    write_md(tmp.path(), "Notes/MyLongNote.md", "x\n");
-    write_md(tmp.path(), "src.md", "see [[my-long-note]]\n");
+    write_md(tmp.path(), "decision-log-archive.md", "x\n");
+    write_md(tmp.path(), "src.md", "see [[decision-log]]\n");
 
     let plans = fuzzy_plans(&tmp);
     assert_eq!(plans.len(), 1, "expected exactly one proposal: {plans:?}");
     assert!(
-        !plans[0].2,
-        "the two conventions name the same note: {plans:?}"
+        plans[0].2 && plans[0].1 > 0.5,
+        "still worth reporting, never applied by default: {plans:?}"
     );
 }

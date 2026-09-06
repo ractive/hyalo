@@ -235,11 +235,24 @@ fn best_token_match(token: &str, others: &[String]) -> f64 {
 /// the two names they are — 0.47 for that same `actions` / `actions-limits`
 /// pair, where `limits` is six of the twenty characters in play.
 fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
+    scored_token_f1(a, b).0
+}
+
+/// [`soft_token_f1`] together with the [`explained_mass`] of the same pairing.
+///
+/// The two are reported separately because only the *basename* charges for
+/// unmatched mass. A directory reorganisation renames whole levels by design —
+/// `dependabot/dependabot-alerts` → `concepts/supply-chain-security` is what a
+/// relocation *is* — so charging directory tokens by character share pushed
+/// 828 GitHub Docs fixes whose basename matched byte-for-byte below the apply
+/// floor. A dropped word in the *name* changes which document is meant; a
+/// dropped word in the *path* is the move being described.
+fn scored_token_f1(a: &[String], b: &[String]) -> (f64, f64) {
     if a.is_empty() && b.is_empty() {
-        return 1.0;
+        return (1.0, 1.0);
     }
     if a.is_empty() || b.is_empty() {
-        return 0.0;
+        return (0.0, 1.0);
     }
     let scores_a: Vec<f64> = a.iter().map(|x| best_token_match(x, b)).collect();
     let scores_b: Vec<f64> = b.iter().map(|x| best_token_match(x, a)).collect();
@@ -248,10 +261,10 @@ fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
     let precision = mean(&scores_a);
     let recall = mean(&scores_b);
     if precision + recall == 0.0 {
-        return 0.0;
+        return (0.0, 1.0);
     }
     let f1 = 2.0 * precision * recall / (precision + recall);
-    f1 * explained_mass(a, &scores_a, b, &scores_b)
+    (f1, explained_mass(a, &scores_a, b, &scores_b))
 }
 
 /// Fraction of the two slugs' written substance that the pairing accounts for:
@@ -293,7 +306,8 @@ pub fn basename_similarity(a_stem: &str, b_stem: &str) -> f64 {
     if a_stem.eq_ignore_ascii_case(b_stem) {
         return 1.0;
     }
-    soft_token_f1(&tokenize(a_stem), &tokenize(b_stem))
+    let (f1, mass) = scored_token_f1(&tokenize(a_stem), &tokenize(b_stem));
+    f1 * mass
 }
 
 /// Weight of the shared-leading-components term inside
@@ -588,10 +602,16 @@ mod tests {
         // all-uppercase name is tokenised exactly as before.
         assert_eq!(tokenize("catmuse"), vec!["catmuse"]);
         assert_eq!(tokenize("README"), vec!["readme"]);
-        assert_eq!(tokenize("obsidian-plugin-toc"), vec![
-            "obsidian", "plugin", "toc"
-        ]);
-        // The split makes the two naming conventions comparable.
+        assert_eq!(
+            tokenize("obsidian-plugin-toc"),
+            vec!["obsidian", "plugin", "toc"]
+        );
+        // The split makes the two naming conventions comparable *to the
+        // scorer*. Whether such a pair ever reaches the scorer is a separate
+        // question: `LinkMatcher`'s candidacy gate is a case-sensitive
+        // Jaro-Winkler over raw stems, so `[[my-long-note]]` never shortlists
+        // `MyLongNote.md` to begin with. Narrowing that gate is not this
+        // iteration's business.
         assert!(approx(basename_similarity("MyNote", "my-note"), 1.0));
     }
 
