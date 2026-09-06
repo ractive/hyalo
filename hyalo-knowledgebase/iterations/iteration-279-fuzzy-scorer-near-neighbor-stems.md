@@ -13,6 +13,7 @@ priority: 3
 related:
   - "[[iterations/iteration-277-link-graph-parity-and-write-performance]]"
   - "[[decision-log]]"
+  - "[[iterations/iteration-280-fuzzy-candidacy-gate-camelcase]]"
 ---
 
 # Iteration 279 — Fuzzy scorer for near-neighbor stems
@@ -42,7 +43,7 @@ show a scoring signal that pulls all three below floor while `[[Obsidian Publish
 MDN corpora used for iteration 277 keeps its confidence. If no such signal exists without
 new false negatives, record that in a DEC and close the plan rather than force a fit.
 
-## Tasks
+## Tasks [4/4]
 
 - [x] SCORE-1: reproduce all three examples on a Hub copy and inspect exactly what the
       current composite score rewards — stem overlap, length ratio, token boundary, edit
@@ -62,7 +63,7 @@ new false negatives, record that in a DEC and close the plan rather than force a
 - [x] SCORE-4: `cargo test --workspace -q`, every xtask `check-*` gate, `hyalo lint --strict`
       on the knowledgebase.
 
-## Acceptance criteria
+## Acceptance criteria [3/3]
 
 - [x] `[[Cat]]`, `[[paulbricman]]` and `[[obsidian-floating-toc-plugin]]` fall below the 0.8
       apply floor on the Hub corpus (`[[jamesb]]` already does, per DEC-319) — or a DEC records
@@ -158,4 +159,5 @@ preservation, not scoring) now passing `--min-confidence 0.5` explicitly.
 The fuzzy *candidacy* gate is still a case-sensitive Jaro-Winkler over raw
 stems, so `[[my-long-note]]` never shortlists `MyLongNote.md` even though the
 scorer now rates that pair 1.0. Widening the gate is a separate change with its
-own cost and was left alone.
+own cost and was left alone — carried forward as
+[[iterations/iteration-280-fuzzy-candidacy-gate-camelcase]].
