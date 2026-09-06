@@ -157,8 +157,8 @@ fn a_typo_is_still_fixed() {
 
 /// A basename that gains a whole word is a different document, so it is
 /// reported for review rather than written by `--apply-fuzzy`. This is the
-/// deliberate narrowing DEC-324 buys: `explained_mass` charges `archive` for
-/// its seven of twenty-nine characters.
+/// deliberate narrowing DEC-324 buys: the explained-mass charge counts
+/// `archive` as seven of the twenty-nine characters in play.
 #[test]
 fn a_basename_that_gains_a_word_is_reported_not_applied() {
     let tmp = TempDir::new().unwrap();
