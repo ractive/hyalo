@@ -61,10 +61,11 @@
 //!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
 //!   opaque token that looks like a typo of the other.
 //! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
-//!   unless their common prefix consumes the shorter token
-//!   ([`shares_dominant_prefix`]) — `creat` is all but the `e` of `create`, but
-//!   `paul` is four of eleven in `paulbricman`, and a shared given name must
-//!   not buy token identity.
+//!   unless their common prefix dominates what it leaves over of the shorter
+//!   token ([`shares_dominant_prefix`], tightened by iter-281/DEC-326) —
+//!   `creat` dwarfs the `e` of `create`, but `paul` leaves seven characters of
+//!   `paulbricman` unaccounted for, and a shared given name must not buy token
+//!   identity.
 //! * [`scored_token_f1`] charges for unmatched tokens by their character share,
 //!   so a dropped word (`obsidian-floating-toc-plugin` /
 //!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
@@ -810,7 +811,11 @@ mod tests {
     #[test]
     fn a_prefix_must_dominate_what_it_leaves_over() {
         // Nothing left over: the shorter token is literally a prefix.
-        for (a, b) in [("get", "getting"), ("run", "running"), ("plugin", "plugins")] {
+        for (a, b) in [
+            ("get", "getting"),
+            ("run", "running"),
+            ("plugin", "plugins"),
+        ] {
             assert!(shares_dominant_prefix(a, b), "{a} / {b}");
         }
         // A leftover the prefix dwarfs — the inflections the exemption exists
@@ -857,7 +862,9 @@ mod tests {
             basename_similarity("creating-a-composite-action", "create-a-composite-action")
                 >= DEFAULT_FUZZY_MIN_CONFIDENCE
         );
-        assert!(basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE);
+        assert!(
+            basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE
+        );
         // A typo still rides in on plain Jaro, with no prefix help at all.
         assert!(token_similarity("acions", "actions") > 0.9);
         assert!(!shares_dominant_prefix("acions", "actions"));
