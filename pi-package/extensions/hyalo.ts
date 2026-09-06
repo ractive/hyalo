@@ -267,7 +267,8 @@ export default function (pi: ExtensionAPI) {
     label: "Hyalo Find",
     description:
       "Search/filter a markdown knowledgebase by full-text query, frontmatter " +
-      "properties, tags, glob, or task status. Preferred over the generic hyalo tool for queries.",
+      "properties, tags, glob, or task status. Ranked queries include score and up to 3 body matches " +
+      "with line, section, text. Preferred over the generic hyalo tool for queries.",
     promptSnippet: "hyalo_find: search/filter knowledgebase files (query, property, tag, task status)",
     parameters: hyaloFindParams,
     async execute(_toolCallId, params: Static<typeof hyaloFindParams>, signal) {

@@ -232,6 +232,8 @@ pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
 /// [`help_long`]. Never hand-write the list-command enumeration here (iter-192).
 const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Find (search and filter, read-only):
+    PATTERN returns score and up to 3 body matches {line, section, text}, ranked by distinct query
+    tokens then line number; --section scopes matches. Regex returns all matching lines, unranked.
     hyalo find [PATTERN | -e/--regexp REGEX] [-p/--property K=V ...] [-t/--tag T ...] [--task STATUS]
                [-s/--section HEADING ...] [--title PAT] [--broken-links] [--orphan] [--dead-end]
                [-f/--file F | -g/--glob G] [--filenames-only | --filenames0] [--fields ...] [--sort ...] [--reverse] [--strict] [--language LANG] [-n/--limit N]

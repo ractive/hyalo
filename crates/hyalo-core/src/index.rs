@@ -2358,16 +2358,7 @@ pub(crate) fn scan_one_file(
         let body = body_collector.into_body();
 
         // Resolve title: frontmatter property > first H1 heading.
-        let title: &str = props
-            .get("title")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                sections
-                    .iter()
-                    .find(|s| s.level == 1)
-                    .and_then(|s| s.heading.as_deref())
-                    .unwrap_or("")
-            });
+        let title = crate::bm25::document_title(&props, &sections);
 
         // Resolve stemming language: frontmatter > config default > English.
         let fm_lang = props.get("language").and_then(|v| v.as_str());

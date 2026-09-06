@@ -19,6 +19,13 @@ description: >
 
 # Hyalo CLI — Prime Tool for Markdown Knowledgebases in pi
 
+Ranked queries return `score` and up to three body `matches` with `line`, `section`,
+and `text`; text output displays that context directly. Snippets rank by distinct query
+tokens then line number and share stemming, OR and CJK rules with scoring. Quoted
+phrases must fit on one line. `--section` scopes snippets; frontmatter is excluded,
+so title-only hits can have an empty array. Indexed queries read snippet text only
+for final results after `--limit`.
+
 Hyalo is a fast CLI for querying and mutating YAML frontmatter, tags, tasks, and structure
 in directories of markdown files. If the hyalo pi extension is installed
 (`.pi/extensions/hyalo.ts`), prefer its **typed tools** for the common operations —

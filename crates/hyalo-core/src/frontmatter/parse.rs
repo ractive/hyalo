@@ -1061,7 +1061,9 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
         if is_closing_delimiter(trimmed) {
             break;
         }
-        total_bytes += n;
+        // Match the scanner's normalized YAML buffer: CRLF and LF each
+        // contribute one newline byte, not the transport's raw byte count.
+        total_bytes += trimmed.len() + 1;
         if line_count - 1 > MAX_FRONTMATTER_LINES || total_bytes > MAX_FRONTMATTER_BYTES {
             parse_bail!(
                 "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"

@@ -1,6 +1,202 @@
 use super::common::{hyalo_no_hints, md, write_md};
 use tempfile::TempDir;
 
+#[test]
+fn ranked_snippets_streaming_unicode_and_crlf_boundaries() {
+    let tmp = TempDir::new().unwrap();
+    let prefix = "---\ntitle: Boundary\n---\n";
+    let padding = "a".repeat(8191 - prefix.len());
+    let unicode_line = format!("{padding}日本語");
+    write_md(
+        tmp.path(),
+        "unicode.md",
+        &format!("{prefix}{unicode_line}\n"),
+    );
+    let comments = format!("#{}\r\n", "a".repeat(63)).repeat(1000);
+    write_md(
+        tmp.path(),
+        "crlf.md",
+        &format!("---\r\ntitle: Near budget\r\n{comments}---\r\nrust\r\n"),
+    );
+    let index = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(index.status.success(), "{index:?}");
+    for (query, file, line, expected) in [
+        ("日本語", "unicode.md", 4, unicode_line.as_str()),
+        ("rust", "crlf.md", 1004, "rust"),
+    ] {
+        let mut previous = None;
+        for indexed in [false, true] {
+            let mut command = hyalo_no_hints();
+            command
+                .arg("--dir")
+                .arg(tmp.path())
+                .args(["find", query, "--format", "json"]);
+            if indexed {
+                command.arg("--index");
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(json["total"], 1);
+            assert_eq!(json["results"][0]["file"], file);
+            assert_eq!(
+                json["results"][0]["matches"],
+                serde_json::json!([
+                    {"line": line, "section": "", "text": expected}
+                ])
+            );
+            if let Some(previous) = previous {
+                assert_eq!(output.stdout, previous);
+            }
+            previous = Some(output.stdout);
+        }
+    }
+}
+
+#[test]
+fn ranked_snippets_semantics_and_complete_index_parity() {
+    let tmp = TempDir::new().unwrap();
+    let body = "---\ntitle: titleonly rust\n---\n# Guide\nrun\nrust rust rust\nrust golang\ngolang rust\nrust\n## Other\nrun fast\nfast run\n日本語Docker入門\n```rust\n# rust code\n```\n%% rust comment %%\n";
+    write_md(tmp.path(), "guide.md", body);
+    write_md(
+        tmp.path(),
+        "title.md",
+        "---\ntitle: titleonly\n---\nUnrelated body.\n",
+    );
+    write_md(tmp.path(), "crossline.md", "# Crossline\nalpha\nbeta\n");
+    write_md(
+        tmp.path(),
+        "german.md",
+        "\u{feff}---\r\nlanguage: german\r\n---\r\nHaus\r\n",
+    );
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    for args in [
+        vec!["rust"],
+        vec!["running"],
+        vec!["rust OR golang"],
+        vec!["rust golang"],
+        vec!["\"run fast\""],
+        vec!["\"run fast\" OR golang"],
+        vec!["日本語"],
+        vec!["Docker"],
+        vec!["Häuser", "--language", "german"],
+        vec!["rust", "--section", "Other"],
+        vec!["titleonly"],
+        vec!["\"alpha beta\""],
+        vec!["rust", "--limit", "0"],
+        vec![
+            "rust OR titleonly",
+            "--limit",
+            "1",
+            "--sort",
+            "file",
+            "--reverse",
+        ],
+    ] {
+        let disk = hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["--format", "json", "find"])
+            .args(&args)
+            .output()
+            .unwrap();
+        let indexed = hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["--format", "json", "find", "--index"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(disk.status.success(), "{args:?}: {disk:?}");
+        assert!(indexed.status.success(), "{args:?}: {indexed:?}");
+        assert_eq!(
+            disk.stdout, indexed.stdout,
+            "whole envelope parity: {args:?}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(&disk.stdout).unwrap();
+        for result in json["results"].as_array().unwrap() {
+            let matches = result["matches"].as_array().unwrap();
+            assert!(matches.len() <= 3);
+            for m in matches {
+                assert_eq!(m.as_object().unwrap().len(), 3);
+                let content =
+                    std::fs::read_to_string(tmp.path().join(result["file"].as_str().unwrap()))
+                        .unwrap();
+                let line = usize::try_from(m["line"].as_u64().unwrap()).unwrap();
+                assert_eq!(
+                    content.lines().nth(line - 1).unwrap(),
+                    m["text"].as_str().unwrap()
+                );
+                if result["file"] == "guide.md" {
+                    assert!(line > 3);
+                }
+            }
+        }
+    }
+    let (_, json, _) = find_json(&tmp, &["rust OR golang"]);
+    assert_eq!(
+        json["results"][0]["matches"],
+        serde_json::json!([
+            {"line": 7, "section": "# Guide", "text": "rust golang"},
+            {"line": 8, "section": "# Guide", "text": "golang rust"},
+            {"line": 6, "section": "# Guide", "text": "rust rust rust"},
+        ])
+    );
+    let (_, json, _) = find_json(&tmp, &["running"]);
+    assert_eq!(json["results"][0]["matches"][0]["text"], "run");
+    let (_, json, _) = find_json(&tmp, &["日本語"]);
+    assert_eq!(json["results"][0]["matches"][0]["text"], "日本語Docker入門");
+    let (_, json, _) = find_json(&tmp, &["Häuser", "--language", "german"]);
+    assert_eq!(
+        json["results"][0]["matches"],
+        serde_json::json!([
+            {"line": 4, "section": "", "text": "Haus"}
+        ])
+    );
+    let (_, json, _) = find_json(&tmp, &["\"run fast\""]);
+    assert_eq!(
+        json["results"][0]["matches"],
+        serde_json::json!([
+            {"line": 11, "section": "## Other", "text": "run fast"}
+        ])
+    );
+    let (_, json, _) = find_json(&tmp, &["rust", "--section", "Other"]);
+    assert_eq!(
+        json["results"][0]["matches"],
+        serde_json::json!([
+            {"line": 14, "section": "## Other", "text": "```rust"},
+            {"line": 15, "section": "## Other", "text": "# rust code"},
+            {"line": 17, "section": "## Other", "text": "%% rust comment %%"}
+        ])
+    );
+    for query in ["titleonly", "\"alpha beta\""] {
+        let (_, json, _) = find_json(&tmp, &[query]);
+        for result in json["results"].as_array().unwrap() {
+            assert_eq!(result["matches"], serde_json::json!([]));
+        }
+    }
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "running", "--format", "text"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("line 5 (# Guide): run"), "{text}");
+}
+
 // ---------------------------------------------------------------------------
 // Vault fixture
 // ---------------------------------------------------------------------------
