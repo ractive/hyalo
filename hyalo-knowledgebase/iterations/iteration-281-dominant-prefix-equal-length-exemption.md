@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 281 — Tighten the dominant-prefix exemption for equal-length word pairs
 date: 2026-09-06
-status: in-progress
+status: completed
 tags: [iteration, links, fuzzy-match]
 branch: iter-281/dominant-prefix-equal-length-exemption
 priority: 3
@@ -38,7 +38,7 @@ single-token match path in `crates/hyalo-core/src/link_score.rs`) only. It does 
 iteration 280's candidacy-gate change, DEC-319's margin damping, or the multi-token scoring path
 that iteration 279 already settled.
 
-## Tasks
+## Tasks [4/4]
 
 - [x] TASK-1: reproduce `[[Mathjax]]` → `mathpad.md` at 0.886 with a minimal fixture (no
       corpus needed — a two-file vault with `Plugins/mathpad.md` and a broken `[[Mathjax]]`
@@ -66,7 +66,7 @@ that iteration 279 already settled.
 - [x] TASK-4: `cargo test --workspace -q`, every xtask `check-*` gate, `hyalo lint --strict` on
       the knowledgebase.
 
-## Acceptance criteria
+## Acceptance criteria [3/4]
 
 - [x] `[[Mathjax]]` no longer fuzzy-matches `mathpad.md` above the apply floor — either it drops
       out of `fuzzy_fixes` entirely or lands below `below_floor`, on the Hub fixture from TASK-1.
