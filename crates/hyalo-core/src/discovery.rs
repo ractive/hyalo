@@ -2046,6 +2046,8 @@ fn truncate_cow(value: &mut Cow<'_, str>, len: usize) {
 /// - some casing of it is, and the volume folds case → the literal probe would
 ///   open that file and report the author's spelling, so: present as written;
 /// - some casing of it is, and the volume does not fold case → absent;
+/// - some casing of it is, and the volume cannot be probed without writing to
+///   it → unknown, so the caller's own filesystem probe answers;
 /// - no casing of it is → absent on either kind of volume.
 fn literal_existence(
     canonical_dir: &Path,
@@ -2059,8 +2061,12 @@ fn literal_existence(
     if idx.contains_path_folded(&folded, rel_path) {
         return Existence::Present(rel_path.to_owned());
     }
-    if idx.has_any_case_folded(&folded) && crate::case_index::fs_folds_case_cached(canonical_dir) {
-        return Existence::Present(rel_path.to_owned());
+    if idx.has_any_case_folded(&folded) {
+        return match crate::case_index::fs_folds_case_cached(canonical_dir) {
+            Some(true) => Existence::Present(rel_path.to_owned()),
+            Some(false) => Existence::Absent,
+            None => Existence::Unknown,
+        };
     }
     Existence::Absent
 }

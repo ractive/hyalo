@@ -721,26 +721,33 @@ pub fn probe_case_insensitive_cached(dir: &Path) -> bool {
 static CANONICAL_FOLD_CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
 
 /// Whether the filesystem under an already-canonicalized `canonical_dir` folds
-/// case, memoized without canonicalizing again (iter-278).
+/// case — `None` when it cannot be told without writing (iter-278).
 ///
-/// [`probe_case_insensitive_cached`] keys its memo on `canonicalize(dir)`, a
-/// `realpath` syscall per call — fine for the handful of config-time callers,
-/// far too expensive for link resolution, which asks the question once per
-/// probed link target. `resolve_target` already receives a pre-canonicalized
-/// vault path (see `canonicalize_vault_dir`), so the key needs no syscall; the
-/// answer itself is still produced by the shared probe, once.
-pub(crate) fn fs_folds_case_cached(canonical_dir: &Path) -> bool {
+/// Two deliberate differences from [`probe_case_insensitive_cached`], both
+/// because this one runs inside link resolution rather than at config time:
+///
+/// 1. It keys its memo on the path as given. The shared probe keys on
+///    `canonicalize(dir)`, a `realpath` syscall per call, and resolution asks
+///    this question once per probed link target — `resolve_target` already
+///    receives a pre-canonicalized vault path (see `canonicalize_vault_dir`),
+///    so the key needs no syscall.
+/// 2. It is **stat-only**. The shared probe falls back to creating a probe file
+///    when the vault offers no usable candidate; a read-only command must not
+///    write into someone's vault to answer a question it can also answer by
+///    going to the filesystem, so an undecidable vault returns `None` and the
+///    caller keeps its filesystem probe.
+pub(crate) fn fs_folds_case_cached(canonical_dir: &Path) -> Option<bool> {
     let cache = CANONICAL_FOLD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(map) = cache.lock()
         && let Some(&cached) = map.get(canonical_dir)
     {
-        return cached;
+        return Some(cached);
     }
-    let resolved = probe_case_insensitive_cached(canonical_dir);
+    let resolved = probe_case_insensitive_stat(canonical_dir)?;
     if let Ok(mut map) = cache.lock() {
         map.insert(canonical_dir.to_path_buf(), resolved);
     }
-    resolved
+    Some(resolved)
 }
 
 /// Resolve a `CaseInsensitiveMode` to a concrete `bool` given a directory.
