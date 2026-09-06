@@ -408,6 +408,17 @@ Prefer `hyalo` CLI for operations on files in this directory:
   directory reorganisation renames whole levels by design. Consequence to know: a basename that
   **gains a whole word** now scores below the floor (`decision-log` → `decision-log-archive` is
   0.607) — it is still reported, and `--min-confidence 0.5` applies it.
+- **The candidacy gate reads a stem the same way** (DEC-325, iter-280): before a candidate is
+  scored at all it has to clear `--threshold` on a cheap Jaro-Winkler prefilter, and that
+  prefilter used to compare the raw, case-sensitive stems — so a pair the scorer rates 1.0
+  never reached it (`my-long-note` / `MyLongNote` is 0.53 raw, `html-parser` / `HTMLParser`
+  0.45). Both sides are now normalised first: split into words (camelCase included),
+  lowercased, rejoined with `-`. `[[my-long-note]]` therefore fixes to `MyLongNote.md` at 1.0.
+  A plain lowercase-hyphen slug is its own key byte for byte, so a documentation corpus is
+  untouched — GitHub Docs and MDN produce byte-identical `links fix` output, at the same wall
+  time. Widening candidacy exposes the scorer as it is: on the Obsidian Hub `[[Mathjax]]` now
+  offers `mathpad.md` at 0.886 (one token each, admitted by the shared `math` prefix), which is
+  wrong and is a known carry-over.
 - **Hints keep `--site-prefix`** (iter-277): a `--site-prefix` given on the CLI is threaded
   into every hint, like `--dir`, `--format` and `--index-file`, so the follow-up answers the
   same question. `hyalo config` reports `site_prefix_source`, and `links fix` says

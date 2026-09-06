@@ -6030,3 +6030,65 @@ gate is a separate change with its own cost.
 `scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
 (`PERFECT_CONFIDENCE`), `crates/hyalo-cli/tests/e2e/iteration279_fuzzy_near_neighbours.rs`.
 See [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]].
+
+## DEC-325: the fuzzy candidacy gate compares stems in word form (2026-09-06)
+
+**Decision:** `LinkMatcher`'s fuzzy *candidacy* gate — the cheap Jaro-Winkler
+prefilter in `fuzzy_shortlist` that decides which files are worth scoring at all
+— compares `link_score::gate_key` normal forms instead of raw, case-sensitive
+filename stems. A gate key is `tokenize`'s words joined with `-`: the same
+tokens `basename_similarity` reads, so candidacy and scoring finally agree about
+what a stem *is*.
+
+**Why.** DEC-324 taught the scorer that a camelCase run is a sequence of words,
+which makes `MyLongNote` and `my-long-note` the same name at confidence 1.0. The
+pair never reached the scorer. Raw Jaro-Winkler puts `my-long-note` /
+`MyLongNote` at **0.53** and `html-parser` / `HTMLParser` at **0.45**, both far
+under the 0.8 `--threshold`, so the gate dropped every camelCase/separator
+mismatch before it was ever scored: an Obsidian vault that writes note names in
+prose case could not be repaired from a slug-spelled link at all. The gate's
+verdict, not the scorer's, was the operative one.
+
+**Why `-` and not concatenation.** The join is what makes the change *provably*
+free on the corpora the gate was tuned on: a plain lowercase-hyphen slug is its
+own gate key, byte for byte. Every `links fix --dry-run` decision on GitHub Docs
+and MDN is therefore unchanged by construction, and the measurement confirms it
+— the whole JSON envelope is identical on both (GitHub Docs: 5,476 fuzzy
+proposals, 3,302 below floor, 1,875 unfixable, zero gained, zero lost, zero
+confidence moved; MDN: 49,784 unfixable, byte-identical output). The synthetic
+`bench-scale` vault (`note-NNNNN.md`, `linker-NNNNN.md`) is in the same class.
+
+**Cost.** None: still one `strsim::jaro_winkler` call per file, over strings
+precomputed once at matcher build (the raw stems were already precomputed for
+iter-206), plus one `gate_key` per broken target. The iter-206 shortlist cache
+is if anything warmer, because `MyNote` and `my-note` now share an entry.
+`links fix --dry-run`, median of 3: GitHub Docs 4.39 s → 4.46 s, MDN 2.02 s →
+2.05 s, Obsidian Hub 0.52 s → 0.49 s — all inside run-to-run noise.
+
+**What moved, on the one corpus where anything moved.** The Obsidian Hub: 16 →
+21 fuzzy proposals, `unfixable` 38 → 33, `broken` unchanged at 54, and the
+`case_mismatches` / `alias_fixes` / `relocations` buckets untouched. Seven
+proposals gained, two lost (both junk at ~0.23 and ~0.31), four re-scored — all
+of those below the apply floor, all lowered. Nothing that was correct changed.
+
+**The honest cost: one new wrong above-floor proposal.** `[[Mathjax]]` (the Hub
+has no MathJax note) now offers `Plugins/mathpad.md` at **0.886**, which
+`--apply-fuzzy` would write. That is not the gate's judgement, it is the
+scorer's: `mathjax` and `mathpad` are one token each, plain Jaro is 0.810 —
+under `TOKEN_MATCH_FLOOR` — and the pair is admitted only by DEC-324's
+`shares_dominant_prefix` exemption, because `math` is four of the seven
+characters, just over half. Had the plugin been named `Mathjax.md` the same
+wrong fix would already be offered today; the raw gate was suppressing it by the
+accident of one capital letter, and no normalisation that reaches `MyLongNote`
+can keep that accident. So it is recorded rather than papered over: the
+dominant-prefix exemption is loose for two *whole* words of equal length, which
+is a scorer question (DEC-324's territory), deliberately out of this iteration's
+scope. Carried over — see the "Not done" section of
+[[iterations/iteration-280-fuzzy-candidacy-gate-camelcase]].
+
+**Where:** `crates/hyalo-core/src/link_score.rs` (`gate_key`),
+`crates/hyalo-core/src/link_fix.rs` (`LinkMatcher::gate_stems`,
+`fuzzy_shortlist`, strategy 4), `crates/hyalo-cli/src/cli/args.rs` (`links fix`
+long help, `--threshold`),
+`crates/hyalo-cli/tests/e2e/iteration280_fuzzy_candidacy_gate.rs`.
+See [[iterations/iteration-280-fuzzy-candidacy-gate-camelcase]].

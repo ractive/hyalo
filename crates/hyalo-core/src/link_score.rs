@@ -68,6 +68,17 @@
 //! * [`scored_token_f1`] charges for unmatched tokens by their character share,
 //!   so a dropped word (`obsidian-floating-toc-plugin` /
 //!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
+//!
+//! # The candidacy gate agrees (iter-280, DEC-325)
+//!
+//! None of the above matters for a pair the *candidacy gate* never shortlists.
+//! That gate — `LinkMatcher::fuzzy_shortlist` — is a raw Jaro-Winkler prefilter
+//! over filename stems, and until iter-280 it ran on the stems as written: the
+//! scorer rated `my-long-note` against `MyLongNote` a perfect 1.0 while the gate
+//! put the same pair at 0.53 and dropped it. [`gate_key`] is the normal form
+//! that settles the disagreement — the same tokens, joined with `-` — and it is
+//! the identity function on a plain lowercase-hyphen slug, so nothing about the
+//! documentation corpora the gate was tuned on changes.
 
 use std::collections::HashSet;
 
@@ -175,6 +186,36 @@ fn push_camel_tokens(run: &str, out: &mut Vec<String>) {
         }
     }
     out.push(chars[start..].iter().collect::<String>().to_lowercase());
+}
+
+/// Normal form of a filename stem for `LinkMatcher`'s fuzzy **candidacy gate**
+/// (iter-280, DEC-325): [`tokenize`]'s words joined by a single `-`.
+///
+/// The gate is a cheap Jaro-Winkler prefilter that decides which files are even
+/// worth scoring; until iter-280 it ran on the raw, case-sensitive stems, so a
+/// pair the scorer rates 1.0 — `my-long-note` / `MyLongNote`, `html-parser` /
+/// `HTMLParser` — never reached it (raw Jaro-Winkler 0.53 and 0.45, far under
+/// the 0.8 floor). Normalising both sides first makes candidacy agree with
+/// [`basename_similarity`] about what a stem *is*, without changing what the
+/// gate costs: it is still one `strsim::jaro_winkler` call per file, over a
+/// string precomputed once at matcher build.
+///
+/// The `-` join (rather than concatenating the tokens) is deliberate: a plain
+/// lowercase-hyphen slug — the whole of the GitHub Docs and MDN corpora — is its
+/// own gate key byte for byte, so on those vaults the gate admits exactly the
+/// candidates it admitted before, at exactly the same cost. Only names carrying
+/// case, spaces or `_` — Obsidian-style vaults — see a different key.
+///
+/// A stem with no alphanumeric character at all (`-----`) would tokenise to
+/// nothing; it keys to itself instead, so two unrelated punctuation-only names
+/// cannot meet at an empty-vs-empty score of 1.0.
+#[must_use]
+pub fn gate_key(stem: &str) -> String {
+    let tokens = tokenize(stem);
+    if tokens.is_empty() {
+        return stem.to_string();
+    }
+    tokens.join("-")
 }
 
 /// `true` when the two tokens' common prefix covers at least half of the
@@ -622,13 +663,13 @@ mod tests {
             tokenize("obsidian-plugin-toc"),
             vec!["obsidian", "plugin", "toc"]
         );
-        // The split makes the two naming conventions comparable *to the
-        // scorer*. Whether such a pair ever reaches the scorer is a separate
-        // question: `LinkMatcher`'s candidacy gate is a case-sensitive
-        // Jaro-Winkler over raw stems, so `[[my-long-note]]` never shortlists
-        // `MyLongNote.md` to begin with. Narrowing that gate is not this
-        // iteration's business.
+        // The split makes the two naming conventions comparable to the scorer,
+        // and since iter-280 (DEC-325) to `LinkMatcher`'s candidacy gate too:
+        // both stems reach it as their `gate_key`, so `[[my-long-note]]` now
+        // shortlists `MyLongNote.md` instead of being filtered out before the
+        // scorer ever ran.
         assert!(approx(basename_similarity("MyNote", "my-note"), 1.0));
+        assert_eq!(gate_key("MyNote"), gate_key("my-note"));
     }
 
     #[test]
@@ -677,6 +718,65 @@ mod tests {
         // Which is what takes the pair from 0.857 to below the apply floor.
         assert!((f1 - 6.0 / 7.0).abs() < 1e-9, "got {f1}");
         assert!(f1 * mass < DEFAULT_FUZZY_MIN_CONFIDENCE);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-280 / DEC-325 — the candidacy gate's normal form
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn gate_key_is_the_identity_on_a_plain_slug() {
+        // The property the whole change rests on: on a lowercase-hyphen corpus
+        // (GitHub Docs, MDN) the gate compares exactly the strings it compared
+        // before, so neither its shortlist nor its cost moves.
+        for stem in [
+            "actions-limits",
+            "getting-started",
+            "code-scanning",
+            "actions-minute-multipliers",
+            "readme",
+            "279",
+            "",
+        ] {
+            assert_eq!(gate_key(stem), stem, "gate_key must not touch {stem}");
+        }
+    }
+
+    #[test]
+    fn gate_key_folds_case_and_separators_together() {
+        assert_eq!(gate_key("MyLongNote"), "my-long-note");
+        assert_eq!(gate_key("HTMLParser"), "html-parser");
+        assert_eq!(gate_key("Obsidian Publish."), "obsidian-publish");
+        assert_eq!(gate_key("my_long_note"), "my-long-note");
+        // A stem with nothing to tokenise keys to itself, so two unrelated
+        // punctuation-only names cannot meet at an empty-vs-empty 1.0.
+        assert_eq!(gate_key("-----"), "-----");
+        assert_eq!(gate_key("***"), "***");
+        assert!(strsim::jaro_winkler(&gate_key("-----"), &gate_key("***")) < 0.5);
+    }
+
+    #[test]
+    fn gate_key_lets_the_scorers_verdict_through() {
+        // The pairs iteration 279 could score but never see. Both are 1.0 to
+        // `basename_similarity`; the gate must now agree they are candidates.
+        for (target, candidate) in [
+            ("my-long-note", "MyLongNote"),
+            ("html-parser", "HTMLParser"),
+            ("my-note", "MyNote"),
+        ] {
+            assert!(
+                strsim::jaro_winkler(target, candidate) < DEFAULT_FUZZY_MIN_CONFIDENCE,
+                "test premise: the raw gate rejected {target} vs {candidate}"
+            );
+            assert!(
+                approx(
+                    strsim::jaro_winkler(&gate_key(target), &gate_key(candidate)),
+                    1.0
+                ),
+                "{target} vs {candidate}"
+            );
+            assert!(approx(basename_similarity(target, candidate), 1.0));
+        }
     }
 
     #[test]
