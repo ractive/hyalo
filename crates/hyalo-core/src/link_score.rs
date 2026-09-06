@@ -576,7 +576,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // iter-279 / DEC-322 — near-neighbour stems
+    // iter-279 / DEC-324 — near-neighbour stems
     // -----------------------------------------------------------------
 
     /// The three wrong above-floor proposals DEC-319's runner-up margin could
