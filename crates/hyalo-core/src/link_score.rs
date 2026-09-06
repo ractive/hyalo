@@ -61,10 +61,11 @@
 //!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
 //!   opaque token that looks like a typo of the other.
 //! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
-//!   unless their common prefix covers at least half the shorter token
-//!   ([`shares_dominant_prefix`]) — `creat` is five of six in `create`, but
-//!   `paul` is four of eleven in `paulbricman`, and a shared given name must
-//!   not buy token identity.
+//!   unless their common prefix dominates what it leaves over of the shorter
+//!   token ([`shares_dominant_prefix`], tightened by iter-281/DEC-326) —
+//!   `creat` dwarfs the `e` of `create`, but `paul` leaves seven characters of
+//!   `paulbricman` unaccounted for, and a shared given name must not buy token
+//!   identity.
 //! * [`scored_token_f1`] charges for unmatched tokens by their character share,
 //!   so a dropped word (`obsidian-floating-toc-plugin` /
 //!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
@@ -218,21 +219,72 @@ pub fn gate_key(stem: &str) -> String {
     tokens.join("-")
 }
 
-/// `true` when the two tokens' common prefix covers at least half of the
-/// shorter one.
+/// How many times the shorter token's leftover the shared prefix must
+/// out-weigh for the two to count as one word (iter-281, DEC-326).
+///
+/// Twice: the shared beginning has to *dominate* what is left of the shorter
+/// token. `referen` (7) against `ce` (2) dominates; `math` (4) against `pad`
+/// (3) does not, and neither does `excali` (6) against `bur` (3), which merely
+/// doubles it.
+const PREFIX_DOMINANCE: usize = 2;
+
+/// `true` when the two tokens' common prefix outweighs what it leaves over of
+/// the shorter one by more than a factor of [`PREFIX_DOMINANCE`].
 ///
 /// This is the question Jaro-Winkler's prefix bonus *should* ask and does not:
 /// Winkler credits a shared prefix up to four characters regardless of how much
 /// of the words that is. Four characters are the whole of `get` in `getting`
-/// and five are most of `create` in `creating` — real morphology — but they are
-/// barely a third of `paulbricman` and `paultreanor`, two different people.
-/// Measuring the prefix against the shorter token's length separates the two.
+/// and five are all but the `e` of `create` in `creating` — real morphology —
+/// but they are barely a third of `paulbricman` and `paultreanor`, two
+/// different people.
+///
+/// # Why the leftover and not half the token (iter-281, DEC-326)
+///
+/// Until iter-281 this asked only for the prefix to cover *at least half* of
+/// the shorter token, and a bare majority is not a prefix relationship.
+/// `mathjax` and `mathpad` are seven characters each and share `math`: four of
+/// seven on both sides clears "half", so the Obsidian Hub's `[[Mathjax]]` — no
+/// such note exists — was admitted as a single-token match against
+/// `Plugins/mathpad.md` and reported at 0.886, over the
+/// [`DEFAULT_FUZZY_MIN_CONFIDENCE`] apply floor, even though plain Jaro rates
+/// the pair 0.810, *below* [`TOKEN_MATCH_FLOOR`]. Widening the candidacy gate
+/// in iter-280 (DEC-325) is what exposed it; the defect is the exemption's.
+///
+/// A prefix relationship is one word *carrying on* into another, so the thing
+/// to weigh the prefix against is what it fails to account for. Comparing the
+/// two directly rather than fixing an absolute leftover is what lets the rule
+/// scale with the word: English inflections grow with their stems, and
+/// `reference` → `referential` leaves `ce` where `create` → `creating` leaves
+/// only `e`. Both are dominated by their prefix; `pad` against `math` is not.
+///
+/// Two alternatives were weighed and rejected:
+///
+/// * *A fixed leftover* — the shorter token spent to within one character.
+///   Clean for the gerund cases (`creat` + `e`, `manag` + `e`, `us` + `e`) but
+///   blind to length: it rejects `reference`/`referential`, a real derivation,
+///   and with it GitHub Docs' `referential-content-type` →
+///   `reference-content-type` rename, which fell from 0.973 to 0.484 when this
+///   was tried. A two-character tail is not a coincidence in a nine-character
+///   word.
+/// * *Require the lengths to differ.* True of a real prefix relationship, and
+///   it does reject `mathjax`/`mathpad` — but only that exact shape. One letter
+///   of slack (`mathjax`/`mathpads`) restores the false positive, and
+///   `paulbricman`/`paultreanor` are the same length as each other while
+///   `excalidraw`/`excalibur` are not. It tests a symptom of the relationship
+///   rather than the relationship.
+///
+/// The comparison is strict — a prefix that exactly doubles its leftover has
+/// not dominated it — which is what separates `excalidraw` from `excalibur`
+/// (`excali`, 6, against `bur`, 3). Nothing real is lost at that boundary: an
+/// inflection leaves a leftover far smaller than that, and a pair too weak to
+/// clear [`TOKEN_MATCH_FLOOR`] on Jaro-**Winkler** — `use`/`using` among them,
+/// at 0.751 — never reaches this function in the first place.
 ///
 /// Both arguments come from [`tokenize`] and are already lowercase.
 fn shares_dominant_prefix(a: &str, b: &str) -> bool {
     let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     let shorter = a.chars().count().min(b.chars().count());
-    shorter > 0 && common * 2 >= shorter
+    shorter > 0 && common > PREFIX_DOMINANCE * (shorter - common)
 }
 
 /// Similarity of two slug tokens, `0.0` when they are not the same token.
@@ -246,8 +298,8 @@ fn shares_dominant_prefix(a: &str, b: &str) -> bool {
 /// [`TOKEN_MATCH_FLOOR`]. So the bonus may *sharpen* a match but may not
 /// *create* one: the pair must clear the floor on plain Jaro.
 ///
-/// The exception is a pair whose common prefix covers most of the shorter
-/// token ([`shares_dominant_prefix`]) — `get` in `getting`, `creat` in
+/// The exception is a pair whose common prefix *consumes* the shorter token
+/// ([`shares_dominant_prefix`]) — `get` in `getting`, `creat` in
 /// `create`/`creating`. There the shared beginning is not a coincidence between
 /// two diverging words, it is nearly all of one of them, and the bonus is
 /// measuring the real relationship: this is the morphology
@@ -718,6 +770,104 @@ mod tests {
         // Which is what takes the pair from 0.857 to below the apply floor.
         assert!((f1 - 6.0 / 7.0).abs() < 1e-9, "got {f1}");
         assert!(f1 * mass < DEFAULT_FUZZY_MIN_CONFIDENCE);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-281 / DEC-326 — the dominant-prefix exemption is a prefix
+    // *relationship*, not a shared beginning
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn two_words_that_merely_begin_alike_are_not_one_token() {
+        // The premise, exactly as iter-280 reported it: plain Jaro puts
+        // `mathjax` and `mathpad` below the floor, and only the exemption
+        // admitted them.
+        assert!(strsim::jaro("mathjax", "mathpad") < TOKEN_MATCH_FLOOR);
+        assert!(strsim::jaro_winkler("mathjax", "mathpad") >= TOKEN_MATCH_FLOOR);
+        // Half of the shorter token — the pre-iter-281 bar — was cleared on
+        // both sides: `math` is four of seven either way.
+        let common = "mathjax"
+            .chars()
+            .zip("mathpad".chars())
+            .take_while(|(x, y)| x == y)
+            .count();
+        assert_eq!(common, 4);
+        assert!(common * 2 >= "mathjax".len(), "test premise: half was met");
+        // And it is no longer enough.
+        assert!(!shares_dominant_prefix("mathjax", "mathpad"));
+        assert!(approx(token_similarity("mathjax", "mathpad"), 0.0));
+        // Two plugin names sharing six characters go the same way.
+        assert!(approx(token_similarity("excalidraw", "excalibur"), 0.0));
+        // One token each, so the whole basename feature collapses with it and
+        // `[[Mathjax]]` lands far under the apply floor rather than at 0.886.
+        assert!(approx(basename_similarity("mathjax", "mathpad"), 0.0));
+        assert!(
+            candidate_confidence("Mathjax", "Plugins/mathpad.md") < DEFAULT_FUZZY_MIN_CONFIDENCE,
+            "got {}",
+            candidate_confidence("Mathjax", "Plugins/mathpad.md")
+        );
+    }
+
+    #[test]
+    fn a_prefix_must_dominate_what_it_leaves_over() {
+        // Nothing left over: the shorter token is literally a prefix.
+        for (a, b) in [
+            ("get", "getting"),
+            ("run", "running"),
+            ("plugin", "plugins"),
+        ] {
+            assert!(shares_dominant_prefix(a, b), "{a} / {b}");
+        }
+        // A leftover the prefix dwarfs — the inflections the exemption exists
+        // for, at every word length. `referential` is the one a fixed
+        // one-character leftover would have thrown away.
+        for (a, b) in [
+            ("creating", "create"),
+            ("managing", "manage"),
+            ("enabling", "enable"),
+            ("writing", "write"),
+            ("configuring", "configure"),
+            ("referential", "reference"),
+            ("documentation", "documenting"),
+        ] {
+            assert!(shares_dominant_prefix(a, b), "{a} / {b}");
+            assert!(token_similarity(a, b) >= TOKEN_MATCH_FLOOR, "{a} / {b}");
+        }
+        // A leftover the prefix merely ties with, or loses to, is two words.
+        for (a, b) in [
+            ("mathjax", "mathpad"),
+            ("mathjax", "mathpads"),
+            ("paulbricman", "paultreanor"),
+            ("managing", "management"),
+            // Exactly double is a tie, not dominance.
+            ("excalidraw", "excalibur"),
+        ] {
+            assert!(!shares_dominant_prefix(a, b), "{a} / {b}");
+        }
+        // The rejected alternative, recorded as a test: requiring the *lengths*
+        // to differ would have admitted this pair, because they do.
+        assert_ne!("mathjax".len(), "mathpads".len());
+        assert!(!shares_dominant_prefix("mathjax", "mathpads"));
+        // The strict boundary costs nothing real: a pair that weak never
+        // reaches the exemption, because Jaro-Winkler rejects it first.
+        assert!(strsim::jaro_winkler("using", "use") < TOKEN_MATCH_FLOOR);
+        assert!(approx(token_similarity("using", "use"), 0.0));
+    }
+
+    #[test]
+    fn tightening_the_exemption_leaves_the_iteration_279_fixtures_alone() {
+        // Every basename-level assertion iter-279 made about the exemption,
+        // re-run against the narrower rule.
+        assert!(
+            basename_similarity("creating-a-composite-action", "create-a-composite-action")
+                >= DEFAULT_FUZZY_MIN_CONFIDENCE
+        );
+        assert!(
+            basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE
+        );
+        // A typo still rides in on plain Jaro, with no prefix help at all.
+        assert!(token_similarity("acions", "actions") > 0.9);
+        assert!(!shares_dominant_prefix("acions", "actions"));
     }
 
     // -----------------------------------------------------------------

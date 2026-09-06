@@ -6092,3 +6092,87 @@ scope. Carried over — see the "Not done" section of
 long help, `--threshold`),
 `crates/hyalo-cli/tests/e2e/iteration280_fuzzy_candidacy_gate.rs`.
 See [[iterations/iteration-280-fuzzy-candidacy-gate-camelcase]].
+
+## DEC-326: a dominant prefix must outweigh what it leaves over (2026-09-06)
+
+**Decision:** `link_score::shares_dominant_prefix` — the exemption that lets a
+token pair be treated as one word on Jaro-**Winkler** when plain Jaro puts it
+under `TOKEN_MATCH_FLOOR` — now requires the shared prefix to be **more than
+twice** what it leaves over of the shorter token, where it previously required
+only that the prefix cover at least *half* of it. `referen` (7) against `ce` (2)
+qualifies; `math` (4) against `pad` (3) does not.
+
+**Why.** Half a word is not a prefix relationship. `mathjax` and `mathpad` are
+seven characters each and share `math`, four of seven on both sides, so the old
+bar was cleared and the pair counted as the same token even though plain Jaro
+rates it 0.810 — under the 0.85 floor DEC-324 chose precisely to keep unrelated
+words apart. On the Obsidian Hub that produced `[[Mathjax]]` (no such note
+exists) → `Plugins/mathpad.md` at **0.886**, above the 0.8 apply floor, so
+`--apply-fuzzy` would have written a link to an unrelated plugin. DEC-325's
+wider candidacy gate exposed it; the defect was always the exemption's, and the
+raw gate had been suppressing it by the accident of one capital letter.
+
+The exemption's own purpose survives untouched, because English inflection
+leaves a leftover its stem dwarfs: `creat` + `ing` against `creat` + `e`,
+`manag`/`manage`, `writ`/`write`, `configur`/`configure`, and — the case that
+decided the final shape of the rule — `referen` + `tial` against `referen` +
+`ce`.
+
+**Why a ratio and not a fixed leftover.** The first implementation asked for the
+shorter token to be spent to within one character. It is clean for the gerund
+cases and blind to word length: it rejects `reference`/`referential`, a real
+derivation, and with it GitHub Docs' `referential-content-type` →
+`reference-content-type` rename, which fell from **0.973 to 0.484** when that
+version was measured. A two-character tail is not a coincidence in a
+nine-character word. Weighing the prefix against its own leftover scales with
+the stem instead of legislating an absolute.
+
+**Why not the two other candidates.** *Raising the share* (three quarters rather
+than half) separates the fixtures but only by moving a threshold until the known
+counter-example falls the right side of it; it still says merely "these words
+begin alike enough", and it grows more permissive exactly where it should not.
+*Requiring the lengths to differ* is true of a real prefix relationship but tests
+a symptom: one letter of slack (`mathjax`/`mathpads`) restores the false
+positive, and `paulbricman`/`paultreanor` are the same length as each other
+while `excalidraw`/`excalibur` are not.
+
+**The comparison is strict.** A prefix that exactly doubles its leftover has not
+dominated it, which is what separates `excalidraw` from `excalibur` (`excali`,
+6, against `bur`, 3). Nothing real sits at that boundary: an inflection leaves a
+leftover far smaller, and a pair too weak to clear `TOKEN_MATCH_FLOOR` on
+Jaro-Winkler in the first place — `use`/`using`, at 0.751 — never reaches the
+function at all.
+
+**Measured** (`links fix --dry-run --format json`, this branch vs `main`):
+
+| corpus | fuzzy proposals | above floor | unfixable | delta |
+| --- | --- | --- | --- | --- |
+| Obsidian Hub | 21 → 18 | 2 → 1 | 33 → 36 | 3 lost, 0 gained, 0 re-scored |
+| GitHub Docs (`content/`) | 5476 → 5483 | 2174 → 2168 | 1875 → 1868 | 34 gained, 26 lost, 431 re-scored |
+| MDN (`files/en-us`) | 0 → 0 | 0 → 0 | 49784 → 49784 | byte-identical output |
+
+On the Hub the single above-floor proposal lost is exactly the target,
+`[[Mathjax]]` → `mathpad.md` at 0.886; the other two were junk below the floor
+(~0.26, ~0.46). What remains above the floor there is one perfect 1.0
+(`Obsidian Publish.` → `Obsidian Publish.md`). `broken` (54),
+`case_mismatches` (48), `alias_fixes` (8) and `relocations` (2) are unchanged.
+On GitHub Docs **no** above-floor proposal disappears, and no proposal moves
+*up* across the floor.
+
+**The honest cost: one correct GitHub Docs relocation is now reported rather
+than applied.** `saml-configuration-reference` →
+`admin/managing-iam/iam-configuration-reference/saml-configuration-reference.md`
+(6 occurrences of one link) falls **0.804 → 0.795**, just under the floor. Its
+basename is identical, so the entire movement is in the directory feature, where
+`management` / `managing` (`manag` + 5, leftover 3) no longer counts as one
+token. The fix was 0.004 above the floor to begin with — applicable by a margin
+narrower than the change — and it is still listed in `fuzzy_fixes`, applied by
+`--min-confidence 0.79`. Admitting `management`/`managing` would need the factor
+below 5/3, at which point `mathjax`/`mathpad` clears by half a character; a rule
+whose only counter-example survives by that margin is not worth the one
+relocation.
+
+**Where:** `crates/hyalo-core/src/link_score.rs` (`shares_dominant_prefix`,
+`PREFIX_DOMINANCE`),
+`crates/hyalo-cli/tests/e2e/iteration281_dominant_prefix_exemption.rs`.
+See [[iterations/iteration-281-dominant-prefix-equal-length-exemption]].
