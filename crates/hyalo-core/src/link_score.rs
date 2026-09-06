@@ -23,12 +23,32 @@
 //! ```
 //!
 //! * **basename similarity** — a soft token F1 over the slug tokens of the two
-//!   filename stems (`actions-limits` → `["actions", "limits"]`). Each token
-//!   is matched against its best partner in the other stem, but only counts
-//!   when that pairing clears [`TOKEN_MATCH_FLOOR`]; below it the token is
-//!   unmatched and scores 0. The floor is what stops Jaro's ~0.5–0.65 noise
-//!   between unrelated English words from masquerading as partial credit,
-//!   while still absorbing typos (`acions` ≈ `actions`).
+//!   filename stems (`actions-limits` → `["actions", "limits"]`, `CatMuse` →
+//!   `["cat", "muse"]`). Each token is matched against its best partner in the
+//!   other stem, but only counts when that pairing clears
+//!   [`TOKEN_MATCH_FLOOR`]; below it the token is unmatched and scores 0. The
+//!   floor is what stops Jaro's ~0.5–0.65 noise between unrelated English
+//!   words from masquerading as partial credit, while still absorbing typos
+//!   (`acions` ≈ `actions`). The F1 is then scaled by [`explained_mass`] so
+//!   that a whole *word* neither side accounts for costs in proportion to how
+//!   much of the name it is.
+//!
+//! # Near-neighbour stems (iter-279, DEC-322)
+//!
+//! DEC-319's runner-up margin damps a fuzzy winner that only just outran a
+//! rival. It cannot touch a wrong candidate whose rivals are absent or far
+//! away — there the *absolute* score is simply too generous. Three signals in
+//! this module keep such a candidate below the apply floor:
+//!
+//! * [`tokenize`] splits camelCase, so an Obsidian note name missing a whole
+//!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
+//!   opaque token that looks like a typo of the other.
+//! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
+//!   unless one token is a prefix of the other — a shared given name or vendor
+//!   prefix (`paulbricman` / `paultreanor`) must not buy token identity.
+//! * [`explained_mass`] charges for unmatched tokens by their character share,
+//!   so a dropped word (`obsidian-floating-toc-plugin` /
+//!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
 //! * **directory similarity** — three quarters shared *leading* components,
 //!   one quarter unordered token overlap. Generic levels (`how-tos`,
 //!   `reference`) are shared by thousands of unrelated GitHub Docs pages, so
@@ -58,12 +78,16 @@ pub const BASENAME_WEIGHT: f64 = 0.7;
 /// Weight of the directory-path feature. `BASENAME_WEIGHT + DIR_WEIGHT == 1`.
 pub const DIR_WEIGHT: f64 = 1.0 - BASENAME_WEIGHT;
 
-/// Minimum Jaro-Winkler score for two slug tokens to count as the same token.
+/// Minimum score for two slug tokens to count as the same token.
 ///
 /// Jaro-Winkler almost never drops below ~0.5 for two real English words, so
 /// without a floor every unrelated token pair contributes partial credit and
 /// long slugs score high against short ones. 0.85 admits typos and small
 /// morphological differences (`getting`/`get`) and rejects the rest.
+///
+/// Which similarity is measured against the floor is decided by
+/// [`token_similarity`] (iter-279): Winkler's prefix bonus may *sharpen* a
+/// match but may not *create* one.
 pub const TOKEN_MATCH_FLOOR: f64 = 0.85;
 
 /// Default minimum confidence a fuzzy/basename-fallback fix must reach before
@@ -106,11 +130,85 @@ pub fn split_path(path: &str) -> (Vec<&str>, &str) {
 /// `actions-minute-multipliers` → `["actions", "minute", "multipliers"]`.
 /// Any non-alphanumeric run is a separator, so `-`, `_`, `.`, spaces and
 /// `%20`-style leftovers all behave the same.
+///
+/// iter-279: an alphanumeric run is additionally split at camelCase
+/// boundaries, so `CatMuse` → `["cat", "muse"]`. Obsidian vaults name notes in
+/// prose case with no separator at all (`CatMuse.md`, `HTMLParser.md`), and
+/// without this the whole note name is one opaque token: `Cat` then looks like
+/// a *typo* of `CatMuse` (Jaro-Winkler 0.867, above [`TOKEN_MATCH_FLOOR`])
+/// rather than what it is — a name missing a whole word. The split also makes
+/// the two naming conventions comparable, so `MyNote` matches `my-note`.
 fn tokenize(slug: &str) -> Vec<String> {
-    slug.split(|c: char| !c.is_alphanumeric())
+    let mut out = Vec::new();
+    for run in slug
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
-        .map(str::to_lowercase)
-        .collect()
+    {
+        push_camel_tokens(run, &mut out);
+    }
+    out
+}
+
+/// Split one alphanumeric run at its camelCase boundaries, lowercasing each
+/// piece into `out`.
+///
+/// A boundary sits before an uppercase letter that follows a lowercase one
+/// (`catMuse`), and before the final uppercase of an uppercase run that is
+/// followed by a lowercase one (`HTMLParser` → `html` + `parser`). A run with
+/// no case transition — `catmuse`, `README`, `279` — stays whole.
+fn push_camel_tokens(run: &str, out: &mut Vec<String>) {
+    let chars: Vec<char> = run.chars().collect();
+    let mut start = 0usize;
+    for i in 1..chars.len() {
+        let prev = chars[i - 1];
+        let cur = chars[i];
+        let lower_to_upper = prev.is_lowercase() && cur.is_uppercase();
+        let acronym_tail = prev.is_uppercase()
+            && cur.is_uppercase()
+            && chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+        if lower_to_upper || acronym_tail {
+            out.push(chars[start..i].iter().collect::<String>().to_lowercase());
+            start = i;
+        }
+    }
+    out.push(chars[start..].iter().collect::<String>().to_lowercase());
+}
+
+/// `true` when the shorter of the two tokens is a prefix of the longer one.
+///
+/// Both arguments come from [`tokenize`] and are already lowercase.
+fn is_prefix_pair(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    !short.is_empty() && long.starts_with(short)
+}
+
+/// Similarity of two slug tokens, `0.0` when they are not the same token.
+///
+/// iter-279: Jaro-**Winkler** adds up to `0.4 · (1 − jaro)` for a shared
+/// four-character prefix. That bonus exists to rank search results by a shared
+/// beginning, and it is exactly the wrong instrument for deciding whether two
+/// words *are* the same word: on the Obsidian Hub `paulbricman` scored 0.855
+/// against `paultreanor` — two different people whose only common ground is a
+/// given name — where the unprefixed Jaro is 0.758, far under
+/// [`TOKEN_MATCH_FLOOR`]. So the bonus may *sharpen* a match but may not
+/// *create* one: the pair must clear the floor on plain Jaro.
+///
+/// The one exception is a **prefix pair**, where the shorter token is wholly
+/// contained at the start of the longer one (`get` in `getting`). There the
+/// shared beginning is not a coincidence between two diverging words, it is
+/// all of one word, and the bonus is measuring the real relationship — this is
+/// the `getting`/`get` morphology [`TOKEN_MATCH_FLOOR`] was chosen to admit.
+/// The reported score is Jaro-Winkler either way; only admission changes.
+fn token_similarity(a: &str, b: &str) -> f64 {
+    if a == b {
+        return 1.0;
+    }
+    let winkler = strsim::jaro_winkler(a, b);
+    if winkler < TOKEN_MATCH_FLOOR {
+        return 0.0;
+    }
+    let admitted = strsim::jaro(a, b) >= TOKEN_MATCH_FLOOR || is_prefix_pair(a, b);
+    if admitted { winkler } else { 0.0 }
 }
 
 /// Best match for `token` among `others`, or `0.0` when nothing clears
@@ -118,8 +216,7 @@ fn tokenize(slug: &str) -> Vec<String> {
 fn best_token_match(token: &str, others: &[String]) -> f64 {
     others
         .iter()
-        .map(|o| strsim::jaro_winkler(token, o))
-        .filter(|s| *s >= TOKEN_MATCH_FLOOR)
+        .map(|o| token_similarity(token, o))
         .fold(0.0_f64, f64::max)
 }
 
@@ -131,6 +228,11 @@ fn best_token_match(token: &str, others: &[String]) -> f64 {
 /// one is what penalises a short slug matching a prefix of a long one:
 /// `actions` is fully covered by `actions-limits` (recall 1.0) but only covers
 /// half of it (precision 0.5), giving 0.67 instead of 0.75.
+///
+/// The result is then scaled by [`explained_mass`] (iter-279), which charges
+/// for whole tokens the pairing leaves unmatched in proportion to how much of
+/// the two names they are — 0.47 for that same `actions` / `actions-limits`
+/// pair, where `limits` is six of the twenty characters in play.
 fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
     if a.is_empty() && b.is_empty() {
         return 1.0;
@@ -138,16 +240,47 @@ fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
+    let scores_a: Vec<f64> = a.iter().map(|x| best_token_match(x, b)).collect();
+    let scores_b: Vec<f64> = b.iter().map(|x| best_token_match(x, a)).collect();
     #[allow(clippy::cast_precision_loss)]
-    let mean = |xs: &[String], ys: &[String]| -> f64 {
-        xs.iter().map(|x| best_token_match(x, ys)).sum::<f64>() / xs.len() as f64
-    };
-    let precision = mean(a, b);
-    let recall = mean(b, a);
+    let mean = |xs: &[f64]| -> f64 { xs.iter().sum::<f64>() / xs.len() as f64 };
+    let precision = mean(&scores_a);
+    let recall = mean(&scores_b);
     if precision + recall == 0.0 {
         return 0.0;
     }
-    2.0 * precision * recall / (precision + recall)
+    let f1 = 2.0 * precision * recall / (precision + recall);
+    f1 * explained_mass(a, &scores_a, b, &scores_b)
+}
+
+/// Fraction of the two slugs' written substance that the pairing accounts for:
+/// `1 −` the share of characters living in tokens left *entirely* unmatched,
+/// counted across both sides.
+///
+/// iter-279: the token F1 weights every token alike and its harmonic mean is
+/// forgiving when one side is fully covered, so `obsidian-floating-toc-plugin`
+/// against `obsidian-plugin-toc` scored 0.857 — three of four tokens matched,
+/// recall a perfect 1.0 — even though the one unmatched token, `floating`, is
+/// the word that names the plugin and is a third of the target's characters.
+/// A dropped or added *whole word* is not a near miss; weighting the residue
+/// by how much of the name it actually is lands that pair at 0.694, below the
+/// apply floor, while leaving every pairing with no unmatched token — a typo,
+/// a punctuation change, a relocation — untouched at its full F1.
+#[allow(clippy::cast_precision_loss)]
+fn explained_mass(a: &[String], scores_a: &[f64], b: &[String], scores_b: &[f64]) -> f64 {
+    let mut unmatched = 0usize;
+    let mut total = 0usize;
+    for (token, score) in a.iter().zip(scores_a).chain(b.iter().zip(scores_b)) {
+        let len = token.chars().count();
+        total += len;
+        if *score == 0.0 {
+            unmatched += len;
+        }
+    }
+    if total == 0 {
+        return 1.0;
+    }
+    1.0 - unmatched as f64 / total as f64
 }
 
 /// Similarity of two filename stems in `[0.0, 1.0]`.
