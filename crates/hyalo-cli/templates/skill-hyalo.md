@@ -549,7 +549,23 @@ What follows is only what those pages do not say — the behaviour that surprise
   reported in `fuzzy_fixes` for review rather than written by `--apply-fuzzy`. A unique match
   keeps its score. `links fix`'s `broken_anchors` is always the count `find --broken-links`
   computes (it used to be a hard-coded 0 whenever any target was broken); `null` still means
-  "could not check".
+  "could not check". A winner the scorer rates as an **exact** match (1.0) is exempt from the
+  damping (iter-279): a perfect match is not a guess, and a real 1.0-vs-1.0 tie is declined
+  outright anyway.
+- **Near-neighbour stems are scored, not damped** (DEC-324, iter-279): DEC-319's margin cannot
+  reach a wrong candidate whose runner-up is absent or far away, so the *basename* score itself
+  tightened three ways. camelCase is a word boundary, so `CatMuse` is `["cat", "muse"]` and
+  `[[Cat]]` is a name missing a word (0.867 → 0.481). A token pair clears the 0.85 floor on
+  plain **Jaro**, not Jaro-Winkler — a shared given name or vendor prefix may sharpen a match
+  but never create one, so `paulbricman` no longer matches `paultreanor` — unless one token is
+  a prefix of the other (`get` in `getting`, which still matches). And a token left entirely
+  unmatched costs its share of the two names' characters, so `obsidian-floating-toc-plugin`
+  against `obsidian-plugin-toc` falls 0.857 → 0.694. The character charge applies to the
+  basename only: a directory reorganisation renames whole levels by design, and charging it
+  there took 828 correct GitHub Docs relocations below the floor. Consequence to know: a
+  basename that **gains a whole word** is now below the floor (`decision-log` →
+  `decision-log-archive` is 0.607) — still reported in `fuzzy_fixes`, applied with
+  `--min-confidence 0.5`.
 - **`links fix`'s two site-prefix warnings count the same set** (iter-277), and the
   "stripped 0 of N" one says "derived from the directory name" when nothing configured the
   prefix it is blaming.

@@ -938,6 +938,11 @@ impl LinkMatcher {
         /// Composite confidence a fuzzy candidate must *exceed* to be reported
         /// at all (iter-261 / UX-8). Zero means "nothing in common".
         const MIN_REPORTABLE_CONFIDENCE: f64 = 0.0;
+        /// Confidence at or above which the scorer calls a candidate an exact
+        /// match, and `CONTESTED_DELTA` no longer applies (iter-279). The
+        /// tolerance absorbs the composite's floating-point arithmetic; the
+        /// scorer reaches a true 1.0 exactly.
+        const PERFECT_CONFIDENCE: f64 = 1.0 - 1e-9;
 
         // A site-absolute target (`/docs/a/b.md`) names a path from the site
         // root; the index is keyed by vault-relative paths, so strip the
@@ -1170,7 +1175,18 @@ impl LinkMatcher {
         // floor and is reported for review instead of applied. A clear winner
         // — `[[Obsidian Publish.]]` → `Obsidian Publish.md` at 1.0, whose
         // runner-up is nowhere near — keeps its score untouched.
-        if margin < CONTESTED_DELTA {
+        //
+        // iter-279: a winner the scorer rates as an *exact* match is exempt.
+        // DEC-319 damps a guess that a rival nearly matched; it has nothing to
+        // say when the winner is not a guess. camelCase tokenisation (DEC-324)
+        // made this reachable: on the Obsidian Hub `[[Obsidian Publish.]]`
+        // still scores 1.0 against `Obsidian Publish.md`, but
+        // `ObsidianPublisher.md` — one token before, `["obsidian",
+        // "publisher"]` after — rose from 0.596 to 0.978, and damping a
+        // perfect match down to 0.444 on the strength of a *worse* candidate
+        // is the opposite of what the margin is for. A genuine 1.0-vs-1.0 tie
+        // is still declined by the `TIE_DELTA` check above.
+        if margin < CONTESTED_DELTA && best_score < PERFECT_CONFIDENCE {
             return Some(MatchResult {
                 matched_file: self.files[best_idx].clone(),
                 strategy: FixStrategy::FuzzyMatch,

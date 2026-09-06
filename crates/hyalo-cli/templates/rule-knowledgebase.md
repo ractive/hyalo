@@ -393,7 +393,21 @@ Prefer `hyalo` CLI for operations on files in this directory:
   0.8 floor, so it is listed in `fuzzy_fixes` for review instead of written by
   `--apply-fuzzy`. Every `fuzzy_fixes` entry — below-floor ones included — carries
   `emitted_target`, and `links fix`'s `broken_anchors` is now always the count
-  `find --broken-links` computes rather than 0 whenever a target was broken.
+  `find --broken-links` computes rather than 0 whenever a target was broken. A winner the
+  scorer rates as an **exact** match (1.0) is exempt from the damping (iter-279) — a perfect
+  match is not a guess; a genuine 1.0-vs-1.0 tie is still declined outright.
+- **A near-neighbour stem is a scorer problem** (DEC-324, iter-279): DEC-319's margin cannot
+  reach a wrong candidate whose runner-up is absent or far away, so three signals tighten the
+  *basename* score instead. `CatMuse` tokenises as `["cat", "muse"]` (camelCase is a word
+  boundary), so `[[Cat]]` is a name missing a word rather than a typo. A token pair must clear
+  the 0.85 floor on plain **Jaro** — Jaro-Winkler's shared-prefix bonus may sharpen a match but
+  never create one, so `paulbricman` no longer matches `paultreanor` — unless one token is a
+  prefix of the other (`get` in `getting`). And a token left entirely unmatched costs its share
+  of the two names' characters, so `obsidian-floating-toc-plugin` against
+  `obsidian-plugin-toc` falls from 0.857 to 0.694. The charge is the basename's alone: a
+  directory reorganisation renames whole levels by design. Consequence to know: a basename that
+  **gains a whole word** now scores below the floor (`decision-log` → `decision-log-archive` is
+  0.607) — it is still reported, and `--min-confidence 0.5` applies it.
 - **Hints keep `--site-prefix`** (iter-277): a `--site-prefix` given on the CLI is threaded
   into every hint, like `--dir`, `--format` and `--index-file`, so the follow-up answers the
   same question. `hyalo config` reports `site_prefix_source`, and `links fix` says

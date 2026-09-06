@@ -1716,11 +1716,14 @@ Content.
 "),
     );
 
-    // decision-log → decision-log-archive is a fuzzy (Jaro-Winkler) match, so
-    // opt into fuzzy fixes with --apply-fuzzy (plain --apply excludes them, L-10).
+    // decision-log → decision-log-archive is a fuzzy match, so opt into fuzzy
+    // fixes (plain --apply excludes them, L-10). Since iter-279 / DEC-324 a
+    // basename that gains a whole word scores 0.607 rather than 0.8 — `archive`
+    // is seven of the twenty-nine characters in play — so the floor is lowered
+    // explicitly here. What this test is about is the *anchor*, not the score.
     let output = hyalo_no_hints()
         .args(["--dir", tmp.path().to_str().unwrap()])
-        .args(["links", "fix", "--apply", "--apply-fuzzy"])
+        .args(["links", "fix", "--apply", "--min-confidence", "0.5"])
         .output()
         .unwrap();
     assert!(
