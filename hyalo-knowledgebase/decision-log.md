@@ -10,6 +10,24 @@ status: reference
 
 # Decision Log
 
+## DEC-327: Codex skills and plugin share one canonical package (2026-09-06)
+
+**Decision:** Ship Codex skills in `plugins/hyalo/skills/` and mirror them inside
+the CLI crate for embedding. `check-codex-package` verifies both directions and
+metadata; `sync-codex-package` refreshes the mirror. The plugin has its own version.
+
+`init --codex` installs project skills and managed `AGENTS.md` guidance.
+`init --codex --codex-plugin` uses the separately installed plugin and removes
+managed local copies to avoid duplicate discovery. Neither changes global Codex
+settings. Deinit removes only managed project artifacts. Runtime integrations
+continue to invoke the existing CLI; MCP tools and hooks remain out of scope.
+
+**Why:** Share established workflows across projects without duplicating their
+maintenance, retain project-local installation for clients without plugin support,
+and keep `cargo package` independent of files outside the crate. Live Codex
+installation, update, and discovery verification follow the Pi package precedent.
+See [[iterations/iteration-288-codex-integration]].
+
 ## DEC-001: CLI Flag Style (2026-03-20)
 
 **Decision:** Use idiomatic `--flag` style with clap subcommands, not Obsidian's `key=value` style.

@@ -52,6 +52,13 @@ pub fn run() -> Result<bool> {
         }
         Err(e) => return Err(e).with_context(|| format!("reading {pi_skills_dir:?}")),
     }
+    let codex_skills = root.join("plugins/hyalo/skills");
+    for entry in std::fs::read_dir(&codex_skills).context("reading Codex skills")? {
+        let file = entry?.path().join("SKILL.md");
+        if file.is_file() {
+            skill_files.push(file);
+        }
+    }
     skill_files.sort();
 
     if skill_files.is_empty() {
@@ -72,13 +79,18 @@ pub fn run() -> Result<bool> {
         // Install the skills profile config (writes .hyalo.toml + [scan] include).
         init_skills_profile(&root, vault)?;
         // Place the template as installed: `.claude/skills/<name>/SKILL.md`.
-        let skill_dir = vault.join(".claude").join("skills").join(&name);
+        let host = if file.starts_with(&codex_skills) {
+            ".agents"
+        } else {
+            ".claude"
+        };
+        let skill_dir = vault.join(host).join("skills").join(&name);
         std::fs::create_dir_all(&skill_dir)
             .with_context(|| format!("creating skill dir {skill_dir:?}"))?;
         std::fs::write(skill_dir.join("SKILL.md"), &body)
             .context("writing SKILL.md into scratch vault")?;
 
-        let rel = format!(".claude/skills/{name}/SKILL.md");
+        let rel = format!("{host}/skills/{name}/SKILL.md");
         let (ok, output) = lint_skill(&root, vault, &rel)?;
         checked += 1;
         if !ok {

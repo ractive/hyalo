@@ -12,6 +12,10 @@ check:
 fmt:
     cargo fmt --all
 
+# Refresh crate-local embedded assets from the canonical Codex plugin skills.
+sync-codex-package:
+    cargo run -p xtask -- sync-codex-package
+
 # Run Miri against the parsing surface of hyalo-core to detect UB.
 # Targets modules that don't touch the filesystem (Miri can't shim chmod/symlinks
 # on macOS, which breaks tempfile-based tests). Covers the scanner, YAML

@@ -20,7 +20,7 @@ COMMANDS \u{2014} write (mutates files):
   links new           fix broken / auto-link mentions | scaffold from a type
   madr okf changelog  ADR toc | OKF index+log | Keep a Changelog add/release
 COMMANDS \u{2014} setup (writes config/index, not your notes):
-  init deinit              Create/remove .hyalo.toml (--claude --pi --profile)
+  init deinit              Create/remove config (--claude --codex --pi --profile)
   types lint-rules views   Schemas | lint rule catalog | saved find queries
   create-index drop-index  Snapshot index for faster repeated queries
   completions              Shell completion script";
@@ -324,7 +324,8 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo config [--raw] [-d/--dir DIR]                    # --raw also prints the .hyalo.toml text
 
   Init (configuration, one-time setup):
-    hyalo init [--claude] [--pi] [--profile <PROFILE>] [-d/--dir DIR]   # a vault outside CWD roots there
+    hyalo init [--claude] [--pi] [--codex] [--codex-plugin] [--profile <PROFILE>] [-d/--dir DIR]
+      # --codex-plugin requires --codex; use a separately installed plugin instead of local skills
 
   Deinit (remove hyalo configuration):
     hyalo deinit [-d/--dir DIR]                            # picks the tree to clean; default CWD

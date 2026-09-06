@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo Skills"
+  short_description: "Validate Agent Skills markdown collections"
+  default_prompt: "Use $hyalo-skills to validate this skill collection."
+policy:
+  allow_implicit_invocation: true

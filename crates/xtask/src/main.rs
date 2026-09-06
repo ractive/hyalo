@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 
 mod bench_scale;
 mod bundled_skills;
+mod codex_package;
 mod command_reference;
 mod feature_fanout;
 mod help_drift;
@@ -35,6 +36,10 @@ enum Commands {
     /// Gate: verify the vendored `crates/hyalo-cli/templates/pi/` copies
     /// match the canonical `pi-package/` files byte-for-byte.
     CheckPiPackageSync,
+    /// Verify Codex plugin assets, metadata, and embedded-copy parity.
+    CheckCodexPackage,
+    /// Refresh the embedded Codex skills from plugins/hyalo/skills.
+    SyncCodexPackage,
     /// Gate (iter-274, BUG-29): every `--jq` recipe in a shipped document
     /// executes against this repo's own knowledgebase without a jq error.
     CheckJqRecipes,
@@ -59,6 +64,8 @@ fn main() {
         Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckPiPackageSync => pi_package_sync::run(),
+        Commands::CheckCodexPackage => codex_package::run(false),
+        Commands::SyncCodexPackage => codex_package::run(true),
         Commands::CheckJqRecipes => jq_recipes::run(),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),

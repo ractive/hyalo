@@ -31,7 +31,7 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 
 - **Fast.** Parallel scanning, streaming I/O, optional snapshot index. Handles 10,000+ file vaults in under a second.
 - **Structured output.** TTY-aware: compact `text` for terminals, `json` when piped — with built-in `--jq` support. Easy to pipe into scripts, CI, or AI agents.
-- **AI-agent friendly.** Designed as a tool for [Claude Code](https://claude.ai/claude-code) and other LLM coding agents. One command sets up the integration: `hyalo init --claude`.
+- **AI-agent friendly.** Integrates with Claude Code, Codex, and Pi. Set up project workflows with `hyalo init --claude`, `hyalo init --codex`, or `hyalo init --pi`; Codex and Pi also have installable packages.
 - **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
 - **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
 
@@ -205,6 +205,39 @@ This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills
 **`knowledgebase` rule** — Scoped to `<your-vault>/**`. Reminds Claude to prefer hyalo CLI commands over built-in file tools whenever it touches vault files.
 
 All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
+
+## Install the Codex integration
+
+For project-local skills and knowledgebase guidance:
+
+```bash
+hyalo init --codex
+hyalo init --codex --profile okf
+```
+
+This installs skills under `.agents/skills/` and a managed section in `AGENTS.md`.
+Existing configuration selects the vault; `--dir` explicitly selects another one.
+The flags compose with `--claude` and `--pi`. Re-run after upgrading Hyalo to
+refresh generated skills. `hyalo deinit` removes managed project artifacts while
+preserving unrelated skills and instruction text.
+
+For use across projects, this repository also ships a skills-only Codex plugin:
+
+```bash
+# From a checkout containing the Codex integration:
+codex plugin marketplace add .
+codex plugin add hyalo@hyalo
+hyalo init --codex --codex-plugin
+```
+
+Plugin mode configures the project and removes managed project skill copies to
+avoid duplicate discovery. It does not install the plugin or modify global Codex
+settings. Keep `--codex-plugin` on subsequent init runs. Start a new Codex session
+after setup. The plugin requires `hyalo` on PATH; post-edit lint is skill guidance,
+not an automatic hook. Project skills also serve clients without plugin support.
+
+See [Codex integration](hyalo-knowledgebase/docs/codex-integration.md) for update,
+removal, profiles, and maintainer verification instructions.
 
 ## Install the pi integration
 

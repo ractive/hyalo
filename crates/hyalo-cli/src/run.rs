@@ -1043,12 +1043,22 @@ fn run_inner() -> Result<(), AppError> {
     if let Commands::Init {
         claude,
         pi,
+        codex,
+        codex_plugin,
         profile,
     } = &mut cli.command
     {
         let init_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        let report = init_commands::run_init(init_dir, *claude, *pi, profile.as_deref())
-            .map_err(AppError::Internal)?;
+        let codex_mode = if *codex_plugin {
+            init_commands::CodexMode::Plugin
+        } else if *codex {
+            init_commands::CodexMode::Local
+        } else {
+            init_commands::CodexMode::None
+        };
+        let report =
+            init_commands::run_init(init_dir, *claude, *pi, profile.as_deref(), codex_mode)
+                .map_err(AppError::Internal)?;
         return emit_init_report(&report, cli.format, cli.jq.as_deref());
     }
     if let Commands::Deinit = &mut cli.command {

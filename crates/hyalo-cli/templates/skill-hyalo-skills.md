@@ -43,9 +43,9 @@ anywhere in the tree is validated as a skill without needing explicit `type: ski
 frontmatter (in fact `hyalo new --type skill` omits the redundant `type:` key for a
 bound path, since SKILL.md carries none per the spec). Explicit frontmatter always wins.
 
-The profile also ships `[scan] include = [".claude/skills/**"]`, which re-admits the
-canonical (hidden) Claude Code skill location to the vault walker (`.git` stays
-excluded). Without it, `.claude/skills/**/SKILL.md` would be invisible to `find`/`lint`;
+The profile also ships `[scan] include = [".claude/skills/**", ".agents/skills/**"]`,
+which re-admits the hidden Claude Code and Codex skill locations to the vault walker
+(`.git` stays excluded). Without it, their `SKILL.md` files would be invisible to `find`/`lint`;
 with it, skills lint in place — no relocation.
 
 ## Validate

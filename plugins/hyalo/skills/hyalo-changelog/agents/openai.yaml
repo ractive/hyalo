@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo Changelog"
+  short_description: "Maintain Keep a Changelog release notes"
+  default_prompt: "Use $hyalo-changelog to inspect the unreleased changes."
+policy:
+  allow_implicit_invocation: true

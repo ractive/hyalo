@@ -6,6 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
+mod codex;
+pub use codex::CodexMode;
+
 // ---------------------------------------------------------------------------
 // Embedded skill content
 // ---------------------------------------------------------------------------
@@ -125,7 +128,7 @@ pub struct Report {
     /// `"init"` or `"deinit"`.
     command: &'static str,
     /// Absolute path of the directory holding the `.hyalo.toml` and the
-    /// `.claude`/`.pi` integration files this run touched.
+    /// `.claude`/`.pi`/`.agents` integration files this run touched.
     root: String,
     /// The `dir = "…"` value written to `.hyalo.toml` (`init` only).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,7 +351,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 // Public command entry point
 // ---------------------------------------------------------------------------
 
-/// Initialize hyalo configuration and optional Claude Code and pi integrations.
+/// Initialize hyalo configuration and optional Claude Code, Codex, and pi integrations.
 ///
 /// - `dir`: explicit value for the `dir` key in `.hyalo.toml`; when `None` the
 ///   function auto-detects a common doc directory.
@@ -356,6 +359,7 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 ///   writes a managed section to `.claude/CLAUDE.md`.
 /// - `pi`: when `true`, also installs the hyalo and hyalo-tidy skills for pi,
 ///   the hyalo extension, and a package.json.
+/// - `codex`: project skills or guidance for a separately installed plugin.
 ///
 /// When `dir` names a tree outside CWD, the whole run moves into that tree
 /// (see [`Scope`]) instead of writing a CWD-local config pointing at it.
@@ -364,17 +368,30 @@ pub fn run_init(
     claude: bool,
     pi: bool,
     profile: Option<&str>,
+    codex: CodexMode,
 ) -> Result<Report> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    run_init_in(dir, claude, pi, profile, &cwd)
+    initialize_in(dir, claude, pi, profile, &cwd, codex)
 }
 
+#[cfg(test)]
 fn run_init_in(
     dir: Option<&str>,
     claude: bool,
     pi: bool,
     profile: Option<&str>,
     cwd: &Path,
+) -> Result<Report> {
+    initialize_in(dir, claude, pi, profile, cwd, CodexMode::None)
+}
+
+fn initialize_in(
+    dir: Option<&str>,
+    claude: bool,
+    pi: bool,
+    profile: Option<&str>,
+    cwd: &Path,
+    codex: CodexMode,
 ) -> Result<Report> {
     // Resolve the profile up front so an unknown name errors before any files
     // are written.
@@ -391,6 +408,10 @@ fn run_init_in(
     let dir_value = scope.dir_value.clone();
     let mut report = Report::new("init", &scope, Some(dir_value.clone()));
     let root = scope.root.as_path();
+
+    if codex != CodexMode::None {
+        codex::preflight(root)?;
+    }
 
     if root.is_file() {
         anyhow::bail!("--dir path '{}' is a file, not a directory", root.display());
@@ -540,6 +561,10 @@ fn run_init_in(
                 }
             }
         }
+    }
+
+    if codex != CodexMode::None {
+        codex::install(root, codex, &mut report)?;
     }
 
     if !claude && !pi {
@@ -810,6 +835,9 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     let scope = resolve_scope(dir, cwd);
     let mut report = Report::new("deinit", &scope, None);
     let root = scope.root.as_path();
+
+    codex::preflight_removal(root)?;
+    codex::remove(root, &mut report)?;
 
     // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
     let skill_path = root

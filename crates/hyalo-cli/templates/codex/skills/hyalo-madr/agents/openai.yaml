@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo MADR"
+  short_description: "Maintain architecture decision records"
+  default_prompt: "Use $hyalo-madr to check the architecture decision records."
+policy:
+  allow_implicit_invocation: true
