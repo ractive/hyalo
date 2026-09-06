@@ -27,6 +27,8 @@ jobs:
         run: cargo run -p xtask -- check-bundled-skills
       - name: Check pi-package vendored copies are in sync
         run: cargo run -p xtask -- check-pi-package-sync
+      - name: Check Codex plugin assets and metadata
+        run: cargo run -p xtask -- check-codex-package
       - name: Check every shipped --jq recipe executes
         run: cargo run -p xtask -- check-jq-recipes
       - name: Check mutating commands go through MutationJournal

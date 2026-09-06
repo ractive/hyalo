@@ -1,0 +1,20 @@
+{
+  "name": "hyalo",
+  "interface": {
+    "displayName": "Hyalo"
+  },
+  "plugins": [
+    {
+      "name": "hyalo",
+      "source": {
+        "source": "local",
+        "path": "./plugins/hyalo"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

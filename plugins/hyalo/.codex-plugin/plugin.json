@@ -1,0 +1,19 @@
+{
+  "name": "hyalo",
+  "version": "0.1.0",
+  "description": "Search, maintain, and lint markdown knowledgebases with the Hyalo CLI.",
+  "author": {
+    "name": "ractive",
+    "url": "https://github.com/ractive"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Hyalo",
+    "shortDescription": "Search and maintain markdown knowledgebases.",
+    "longDescription": "Hyalo CLI workflows for structured markdown, knowledgebase maintenance, OKF, MADR, Agent Skills, and changelogs. Requires the Hyalo CLI on PATH.",
+    "developerName": "ractive",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use Hyalo to find planned work in this knowledgebase."
+  }
+}

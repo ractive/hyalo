@@ -1604,10 +1604,14 @@ Repeatable (AND).\n\
     },
     /// Initialize hyalo configuration and optional tool integrations
     #[command(
-        long_about = "Create .hyalo.toml and optionally set up Claude Code and pi integrations.\n\n\
+        long_about = "Create .hyalo.toml and optionally set up Claude Code, Codex, and pi integrations.\n\n\
             Without flags, creates a .hyalo.toml config file.\n\
             With --claude, also installs the hyalo skill for Claude Code.\n\
             With --pi, also installs the hyalo skill for pi.\n\
+            With --codex, installs project skills in .agents/skills and a managed AGENTS.md block.\n\
+            Add --codex-plugin if the Hyalo plugin is installed: writes project guidance and\n\
+            removes managed project skills to avoid duplicates. Neither option installs Codex\n\
+            or modifies global settings. Re-run init after upgrading Hyalo to refresh skills.\n\
             With --profile <name>, scaffolds a preset vault flavour by merging an\n\
             embedded config fragment into .hyalo.toml (available: okf, madr, skills,\n\
             changelog). Multiple profiles compose in one vault: array keys (exempt,\n\
@@ -1615,6 +1619,7 @@ Repeatable (AND).\n\
             re-running is idempotent. A changed scalar prints a `conflict:` line to\n\
             stderr — nothing is lost silently.\n\
             With --profile <name> --claude, also installs the bundled skill for it.\n\n\
+            With --codex, installs Codex workflows for all active known profiles.\n\n\
             Use the global --dir flag to name the markdown directory. A vault at or below the\n\
             current directory keeps .hyalo.toml here and records `dir` relative to it; a vault\n\
             outside it (an absolute path elsewhere, ../sibling) makes that tree its own project\n\
@@ -1629,6 +1634,9 @@ Repeatable (AND).\n\
             hyalo init --dir kb --format json\n\
             hyalo --dir kb init --claude\n\
             hyalo --dir kb init --pi\n\
+            hyalo init --codex\n\
+            hyalo init --codex --codex-plugin\n\
+            hyalo init --codex --profile okf\n\
             hyalo init --profile okf\n\
             hyalo init --profile okf --claude\n\
             hyalo init --profile madr\n\
@@ -1642,6 +1650,12 @@ Repeatable (AND).\n\
         /// Set up pi integration (skill + extension)
         #[arg(long)]
         pi: bool,
+        /// Set up Codex project skills and managed AGENTS.md guidance
+        #[arg(long)]
+        codex: bool,
+        /// Use the installed Hyalo plugin instead of project skills
+        #[arg(long, requires = "codex")]
+        codex_plugin: bool,
         /// Scaffold a preset vault flavour: okf, madr, skills, or changelog
         ///
         /// Merges the profile's embedded config fragment into .hyalo.toml.
@@ -1650,8 +1664,10 @@ Repeatable (AND).\n\
     },
     /// Remove hyalo configuration and tool integration artifacts
     #[command(
-        long_about = "Remove .hyalo.toml and all Claude Code / pi integration artifacts created by `init`.\n\n\
+        long_about = "Remove .hyalo.toml and all Claude Code / Codex / pi integration artifacts created by `init`.\n\n\
             Removes skills, rules, and the managed section from .claude/CLAUDE.md, and .pi/ directory.\n\
+            Removes managed Codex skills and the managed AGENTS.md block, preserving user content.\n\
+            Installed plugins and global Codex settings are not changed.\n\
             Safe to run when artifacts are already absent (idempotent).\n\n\
             The global --dir flag selects the tree to clean, exactly as it does for `init`: a\n\
             vault inside the current directory still cleans the current project, while --dir\n\

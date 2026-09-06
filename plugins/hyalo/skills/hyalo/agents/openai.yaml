@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo"
+  short_description: "Search and maintain markdown knowledgebases"
+  default_prompt: "Use $hyalo to find planned work in this knowledgebase."
+policy:
+  allow_implicit_invocation: true

@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Codex project integration with `hyalo init --codex`: managed `AGENTS.md`
+  guidance, skills under `.agents/skills/`, active profile workflows, and clean
+  removal through `deinit`. A skills-only plugin ships under `plugins/hyalo/`;
+  `--codex-plugin` configures projects without duplicate local skill copies.
+- Agent Skills validation now includes `.agents/skills/**` as well as Claude's
+  skill directory. CI checks Codex plugin metadata and embedded asset parity.
+
 ### Changed
 
 - **Loading a `.hyalo-index` snapshot no longer decodes the BM25 inverted

@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo Tidy"
+  short_description: "Audit knowledgebase health and scoped repairs"
+  default_prompt: "Use $hyalo-tidy to audit this knowledgebase and report findings."
+policy:
+  allow_implicit_invocation: false

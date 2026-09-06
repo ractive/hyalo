@@ -1,0 +1,7 @@
+# hyalo:managed
+interface:
+  display_name: "Hyalo OKF"
+  short_description: "Maintain Open Knowledge Format vaults"
+  default_prompt: "Use $hyalo-okf to check this OKF vault."
+policy:
+  allow_implicit_invocation: true
