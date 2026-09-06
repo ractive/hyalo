@@ -107,11 +107,14 @@ exemption, because `math` is four of seven characters, just over half. Had the p
 `Mathjax.md` the identical fix would already be offered today; the raw gate suppressed it purely
 by the accident of one capital letter, and no normalisation that reaches `MyLongNote` can keep
 that accident. Tightening `shares_dominant_prefix` for two whole words of *equal length* is a
-scorer change (DEC-324's territory), explicitly out of this iteration's scope — carried over.
+scorer change (DEC-324's territory), explicitly out of this iteration's scope — carried over to
+[[iterations/iteration-281-dominant-prefix-equal-length-exemption]].
 
 ## Links
 
 - [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]] — "Not done": names this exact
   gap and why it was left alone (separate change, separate cost)
+- [[iterations/iteration-281-dominant-prefix-equal-length-exemption]] — carries this exact
+  false positive forward
 - [[decision-log]] — DEC-324 (basename scorer signals this gate would finally let through),
   DEC-325 (this iteration)
