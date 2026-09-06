@@ -1,0 +1,74 @@
+---
+type: iteration
+title: "Iteration 287 — Typed TypeScript API generated with ts-rs"
+date: 2026-09-06
+status: planned
+tags: [iteration, npm, typescript, api]
+branch: iter-287/typed-typescript-api
+priority: 3
+depends-on: "[[iterations/iteration-286-npm-distribution]]"
+related:
+  - "[[iterations/iteration-285-typed-output-structs]]"
+  - "[[research/npm-package-and-typed-typescript-api]]"
+  - "[[iterations/iteration-236-typed-pi-tools]]"
+  - "[[decision-log]]"
+---
+
+# Iteration 287 — Typed TypeScript API generated with ts-rs
+
+## Goal
+
+`import { find, read, summary } from "hyalo"` with result types that come from the Rust
+structs, not from a hand-written mirror. Decided in
+[[research/npm-package-and-typed-typescript-api]]: `ts-rs` derives on the output structs from
+[[iterations/iteration-285-typed-output-structs]] and on the clap argument structs; `cargo test`
+writes `types.ts`, which is committed so a change shows up in review. No schemars, no JSON
+Schema, no `hyalo schema` command, no stdio server mode. Contract tests run against the binary
+built from the same commit. Requires both 285 (structs) and 286 (the package to ship in).
+
+## Tasks
+
+- [ ] TASK-1: `ts-rs` (features `serde-json-impl`, `indexmap-impl`) as a dev-dependency;
+      `#[derive(TS)]` + `#[ts(export)]` on `Envelope<T>`, `ErrorEnvelope`, `FileObject` and its
+      parts (`ContentMatch`, `PropertyInfo`, links, sections, tasks, backlinks), the `read` and
+      `summary` results, and the `FindArgs` / `ReadArgs` / `SummaryArgs` clap structs plus the
+      global args struct. Doc comments flow through as JSDoc. `serde_json::Value` fields export
+      as `unknown`.
+- [ ] TASK-2: an xtask gate `check-ts-types` that regenerates into a temp dir and diffs against
+      the committed `npm/hyalo/src/generated/*.ts`; fails on drift. Runs in `quality-gates.yml`.
+- [ ] TASK-3: `npm/hyalo/src/` — `find(args)`, `read(args)`, `summary(args)`: build argv from
+      the generated arg type (global flags from the global struct; custom-parsed values such as
+      `--property K=V` are typed as the string form and documented), spawn the **platform
+      binary directly** (not the launcher) with `--format json --no-hints`, parse into
+      `Envelope<T>`, map exit 1 to a thrown `HyaloError` carrying `ErrorEnvelope`, exit 2 to a
+      usage error. Clap `conflicts_with` / `requires` rules are documented on the type, not
+      enforced.
+- [ ] TASK-4: vitest contract tests against a fixture vault and the freshly built binary:
+      shapes match the generated types (a runtime check generated from the same structs, or
+      `expectTypeOf` plus a JSON round-trip), exit codes, stderr passthrough, hint suppression,
+      the `files_missing` counters, an unparsable-frontmatter `--file` (DEC-301). CI builds the
+      binary once and points the tests at it.
+- [ ] TASK-5: port `pi-package/extensions/hyalo.ts` (485 lines, typebox schemas, hand-parsed
+      `config` JSON) onto the wrapper; typed tools keep their typebox parameter schemas but stop
+      hand-building argv and parsing JSON.
+- [ ] TASK-6: docs: API README with the three calls, the generated-types workflow, how to add a
+      command; `skill-hyalo.md` note; research note outcome. Gates: `cargo fmt`, clippy,
+      `cargo test --workspace -q`, every xtask `check-*`, `npm test`, `hyalo lint --strict`.
+- [ ] TASK-7 (consumer, outside this repo): switch `homefinder-eco-mcp` to `npm install hyalo`
+      and the typed `find`; record what the wrapper lacked.
+
+## Acceptance criteria
+
+- [ ] `types.ts` is generated, committed, and `check-ts-types` fails on drift.
+- [ ] `find`, `read`, `summary` return values whose TypeScript type is the exported Rust
+      struct, verified by the contract suite against the same-commit binary.
+- [ ] Error paths surface `ErrorEnvelope` with the original exit code.
+- [ ] The pi extension no longer hand-parses any hyalo JSON.
+- [ ] Gates green, including `npm test` in CI.
+
+## Links
+
+- [[research/npm-package-and-typed-typescript-api]] — decision record
+- [[iterations/iteration-285-typed-output-structs]] — the structs being exported
+- [[iterations/iteration-286-npm-distribution]] — the package this ships in
+- [[iterations/iteration-236-typed-pi-tools]] — the pi tools being ported

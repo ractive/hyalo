@@ -206,20 +206,23 @@ see "Settled" below). The two options are kept for the record.
 - **Snippets in ranked mode** → [[iterations/iteration-283-ranked-search-snippets]].
 - **Frontmatter-after-comment:** handled in the MCP server, nothing here.
 
-## Suggested iterations (after 0.22.0 is released)
+## Iterations (filed 2026-09-06, to run after 0.22.0 is released)
 
-Three separate iterations, not one:
+Three separate iterations, not one, preceded by the stability retrospective
+[[iterations/iteration-284-stability-retrospective]]:
 
-1. **Typed output** (Rust only, retrospective work): `Envelope<T>` plus an
+1. **Typed output** — [[iterations/iteration-285-typed-output-structs]]
+   (Rust only, retrospective work): `Envelope<T>` plus an
    error envelope struct replacing `build_envelope_value`; results structs for
    `read` and `summary` first, then the remaining `json!` commands. No
    behaviour change; JSON byte-identical, verified by the e2e suite.
-2. **npm distribution** (needs no types): `npm/hyalo/` launcher, platform
+2. **npm distribution** — [[iterations/iteration-286-npm-distribution]]
+   (needs no types): `npm/hyalo/` launcher, platform
    package template under `npm/platforms/`, `release.yml` unpacking each
    archive into a platform package, publishing platforms then main via
    trusted publishing. Fix the version-sync gate for `pi-package/` in the
    same iteration. DEC for the polyglot rule.
-3. **Typed API**: `ts-rs` derives on the output and clap structs, generated
+3. **Typed API** — [[iterations/iteration-287-typed-typescript-api]]: `ts-rs` derives on the output and clap structs, generated
    `types.ts` committed, `find`/`read`/`summary` wrappers spawning the
    platform binary directly, vitest contract tests against the freshly built
    binary. Port `pi-package/extensions/hyalo.ts` onto it. Then switch
