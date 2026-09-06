@@ -40,8 +40,9 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
       the generated arg type (global flags from the global struct; custom-parsed values such as
       `--property K=V` are typed as the string form and documented), spawn the **platform
       binary directly** (not the launcher) with `--format json --no-hints`, parse into
-      `Envelope<T>`, map exit 1 to a thrown `HyaloError` carrying `ErrorEnvelope`, exit 2 to a
-      usage error. Clap `conflicts_with` / `requires` rules are documented on the type, not
+      `Envelope<T>`, map exit 1 to a thrown `HyaloError` carrying `ErrorEnvelope`, and preserve
+      exit 2 as usage **or internal** failure with the original stderr (which may be plain
+      text). Clap `conflicts_with` / `requires` rules are documented on the type, not
       enforced.
 - [ ] TASK-4: vitest contract tests against a fixture vault and the freshly built binary:
       shapes match the generated types (a runtime check generated from the same structs, or
@@ -65,6 +66,15 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
 - [ ] Error paths surface `ErrorEnvelope` with the original exit code.
 - [ ] The pi extension no longer hand-parses any hyalo JSON.
 - [ ] Gates green, including `npm test` in CI.
+
+## Plan reconciliation — 2026-09-06, iteration 284
+
+Baseline inspection of `run.rs` and `output_pipeline.rs` confirms DEC-307 reserves exit 2
+for both clap usage errors and internal failures. TASK-3 now preserves that distinction
+and raw stderr instead of mislabeling every exit-2 failure as usage. Error-path coverage
+remains required. Both 285 and the full 286 prerequisite remain required; npm publication,
+real-platform verification, and the external consumer migration are not completed by
+repository-only work in this batch.
 
 ## Links
 
