@@ -85,8 +85,11 @@ of `link_score`, recorded as [[decision-log#DEC-324: near-neighbour stems are a 
 1. **camelCase is a word boundary.** `CatMuse` → `["cat", "muse"]`, so `[[Cat]]`
    is a name missing a word rather than a typo of one opaque token.
 2. **Jaro admits, Winkler only sharpens.** The 0.85 token floor is measured
-   against plain Jaro unless one token is a prefix of the other. A shared given
-   name (`paul…`) buys a Winkler bonus, not token identity.
+   against plain Jaro unless the pair's common prefix covers at least half the
+   shorter token. Winkler credits a shared prefix up to four characters however
+   long the words are: that is five of six in `creat` (`create`/`creating`) but
+   four of eleven in `paulbricman`/`paultreanor`. A shared given name buys a
+   bonus, not token identity.
 3. **An unmatched token costs its character share.** `explained_mass` scales the
    token F1 by the fraction of the two names' characters the pairing accounts
    for, so a dropped *word* is not absorbed by a forgiving harmonic mean.
@@ -100,8 +103,8 @@ which damped the *correct* 1.0 winner to 0.444.
 
 | corpus | fuzzy proposals | above floor |
 |---|---|---|
-| Obsidian Hub | 18 → 14 | **4 → 1** |
-| GitHub Docs (`content/`) | 5 493 → 5 409 | 2 226 → 2 225 |
+| Obsidian Hub | 18 → 16 | **4 → 1** |
+| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 226 → 2 159 |
 | MDN (`files/en-us`) | 0 → 0 | 0 → 0 |
 
 All three named examples are closed: `[[Cat]]`'s winner moved from `CatMuse.md`
@@ -118,17 +121,36 @@ caught the one real mistake in this iteration (see below).
 
 ### What the corpora caught
 
-Charging unmatched mass in `directory_similarity` as well as the basename took
-**828** GitHub Docs fixes whose basename matched byte-for-byte below the apply
-floor. A directory reorganisation renames whole levels — that *is* the move
-being described — so the charge is now the basename's alone.
+Two mistakes in the design, both found by GitHub Docs before the gates ran:
+
+- Charging unmatched mass in `directory_similarity` as well as the basename
+  took **828** fixes whose basename matched byte-for-byte below the apply floor
+  (`about-dependabot-alerts` → `about-dependabot-alerts.md`, 0.808 → 0.789). A
+  directory reorganisation renames whole levels — that *is* the move being
+  described — so the charge is the basename's alone.
+- Gating token identity on plain Jaro with only a *strict prefix* exemption
+  took a further **132**: it killed the gerund-to-imperative slug rename
+  (`creating-a-composite-action` → `create-a-composite-action`), which GitHub
+  applied to a whole tree. The real flaw is that Winkler credits a shared
+  prefix up to four characters however long the words are, so the exemption
+  became "the common prefix covers at least half the shorter token".
 
 ### Known narrowing
 
-A basename that gains a whole word scores below the floor: `decision-log` →
-`decision-log-archive` is 0.607, not 0.8. Still reported in `fuzzy_fixes`;
-`--min-confidence 0.5` applies it. This is the intended trade and is what the
-one dropped GitHub Docs fix was.
+A basename that gains or loses a whole word scores below the floor:
+`decision-log` → `decision-log-archive` is 0.607, not 0.8. Still reported in
+`fuzzy_fixes`; `--min-confidence 0.5` applies it.
+
+This is the whole of the residual cost: **67** GitHub Docs fixes (13 distinct
+targets, 3.0% of the 2 226 that were applicable), **0** new false positives.
+Three of the 13 were plainly wrong and are closed on purpose
+(`about-the-audit-log-…` → `accessing-the-audit-log-…`,
+`modifying-a-github-app` → `deleting-a-github-app`, `block-copilot-cloud-agent`
+→ `enable-copilot-cloud-agent`); the other ten are real renames that also
+dropped a word and are now reported rather than written. The corpora the
+acceptance criteria name — Hub, MDN, the iteration 277 e2e fixtures — lose
+nothing, beyond one e2e fixture in `mv.rs` (whose subject is anchor
+preservation, not scoring) now passing `--min-confidence 0.5` explicitly.
 
 ### Not done
 

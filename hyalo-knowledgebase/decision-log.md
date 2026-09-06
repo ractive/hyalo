@@ -5947,13 +5947,17 @@ to tune and without lowering the floor:
    opaque token — `Cat` then reads as a *typo* of `CatMuse` (Jaro-Winkler
    0.867) rather than a name missing a whole word.
 2. **Jaro admits, Winkler only sharpens.** `token_similarity` measures the
-   token floor against plain Jaro, not Jaro-Winkler, unless one token is a
-   prefix of the other. Winkler adds up to `0.4 · (1 − jaro)` for a shared
-   four-character prefix; that is credit for a shared beginning, not evidence
+   token floor against plain Jaro, not Jaro-Winkler, unless the pair's common
+   prefix covers at least half the shorter token. Winkler adds up to
+   `0.4 · (1 − jaro)` for a shared four-character prefix *regardless of how much
+   of the words that is*; that is credit for a shared beginning, not evidence
    two words are the same word. `paulbricman` / `paultreanor` — two people who
-   share a given name — is 0.855 under Winkler and 0.758 under Jaro. The
-   prefix-pair exemption keeps the `get` / `getting` morphology
-   `TOKEN_MATCH_FLOOR` was chosen to admit.
+   share a given name — is 0.855 under Winkler and 0.758 under Jaro, and `paul`
+   is four of eleven characters. The dominant-prefix exemption is what keeps the
+   morphology `TOKEN_MATCH_FLOOR` was chosen to admit: `get` in `getting` (3 of
+   3), `creat` in `create`/`creating` (5 of 6). Gating on plain Jaro alone cost
+   132 GitHub Docs fixes, because GitHub renamed a whole tree from `creating-…`
+   and `managing-…` to `create-…` and `manage-…`.
 3. **Unmatched tokens cost their character share.** `explained_mass` scales the
    token F1 by `1 −` the share of characters living in tokens left entirely
    unmatched on either side. The F1 weights every token alike and its harmonic
@@ -5988,8 +5992,8 @@ does not.
 
 | corpus | fuzzy proposals | above floor | notes |
 |---|---|---|---|
-| Obsidian Hub | 18 → 14 | **4 → 1** | the 3 wrong ones closed, the 1 correct one kept at 1.0 |
-| GitHub Docs (`content/`) | 5 493 → 5 409 | 2 226 → 2 225 | 1 dropped, 0 gained |
+| Obsidian Hub | 18 → 16 | **4 → 1** | the 3 wrong ones closed, the 1 correct one kept at 1.0 |
+| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 226 → 2 159 | 67 dropped (13 distinct targets), **0 gained** |
 | MDN (`files/en-us`) | 0 → 0 | 0 → 0 | not a fuzzy corpus — all 14 375 files are `index.md`, so no basename ever clears the candidacy gate (DEC-321) |
 
 On the Hub the four above-floor proposals were `Obsidian Publish.` (correct,
@@ -5998,11 +6002,23 @@ On the Hub the four above-floor proposals were `Obsidian Publish.` (correct,
 `[[paulbricman]]` is no longer proposed at all, and
 `[[obsidian-floating-toc-plugin]]` fell to 0.694.
 
-**Known narrowing.** A basename that gains a whole word now scores below the
-floor: `decision-log` → `decision-log-archive` is 0.607, not 0.8. It is still
-reported in `fuzzy_fixes`; `--min-confidence 0.5` applies it. This is the
-intended trade — an added word is a different document — and it is what the one
-dropped GitHub Docs fix was.
+**Known narrowing, stated honestly.** A basename that gains or loses a whole
+word now scores below the floor: `decision-log` → `decision-log-archive` is
+0.607, not 0.8. It is still reported in `fuzzy_fixes`; `--min-confidence 0.5`
+applies it. That is the intended trade — an added word is a different document —
+and it is what all 67 dropped GitHub Docs fixes are. Three of the 13 distinct
+ones were plainly wrong and are closed on purpose:
+`about-the-audit-log-for-your-enterprise` →
+`accessing-the-audit-log-for-your-enterprise`, `modifying-a-github-app` →
+`deleting-a-github-app`, and `block-copilot-cloud-agent` →
+`enable-copilot-cloud-agent`. The other ten are real GitHub Docs renames that
+also dropped a word (`github-hosted-runners-reference` →
+`github-hosted-runners`, `about-task-lists` → `about-tasklists`) and are now
+reported rather than applied. The Obsidian Hub, MDN and the iteration 277 e2e
+fixtures — the corpora the iteration's acceptance criteria name — lose nothing:
+the Hub's only correct above-floor proposal keeps its 1.0, and the one e2e
+fixture that relied on an added-word rename (`mv.rs`, whose subject is anchor
+preservation) now passes `--min-confidence 0.5` explicitly.
 
 **Not done.** The fuzzy *candidacy* gate is still a case-sensitive
 Jaro-Winkler over raw stems, so `[[my-long-note]]` never shortlists
@@ -6010,7 +6026,7 @@ Jaro-Winkler over raw stems, so `[[my-long-note]]` never shortlists
 gate is a separate change with its own cost.
 
 **Where:** `crates/hyalo-core/src/link_score.rs` (`tokenize`,
-`push_camel_tokens`, `token_similarity`, `is_prefix_pair`, `explained_mass`,
-`scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
+`push_camel_tokens`, `token_similarity`, `shares_dominant_prefix`,
+`explained_mass`, `scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
 (`PERFECT_CONFIDENCE`), `crates/hyalo-cli/tests/e2e/iteration279_fuzzy_near_neighbours.rs`.
 See [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]].
