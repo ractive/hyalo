@@ -566,6 +566,21 @@ What follows is only what those pages do not say — the behaviour that surprise
   basename that **gains a whole word** is now below the floor (`decision-log` →
   `decision-log-archive` is 0.607) — still reported in `fuzzy_fixes`, applied with
   `--min-confidence 0.5`.
+- **The candidacy gate reads a stem the same way the scorer does** (DEC-325, iter-280): a
+  candidate only gets scored if it first clears `--threshold` on a cheap Jaro-Winkler
+  prefilter, and that prefilter compared the raw, case-sensitive stems — so a pair the scorer
+  rates a perfect 1.0 never reached it. `[[my-long-note]]` never shortlisted `MyLongNote.md`
+  (raw 0.53), `[[html-parser]]` never shortlisted `HTMLParser.md` (0.45): an Obsidian vault
+  naming notes in prose case could not be repaired from a slug-spelled link at all. Both sides
+  are now normalised before the comparison — split into words (camelCase included), lowercased,
+  rejoined with `-` — so `[[my-long-note]]` fixes to `MyLongNote.md` at 1.0 and
+  `--apply-fuzzy` writes it. A plain lowercase-hyphen slug is its own normal form byte for
+  byte, so a documentation vault sees nothing change: GitHub Docs (5,476 fuzzy proposals) and
+  MDN produce byte-identical `links fix` output at the same wall time. What a wider gate does
+  expose is the scorer as it stands — on the Obsidian Hub `[[Mathjax]]`, which names no note,
+  now offers `mathpad.md` at 0.886 on the strength of a shared `math` prefix. That one is
+  wrong, is recorded as a carry-over, and is a reason to read `fuzzy_fixes` before
+  `--apply-fuzzy` on a prose-cased vault.
 - **`links fix`'s two site-prefix warnings count the same set** (iter-277), and the
   "stripped 0 of N" one says "derived from the directory name" when nothing configured the
   prefix it is blaming.
