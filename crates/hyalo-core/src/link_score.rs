@@ -228,6 +228,12 @@ pub fn gate_key(stem: &str) -> String {
 /// doubles it.
 const PREFIX_DOMINANCE: usize = 2;
 
+/// Directory levels describe location, so their shared prefix need only
+/// outweigh the leftover, rather than double it (iter-282, DEC-329).
+/// `management`/`managing` shares five characters and leaves three in the
+/// shorter token. Basenames retain the stricter morphological rule.
+const DIRECTORY_PREFIX_DOMINANCE: usize = 1;
+
 /// `true` when the two tokens' common prefix outweighs what it leaves over of
 /// the shorter one by more than a factor of [`PREFIX_DOMINANCE`].
 ///
@@ -282,9 +288,13 @@ const PREFIX_DOMINANCE: usize = 2;
 ///
 /// Both arguments come from [`tokenize`] and are already lowercase.
 fn shares_dominant_prefix(a: &str, b: &str) -> bool {
+    shares_prefix_with_dominance(a, b, PREFIX_DOMINANCE)
+}
+
+fn shares_prefix_with_dominance(a: &str, b: &str, dominance: usize) -> bool {
     let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     let shorter = a.chars().count().min(b.chars().count());
-    shorter > 0 && common > PREFIX_DOMINANCE * (shorter - common)
+    shorter > 0 && common > dominance * (shorter - common)
 }
 
 /// Similarity of two slug tokens, `0.0` when they are not the same token.
@@ -309,6 +319,16 @@ fn shares_dominant_prefix(a: &str, b: &str) -> bool {
 ///
 /// The reported score is Jaro-Winkler either way; only admission changes.
 fn token_similarity(a: &str, b: &str) -> f64 {
+    token_similarity_with_prefix(a, b, shares_dominant_prefix)
+}
+
+fn directory_token_similarity(a: &str, b: &str) -> f64 {
+    token_similarity_with_prefix(a, b, |a, b| {
+        shares_prefix_with_dominance(a, b, DIRECTORY_PREFIX_DOMINANCE)
+    })
+}
+
+fn token_similarity_with_prefix(a: &str, b: &str, prefix: fn(&str, &str) -> bool) -> f64 {
     if a == b {
         return 1.0;
     }
@@ -316,20 +336,20 @@ fn token_similarity(a: &str, b: &str) -> f64 {
     if winkler < TOKEN_MATCH_FLOOR {
         return 0.0;
     }
-    let admitted = strsim::jaro(a, b) >= TOKEN_MATCH_FLOOR || shares_dominant_prefix(a, b);
+    let admitted = strsim::jaro(a, b) >= TOKEN_MATCH_FLOOR || prefix(a, b);
     if admitted { winkler } else { 0.0 }
 }
 
 /// Best match for `token` among `others`, or `0.0` when nothing clears
 /// [`TOKEN_MATCH_FLOOR`].
-fn best_token_match(token: &str, others: &[String]) -> f64 {
+fn best_token_match(token: &str, others: &[String], similarity: fn(&str, &str) -> f64) -> f64 {
     others
         .iter()
-        .map(|o| token_similarity(token, o))
+        .map(|o| similarity(token, o))
         .fold(0.0_f64, f64::max)
 }
 
-/// Soft token F1: the harmonic mean of how well each side is covered by the
+/// Directory soft token F1: the harmonic mean of how well each side is covered by the
 /// other, where coverage is the mean best-match score per token.
 ///
 /// Two empty token lists are identical (`1.0`); exactly one empty list is a
@@ -338,15 +358,12 @@ fn best_token_match(token: &str, others: &[String]) -> f64 {
 /// `actions` is fully covered by `actions-limits` (recall 1.0) but only covers
 /// half of it (precision 0.5), giving 0.67 instead of 0.75.
 ///
-/// The result is then scaled by its explained mass (iter-279), which charges
-/// for whole tokens the pairing leaves unmatched in proportion to how much of
-/// the two names they are — 0.47 for that same `actions` / `actions-limits`
-/// pair, where `limits` is six of the twenty characters in play.
+/// Directory overlap uses its own prefix admission and no character charge.
 fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
-    scored_token_f1(a, b).0
+    scored_token_f1_with(a, b, directory_token_similarity).0
 }
 
-/// [`soft_token_f1`] together with the pairing's **explained mass**: `1 −` the
+/// Basename soft token F1 together with the pairing's **explained mass**: `1 −` the
 /// share of characters living in tokens left *entirely* unmatched, counted
 /// across both sides.
 ///
@@ -367,8 +384,16 @@ fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
 /// share pushed 828 GitHub Docs fixes whose basename matched byte-for-byte
 /// below the apply floor. A dropped word in the *name* changes which document
 /// is meant; a dropped word in the *path* is the move being described.
-#[allow(clippy::cast_precision_loss)]
 fn scored_token_f1(a: &[String], b: &[String]) -> (f64, f64) {
+    scored_token_f1_with(a, b, token_similarity)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn scored_token_f1_with(
+    a: &[String],
+    b: &[String],
+    similarity: fn(&str, &str) -> f64,
+) -> (f64, f64) {
     if a.is_empty() && b.is_empty() {
         return (1.0, 1.0);
     }
@@ -382,7 +407,7 @@ fn scored_token_f1(a: &[String], b: &[String]) -> (f64, f64) {
     let mut side = |xs: &[String], ys: &[String]| -> f64 {
         let mut sum = 0.0;
         for x in xs {
-            let score = best_token_match(x, ys);
+            let score = best_token_match(x, ys, similarity);
             sum += score;
             let len = x.chars().count();
             total_chars += len;
@@ -454,9 +479,12 @@ fn common_prefix_ratio(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
 /// * **shared leading components** ([`DIR_PREFIX_WEIGHT`]) — `a/b/c` and
 ///   `a/b/d` share two of three levels. This is the term that separates a
 ///   relocation *within* a section from a substitution *across* sections.
-/// * **unordered token overlap** — the same soft token F1 used for basenames,
-///   over the flattened components. It keeps a reorganisation that inserts or
-///   reorders a level from collapsing to zero.
+/// * **unordered token overlap** — soft token F1 over the flattened components,
+///   without the basename's unmatched-character charge. The prefix exemption
+///   requires the common prefix to outweigh its leftover in the shorter token
+///   (factor one), while basenames require more than twice the leftover. Both
+///   still require Jaro-Winkler to clear the token floor. It keeps a directory
+///   rename such as `management`/`managing` from losing its overlap evidence.
 #[must_use]
 pub fn directory_similarity(a_dirs: &[&str], b_dirs: &[&str]) -> f64 {
     if a_dirs.is_empty() && b_dirs.is_empty() {
@@ -527,6 +555,66 @@ pub fn candidate_confidence_with_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_prefix_admission_is_deliberately_looser_than_basename() {
+        assert!(strsim::jaro("management", "managing") < TOKEN_MATCH_FLOOR);
+        assert!(strsim::jaro_winkler("management", "managing") >= TOKEN_MATCH_FLOOR);
+        assert!(approx(token_similarity("management", "managing"), 0.0));
+        for (a, b) in [("management", "managing"), ("managing", "management")] {
+            assert!(approx(
+                directory_token_similarity(a, b),
+                strsim::jaro_winkler(a, b)
+            ));
+        }
+        // A majority must beat, not tie, the leftover; count Unicode characters.
+        for (a, b, admitted) in [
+            ("abcdxy", "abcdzz", true),
+            ("abcxyz", "abcuvw", false),
+            ("abxxxx", "abyyyy", false),
+            ("éabcxy", "éabczz", true),
+            ("éabxyz", "éabuvw", false),
+            ("", "", false),
+        ] {
+            assert_eq!(
+                shares_prefix_with_dominance(a, b, DIRECTORY_PREFIX_DOMINANCE),
+                admitted
+            );
+        }
+        // Majority alone does not bypass the Winkler floor.
+        assert!(shares_prefix_with_dominance(
+            "use",
+            "using",
+            DIRECTORY_PREFIX_DOMINANCE
+        ));
+        assert!(approx(directory_token_similarity("use", "using"), 0.0));
+        assert!(approx(
+            directory_token_similarity("paulbricman", "paultreanor"),
+            0.0
+        ));
+        assert!(approx(token_similarity("mathjax", "mathpad"), 0.0));
+        assert!(approx(basename_similarity("management", "managing"), 0.0));
+    }
+
+    #[test]
+    fn saml_directory_rename_restores_the_measured_apply_floor_crossing() {
+        let target = "admin/identity-and-access-management/using-saml-for-enterprise-iam/saml-configuration-reference";
+        let candidate =
+            "admin/managing-iam/iam-configuration-reference/saml-configuration-reference.md";
+        // These components have no duplicate tokens: the baseline's shared
+        // basename admission gives directory overlap 4/15 and confidence .795.
+        let old_tokens =
+            tokenize("admin-identity-and-access-management-using-saml-for-enterprise-iam");
+        let new_tokens = tokenize("admin-managing-iam-configuration-reference");
+        let old_overlap = scored_token_f1(&old_tokens, &new_tokens).0;
+        let before = 0.7 + 0.3 * (0.75 / 3.0 + 0.25 * old_overlap);
+        assert!((before - 0.795).abs() < 1e-12, "{before}");
+        let after = candidate_confidence(target, candidate);
+        assert_eq!(format!("{after:.3}"), "0.804");
+        assert!(before < DEFAULT_FUZZY_MIN_CONFIDENCE);
+        assert!(after >= DEFAULT_FUZZY_MIN_CONFIDENCE);
+        assert!(approx(candidate_confidence(candidate, target), after));
+    }
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

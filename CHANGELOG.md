@@ -20,6 +20,11 @@ and this project adheres to
 
 ### Changed
 
+- Directory overlap in fuzzy link confidence now admits a shared prefix that
+  outweighs its leftover in the shorter token, while basename tokens retain
+  the stricter factor of two. The GitHub Docs SAML directory relocation returns
+  from 0.795 to 0.804, above the default apply floor; `Mathjax` still does not
+  match `mathpad`. Both features retain the 0.85 Jaro-Winkler token floor.
 - **Loading a `.hyalo-index` snapshot no longer decodes the BM25 inverted
   index.** On a MDN-scale vault (14 375 entries, 116 MiB index) the BM25
   section is 76 % of the file, and a `find` with no text query spent ~230 ms of

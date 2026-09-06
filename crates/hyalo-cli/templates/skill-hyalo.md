@@ -578,10 +578,12 @@ What follows is only what those pages do not say — the behaviour that surprise
   `--apply-fuzzy` writes it. A plain lowercase-hyphen slug is its own normal form byte for
   byte, so a documentation vault sees nothing change: GitHub Docs (5,476 fuzzy proposals) and
   MDN produce byte-identical `links fix` output at the same wall time. What a wider gate does
-  expose is the scorer as it stands — on the Obsidian Hub `[[Mathjax]]`, which names no note,
-  now offers `mathpad.md` at 0.886 on the strength of a shared `math` prefix. That one is
-  wrong, is recorded as a carry-over, and is a reason to read `fuzzy_fixes` before
-  `--apply-fuzzy` on a prose-cased vault.
+  expose is the scorer as it stands. DEC-326 (iter-281) closed the exposed `[[Mathjax]]` →
+  `mathpad.md` false match: a basename prefix must exceed twice its leftover in the shorter
+  token. Directory overlap deliberately uses a looser rule (DEC-329, iter-282): the prefix
+  must outweigh the leftover, so `management`/`managing` qualifies. Both features still need
+  0.85 on Jaro-Winkler. The SAML directory relocation returns from 0.795 to 0.804, above the
+  default apply floor, while basename `Mathjax`/`mathpad` stays closed.
 - **`links fix`'s two site-prefix warnings count the same set** (iter-277), and the
   "stripped 0 of N" one says "derived from the directory name" when nothing configured the
   prefix it is blaming.

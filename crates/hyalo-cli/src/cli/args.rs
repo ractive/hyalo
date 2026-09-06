@@ -2953,9 +2953,11 @@ pub(crate) enum LinksAction {
             location, so only its basename is scored.\n\n\
             The basename term compares words, not characters: a slug is split on separators\n\
             AND at camelCase boundaries (CatMuse -> cat + muse), two words count as the same\n\
-            word only if they are close enough on Jaro alone (a shared prefix sharpens a\n\
-            match but cannot create one, so paulbricman does not match paultreanor), and a\n\
-            word neither name accounts for costs its share of their characters. So a rename\n\
+            word if they clear 0.85 on Jaro, or on Jaro-Winkler when their shared prefix\n\
+            is more than twice its leftover in the shorter word. Directory tokens instead\n\
+            require the prefix to outweigh its leftover (management/managing qualifies);\n\
+            both retain the 0.85 Jaro-Winkler floor. Basename mathjax/mathpad stays unmatched.\n\
+            A word neither name accounts for costs its share of their characters. So a rename\n\
             that ADDS OR DROPS A WHOLE WORD lands below the default floor (decision-log ->\n\
             decision-log-archive scores 0.607) and is reported rather than written; a typo,\n\
             a punctuation change or a pure relocation is unaffected.\n\n\
