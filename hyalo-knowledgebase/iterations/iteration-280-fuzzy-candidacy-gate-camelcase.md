@@ -52,14 +52,14 @@ This iteration is scoped to the candidacy gate only. It does not touch `basename
 
 ## Acceptance criteria
 
-- [ ] `[[my-long-note]]` shortlists and fuzzy-matches `MyLongNote.md` at (or near) 1.0
+- [x] `[[my-long-note]]` shortlists and fuzzy-matches `MyLongNote.md` at (or near) 1.0
       confidence — or a DEC records why widening the gate is not worth its cost (e.g. shortlist
       size blows up on a large vault) and this plan is closed without the change.
-- [ ] No regression in `fuzzy_shortlist` candidate-set size or measured `links fix` wall time
+- [x] No regression in `fuzzy_shortlist` candidate-set size or measured `links fix` wall time
       on the `bench-scale` synthetic vault beyond a documented, justified margin.
-- [ ] No previously-correct fuzzy fix across the Hub, MDN, GitHub Docs or the iteration
+- [x] No previously-correct fuzzy fix across the Hub, MDN, GitHub Docs or the iteration
       277/279 e2e fixtures changes score or drops below the apply floor as a side effect.
-- [ ] Gates green.
+- [x] Gates green.
 
 ## Outcome
 
@@ -79,7 +79,9 @@ asserting the fix.
 strings precomputed at matcher build. The `-` join (rather than concatenating the tokens) is what
 makes the change free where it matters: a plain lowercase-hyphen slug is its own gate key byte
 for byte, so GitHub Docs, MDN and the `bench-scale` synthetic vault (`note-NNNNN.md`,
-`linker-NNNNN.md`) compare exactly the strings they compared before.
+`linker-NNNNN.md`) compare exactly the strings they compared before. `xtask bench-scale` on the
+14 000-file synthetic vault: `find` 330 ms (budget 3 s), `links fix` **1.05 s** (budget 15 s,
+iter-278 baseline ~1.1 s), `mv` at 2 000 backlinks 522 ms — PASS, no regression.
 
 **GATE-3 — measured on all three corpora** (`links fix --dry-run --format json`, this branch vs
 `main`):
