@@ -177,6 +177,36 @@ fn push_camel_tokens(run: &str, out: &mut Vec<String>) {
     out.push(chars[start..].iter().collect::<String>().to_lowercase());
 }
 
+/// Normal form of a filename stem for `LinkMatcher`'s fuzzy **candidacy gate**
+/// (iter-280, DEC-325): [`tokenize`]'s words joined by a single `-`.
+///
+/// The gate is a cheap Jaro-Winkler prefilter that decides which files are even
+/// worth scoring; until iter-280 it ran on the raw, case-sensitive stems, so a
+/// pair the scorer rates 1.0 — `my-long-note` / `MyLongNote`, `html-parser` /
+/// `HTMLParser` — never reached it (raw Jaro-Winkler 0.53 and 0.45, far under
+/// the 0.8 floor). Normalising both sides first makes candidacy agree with
+/// [`basename_similarity`] about what a stem *is*, without changing what the
+/// gate costs: it is still one `strsim::jaro_winkler` call per file, over a
+/// string precomputed once at matcher build.
+///
+/// The `-` join (rather than concatenating the tokens) is deliberate: a plain
+/// lowercase-hyphen slug — the whole of the GitHub Docs and MDN corpora — is its
+/// own gate key byte for byte, so on those vaults the gate admits exactly the
+/// candidates it admitted before, at exactly the same cost. Only names carrying
+/// case, spaces or `_` — Obsidian-style vaults — see a different key.
+///
+/// A stem with no alphanumeric character at all (`-----`) would tokenise to
+/// nothing; it keys to itself instead, so two unrelated punctuation-only names
+/// cannot meet at an empty-vs-empty score of 1.0.
+#[must_use]
+pub fn gate_key(stem: &str) -> String {
+    let tokens = tokenize(stem);
+    if tokens.is_empty() {
+        return stem.to_string();
+    }
+    tokens.join("-")
+}
+
 /// `true` when the two tokens' common prefix covers at least half of the
 /// shorter one.
 ///

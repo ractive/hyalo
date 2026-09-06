@@ -757,26 +757,34 @@ pub struct LinkMatcher {
     /// Lowercased stem (filename without .md and path) → list of indices.
     /// Used for shortest-path: unique means unambiguous.
     stem_to_indices: HashMap<String, Vec<usize>>,
-    /// Minimum Jaro-Winkler stem score for a file to be considered a fuzzy
-    /// candidate at all (`--threshold`). Candidates that clear it are then
-    /// ranked by [`crate::link_score::candidate_confidence`].
+    /// Minimum Jaro-Winkler score, over [`link_score::gate_key`]-normalised
+    /// stems, for a file to be considered a fuzzy candidate at all
+    /// (`--threshold`). Candidates that clear it are then ranked by
+    /// [`crate::link_score::candidate_confidence`].
     threshold: f64,
     /// Site prefix stripped from site-absolute targets before matching, so a
     /// link written `/docs/a/b.md` is compared against the vault path
     /// `a/b.md` (iter-200).
     site_prefix: Option<String>,
-    /// Per-file filename stems (`.md` stripped), parallel to `files` —
-    /// precomputed at build so the fuzzy pass (and its iter-206 shortlist
-    /// cache) never re-derives them per broken link.
-    stems: Vec<String>,
+    /// Per-file filename stems (`.md` stripped) in the candidacy gate's normal
+    /// form ([`link_score::gate_key`]), parallel to `files` — precomputed at
+    /// build so the fuzzy pass (and its iter-206 shortlist cache) never
+    /// re-derives them per broken link.
+    ///
+    /// iter-280 (DEC-325) changed what is stored here from the raw stem to its
+    /// gate key. For a plain lowercase-hyphen slug the two are identical, so
+    /// the documentation corpora see the same strings — and the same shortlist
+    /// — as before; a camelCase or space-separated Obsidian note name now keys
+    /// the way [`link_score::basename_similarity`] reads it.
+    gate_stems: Vec<String>,
     /// Lazy threshold-gated fuzzy candidate shortlist per distinct target
-    /// stem (iter-206). The Jaro-Winkler candidacy gate over the whole vault
+    /// gate key (iter-206). The Jaro-Winkler candidacy gate over the whole vault
     /// is by far the dominant cost of `links fix` on link-heavy corpora
     /// (profiled at ~87% of samples in `find_match`: broken-link count ×
     /// vault-size calls to `strsim::jaro_winkler`). Broken targets repeat
     /// heavily across a vault (the same site-absolute URL appears in many
-    /// pages), so the gate is computed once per *distinct* target stem and
-    /// shared by every broken link with that stem. The per-link work that
+    /// pages), so the gate is computed once per *distinct* target gate key and
+    /// shared by every broken link with that key. The per-link work that
     /// remains — self-link filtering and `candidate_confidence` ranking over
     /// the shortlist — still runs per link because it depends on `source`.
     fuzzy_shortlists: RefCell<HashMap<String, Rc<Vec<usize>>>>,
@@ -828,12 +836,15 @@ impl LinkMatcher {
         let mut lower_to_idx = HashMap::with_capacity(files.len());
         let mut exact_to_idx = HashMap::with_capacity(files.len());
         let mut stem_to_indices: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut stems = Vec::with_capacity(files.len());
+        let mut gate_stems = Vec::with_capacity(files.len());
 
         for (i, f) in files.iter().enumerate() {
-            // Filename stem, precomputed for the fuzzy pass (iter-206).
+            // Filename stem in the candidacy gate's normal form, precomputed
+            // for the fuzzy pass (iter-206 shortlist, iter-280 normalisation).
             let fname0 = f.rsplit('/').next().unwrap_or(f.as_str());
-            stems.push(fname0.strip_suffix(".md").unwrap_or(fname0).to_string());
+            gate_stems.push(link_score::gate_key(
+                fname0.strip_suffix(".md").unwrap_or(fname0),
+            ));
             // Index by exact path, plus the extension-toggled form.
             exact_to_idx.entry(f.clone()).or_insert(i);
             let alt = if f.to_ascii_lowercase().ends_with(".md") {
@@ -870,7 +881,7 @@ impl LinkMatcher {
             stem_to_indices,
             threshold,
             site_prefix: site_prefix.map(std::string::ToString::to_string),
-            stems,
+            gate_stems,
             fuzzy_shortlists: RefCell::new(HashMap::new()),
         }
     }
@@ -892,30 +903,33 @@ impl LinkMatcher {
         strip_wikilink_md_suffix(source).eq_ignore_ascii_case(strip_wikilink_md_suffix(candidate))
     }
 
-    /// Threshold-gated fuzzy candidate indices for `target_stem` (iter-206).
+    /// Threshold-gated fuzzy candidate indices for `target_key` (iter-206).
     ///
-    /// Computes (once per distinct target stem, then cached) the indices of
-    /// every file whose stem clears `--threshold` under Jaro-Winkler. This is
-    /// the expensive full-vault pass; sharing it across the many broken links
+    /// Computes (once per distinct target gate key, then cached) the indices of
+    /// every file whose gate key clears `--threshold` under Jaro-Winkler. This
+    /// is the expensive full-vault pass; sharing it across the many broken links
     /// that share a target stem turns the O(broken × vault) gate into
-    /// O(distinct stems × vault).
-    fn fuzzy_shortlist(&self, target_stem: &str) -> Rc<Vec<usize>> {
-        if let Some(hit) = self.fuzzy_shortlists.borrow().get(target_stem) {
+    /// O(distinct keys × vault).
+    ///
+    /// iter-280 (DEC-325): both sides are [`link_score::gate_key`] normal forms
+    /// rather than raw stems. The cost is unchanged — one `jaro_winkler` per
+    /// file over strings precomputed at build — and the cache is if anything
+    /// *warmer*, because `MyNote` and `my-note` now share one entry.
+    fn fuzzy_shortlist(&self, target_key: &str) -> Rc<Vec<usize>> {
+        if let Some(hit) = self.fuzzy_shortlists.borrow().get(target_key) {
             return Rc::clone(hit);
         }
         let shortlist: Vec<usize> = self
-            .stems
+            .gate_stems
             .iter()
             .enumerate()
-            .filter(|(_, fstem)| {
-                strsim::jaro_winkler(target_stem, fstem.as_str()) >= self.threshold
-            })
+            .filter(|(_, fstem)| strsim::jaro_winkler(target_key, fstem.as_str()) >= self.threshold)
             .map(|(i, _)| i)
             .collect();
         let rc = Rc::new(shortlist);
         self.fuzzy_shortlists
             .borrow_mut()
-            .insert(target_stem.to_string(), Rc::clone(&rc));
+            .insert(target_key.to_string(), Rc::clone(&rc));
         rc
     }
 
@@ -1103,22 +1117,28 @@ impl LinkMatcher {
         // ambiguous. Since iter-212 the threshold is applied as a per-candidate
         // admission gate before scoring, so it can never enter either slot.
         //
-        // iter-212: candidacy is still gated by the raw Jaro-Winkler stem
-        // score against `--threshold` (unchanged semantics, and a cheap filter
-        // that keeps the composite scorer off the ~99% of the vault that could
-        // never win), but *ranking* and the reported confidence now come from
-        // [`candidate_confidence`], which weights the basename above the
-        // directory instead of rewarding a shared prefix.
-        // iter-206: the expensive full-vault Jaro-Winkler candidacy gate now
-        // runs once per *distinct* target stem (`fuzzy_shortlist` cache);
-        // this loop only ranks the survivors. Per-link semantics are
-        // unchanged: candidacy is still gated by the raw stem score against
-        // `--threshold`, and ranking/confidence still come from
-        // [`candidate_confidence`] (iter-212). The shortlist is *not*
-        // filtered for self-links here — self-link filtering depends on
-        // `source`, which the cache cannot see — so it is applied per link
-        // below, exactly as before.
-        let shortlist = self.fuzzy_shortlist(target_stem);
+        // iter-212: candidacy is gated by a cheap Jaro-Winkler stem score
+        // against `--threshold` (a filter that keeps the composite scorer off
+        // the ~99% of the vault that could never win), but *ranking* and the
+        // reported confidence come from [`candidate_confidence`], which weights
+        // the basename above the directory instead of rewarding a shared prefix.
+        // iter-206: that full-vault gate runs once per *distinct* target key
+        // (`fuzzy_shortlist` cache); this loop only ranks the survivors. The
+        // shortlist is *not* filtered for self-links here — self-link filtering
+        // depends on `source`, which the cache cannot see — so it is applied
+        // per link below.
+        //
+        // iter-280 (DEC-325): the gate compares [`link_score::gate_key`] normal
+        // forms — the tokens `basename_similarity` itself reads, joined by `-`
+        // — instead of the raw, case-sensitive stems. Otherwise the gate and the
+        // scorer disagreed about what a stem is: iter-279 taught the scorer that
+        // `MyLongNote` is `["my", "long", "note"]` and rates it 1.0 against
+        // `my-long-note`, but raw Jaro-Winkler put the pair at 0.53, so no
+        // camelCase/separator mismatch ever reached the scorer at the 0.8 floor.
+        // The gate is no cheaper and no dearer for it: still one `jaro_winkler`
+        // per file, over strings precomputed at build, and a plain
+        // lowercase-hyphen slug is its own key byte for byte.
+        let shortlist = self.fuzzy_shortlist(&link_score::gate_key(target_stem));
         let mut best_score = f64::NEG_INFINITY;
         let mut second_score = f64::NEG_INFINITY;
         let mut best_idx: Option<usize> = None;
