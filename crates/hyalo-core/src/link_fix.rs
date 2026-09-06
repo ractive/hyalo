@@ -2198,6 +2198,65 @@ mod tests {
         assert!(matches!(result.strategy, FixStrategy::FuzzyMatch));
     }
 
+    // --- iter-280 / DEC-325: the candidacy gate normalises the stem ---
+
+    #[test]
+    fn matcher_shortlists_across_camel_case_and_separators() {
+        // GATE-1: before iter-280 the candidacy gate was a raw, case-sensitive
+        // Jaro-Winkler over unsplit stems, so neither pair below ever reached
+        // the (camelCase-aware, DEC-324) composite scorer at the default 0.8
+        // fuzzy floor — `find_match` returned `None`.
+        for (target, file) in [
+            ("my-long-note", "MyLongNote.md"),
+            ("html-parser", "HTMLParser.md"),
+        ] {
+            assert!(
+                strsim::jaro_winkler(target, file.trim_end_matches(".md")) < 0.8,
+                "test premise: the raw gate must reject {target} vs {file}"
+            );
+            let matcher = LinkMatcher::new(make_files(&[file]), 0.8);
+            let result = matcher
+                .find_match(target, "__test__")
+                .unwrap_or_else(|| panic!("[[{target}]] must now shortlist {file}"));
+            assert_eq!(result.matched_file, file);
+            assert!(matches!(result.strategy, FixStrategy::FuzzyMatch));
+            assert!(
+                result.confidence >= 0.999,
+                "{target} -> {file} scored {}",
+                result.confidence
+            );
+        }
+    }
+
+    #[test]
+    fn matcher_gate_key_is_identity_for_plain_slugs() {
+        // The normalisation must be a no-op for a lowercase-hyphen slug, which
+        // is what keeps the gate byte-identical (same shortlist, same size, same
+        // cost) on the documentation corpora it was tuned on.
+        for stem in [
+            "actions-limits",
+            "getting-started",
+            "code-scanning",
+            "readme",
+            "279",
+        ] {
+            assert_eq!(link_score::gate_key(stem), stem);
+        }
+        // A stem with no alphanumerics at all keys to itself rather than to the
+        // empty string, so two unrelated punctuation-only names cannot collide
+        // at a perfect gate score.
+        assert_eq!(link_score::gate_key("-----"), "-----");
+        assert_eq!(link_score::gate_key(""), "");
+    }
+
+    #[test]
+    fn matcher_gate_normalisation_does_not_bypass_the_threshold() {
+        // Widening the gate is not the same as removing it: two genuinely
+        // different names still fail candidacy, camelCase or not.
+        let matcher = LinkMatcher::new(make_files(&["CompletelyUnrelated.md"]), 0.95);
+        assert!(matcher.find_match("xyz-abc-notexist", "__test__").is_none());
+    }
+
     #[test]
     fn matcher_two_genuine_ties_still_rejected() {
         // Guard: two real candidates scoring within TIE_DELTA of each other are
