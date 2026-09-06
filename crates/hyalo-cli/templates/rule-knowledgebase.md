@@ -402,7 +402,8 @@ Prefer `hyalo` CLI for operations on files in this directory:
   boundary), so `[[Cat]]` is a name missing a word rather than a typo. A token pair must clear
   the 0.85 floor on plain **Jaro** — Jaro-Winkler's shared-prefix bonus may sharpen a match but
   never create one, so `paulbricman` no longer matches `paultreanor` — unless one token is a
-  prefix of the other (`get` in `getting`). And a token left entirely unmatched costs its share
+  prefix of the other (`get` in `getting`; DEC-326 says how much of a prefix that takes). And a
+  token left entirely unmatched costs its share
   of the two names' characters, so `obsidian-floating-toc-plugin` against
   `obsidian-plugin-toc` falls from 0.857 to 0.694. The charge is the basename's alone: a
   directory reorganisation renames whole levels by design. Consequence to know: a basename that

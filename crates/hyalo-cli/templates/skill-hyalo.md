@@ -558,7 +558,8 @@ What follows is only what those pages do not say — the behaviour that surprise
   `[[Cat]]` is a name missing a word (0.867 → 0.481). A token pair clears the 0.85 floor on
   plain **Jaro**, not Jaro-Winkler — a shared given name or vendor prefix may sharpen a match
   but never create one, so `paulbricman` no longer matches `paultreanor` — unless one token is
-  a prefix of the other (`get` in `getting`, which still matches). And a token left entirely
+  a prefix of the other (`get` in `getting`, which still matches; see DEC-326 for how much of
+  a prefix that takes). And a token left entirely
   unmatched costs its share of the two names' characters, so `obsidian-floating-toc-plugin`
   against `obsidian-plugin-toc` falls 0.857 → 0.694. The character charge applies to the
   basename only: a directory reorganisation renames whole levels by design, and charging it

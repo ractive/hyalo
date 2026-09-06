@@ -218,16 +218,17 @@ pub fn gate_key(stem: &str) -> String {
     tokens.join("-")
 }
 
-/// How many times the shorter token's leftover the shared prefix must be
-/// worth for the two to count as one word (iter-281, DEC-326).
+/// How many times the shorter token's leftover the shared prefix must
+/// out-weigh for the two to count as one word (iter-281, DEC-326).
 ///
 /// Twice: the shared beginning has to *dominate* what is left of the shorter
-/// token, not merely tie with it. `referen` (7) against `ce` (2) dominates;
-/// `math` (4) against `pad` (3) is a tie.
+/// token. `referen` (7) against `ce` (2) dominates; `math` (4) against `pad`
+/// (3) does not, and neither does `excali` (6) against `bur` (3), which merely
+/// doubles it.
 const PREFIX_DOMINANCE: usize = 2;
 
-/// `true` when the two tokens' common prefix is at least
-/// [`PREFIX_DOMINANCE`] times what it leaves over of the shorter one.
+/// `true` when the two tokens' common prefix outweighs what it leaves over of
+/// the shorter one by more than a factor of [`PREFIX_DOMINANCE`].
 ///
 /// This is the question Jaro-Winkler's prefix bonus *should* ask and does not:
 /// Winkler credits a shared prefix up to four characters regardless of how much
@@ -271,16 +272,18 @@ const PREFIX_DOMINANCE: usize = 2;
 ///   `excalidraw`/`excalibur` are not. It tests a symptom of the relationship
 ///   rather than the relationship.
 ///
-/// The known limit: at exactly twice, `excalidraw`/`excalibur` (`excali` + 3)
-/// is admitted. It is the boundary case and it stays admitted deliberately —
-/// tightening to *more* than twice would drop `use`/`using` (`us` + `e`), a
-/// pair the exemption exists to keep.
+/// The comparison is strict — a prefix that exactly doubles its leftover has
+/// not dominated it — which is what separates `excalidraw` from `excalibur`
+/// (`excali`, 6, against `bur`, 3). Nothing real is lost at that boundary: an
+/// inflection leaves a leftover far smaller than that, and a pair too weak to
+/// clear [`TOKEN_MATCH_FLOOR`] on Jaro-**Winkler** — `use`/`using` among them,
+/// at 0.751 — never reaches this function in the first place.
 ///
 /// Both arguments come from [`tokenize`] and are already lowercase.
 fn shares_dominant_prefix(a: &str, b: &str) -> bool {
     let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     let shorter = a.chars().count().min(b.chars().count());
-    shorter > 0 && common >= PREFIX_DOMINANCE * (shorter - common)
+    shorter > 0 && common > PREFIX_DOMINANCE * (shorter - common)
 }
 
 /// Similarity of two slug tokens, `0.0` when they are not the same token.
@@ -792,6 +795,8 @@ mod tests {
         // And it is no longer enough.
         assert!(!shares_dominant_prefix("mathjax", "mathpad"));
         assert!(approx(token_similarity("mathjax", "mathpad"), 0.0));
+        // Two plugin names sharing six characters go the same way.
+        assert!(approx(token_similarity("excalidraw", "excalibur"), 0.0));
         // One token each, so the whole basename feature collapses with it and
         // `[[Mathjax]]` lands far under the apply floor rather than at 0.886.
         assert!(approx(basename_similarity("mathjax", "mathpad"), 0.0));
@@ -816,7 +821,6 @@ mod tests {
             ("managing", "manage"),
             ("enabling", "enable"),
             ("writing", "write"),
-            ("using", "use"),
             ("configuring", "configure"),
             ("referential", "reference"),
             ("documentation", "documenting"),
@@ -830,6 +834,8 @@ mod tests {
             ("mathjax", "mathpads"),
             ("paulbricman", "paultreanor"),
             ("managing", "management"),
+            // Exactly double is a tie, not dominance.
+            ("excalidraw", "excalibur"),
         ] {
             assert!(!shares_dominant_prefix(a, b), "{a} / {b}");
         }
@@ -837,10 +843,10 @@ mod tests {
         // to differ would have admitted this pair, because they do.
         assert_ne!("mathjax".len(), "mathpads".len());
         assert!(!shares_dominant_prefix("mathjax", "mathpads"));
-        // The documented boundary: exactly twice is admitted, and tightening
-        // past it would take `use`/`using` with it.
-        assert!(shares_dominant_prefix("excalidraw", "excalibur"));
-        assert!(shares_dominant_prefix("using", "use"));
+        // The strict boundary costs nothing real: a pair that weak never
+        // reaches the exemption, because Jaro-Winkler rejects it first.
+        assert!(strsim::jaro_winkler("using", "use") < TOKEN_MATCH_FLOOR);
+        assert!(approx(token_similarity("using", "use"), 0.0));
     }
 
     #[test]
