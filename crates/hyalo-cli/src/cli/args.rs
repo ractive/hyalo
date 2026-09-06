@@ -2924,7 +2924,9 @@ pub(crate) enum LinksAction {
                basename guess and is reported as the separate\n\
                basename-fallback strategy\n\
             4. Fuzzy match: a candidate must clear --threshold on the\n\
-               Jaro-Winkler similarity of the filename stem\n\n\
+               Jaro-Winkler similarity of the filename stem, compared after\n\
+               both stems are split into words (camelCase included) and\n\
+               rejoined with '-', so [[my-long-note]] does reach MyLongNote.md\n\n\
             Use --apply to write fixes to disk. Without --apply, only a dry-run report is printed.\n\n\
             CONFIDENCE: every low-confidence proposal carries a score in 0.0-1.0 that weights\n\
             the final path segment (the basename/slug) at 70% and the directory path at 30%.\n\
@@ -3016,8 +3018,12 @@ pub(crate) enum LinksAction {
         apply: bool,
         /// Minimum stem similarity (0.0–1.0) for a file to be a fuzzy candidate at all
         ///
-        /// Jaro-Winkler. Candidates that clear it are then scored and ranked by
-        /// confidence — see --min-confidence.
+        /// Jaro-Winkler over the two stems in word form: each is split on
+        /// separators AND at camelCase boundaries, lowercased and rejoined with
+        /// '-', so my-long-note and MyLongNote are the same string here and a
+        /// plain lowercase-hyphen slug is unchanged. Candidates that clear the
+        /// threshold are then scored and ranked by confidence — see
+        /// --min-confidence.
         #[arg(long, value_name = "N", default_value = "0.8", value_parser = parse_threshold)]
         threshold: f64,
         /// Apply low-confidence fixes too (excluded from --apply by default)

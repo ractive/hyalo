@@ -10,8 +10,9 @@
 //! 2. [`plan_fixes`] — for each broken link, find the best candidate file using
 //!    a priority-ordered strategy (case-insensitive → extension mismatch →
 //!    shortest-path → fuzzy) and produce a [`FixReport`]. Fuzzy candidacy is
-//!    gated by a Jaro-Winkler stem score, but the reported *confidence* comes
-//!    from [`crate::link_score::candidate_confidence`] (iter-212).
+//!    gated by a Jaro-Winkler score over [`crate::link_score::gate_key`]
+//!    normal forms (iter-280), but the reported *confidence* comes from
+//!    [`crate::link_score::candidate_confidence`] (iter-212).
 //!
 //! 3. [`apply_fixes`] — convert [`FixPlan`]s to [`RewritePlan`]s and write
 //!    the corrected link text back to disk.
@@ -742,8 +743,9 @@ fn alias_fix_target(target: &str, case_index: Option<&CaseInsensitiveIndex>) -> 
 /// 1. Case-insensitive exact match
 /// 2. Extension mismatch (`.md` present/absent)
 /// 3. Shortest-path (unique stem match anywhere in vault)
-/// 4. Fuzzy match — Jaro-Winkler on the filename stem decides *candidacy*
-///    (`--threshold`), [`crate::link_score::candidate_confidence`] decides
+/// 4. Fuzzy match — Jaro-Winkler on the filename stem, in
+///    [`crate::link_score::gate_key`] normal form, decides *candidacy*
+///    (`--threshold`); [`crate::link_score::candidate_confidence`] decides
 ///    ranking and the reported confidence.
 ///
 /// Build once, then call [`find_match`] for each broken link target.
@@ -1228,8 +1230,11 @@ impl LinkMatcher {
 /// the [`LinkMatcher`] priority-ordered strategy.
 ///
 /// `threshold` is the minimum Jaro-Winkler stem score (0.0–1.0) for a file to
-/// be considered a fuzzy candidate; the confidence attached to the winning
-/// candidate is [`crate::link_score::candidate_confidence`].
+/// be considered a fuzzy candidate — measured over
+/// [`crate::link_score::gate_key`] normal forms, so a camelCase or
+/// space-separated name is comparable with its slug spelling (iter-280); the
+/// confidence attached to the winning candidate is
+/// [`crate::link_score::candidate_confidence`].
 pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport {
     let mut fixes = Vec::new();
     let mut unfixable = Vec::new();
