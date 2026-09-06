@@ -174,12 +174,14 @@ command edits global Codex settings, installs packages, or changes approvals.
       in [[decision-log]] during implementation. Explain that vendored skills update
       when Hyalo is upgraded and init is rerun; linting is a skill instruction in
       this version, not Pi's automatic post-write hook.
-- [ ] Verify discovery and actual use in fresh Codex CLI and desktop sessions in
-      a scratch Git project, from its root and a nested directory. Test an ordinary
-      knowledgebase search prompt, explicit skill selection, a requested property
-      change followed by lint, and an audit-only tidy request. Inspect the commands
-      actually executed and the resulting diff. Record client versions and results;
-      leave an unavailable surface unchecked with a concrete follow-up.
+- [x] Verify actual use in a fresh Codex CLI session in a scratch Git project:
+      ordinary search from the root and a nested vault directory, explicit tidy
+      selection, a requested property change followed by lint, and an audit-only
+      request. Inspect executed commands and the resulting diff; record versions.
+- [ ] Repeat the live workflow in the separate Codex desktop app, including fresh
+      launches from the project root and a nested directory. Record the client
+      version, skill discovery, commands, and before/after diffs. Deferred with
+      the user's explicit acceptance of a partial merge on 2026-09-06.
 - [x] Run implementation gates: `cargo fmt`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, all `xtask check-*`, and `hyalo lint --strict`.
@@ -191,7 +193,7 @@ command edits global Codex settings, installs packages, or changes approvals.
 
 - [x] `hyalo init --codex` installs the documented project artifacts offline,
       without requiring Codex to be installed to generate them.
-- [ ] Fresh Codex sessions discover the skills and use the installed Hyalo CLI for
+- [x] Fresh Codex CLI sessions discover the skills and use the installed Hyalo CLI for
       representative knowledgebase work; versions and observed behaviour are recorded.
 - [x] Repeat init refreshes managed content without duplicate instruction blocks,
       preserves unrelated content, and uses the configured vault consistently.
@@ -201,7 +203,7 @@ command edits global Codex settings, installs packages, or changes approvals.
       external-vault operations leave the invoking checkout untouched.
 - [x] JSON init/deinit reports remain parseable and accurately name affected paths,
       actions, and any conflicts or discovery warnings.
-- [ ] Audit-only requests do not mutate notes; requested edits are followed by lint.
+- [x] Audit-only requests do not mutate notes; requested edits are followed by lint.
 - [x] Rust, drift, package-build, and documentation gates pass.
 
 ## Implementation results
@@ -213,7 +215,7 @@ managed removal, documentation, and CI drift checks are implemented.
 ### Automated checks
 
 - `cargo fmt`, strict workspace Clippy, and `cargo test --workspace -q` pass:
-  4,866 tests passed and two doctests were ignored. This includes all 2,150 CLI
+  4,868 tests passed and two doctests were ignored. This includes all 2,152 CLI
   end-to-end tests and the new Codex install/remove safety coverage.
 - All implemented `xtask check-*` gates pass: feature fanout, help drift, command
   reference, 14 bundled skills, 12 synchronized Codex assets, Pi package parity,
@@ -254,15 +256,43 @@ core and markdown-lint siblings. That build succeeded and its executable install
 the Codex integration successfully. No repository plugin path was used by the
 extracted build, confirming the embedded assets are self-contained.
 
-### Remaining live verification
+### Review fixes and live CLI verification
 
-Discovery is verified, but model-driven execution is not: no fresh model was asked
-to choose a skill, search, change a property and lint, or perform an audit-only
-tidy run. An attended desktop session was also not exercised. Keep the iteration
-in progress until those checks are performed in a scratch project, recording
-the desktop version, actual commands, and before/after file diffs. In particular,
-the audit-only and post-edit lint acceptance criteria remain unchecked; static
-skill instructions are not evidence that a model followed them.
+Independent local review and Copilot feedback led to two verified fixes: generated
+guidance now limits ancestor configuration discovery to the project root or inside
+the configured vault, and managed-file rewrites preserve Unix permission bits,
+including macOS set-ID bits. Regression tests cover both. Permission tests were
+run outside the outer sandbox, which otherwise strips set-ID fixture bits.
+
+An attended, fresh Codex CLI `0.153.4` session using `gpt-6-astra` ran in cmux
+against a committed scratch Git fixture on 2026-09-06. Project skills were generated
+by the reviewed implementation at `1607edc6`. The session read `AGENTS.md` and both
+installed skills, selected Hyalo for the ordinary search, and used the explicitly
+requested `$hyalo-tidy` for the audit. Most commands used the existing installed
+`hyalo 0.22.0 (625c5c19510d 2026-09-05)`; one configuration check used the current
+debug binary. This validates the new guidance with the installed compatible CLI.
+
+- `hyalo find --property status=planned --format text` from the root and
+  `notes/nested` returned the same single note. The fresh session launched at the
+  root and executed the nested query with a changed command CWD; this was not a
+  separate nested interactive launch.
+- `hyalo set planned.md --property status=in-progress` was followed by
+  `hyalo lint` and `hyalo lint planned.md`. Both reported zero errors and the
+  fixture's expected broken-link warning.
+- The audit ran `config`, `summary`, `lint`, `find --broken-links`, `find --orphan`,
+  `types list`, note reads, and status queries. It identified the intentional
+  `[[missing-reference]]` and orphan control note without repairing either.
+- A before/after file-hash comparison around the audit reported no changed files.
+  The final Git diff contained only the requested status replacement; the edited
+  note's body and the control note were unchanged. `git diff --check` passed.
+
+### Deferred desktop verification
+
+The separate Codex desktop-app workflow remains untested. On 2026-09-06 the user
+accepted deferring it and requested merging PR #331. Keep this iteration
+`in-progress`, with the desktop task above unchecked, until that follow-up is
+performed and its evidence recorded. The successful interactive CLI test in cmux
+does not stand in for a desktop-app test. Its temporary pane has been closed.
 
 ## Non-goals and follow-up
 
