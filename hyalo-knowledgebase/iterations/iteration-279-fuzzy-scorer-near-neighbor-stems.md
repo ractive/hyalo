@@ -90,9 +90,10 @@ of `link_score`, recorded as [[decision-log#DEC-324: near-neighbour stems are a 
    long the words are: that is five of six in `creat` (`create`/`creating`) but
    four of eleven in `paulbricman`/`paultreanor`. A shared given name buys a
    bonus, not token identity.
-3. **An unmatched token costs its character share.** `explained_mass` scales the
-   token F1 by the fraction of the two names' characters the pairing accounts
-   for, so a dropped *word* is not absorbed by a forgiving harmonic mean.
+3. **An unmatched token costs its character share.** The pairing's *explained
+   mass* scales the token F1 by the fraction of the two names' characters it
+   accounts for, so a dropped *word* is not absorbed by a forgiving harmonic
+   mean.
 
 Plus one correction to DEC-319: a winner scored an exact 1.0 is exempt from the
 contested-margin damping. camelCase tokenisation made this reachable —
@@ -117,7 +118,7 @@ MDN contributes nothing either way: all 14 375 of its files are `index.md`, so
 no basename ever clears the candidacy gate and it produces zero fuzzy proposals
 at any threshold. GitHub Docs — the corpus the scorer was built on in
 iteration 212 — was substituted as the third regression corpus and is what
-caught the one real mistake in this iteration (see below).
+caught both design mistakes in this iteration (see below).
 
 ### What the corpora caught
 

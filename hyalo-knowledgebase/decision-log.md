@@ -5958,8 +5958,8 @@ to tune and without lowering the floor:
    3), `creat` in `create`/`creating` (5 of 6). Gating on plain Jaro alone cost
    132 GitHub Docs fixes, because GitHub renamed a whole tree from `creating-…`
    and `managing-…` to `create-…` and `manage-…`.
-3. **Unmatched tokens cost their character share.** `explained_mass` scales the
-   token F1 by `1 −` the share of characters living in tokens left entirely
+3. **Unmatched tokens cost their character share.** The pairing's *explained
+   mass* scales the token F1 by `1 −` the share of characters living in tokens left entirely
    unmatched on either side. The F1 weights every token alike and its harmonic
    mean is forgiving when one side is fully covered, so
    `obsidian-floating-toc-plugin` / `obsidian-plugin-toc` scored 0.857 with
@@ -6027,6 +6027,6 @@ gate is a separate change with its own cost.
 
 **Where:** `crates/hyalo-core/src/link_score.rs` (`tokenize`,
 `push_camel_tokens`, `token_similarity`, `shares_dominant_prefix`,
-`explained_mass`, `scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
+`scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
 (`PERFECT_CONFIDENCE`), `crates/hyalo-cli/tests/e2e/iteration279_fuzzy_near_neighbours.rs`.
 See [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]].

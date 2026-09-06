@@ -29,9 +29,9 @@
 //!   [`TOKEN_MATCH_FLOOR`]; below it the token is unmatched and scores 0. The
 //!   floor is what stops Jaro's ~0.5–0.65 noise between unrelated English
 //!   words from masquerading as partial credit, while still absorbing typos
-//!   (`acions` ≈ `actions`). The F1 is then scaled by [`explained_mass`] so
-//!   that a whole *word* neither side accounts for costs in proportion to how
-//!   much of the name it is.
+//!   (`acions` ≈ `actions`). The F1 is then scaled by the pairing's
+//!   **explained mass**, so that a whole *word* neither side accounts for costs
+//!   in proportion to how much of the name it is.
 //!
 //! * **directory similarity** — three quarters shared *leading* components,
 //!   one quarter unordered token overlap. Generic levels (`how-tos`,
@@ -61,9 +61,11 @@
 //!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
 //!   opaque token that looks like a typo of the other.
 //! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
-//!   unless one token is a prefix of the other — a shared given name or vendor
-//!   prefix (`paulbricman` / `paultreanor`) must not buy token identity.
-//! * [`explained_mass`] charges for unmatched tokens by their character share,
+//!   unless their common prefix covers at least half the shorter token
+//!   ([`shares_dominant_prefix`]) — `creat` is five of six in `create`, but
+//!   `paul` is four of eleven in `paulbricman`, and a shared given name must
+//!   not buy token identity.
+//! * [`scored_token_f1`] charges for unmatched tokens by their character share,
 //!   so a dropped word (`obsidian-floating-toc-plugin` /
 //!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
 
@@ -243,7 +245,7 @@ fn best_token_match(token: &str, others: &[String]) -> f64 {
 /// `actions` is fully covered by `actions-limits` (recall 1.0) but only covers
 /// half of it (precision 0.5), giving 0.67 instead of 0.75.
 ///
-/// The result is then scaled by [`explained_mass`] (iter-279), which charges
+/// The result is then scaled by its explained mass (iter-279), which charges
 /// for whole tokens the pairing leaves unmatched in proportion to how much of
 /// the two names they are — 0.47 for that same `actions` / `actions-limits`
 /// pair, where `limits` is six of the twenty characters in play.
@@ -251,15 +253,28 @@ fn soft_token_f1(a: &[String], b: &[String]) -> f64 {
     scored_token_f1(a, b).0
 }
 
-/// [`soft_token_f1`] together with the [`explained_mass`] of the same pairing.
+/// [`soft_token_f1`] together with the pairing's **explained mass**: `1 −` the
+/// share of characters living in tokens left *entirely* unmatched, counted
+/// across both sides.
 ///
-/// The two are reported separately because only the *basename* charges for
-/// unmatched mass. A directory reorganisation renames whole levels by design —
-/// `dependabot/dependabot-alerts` → `concepts/supply-chain-security` is what a
-/// relocation *is* — so charging directory tokens by character share pushed
-/// 828 GitHub Docs fixes whose basename matched byte-for-byte below the apply
-/// floor. A dropped word in the *name* changes which document is meant; a
-/// dropped word in the *path* is the move being described.
+/// iter-279: the F1 weights every token alike and its harmonic mean is
+/// forgiving when one side is fully covered, so `obsidian-floating-toc-plugin`
+/// against `obsidian-plugin-toc` scored 0.857 — three of four tokens matched,
+/// recall a perfect 1.0 — even though the one unmatched token, `floating`, is
+/// the word that names the plugin and a third of the target's characters. A
+/// dropped or added *whole word* is not a near miss; weighting the residue by
+/// how much of the name it is lands that pair at 0.694, while leaving every
+/// pairing with no unmatched token — a typo, a punctuation change, a
+/// relocation — untouched at its full F1.
+///
+/// The two numbers are returned separately because only the *basename* charges
+/// for unmatched mass. A directory reorganisation renames whole levels by
+/// design — `dependabot/dependabot-alerts` → `concepts/supply-chain-security`
+/// is what a relocation *is* — and charging directory tokens by character
+/// share pushed 828 GitHub Docs fixes whose basename matched byte-for-byte
+/// below the apply floor. A dropped word in the *name* changes which document
+/// is meant; a dropped word in the *path* is the move being described.
+#[allow(clippy::cast_precision_loss)]
 fn scored_token_f1(a: &[String], b: &[String]) -> (f64, f64) {
     if a.is_empty() && b.is_empty() {
         return (1.0, 1.0);
@@ -267,47 +282,35 @@ fn scored_token_f1(a: &[String], b: &[String]) -> (f64, f64) {
     if a.is_empty() || b.is_empty() {
         return (0.0, 1.0);
     }
-    let scores_a: Vec<f64> = a.iter().map(|x| best_token_match(x, b)).collect();
-    let scores_b: Vec<f64> = b.iter().map(|x| best_token_match(x, a)).collect();
-    #[allow(clippy::cast_precision_loss)]
-    let mean = |xs: &[f64]| -> f64 { xs.iter().sum::<f64>() / xs.len() as f64 };
-    let precision = mean(&scores_a);
-    let recall = mean(&scores_b);
+    // One pass per side accumulates both the coverage mean and the character
+    // mass; this runs once per fuzzy candidate, so it holds no temporaries.
+    let mut unmatched_chars = 0usize;
+    let mut total_chars = 0usize;
+    let mut side = |xs: &[String], ys: &[String]| -> f64 {
+        let mut sum = 0.0;
+        for x in xs {
+            let score = best_token_match(x, ys);
+            sum += score;
+            let len = x.chars().count();
+            total_chars += len;
+            if score == 0.0 {
+                unmatched_chars += len;
+            }
+        }
+        sum / xs.len() as f64
+    };
+    let precision = side(a, b);
+    let recall = side(b, a);
     if precision + recall == 0.0 {
         return (0.0, 1.0);
     }
     let f1 = 2.0 * precision * recall / (precision + recall);
-    (f1, explained_mass(a, &scores_a, b, &scores_b))
-}
-
-/// Fraction of the two slugs' written substance that the pairing accounts for:
-/// `1 −` the share of characters living in tokens left *entirely* unmatched,
-/// counted across both sides.
-///
-/// iter-279: the token F1 weights every token alike and its harmonic mean is
-/// forgiving when one side is fully covered, so `obsidian-floating-toc-plugin`
-/// against `obsidian-plugin-toc` scored 0.857 — three of four tokens matched,
-/// recall a perfect 1.0 — even though the one unmatched token, `floating`, is
-/// the word that names the plugin and is a third of the target's characters.
-/// A dropped or added *whole word* is not a near miss; weighting the residue
-/// by how much of the name it actually is lands that pair at 0.694, below the
-/// apply floor, while leaving every pairing with no unmatched token — a typo,
-/// a punctuation change, a relocation — untouched at its full F1.
-#[allow(clippy::cast_precision_loss)]
-fn explained_mass(a: &[String], scores_a: &[f64], b: &[String], scores_b: &[f64]) -> f64 {
-    let mut unmatched = 0usize;
-    let mut total = 0usize;
-    for (token, score) in a.iter().zip(scores_a).chain(b.iter().zip(scores_b)) {
-        let len = token.chars().count();
-        total += len;
-        if *score == 0.0 {
-            unmatched += len;
-        }
-    }
-    if total == 0 {
-        return 1.0;
-    }
-    1.0 - unmatched as f64 / total as f64
+    let mass = if total_chars == 0 {
+        1.0
+    } else {
+        1.0 - unmatched_chars as f64 / total_chars as f64
+    };
+    (f1, mass)
 }
 
 /// Similarity of two filename stems in `[0.0, 1.0]`.
@@ -466,7 +469,7 @@ mod tests {
         // `actions-limits` vs `actions`: Jaro-Winkler alone says 0.9.
         let s = basename_similarity("actions-limits", "actions");
         assert!(s < 0.7, "expected the extra token to cost, got {s}");
-        // iter-279: the bound was 0.5 before `explained_mass` charged for the
+        // iter-279: the bound was 0.5 before the explained-mass charge counted the
         // unmatched `limits` by its six-of-twenty character share. Partial
         // credit for the token that *does* match still has to survive — this
         // pair must stay well clear of the near-zero band unrelated slugs land
@@ -661,23 +664,19 @@ mod tests {
 
     #[test]
     fn an_unmatched_token_costs_its_character_share() {
-        // Nothing unmatched: the pairing is untouched.
-        assert!(approx(
-            explained_mass(
-                &["a".into(), "bb".into()],
-                &[1.0, 0.9],
-                &["a".into(), "bb".into()],
-                &[1.0, 0.9]
-            ),
-            1.0
-        ));
+        // Nothing unmatched: the F1 is reported untouched.
+        let same = tokenize("alpha-beta");
+        let (f1, mass) = scored_token_f1(&same, &same);
+        assert!(approx(mass, 1.0), "got {mass}");
+        assert!(approx(f1, 1.0), "got {f1}");
         // `floating` is 8 of the 42 characters in play.
-        let a: Vec<String> = tokenize("obsidian-floating-toc-plugin");
-        let b: Vec<String> = tokenize("obsidian-plugin-toc");
-        let sa: Vec<f64> = a.iter().map(|t| best_token_match(t, &b)).collect();
-        let sb: Vec<f64> = b.iter().map(|t| best_token_match(t, &a)).collect();
-        let mass = explained_mass(&a, &sa, &b, &sb);
+        let a = tokenize("obsidian-floating-toc-plugin");
+        let b = tokenize("obsidian-plugin-toc");
+        let (f1, mass) = scored_token_f1(&a, &b);
         assert!((mass - (1.0 - 8.0 / 42.0)).abs() < 1e-9, "got {mass}");
+        // Which is what takes the pair from 0.857 to below the apply floor.
+        assert!((f1 - 6.0 / 7.0).abs() < 1e-9, "got {f1}");
+        assert!(f1 * mass < DEFAULT_FUZZY_MIN_CONFIDENCE);
     }
 
     #[test]
