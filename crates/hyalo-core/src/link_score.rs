@@ -175,12 +175,21 @@ fn push_camel_tokens(run: &str, out: &mut Vec<String>) {
     out.push(chars[start..].iter().collect::<String>().to_lowercase());
 }
 
-/// `true` when the shorter of the two tokens is a prefix of the longer one.
+/// `true` when the two tokens' common prefix covers at least half of the
+/// shorter one.
+///
+/// This is the question Jaro-Winkler's prefix bonus *should* ask and does not:
+/// Winkler credits a shared prefix up to four characters regardless of how much
+/// of the words that is. Four characters are the whole of `get` in `getting`
+/// and five are most of `create` in `creating` — real morphology — but they are
+/// barely a third of `paulbricman` and `paultreanor`, two different people.
+/// Measuring the prefix against the shorter token's length separates the two.
 ///
 /// Both arguments come from [`tokenize`] and are already lowercase.
-fn is_prefix_pair(a: &str, b: &str) -> bool {
-    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    !short.is_empty() && long.starts_with(short)
+fn shares_dominant_prefix(a: &str, b: &str) -> bool {
+    let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    let shorter = a.chars().count().min(b.chars().count());
+    shorter > 0 && common * 2 >= shorter
 }
 
 /// Similarity of two slug tokens, `0.0` when they are not the same token.
@@ -194,11 +203,15 @@ fn is_prefix_pair(a: &str, b: &str) -> bool {
 /// [`TOKEN_MATCH_FLOOR`]. So the bonus may *sharpen* a match but may not
 /// *create* one: the pair must clear the floor on plain Jaro.
 ///
-/// The one exception is a **prefix pair**, where the shorter token is wholly
-/// contained at the start of the longer one (`get` in `getting`). There the
-/// shared beginning is not a coincidence between two diverging words, it is
-/// all of one word, and the bonus is measuring the real relationship — this is
-/// the `getting`/`get` morphology [`TOKEN_MATCH_FLOOR`] was chosen to admit.
+/// The exception is a pair whose common prefix covers most of the shorter
+/// token ([`shares_dominant_prefix`]) — `get` in `getting`, `creat` in
+/// `create`/`creating`. There the shared beginning is not a coincidence between
+/// two diverging words, it is nearly all of one of them, and the bonus is
+/// measuring the real relationship: this is the morphology
+/// [`TOKEN_MATCH_FLOOR`] was chosen to admit, and documentation renames slugs
+/// that way constantly (GitHub Docs moved a whole tree from `creating-…` and
+/// `managing-…` to `create-…` and `manage-…`).
+///
 /// The reported score is Jaro-Winkler either way; only admission changes.
 fn token_similarity(a: &str, b: &str) -> f64 {
     if a == b {
@@ -208,7 +221,7 @@ fn token_similarity(a: &str, b: &str) -> f64 {
     if winkler < TOKEN_MATCH_FLOOR {
         return 0.0;
     }
-    let admitted = strsim::jaro(a, b) >= TOKEN_MATCH_FLOOR || is_prefix_pair(a, b);
+    let admitted = strsim::jaro(a, b) >= TOKEN_MATCH_FLOOR || shares_dominant_prefix(a, b);
     if admitted { winkler } else { 0.0 }
 }
 
@@ -622,9 +635,21 @@ mod tests {
         assert!(strsim::jaro_winkler("paulbricman", "paultreanor") >= TOKEN_MATCH_FLOOR);
         assert!(strsim::jaro("paulbricman", "paultreanor") < TOKEN_MATCH_FLOOR);
         assert!(approx(token_similarity("paulbricman", "paultreanor"), 0.0));
-        // A prefix pair is the exception: `get` is the whole of the shared
-        // beginning, which is the morphology TOKEN_MATCH_FLOOR admits.
+        // `paul` is four of eleven characters; Winkler credits it the same as
+        // it credits five of six in `creat`.
+        assert!(!shares_dominant_prefix("paulbricman", "paultreanor"));
+        // A dominant shared prefix is the exception — the morphology
+        // TOKEN_MATCH_FLOOR was chosen to admit, and the gerund-to-imperative
+        // slug rename documentation sites do wholesale.
         assert!(token_similarity("get", "getting") >= TOKEN_MATCH_FLOOR);
+        assert!(token_similarity("creating", "create") >= TOKEN_MATCH_FLOOR);
+        assert!(token_similarity("managing", "manage") >= TOKEN_MATCH_FLOOR);
+        assert!(token_similarity("running", "run") >= TOKEN_MATCH_FLOOR);
+        assert!(
+            basename_similarity("creating-a-composite-action", "create-a-composite-action")
+                >= DEFAULT_FUZZY_MIN_CONFIDENCE,
+            "GitHub Docs renamed a whole tree this way"
+        );
         assert!(
             basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE,
             "a morphological variant of one token must survive"

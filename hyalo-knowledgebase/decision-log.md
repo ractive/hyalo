@@ -5933,3 +5933,84 @@ shared runner. It stays an on-demand gate (DEC-098), not per-PR CI.
 **Where:** `crates/xtask/src/bench_scale.rs` (`FANOUT_BACKLINKS`,
 `median_mv_fanout`, `generate_fanout_vault`). See
 [[iterations/iteration-278-site-prefix-resolution-allocation]].
+
+## DEC-324: near-neighbour stems are a scorer problem, closed in the basename feature (2026-09-06)
+
+**Decision:** Three signals in `link_score`, all inside the *basename* feature,
+pull a wrong fuzzy candidate below the 0.8 apply floor without a new constant
+to tune and without lowering the floor:
+
+1. **camelCase tokenisation.** `tokenize` splits an alphanumeric run at its
+   case boundaries, so `CatMuse` → `["cat", "muse"]` and `HTMLParser` →
+   `["html", "parser"]`. An Obsidian vault names notes in prose case with no
+   separator, and to a separator-only tokeniser the whole note name is one
+   opaque token — `Cat` then reads as a *typo* of `CatMuse` (Jaro-Winkler
+   0.867) rather than a name missing a whole word.
+2. **Jaro admits, Winkler only sharpens.** `token_similarity` measures the
+   token floor against plain Jaro, not Jaro-Winkler, unless one token is a
+   prefix of the other. Winkler adds up to `0.4 · (1 − jaro)` for a shared
+   four-character prefix; that is credit for a shared beginning, not evidence
+   two words are the same word. `paulbricman` / `paultreanor` — two people who
+   share a given name — is 0.855 under Winkler and 0.758 under Jaro. The
+   prefix-pair exemption keeps the `get` / `getting` morphology
+   `TOKEN_MATCH_FLOOR` was chosen to admit.
+3. **Unmatched tokens cost their character share.** `explained_mass` scales the
+   token F1 by `1 −` the share of characters living in tokens left entirely
+   unmatched on either side. The F1 weights every token alike and its harmonic
+   mean is forgiving when one side is fully covered, so
+   `obsidian-floating-toc-plugin` / `obsidian-plugin-toc` scored 0.857 with
+   three of four tokens matched — even though the unmatched one, `floating`, is
+   the word that names the plugin.
+
+**And one correction to DEC-319:** a winner the scorer rates as an *exact*
+match (confidence 1.0) is exempt from the contested-margin damping. camelCase
+tokenisation made this reachable — on the Hub `[[Obsidian Publish.]]` still
+scores 1.0 against `Obsidian Publish.md`, but `ObsidianPublisher.md` rose from
+0.596 to 0.978, and damping a perfect match to 0.444 on the strength of a
+*worse* candidate is the opposite of what the margin is for. A genuine
+1.0-vs-1.0 tie is still declined by `TIE_DELTA`.
+
+**Why not the margin.** DEC-319 damps a winner that only just outran a rival.
+For these three the rival is absent or far away: no margin width reaches them
+without damping genuinely unique matches everywhere else. The *absolute* score
+was too generous, which is a scorer problem.
+
+**The mass charge is the basename's alone.** Applied to `directory_similarity`
+as well, it took **828** GitHub Docs fixes whose basename matched
+byte-for-byte below the floor — `/code-security/dependabot/dependabot-alerts/
+about-dependabot-alerts` → `code-security/concepts/supply-chain-security/
+about-dependabot-alerts.md` fell 0.808 → 0.789. A directory reorganisation
+renames whole levels by design; that *is* the move being described. A dropped
+word in the name changes which document is meant, a dropped word in the path
+does not.
+
+**Measured** (`links fix --dry-run`, all three corpora, before vs after):
+
+| corpus | fuzzy proposals | above floor | notes |
+|---|---|---|---|
+| Obsidian Hub | 18 → 14 | **4 → 1** | the 3 wrong ones closed, the 1 correct one kept at 1.0 |
+| GitHub Docs (`content/`) | 5 493 → 5 409 | 2 226 → 2 225 | 1 dropped, 0 gained |
+| MDN (`files/en-us`) | 0 → 0 | 0 → 0 | not a fuzzy corpus — all 14 375 files are `index.md`, so no basename ever clears the candidacy gate (DEC-321) |
+
+On the Hub the four above-floor proposals were `Obsidian Publish.` (correct,
+1.0) plus the three wrong ones; afterwards only the correct one is applicable.
+`[[Cat]]`'s winner moved from `CatMuse.md` (0.867) to `CattailNu.md` (0.481),
+`[[paulbricman]]` is no longer proposed at all, and
+`[[obsidian-floating-toc-plugin]]` fell to 0.694.
+
+**Known narrowing.** A basename that gains a whole word now scores below the
+floor: `decision-log` → `decision-log-archive` is 0.607, not 0.8. It is still
+reported in `fuzzy_fixes`; `--min-confidence 0.5` applies it. This is the
+intended trade — an added word is a different document — and it is what the one
+dropped GitHub Docs fix was.
+
+**Not done.** The fuzzy *candidacy* gate is still a case-sensitive
+Jaro-Winkler over raw stems, so `[[my-long-note]]` never shortlists
+`MyLongNote.md` even though the scorer now rates the pair 1.0. Widening that
+gate is a separate change with its own cost.
+
+**Where:** `crates/hyalo-core/src/link_score.rs` (`tokenize`,
+`push_camel_tokens`, `token_similarity`, `is_prefix_pair`, `explained_mass`,
+`scored_token_f1`), `crates/hyalo-core/src/link_fix.rs`
+(`PERFECT_CONFIDENCE`), `crates/hyalo-cli/tests/e2e/iteration279_fuzzy_near_neighbours.rs`.
+See [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]].
