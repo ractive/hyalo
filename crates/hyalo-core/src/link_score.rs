@@ -33,22 +33,6 @@
 //!   that a whole *word* neither side accounts for costs in proportion to how
 //!   much of the name it is.
 //!
-//! # Near-neighbour stems (iter-279, DEC-322)
-//!
-//! DEC-319's runner-up margin damps a fuzzy winner that only just outran a
-//! rival. It cannot touch a wrong candidate whose rivals are absent or far
-//! away — there the *absolute* score is simply too generous. Three signals in
-//! this module keep such a candidate below the apply floor:
-//!
-//! * [`tokenize`] splits camelCase, so an Obsidian note name missing a whole
-//!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
-//!   opaque token that looks like a typo of the other.
-//! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
-//!   unless one token is a prefix of the other — a shared given name or vendor
-//!   prefix (`paulbricman` / `paultreanor`) must not buy token identity.
-//! * [`explained_mass`] charges for unmatched tokens by their character share,
-//!   so a dropped word (`obsidian-floating-toc-plugin` /
-//!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
 //! * **directory similarity** — three quarters shared *leading* components,
 //!   one quarter unordered token overlap. Generic levels (`how-tos`,
 //!   `reference`) are shared by thousands of unrelated GitHub Docs pages, so
@@ -65,6 +49,23 @@
 //! substitution is reported but not written unless the user lowers the bar.
 //! A relocation one level away inside the same section
 //! (`a/b/c/page` → `a/b/d/page`) lands near 0.89 and is written.
+//!
+//! # Near-neighbour stems (iter-279, DEC-324)
+//!
+//! DEC-319's runner-up margin damps a fuzzy winner that only just outran a
+//! rival. It cannot touch a wrong candidate whose rivals are absent or far
+//! away — there the *absolute* score is simply too generous. Three signals in
+//! the basename feature keep such a candidate below the apply floor:
+//!
+//! * [`tokenize`] splits camelCase, so an Obsidian note name missing a whole
+//!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
+//!   opaque token that looks like a typo of the other.
+//! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
+//!   unless one token is a prefix of the other — a shared given name or vendor
+//!   prefix (`paulbricman` / `paultreanor`) must not buy token identity.
+//! * [`explained_mass`] charges for unmatched tokens by their character share,
+//!   so a dropped word (`obsidian-floating-toc-plugin` /
+//!   `obsidian-plugin-toc`) is not absorbed by a forgiving harmonic mean.
 
 use std::collections::HashSet;
 
@@ -438,7 +439,12 @@ mod tests {
         // `actions-limits` vs `actions`: Jaro-Winkler alone says 0.9.
         let s = basename_similarity("actions-limits", "actions");
         assert!(s < 0.7, "expected the extra token to cost, got {s}");
-        assert!(s > 0.5, "one of two tokens still matches, got {s}");
+        // iter-279: the bound was 0.5 before `explained_mass` charged for the
+        // unmatched `limits` by its six-of-twenty character share. Partial
+        // credit for the token that *does* match still has to survive — this
+        // pair must stay well clear of the near-zero band unrelated slugs land
+        // in (0.089 for `actions-minute-multipliers` / `actions-built-in-queries`).
+        assert!(s > 0.4, "one of two tokens still matches, got {s}");
         assert!(strsim::jaro_winkler("actions-limits", "actions") > 0.85);
     }
 
@@ -537,6 +543,96 @@ mod tests {
             c >= DEFAULT_FUZZY_MIN_CONFIDENCE,
             "a same-directory typo is the legitimate fuzzy case, got {c}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // iter-279 / DEC-322 — near-neighbour stems
+    // -----------------------------------------------------------------
+
+    /// The three wrong above-floor proposals DEC-319's runner-up margin could
+    /// not reach, verbatim from the post-274 dogfood of the Obsidian Hub with
+    /// their measured pre-iter-279 confidences. All three are bare wikilinks,
+    /// so the basename carries the whole score.
+    #[test]
+    fn near_neighbour_stems_fall_below_the_apply_floor() {
+        for (target, candidate, was) in [
+            ("Cat", "CatMuse.md", 0.867),
+            ("paulbricman", "paultreanor.md", 0.855),
+            (
+                "obsidian-floating-toc-plugin",
+                "obsidian-plugin-toc.md",
+                0.857,
+            ),
+        ] {
+            let c = candidate_confidence(target, candidate);
+            assert!(
+                c < DEFAULT_FUZZY_MIN_CONFIDENCE,
+                "[[{target}]] -> {candidate} was {was}, still {c}"
+            );
+        }
+    }
+
+    /// The counterpart the same dogfood named as correct: it must keep its
+    /// perfect score, not merely stay above the floor.
+    #[test]
+    fn the_real_match_keeps_its_confidence() {
+        let c = candidate_confidence("Obsidian Publish.", "Obsidian Publish.md");
+        assert!(approx(c, 1.0), "got {c}");
+    }
+
+    #[test]
+    fn camel_case_runs_split_into_words() {
+        assert_eq!(tokenize("CatMuse"), vec!["cat", "muse"]);
+        assert_eq!(tokenize("HTMLParser"), vec!["html", "parser"]);
+        // No case transition: the run stays whole, so an all-lowercase or an
+        // all-uppercase name is tokenised exactly as before.
+        assert_eq!(tokenize("catmuse"), vec!["catmuse"]);
+        assert_eq!(tokenize("README"), vec!["readme"]);
+        assert_eq!(tokenize("obsidian-plugin-toc"), vec![
+            "obsidian", "plugin", "toc"
+        ]);
+        // The split makes the two naming conventions comparable.
+        assert!(approx(basename_similarity("MyNote", "my-note"), 1.0));
+    }
+
+    #[test]
+    fn winkler_may_sharpen_a_token_match_but_not_create_one() {
+        // Two different people sharing a given name: Jaro-Winkler clears the
+        // floor only because of the four-character `paul` prefix.
+        assert!(strsim::jaro_winkler("paulbricman", "paultreanor") >= TOKEN_MATCH_FLOOR);
+        assert!(strsim::jaro("paulbricman", "paultreanor") < TOKEN_MATCH_FLOOR);
+        assert!(approx(token_similarity("paulbricman", "paultreanor"), 0.0));
+        // A prefix pair is the exception: `get` is the whole of the shared
+        // beginning, which is the morphology TOKEN_MATCH_FLOOR admits.
+        assert!(token_similarity("get", "getting") >= TOKEN_MATCH_FLOOR);
+        assert!(
+            basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE,
+            "a morphological variant of one token must survive"
+        );
+        // A typo is admitted on plain Jaro, with no help from the prefix.
+        assert!(token_similarity("acions", "actions") > 0.9);
+        assert!(token_similarity("xctions", "actions") > 0.85);
+    }
+
+    #[test]
+    fn an_unmatched_token_costs_its_character_share() {
+        // Nothing unmatched: the pairing is untouched.
+        assert!(approx(
+            explained_mass(
+                &["a".into(), "bb".into()],
+                &[1.0, 0.9],
+                &["a".into(), "bb".into()],
+                &[1.0, 0.9]
+            ),
+            1.0
+        ));
+        // `floating` is 8 of the 42 characters in play.
+        let a: Vec<String> = tokenize("obsidian-floating-toc-plugin");
+        let b: Vec<String> = tokenize("obsidian-plugin-toc");
+        let sa: Vec<f64> = a.iter().map(|t| best_token_match(t, &b)).collect();
+        let sb: Vec<f64> = b.iter().map(|t| best_token_match(t, &a)).collect();
+        let mass = explained_mass(&a, &sa, &b, &sb);
+        assert!((mass - (1.0 - 8.0 / 42.0)).abs() < 1e-9, "got {mass}");
     }
 
     #[test]

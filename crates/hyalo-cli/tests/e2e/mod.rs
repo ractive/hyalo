@@ -57,6 +57,7 @@ mod iteration275_alias_and_mv_guards;
 mod iteration276_autofix_config_index_honesty;
 mod iteration277_graph_parity_and_write_perf;
 mod iteration278_literal_probe_from_index;
+mod iteration279_fuzzy_near_neighbours;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;
