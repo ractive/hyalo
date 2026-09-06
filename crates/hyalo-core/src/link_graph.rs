@@ -1663,6 +1663,50 @@ mod tests {
     }
 
     #[test]
+    fn strip_site_prefix_ref_agrees_with_the_owning_form() {
+        // iter-278 (ALLOC-2): the borrowing form replaced a `format!` per
+        // call, including the byte-boundary guard that `format!` + `get(..n)`
+        // used to provide. Pin the two against each other over every shape
+        // that guard exists for.
+        let targets = [
+            "/en-US/docs/Web/CSS/page",
+            "/EN-us/docs/page.md",
+            "/en-USdocs/page.md",
+            "/en-US",
+            "/en-US/",
+            "/docs/page.md",
+            "relative/page.md",
+            "/",
+            "/é/page.md",
+            "/éx/page.md",
+            "/ünïcode/page.md",
+        ];
+        let prefixes = [None, Some(""), Some("en-US"), Some("docs"), Some("é")];
+        for target in targets {
+            for prefix in prefixes {
+                assert_eq!(
+                    strip_site_prefix_ref(target, prefix),
+                    strip_site_prefix(target, prefix).as_str(),
+                    "borrowed and owning strip disagree on {target:?} with prefix {prefix:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn strip_site_prefix_needs_a_whole_segment() {
+        // A prefix that is only a leading substring of the first segment must
+        // not strip: `/en-USdocs/x` is not under `en-US`.
+        assert_eq!(
+            strip_site_prefix_ref("/en-USdocs/page.md", Some("en-US")),
+            "en-USdocs/page.md"
+        );
+        // …and an exact segment with nothing after it strips to empty, as the
+        // owning form has always done.
+        assert_eq!(strip_site_prefix_ref("/en-US/", Some("en-US")), "");
+    }
+
+    #[test]
     fn okf_bundle_absolute_link_resolves_from_root() {
         // OKF spec §5: `/tables/customers.md` is bundle-root-relative. With
         // site_prefix = None (the effective value an OKF vault gets from

@@ -3597,6 +3597,170 @@ mod tests {
         }
     }
 
+    // --- iter-278: the literal probe answered from a complete index ---
+
+    /// Every spelling this vault can be linked by, run through both the
+    /// filesystem probe and the index-backed one.
+    ///
+    /// This is the invariant the whole iteration rests on: `classify_link` now
+    /// asks the index the question it used to ask the filesystem, and the two
+    /// must never disagree — on a case-folding volume (macOS, Windows) or a
+    /// case-sensitive one (Linux) alike, which is why the expectations are
+    /// written as "same as disk" rather than as literals.
+    fn assert_literal_probe_matches_disk(
+        canonical: &Path,
+        idx: &CaseInsensitiveIndex,
+        site_prefix: Option<&str>,
+        targets: &[&str],
+    ) {
+        for target in targets {
+            let from_disk = resolve_target(canonical, target, site_prefix, None);
+            let from_index = resolve_target_literal(canonical, target, site_prefix, Some(idx));
+            assert_eq!(
+                from_index, from_disk,
+                "literal probe for {target:?} must match the filesystem's answer"
+            );
+        }
+    }
+
+    fn complete_index(paths: &[&str]) -> CaseInsensitiveIndex {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        for path in paths {
+            idx.insert(path);
+        }
+        idx.set_complete(true);
+        idx
+    }
+
+    #[test]
+    fn literal_probe_from_complete_index_matches_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = ["Sub/Note.md", "foo/index.md", "plain.md"];
+        make_files(tmp.path(), &files);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let idx = complete_index(&files);
+        assert_literal_probe_matches_disk(
+            &canonical,
+            &idx,
+            None,
+            &[
+                // exact spellings
+                "Sub/Note.md",
+                "Sub/Note",
+                "plain.md",
+                "plain",
+                "foo",
+                "foo/",
+                "foo/index.md",
+                // case-differing spellings — the answer depends on the volume,
+                // and both probes must depend on it the same way
+                "sub/note.md",
+                "sub/note",
+                "SUB/NOTE.MD",
+                "FOO/",
+                // absent
+                "missing.md",
+                "missing",
+                "Sub/Missing",
+            ],
+        );
+    }
+
+    #[test]
+    fn literal_probe_matches_disk_with_site_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = ["guide/index.md", "Web/CSS/page.md"];
+        make_files(tmp.path(), &files);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let idx = complete_index(&files);
+        assert_literal_probe_matches_disk(
+            &canonical,
+            &idx,
+            Some("docs"),
+            &[
+                "/docs/guide",
+                "/docs/guide/",
+                "/docs/Web/CSS/page.md",
+                "/docs/web/css/page",
+                "/guide",
+                "/docs/missing",
+                // a prefix that only shares a leading substring must not strip
+                "/docsy/guide",
+            ],
+        );
+    }
+
+    #[test]
+    fn literal_probe_reports_the_written_spelling_never_the_canonical_one() {
+        // The whole point of the literal probe: it answers "is this link
+        // already correct as written?", so it must not canonicalize casing the
+        // way `resolve_target` with a `case_index` does. `classify_link`
+        // compares the two answers to decide whether a link is a case
+        // mismatch, and would call every link correct if this one folded.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["Sub/Note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let idx = complete_index(&["Sub/Note.md"]);
+        assert_eq!(
+            resolve_target_literal(&canonical, "Sub/Note.md", None, Some(&idx)),
+            Some("Sub/Note.md".to_owned())
+        );
+        assert_eq!(
+            resolve_target(&canonical, "sub/note.md", None, Some(&idx)),
+            Some("Sub/Note.md".to_owned()),
+            "the canonicalizing probe still reports the on-disk spelling"
+        );
+    }
+
+    #[test]
+    fn literal_probe_without_a_complete_index_still_uses_the_filesystem() {
+        // A `--file`-scoped index proves nothing about the rest of the vault,
+        // so the probe must fall back to disk rather than call the unseen file
+        // absent.
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["a.md", "b.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut partial = CaseInsensitiveIndex::new();
+        partial.set_case_insensitive_paths(true);
+        partial.insert("a.md");
+        assert!(!partial.is_complete());
+        assert_eq!(
+            resolve_target_literal(&canonical, "b.md", None, Some(&partial)),
+            Some("b.md".to_owned()),
+            "an incomplete index must not turn an existing file into a miss"
+        );
+        assert_eq!(
+            resolve_target_literal(&canonical, "c.md", None, Some(&partial)),
+            None
+        );
+        assert_eq!(
+            resolve_target_literal(&canonical, "a.md", None, None),
+            Some("a.md".to_owned()),
+            "no index at all is the pre-iter-278 path"
+        );
+    }
+
+    #[test]
+    fn literal_probe_never_reaches_stems_or_aliases() {
+        // `resolve_target(.., None)` never consulted the stem or alias maps,
+        // and neither may the index-backed form: a bare `[[note]]` living in a
+        // subfolder is *not* "already correct as written".
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &["sub/note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = complete_index(&["sub/note.md"]);
+        idx.insert_aliases("sub/note.md", ["nickname"]);
+        assert_eq!(
+            resolve_target_literal(&canonical, "note", None, Some(&idx)),
+            None
+        );
+        assert_eq!(
+            resolve_target_literal(&canonical, "nickname", None, Some(&idx)),
+            None
+        );
+    }
+
     // --- iter-203: directory targets resolve to <target>/index.md ---
 
     #[test]

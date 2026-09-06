@@ -781,6 +781,46 @@ pub fn links_case_insensitive(mode: CaseInsensitiveMode) -> bool {
 mod tests {
     use super::*;
 
+    // ---- fold_key (iter-278) ----
+
+    #[test]
+    fn fold_key_borrows_a_key_that_is_already_folded() {
+        assert!(matches!(
+            fold_key("web/css/page.md"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            fold_key("Web/CSS/page.md"),
+            std::borrow::Cow::Owned(_)
+        ));
+        // Non-ASCII is left alone either way — the map is keyed by
+        // `to_ascii_lowercase`, so folding must stop where that one does.
+        assert_eq!(fold_key("Ünï/Côde.md"), "Ünï/Côde.md".to_ascii_lowercase());
+        for s in ["", "a", "A", "ß", "9/9", "Web/CSS", "web/css"] {
+            assert_eq!(
+                fold_key(s).as_ref(),
+                s.to_ascii_lowercase(),
+                "fold_key must equal to_ascii_lowercase for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn folded_lookups_match_their_allocating_siblings() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.insert("Sub/Note.md");
+        for probe in ["Sub/Note.md", "sub/note.md", "SUB/NOTE.MD", "other.md"] {
+            let folded = fold_key(probe);
+            assert_eq!(
+                idx.contains_path_folded(&folded, probe),
+                idx.contains_path(probe)
+            );
+            assert_eq!(idx.lookup_unique_folded(&folded), idx.lookup_unique(probe));
+            assert_eq!(idx.has_any_case_folded(&folded), idx.has_any_case(probe));
+        }
+    }
+
     // ---- CaseInsensitiveIndex ----
 
     #[test]
