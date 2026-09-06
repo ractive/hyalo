@@ -76,6 +76,13 @@ remains required. Both 285 and the full 286 prerequisite remain required; npm pu
 real-platform verification, and the external consumer migration are not completed by
 repository-only work in this batch.
 
+## Plan reconciliation — 2026-09-07, iteration 283
+
+Ranked `find` now returns up to three existing `ContentMatch` objects per result, ordered by
+distinct-token coverage then line number; title-only and cross-line phrase hits can have an
+empty array. Include these cases in the typed `find` contract fixtures. The generated shape
+and the full 285/286 prerequisites remain unchanged.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — decision record

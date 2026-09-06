@@ -2,6 +2,65 @@ use super::*;
 use hyalo_core::index::{ScanOptions, ScannedIndex};
 use std::fs;
 
+#[test]
+fn ranked_snippets_read_only_results_after_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    for name in ["a.md", "b.md"] {
+        fs::write(tmp.path().join(name), "# Guide\nrust\n").unwrap();
+    }
+    let pairs = ["a.md", "b.md"].map(|name| (tmp.path().join(name), name.to_owned()));
+    let build = ScannedIndex::build(
+        &pairs,
+        None,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: true,
+            default_language: None,
+            frontmatter_link_props: None,
+        },
+    )
+    .unwrap();
+    // Keep the already-built token cache, but make non-selected body reads fail.
+    fs::remove_file(tmp.path().join("b.md")).unwrap();
+    let run = |limit| {
+        find(
+            &build.index,
+            tmp.path(),
+            None,
+            Some("rust"),
+            None,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            &[],
+            &Fields::default(),
+            Some(&SortField::File),
+            false,
+            Some(limit),
+            false,
+            false,
+            false,
+            None,
+            Format::Json,
+            None,
+            None,
+            None,
+        )
+    };
+    let json: serde_json::Value = serde_json::from_str(&unwrap_success(run(1).unwrap())).unwrap();
+    assert_eq!(json[0]["file"], "a.md");
+    assert_eq!(json[0]["matches"][0]["line"], 2);
+    fs::remove_file(tmp.path().join("a.md")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&unwrap_success(run(0).unwrap())).unwrap();
+    assert_eq!(json, serde_json::json!([]));
+    assert!(
+        run(1).is_err(),
+        "a selected missing body must actually be read"
+    );
+}
+
 /// Build a `ScannedIndex` from `dir` and call `find`.
 /// Mirrors the old disk-scan helper signature used in pre-Phase-5 tests.
 #[allow(clippy::too_many_arguments)]
@@ -1728,7 +1787,7 @@ fn content_search_works_with_frontmatter_only_index() {
     let arr = parsed.as_array().unwrap();
     assert_eq!(arr.len(), 1, "should find beta.md via BM25 content search");
     assert!(arr[0]["file"].as_str().unwrap().contains("beta"));
-    // BM25 search produces a relevance score (no line-level matches)
+    // BM25 search produces both a relevance score and body snippets.
     let score = arr[0]["score"].as_f64();
     assert!(
         score.is_some(),

@@ -715,104 +715,69 @@ pub fn read_line_capped<R: BufRead>(
     buf: &mut String,
     limit: usize,
 ) -> std::io::Result<(usize, LineOutcome)> {
-    let mut total = 0usize;
-    loop {
-        // Inspect the internal buffer to find a newline and measure how many
-        // bytes are available.  We extract the indices we need *before*
-        // releasing the borrow so that we can then call `consume`.
-        let (newline_pos, chunk_len) = loop {
+    // A BufRead chunk may end inside a UTF-8 codepoint. Reuse the caller's
+    // allocation as bounded raw bytes, then validate the complete retained
+    // line, never individual I/O chunks. Only a terminating LF may exceed
+    // the content-byte quota.
+    let mut bytes = std::mem::take(buf).into_bytes();
+    let mut total = 0;
+    let truncated = loop {
+        let available = loop {
             match reader.fill_buf() {
-                Ok([]) => return Ok((total, LineOutcome::Complete)),
-                Ok(b) => {
-                    let nl = b.iter().position(|&byte| byte == b'\n');
-                    let len = b.len();
-                    break (nl, len);
-                }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-
-                Err(e) => return Err(e),
+                result => break result?,
             }
         };
-
-        // How many bytes we will consume from the reader this iteration.
-        let consume = match newline_pos {
-            Some(pos) => pos + 1, // include the '\n'
-            None => chunk_len,
-        };
-
-        if buf.len() >= limit {
-            // Quota was exactly filled by a previous iteration. If the very
-            // next byte is the newline (`pos == 0`), the line's content is
-            // exactly `limit` bytes — nothing was actually discarded, so this
-            // is not a truncation, just a line landing on the boundary.
-            if newline_pos == Some(0) {
-                reader.consume(1);
-                total += 1;
-                // Keep parity with the other complete paths, which
-                // include the terminating newline in `buf`.
-                buf.push('\n');
-                return Ok((total, LineOutcome::Complete));
-            }
-            // Otherwise there is more line content beyond the quota — drain it.
-            reader.consume(consume);
-            total += consume;
-            if newline_pos.is_some() {
-                return Ok((total, LineOutcome::Truncated));
-            }
-            drain_until_newline(reader)?;
-            return Ok((total, LineOutcome::Truncated));
+        if available.is_empty() {
+            break false;
         }
-
-        // Within quota: copy up to `to_copy` bytes into a temporary Vec so we
-        // can release the `fill_buf` borrow before calling `consume`.
-        let remaining_quota = limit - buf.len();
-        let to_copy = consume.min(remaining_quota);
-
-        // Copy the bytes out while the immutable borrow is still live.
-        let chunk: Vec<u8> = {
-            let available = reader.fill_buf()?;
-            available[..to_copy].to_vec()
-        };
-        // Now release the borrow and advance the reader.
+        let newline = available.iter().position(|&byte| byte == b'\n');
+        let content_len = newline.unwrap_or(available.len());
+        let consume = newline.map_or(available.len(), |pos| pos + 1);
+        let copied = content_len.min(limit.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&available[..copied]);
+        let truncated = copied < content_len;
+        if newline.is_some() && !truncated {
+            bytes.push(b'\n');
+        }
         reader.consume(consume);
         total += consume;
-
-        // Validate UTF-8; invalid bytes are a distinct skip cause so callers
-        // can report the real problem (F-5, iter-246) instead of blaming the
-        // byte limit.
-        if let Ok(s) = std::str::from_utf8(&chunk) {
-            buf.push_str(s);
-        } else {
-            if newline_pos.is_none() {
-                drain_until_newline(reader)?;
-            }
-            return Ok((total, LineOutcome::InvalidUtf8));
-        }
-
-        let truncated = to_copy < consume;
-        if newline_pos.is_some() {
-            // The newline was within the consumed range — line is complete.
-            // If quota was hit before the newline, we already consumed past it,
-            // so no further draining is needed.
-            return Ok((
-                total,
-                if truncated {
-                    LineOutcome::Truncated
-                } else {
-                    LineOutcome::Complete
-                },
-            ));
-        }
         if truncated {
-            // Quota hit on a chunk with no newline — drain the rest of the line.
-            drain_until_newline(reader)?;
-            return Ok((total, LineOutcome::Truncated));
+            if newline.is_none() {
+                total += drain_until_newline(reader)?;
+            }
+            break true;
         }
-    }
+        if newline.is_some() {
+            break false;
+        }
+    };
+    let outcome = match String::from_utf8(bytes) {
+        Ok(line) => {
+            *buf = line;
+            if truncated {
+                LineOutcome::Truncated
+            } else {
+                LineOutcome::Complete
+            }
+        }
+        Err(error) => {
+            // A quota can cut a valid codepoint. An incomplete final sequence
+            // then means truncation; definitively invalid bytes before the
+            // quota still retain their distinct InvalidUtf8 diagnosis.
+            if truncated && error.utf8_error().error_len().is_none() {
+                LineOutcome::Truncated
+            } else {
+                LineOutcome::InvalidUtf8
+            }
+        }
+    };
+    Ok((total, outcome))
 }
 
 /// Consume bytes from `reader` until (and including) a `\n`, or until EOF.
-fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
+fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<usize> {
+    let mut total = 0;
     loop {
         let available = match reader.fill_buf() {
             Ok(b) => b,
@@ -820,14 +785,15 @@ fn drain_until_newline<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
             Err(e) => return Err(e),
         };
         if available.is_empty() {
-            return Ok(());
+            return Ok(total);
         }
         if let Some(pos) = available.iter().position(|&b| b == b'\n') {
             reader.consume(pos + 1);
-            return Ok(());
+            return Ok(total + pos + 1);
         }
         let n = available.len();
         reader.consume(n);
+        total += n;
     }
 }
 
@@ -1973,6 +1939,62 @@ code only
             "subsequent line must be read normally"
         );
         assert_eq!(buf, "next\n");
+    }
+
+    #[test]
+    fn read_line_capped_utf8_is_independent_of_buffer_boundaries() {
+        for text in ["é", "日本語", "🦀"] {
+            for capacity in 1..=9 {
+                for padding in 0..=9 {
+                    for ending in ["", "\n", "\r\n"] {
+                        let input = format!("{}{text}{ending}", "a".repeat(padding));
+                        let mut reader =
+                            std::io::BufReader::with_capacity(capacity, input.as_bytes());
+                        let mut buf = String::new();
+                        let (n, outcome) = read_line_capped(&mut reader, &mut buf, 128).unwrap();
+                        assert_eq!(outcome, LineOutcome::Complete, "{capacity}, {input:?}");
+                        assert_eq!(n, input.len());
+                        assert_eq!(buf, input);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_line_capped_unicode_quota_and_incomplete_eof() {
+        for capacity in 1..=16 {
+            for limit in 0..=8 {
+                let input = "a日本\nnext\n";
+                let mut reader = std::io::BufReader::with_capacity(capacity, input.as_bytes());
+                let mut buf = String::new();
+                let (n, outcome) = read_line_capped(&mut reader, &mut buf, limit).unwrap();
+                assert_eq!(n, "a日本\n".len());
+                assert_eq!(
+                    outcome,
+                    if limit < 7 {
+                        LineOutcome::Truncated
+                    } else {
+                        LineOutcome::Complete
+                    }
+                );
+                assert!(buf.len() <= limit + 1);
+                buf.clear();
+                assert_eq!(
+                    read_line_capped(&mut reader, &mut buf, 32).unwrap().1,
+                    LineOutcome::Complete
+                );
+                assert_eq!(buf, "next\n");
+            }
+            for input in [&b"bad \xe6\x97"[..], &b"bad \xffrest\nnext\n"[..]] {
+                let mut reader = std::io::BufReader::with_capacity(capacity, input);
+                let mut buf = String::new();
+                assert_eq!(
+                    read_line_capped(&mut reader, &mut buf, 128).unwrap().1,
+                    LineOutcome::InvalidUtf8
+                );
+            }
+        }
     }
 
     #[test]

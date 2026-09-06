@@ -36,6 +36,14 @@ The positional argument to `find` triggers BM25 ranked full-text search with aut
 stemming ("running" matches "run", "runner", etc.). Results are sorted by relevance score
 by default (unless `--sort` is specified).
 
+Each ranked result includes `score` and `matches`: up to 3 body snippets with
+`{line, section, text}`, ordered by distinct query tokens then line number. Tokens use
+the same stemming/CJK rules as ranking; quoted phrases must be consecutive on one line,
+and OR accepts either side. `--section` scopes snippets. Frontmatter is excluded;
+title-only hits and phrases spanning lines can have `matches: []`. Text mode prints
+the same line/section context as regex. Indexed queries read only final selected files
+after `--limit` to recover original snippet text.
+
 ```bash
 hyalo find "rust"                        # single term, stemmed
 hyalo find "rust programming"            # AND: both terms required (implicit)

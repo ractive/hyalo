@@ -79,8 +79,15 @@ existing wire contract, including specialized budget-error fields. The completed
 also replaces the goal's anticipated causal claim with its evidence-backed limitations.
 The byte-parity outcome and acceptance strength are unchanged.
 
+## Plan reconciliation — 2026-09-07, iteration 283
+
+The byte-parity baseline now includes ranked `FileObject.matches` arrays (including empty
+arrays for title-only or cross-line phrase hits) and the shared authored-title scoring rule.
+Preserve these values and the repaired Unicode/frontmatter boundaries during the output
+refactor. The existing `ContentMatch` shape is unchanged; no additional output type is needed.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — "Precondition: typed output structs"
-- [[iterations/iteration-284-stability-retrospective]] — expected to confirm the defect class
+- [[iterations/iteration-284-stability-retrospective]] — completed defect-class evidence
 - [[iterations/iteration-287-typed-typescript-api]] — consumer of these structs

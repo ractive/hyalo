@@ -822,10 +822,13 @@ pub(crate) enum Commands {
             SEARCH MODES:\n\
             - PATTERN (positional): BM25 ranked full-text search with stemming. Results are sorted by \
             relevance score (highest first) unless --sort is specified. Each result includes a numeric \
-            'score' field in the output. Stemming normalises words to their root: 'running' matches \
+            'score' and a 'matches' array with up to 3 body snippets ({line, section, text}). Snippets \
+            rank by distinct query tokens, then line number; quoted phrases must fit on one line. \
+            --section scopes snippets; title-only hits may have an empty array. Stemming normalises \
+            words to their root: 'running' matches \
             documents containing 'run', 'runner', 'running', etc.\n\
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; unranked; \
-            results include per-line 'matches' instead of 'score'). Mutually exclusive with PATTERN.\n\n\
+            results include all per-line 'matches' and no 'score'). Mutually exclusive with PATTERN.\n\n\
             QUERY SYNTAX (for PATTERN):\n\
             - Multiple words: implicit AND — all terms required (e.g. 'rust programming' returns \
             only documents containing both words)\n\

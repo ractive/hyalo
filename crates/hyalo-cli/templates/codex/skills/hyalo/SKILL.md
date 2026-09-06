@@ -38,6 +38,12 @@ Use `hyalo <command> --help` for exact syntax, advanced filters, links, or bulk 
 `find`'s positional query is ranked search; `-e` is regex. Quote filter expressions
 and paths as single arguments using the active shell's quoting rules.
 
+Ranked results include `score` and up to three body `matches` with `line`, `section`,
+and `text`. Snippets rank by distinct query tokens then line number, share BM25
+stemming/OR/CJK rules, and honor `--section`. Quoted phrases must fit on one line;
+frontmatter is excluded and title-only hits can have an empty array. Indexed queries
+read snippet text only for final results after `--limit`.
+
 Pass `--format text` for compact reading or `--format json` for structured output.
 JSON is an envelope; results live in `.results`. `--jq` operates on that envelope
 and cannot be combined with text format. Respect reported truncation; narrow the query

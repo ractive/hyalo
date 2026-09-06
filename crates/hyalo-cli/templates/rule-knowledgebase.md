@@ -14,6 +14,11 @@ Prefer `hyalo` CLI for operations on files in this directory:
   filter, because identifiers that live in `##` headings are never frontmatter titles.
 - **Search/filter**: `hyalo find --property status=planned --tag iteration`
 - **Body search**: `hyalo find "broken links"`
+- **Ranked snippets**: positional searches return `score` and up to 3 `matches` with
+  `{line, section, text}`, ordered by distinct query tokens then line number. They share
+  BM25 stemming, OR and CJK semantics; phrases must fit on one line. `--section` scopes
+  snippets and frontmatter never qualifies. Title-only hits can have `matches: []`.
+  Indexed searches read snippet text only for final results, after `--limit`.
 - **Title regex**: `hyalo find --property 'title~=link'`
 - **Inspect config**: `hyalo config` — shows effective dir, config path, hints, format, site_prefix,
   the `[links.auto]` auto-link settings, and `links.fuzzy_min_confidence` (the confidence floor

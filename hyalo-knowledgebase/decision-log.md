@@ -6272,3 +6272,84 @@ Winkler-floor rejection and unchanged basename admission. Existing iteration
 
 See [[iterations/iteration-282-directory-token-dominance-rule]] for the corpus
 comparison and validation outcome.
+
+## DEC-330: ranked snippets share BM25 query semantics (2026-09-07)
+
+**Decision:** Ranked `find PATTERN` returns both `score` and a non-null `matches`
+array of at most three `{line, section, text}` objects. The existing regex mode
+and renderer retain their behavior; text mode uses `line N (section): text`.
+
+A body line qualifies if it contains a positive stemmed query token, or the
+complete consecutive stemmed sequence of a quoted phrase. AND queries still
+require all terms at the document level, but an individual snippet may show one
+term; OR accepts either positive side. Negated terms never supply snippets.
+The query uses its configured language and each body uses its effective document
+language, just as BM25 scoring does. CJK uses the same overlapping bigrams.
+
+Among qualifying lines, count distinct positive query tokens, prefer greater
+coverage, then earlier document lines. Repetition of one token cannot outrank a
+line containing two different query tokens. Keep at most three snippets. Once
+three lines each carry every positive token, scanning can stop: later lines
+cannot improve coverage and lose the document-order tie.
+
+Frontmatter never qualifies. Raw body lines include code, fence delimiters and
+Obsidian comments, because the ranked corpus includes those lines too. Section
+context comes from the existing structural outline, so a heading inside code
+is not a new section. `--section` limits eligibility before snippet ranking.
+Line numbers are one-based positions in the original complete file, and text
+preserves the original body line. Title-only matches and phrases that span lines
+can produce an empty array without changing the file's BM25 score or eligibility.
+
+**Index boundary:** The snapshot has stemmed token positions, but neither original
+text nor file-line offsets. Recover original snippet text by streaming only the
+final selected files, after every filter, sort and limit. An empty final selection
+reads no snippet bodies. CLI `--limit 0` requests unlimited results; the default
+cap is 50, including JSON output. No snapshot schema change or CLI flag is needed.
+
+**Where:** `hyalo_core::bm25::SnippetQuery` reuses the scoring query parser and
+tokenizer; its raw-body visitor retains only three candidates.
+`hyalo_cli::commands::find` invokes it after final result selection.
+See [[iterations/iteration-283-ranked-search-snippets]] for validation and timing.
+
+**Score parity correction:** The BOM/CRLF German regression fixture exposed an
+existing corpus mismatch: disk scoring included the displayed filename fallback
+for notes lacking both a string title and an H1, but snapshots did not. That
+changed corpus average length and even unrelated results' scores (the fixture's
+`rust` score was 2.041530630546071 on disk versus 2.0292286111667424 indexed).
+Both builders now share the existing indexed authored-title rule through
+`document_title`. Disk scores can consequently change in such corpora; persisted
+scores and snapshot schema remain unchanged, as do displayed title fallbacks.
+
+Selected-file extraction runs in parallel using the existing Rayon pool. Each
+worker owns one result slot, so snippets and file order are stable; errors are
+reported in result order after collection. Parallelism never expands the final
+selected set. This avoids serial body tokenization on unlimited queries.
+
+**Measured:** On the 14,375-file MDN scratch corpus, the primary default query
+`find javascript --index` emits 50 of 4,055 hits. Thirty alternating timing pairs
+give 448.25 ms main versus 454.60 ms candidate (+1.42%), inside the 10% gate.
+Unlimited output (`--limit 0`) emits all 4,055 hits and costs 483.72 → 657.28 ms
+(+35.88%, fifteen pairs); this is a supplemental stress measurement, not the
+default query. Its 174 ms overhead remains well below the 4.090 s main disk scan.
+Both complete disk/index envelopes are byte-identical. All timings use release
+binaries, five warmup pairs for indexed comparisons and unchanged corpus data.
+
+**First review repair:** The bounded reader had validated each I/O chunk as
+UTF-8, incorrectly skipping valid characters split at an 8 KiB boundary. It now
+assembles at most the line quota (plus a terminating LF) in a reusable byte
+buffer and validates the retained line once. Definite invalid bytes still report
+`InvalidUtf8`; a quota splitting an otherwise valid codepoint reports
+`Truncated`. Rejected lines are drained and their full consumed byte count is
+returned. Tests vary buffer capacity, character width, EOF and quota boundaries.
+
+The frontmatter skip helper also counted raw CRLF bytes, whereas the scanner
+budgets normalized content plus one LF per line. It now shares that accounting,
+so valid near-64-KiB CRLF notes remain searchable. At-limit and over-limit LF/CRLF
+fixtures check agreement with the scanner; both reviewer repros have complete
+disk/index CLI regressions with accurate snippet text and line numbers.
+
+Repair timings retain the primary gate: 446.54 → 444.42 ms (-0.48%, thirty
+alternating pairs) for the default 50-result query. Supplemental unlimited
+output is 454.57 → 608.28 ms (+33.81%, fifteen pairs). Complete disk/index
+envelopes still agree in both cases; original implementation measurements are
+retained separately from the repair evidence.

@@ -17,6 +17,10 @@ and this project adheres to
   `--codex-plugin` configures projects without duplicate local skill copies.
 - Agent Skills validation now includes `.agents/skills/**` as well as Claude's
   skill directory. CI checks Codex plugin metadata and embedded asset parity.
+- Ranked find results now include up to three body snippets with line numbers and
+  section context, alongside their relevance score. Snippets share stemming, phrase, OR
+  and CJK rules with ranked search; indexed queries read only final selected files after
+  the result limit.
 
 ### Changed
 
@@ -439,6 +443,13 @@ and this project adheres to
 - Hints thread `--site-prefix` when it was given on the CLI, so a follow-up command answers the same question as the one that printed it.
 - The `find --broken-links` hint no longer offers `links fix` when every genuinely broken link is site-absolute: external URIs carry a null `path` but are not broken and used to out-vote them.
 - `find --index --file <missing>` reports the missing file without a spurious "index older than vault" warning first, and the stale-index warning names which probe fired (a directory mtime, or a specific file).
+- Disk and indexed ranked search now use the same authored title tokens. Disk scores can
+  change in corpora containing notes without a string title or H1: displayed filename
+  fallbacks no longer enter the disk corpus. Indexed scores, displayed titles and
+  snapshot format are unchanged.
+- Streaming reads preserve UTF-8 characters split across buffer boundaries. Frontmatter
+  skipping now uses the same normalized CRLF byte budget as scanning, so ranked snippets
+  no longer disappear or abort on these boundaries.
 
 ### Added
 

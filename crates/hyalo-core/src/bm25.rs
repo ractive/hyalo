@@ -4,6 +4,18 @@
 //! - [`StemLanguage`]: enum of supported stemming languages with [`parse_language`]
 //! - [`resolve_language`]: language precedence logic (frontmatter > CLI > config > English)
 //! - [`tokenize`]: Unicode-aware tokenization + stemming pipeline
+//!
+//! Ranked snippet qualification (iteration 283): a body line qualifies when it
+//! contains a positive query clause: any stemmed token for plain AND/OR terms,
+//! or the complete consecutive stemmed sequence for a quoted phrase. OR accepts
+//! any positive side; excluded terms never supply snippets. Query tokens use the
+//! query language; body tokens use the document language, exactly as scoring does.
+//! CJK uses the same overlapping bigrams, including single-character unigrams.
+//! Frontmatter never qualifies, but raw body code/fence/comment lines do. Phrases
+//! spanning lines and title-only hits may therefore have an empty matches array.
+//! Within section scope, prioritize the number of distinct positive query tokens
+//! present on each qualifying line, then document order, keeping at most three.
+//! Snippets keep original text, one-based full-file lines and heading context.
 //! - [`Bm25InvertedIndex`]: serializable in-memory BM25 index built from [`DocumentInput`] values
 
 use std::collections::{HashMap, HashSet};
@@ -285,6 +297,25 @@ pub struct DocumentInput {
     pub language: StemLanguage,
 }
 
+/// Authored title used by the ranked corpus: frontmatter string, then first H1.
+/// A filename fallback is useful for display, but has never been part of the
+/// persisted BM25 token stream. Share this rule so disk scores agree with it.
+pub fn document_title<'a>(
+    properties: &'a indexmap::IndexMap<String, serde_json::Value>,
+    sections: &'a [crate::types::OutlineSection],
+) -> &'a str {
+    properties
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| {
+            sections
+                .iter()
+                .find(|s| s.level == 1)
+                .and_then(|s| s.heading.as_deref())
+                .unwrap_or("")
+        })
+}
+
 /// Tokenize a [`DocumentInput`] into a [`PreTokenizedInput`].
 ///
 /// Applies the same tokenization pipeline as [`Bm25InvertedIndex::build`]: Unicode-aware
@@ -329,6 +360,154 @@ enum Clause {
 #[derive(Debug, Clone)]
 struct BooleanQuery {
     clauses: Vec<Clause>,
+}
+
+/// Positive clauses compiled once for ranked body snippets. Shares scoring's
+/// query parser, so operators, negation, phrases and CJK never drift.
+pub struct SnippetQuery {
+    clauses: Vec<Vec<String>>,
+    terms: HashSet<String>,
+}
+
+impl SnippetQuery {
+    /// Compile with the query-time stemming language (no document override).
+    pub fn new(query: &str, language: StemLanguage) -> Self {
+        let clauses: Vec<_> = parse_boolean_query(query, &create_stemmer(language))
+            .clauses
+            .into_iter()
+            .filter_map(|clause| match clause {
+                Clause::Must(terms) | Clause::Should(terms) => Some(terms),
+                Clause::MustNot(_) => None,
+            })
+            .collect();
+        let terms = clauses.iter().flatten().cloned().collect();
+        Self { clauses, terms }
+    }
+
+    /// Number of distinct positive query tokens on a qualifying line, or zero.
+    /// Body stemming must use the same document language as the BM25 corpus.
+    fn distinct_tokens(&self, line: &str, stemmer: &Stemmer) -> usize {
+        let tokens = tokenize(line, stemmer);
+        if !self
+            .clauses
+            .iter()
+            .any(|clause| tokens.windows(clause.len()).any(|window| window == clause))
+        {
+            return 0;
+        }
+        tokens
+            .iter()
+            .filter(|token| self.terms.contains(*token))
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    /// Stream one selected result's raw body and keep the best three lines.
+    /// Call only after result filtering, sorting and limiting. Snapshot tokens
+    /// have no original text or file-line offsets, so cannot supply snippets.
+    pub fn snippets(
+        &self,
+        path: &std::path::Path,
+        language: StemLanguage,
+        sections: &[crate::types::OutlineSection],
+        scope: &[crate::heading::SectionRange],
+    ) -> anyhow::Result<Vec<crate::types::ContentMatch>> {
+        use crate::scanner::{
+            FileVisitor, LineOutcome, MAX_BODY_LINE_BYTES, ScanAction, read_line_capped,
+        };
+        let mut visitor = SnippetVisitor {
+            query: self,
+            stemmer: create_stemmer(language),
+            sections,
+            scope,
+            best: Vec::with_capacity(4),
+        };
+        let file = std::fs::File::open(path)?;
+        if file.metadata()?.len() > crate::scanner::MAX_FILE_SIZE {
+            return Ok(Vec::new());
+        }
+        let mut reader = std::io::BufReader::new(file);
+        let mut buf = String::new();
+        let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)?;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let fm_lines = crate::frontmatter::skip_frontmatter(&mut reader, &buf)?;
+        let mut line = fm_lines.max(1);
+        if fm_lines == 0 && outcome == LineOutcome::Complete {
+            visitor.on_raw_body_line(buf.trim_end_matches(['\r', '\n']), line);
+        }
+        loop {
+            buf.clear();
+            let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)?;
+            if n == 0 {
+                break;
+            }
+            line += 1;
+            if outcome == LineOutcome::Complete
+                && visitor.on_raw_body_line(buf.trim_end_matches(['\r', '\n']), line)
+                    == ScanAction::Stop
+            {
+                break;
+            }
+        }
+        Ok(visitor.best.into_iter().map(|(_, m)| m).collect())
+    }
+}
+
+struct SnippetVisitor<'a> {
+    query: &'a SnippetQuery,
+    stemmer: Stemmer,
+    sections: &'a [crate::types::OutlineSection],
+    scope: &'a [crate::heading::SectionRange],
+    best: Vec<(usize, crate::types::ContentMatch)>,
+}
+
+impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
+    fn on_raw_body_line(&mut self, raw: &str, line: usize) -> crate::scanner::ScanAction {
+        use crate::scanner::ScanAction;
+        if !self.scope.is_empty() && !crate::heading::in_scope(self.scope, line) {
+            return ScanAction::Continue;
+        }
+        let count = self.query.distinct_tokens(raw, &self.stemmer);
+        if count == 0 || (self.best.len() == 3 && self.best[2].0 >= count) {
+            return ScanAction::Continue;
+        }
+        let section = self
+            .sections
+            .iter()
+            .rev()
+            .find(|s| s.line <= line && s.heading.is_some())
+            .and_then(|s| {
+                s.heading
+                    .as_ref()
+                    .map(|heading| format!("{} {heading}", "#".repeat(usize::from(s.level))))
+            })
+            .unwrap_or_default();
+        self.best.push((
+            count,
+            crate::types::ContentMatch {
+                line,
+                section,
+                text: raw.to_owned(),
+            },
+        ));
+        self.best
+            .sort_by_key(|(count, m)| (std::cmp::Reverse(*count), m.line));
+        self.best.truncate(3);
+        // Nothing later can beat three lines carrying every distinct query
+        // token; equal coverage loses on document order. Particularly useful
+        // for common single-term searches over long indexed documents.
+        if self.best.len() == 3 && self.best[2].0 == self.query.terms.len() {
+            ScanAction::Stop
+        } else {
+            ScanAction::Continue
+        }
+    }
+
+    fn needs_frontmatter(&self) -> bool {
+        false
+    }
 }
 
 impl BooleanQuery {

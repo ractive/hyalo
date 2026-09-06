@@ -659,9 +659,9 @@ pub fn find(
                         raw_body.to_owned()
                     };
 
-                    let title_val =
-                        extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path);
-                    let title_str = title_val.as_str().unwrap_or("").to_owned();
+                    let title_str =
+                        hyalo_core::bm25::document_title(&entry.properties, &entry.sections)
+                            .to_owned();
                     let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
                     let lang = resolve_language(fm_lang, language, config_language);
                     doc_inputs.push(DocumentInput {
@@ -1460,6 +1460,46 @@ pub fn find(
         }
         t
     };
+
+    // Snapshot tokens cannot recover original lines. Read only final results,
+    // after every filter, sort and limit (including an explicit zero limit).
+    if let Some(pat) = pattern.filter(|_| has_bm25_search) {
+        use rayon::prelude::*;
+        let query = hyalo_core::bm25::SnippetQuery::new(
+            pat,
+            resolve_language(None, language, config_language),
+        );
+        // Gather references before parallel I/O: VaultIndex need not be Sync,
+        // and each worker owns one distinct result slot. Output order is kept.
+        let selected: Vec<_> = results
+            .iter_mut()
+            .filter_map(|obj| index.get(&obj.file).map(|entry| (obj, entry)))
+            .collect();
+        let outcomes: Vec<Result<()>> = selected
+            .into_par_iter()
+            .map(|(obj, entry)| {
+                let scope = build_section_scope(&entry.sections, section_filters, usize::MAX);
+                let doc_language = resolve_language(
+                    entry
+                        .properties
+                        .get("language")
+                        .and_then(serde_json::Value::as_str),
+                    language,
+                    config_language,
+                );
+                obj.matches = Some(
+                    query
+                        .snippets(&dir.join(&obj.file), doc_language, &entry.sections, &scope)
+                        .with_context(|| format!("reading ranked snippets for {}", obj.file))?,
+                );
+                Ok(())
+            })
+            .collect();
+        // Report the first failure in result order, independent of scheduling.
+        for outcome in outcomes {
+            outcome?;
+        }
+    }
 
     // --- Fuzzy suggestions when results are empty (BUG-C) ---
     if total == 0 {

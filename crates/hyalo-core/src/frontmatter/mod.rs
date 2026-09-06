@@ -502,7 +502,7 @@ Body.
     #[test]
     fn streaming_budget_boundary_bytes_at_limit() {
         // Build frontmatter whose content is exactly MAX_FRONTMATTER_BYTES.
-        // skip_frontmatter counts raw bytes from read_line (including \n).
+        // skip_frontmatter counts normalized content bytes (including LF).
         // Use a single long line: "x: " (3 bytes) + value + "\n" = MAX_FRONTMATTER_BYTES
         use super::MAX_FRONTMATTER_BYTES;
         let value = "a".repeat(MAX_FRONTMATTER_BYTES - 4); // "x: " (3) + value + "\n" = limit
@@ -540,6 +540,32 @@ Body.
                 .to_string()
                 .contains("frontmatter too large")
         );
+    }
+
+    #[test]
+    fn skip_frontmatter_crlf_uses_scanner_normalized_byte_budget() {
+        // Many CRLF comment lines fit in the scanner's normalized 64 KiB
+        // budget even though their on-disk representation exceeds 64 KiB.
+        let line = format!("#{}", "a".repeat(63));
+        let comments = format!("{line}\n").repeat(1000);
+        let title = "title: Boundary\n";
+        let remaining = MAX_FRONTMATTER_BYTES - comments.len() - title.len();
+        for extra in [0, 1] {
+            let tail = format!("#{}\n", "b".repeat(remaining - 2 + extra));
+            let lf = format!("---\n{title}{comments}{tail}---\nbody\n");
+            let crlf = lf.replace('\n', "\r\n");
+            for text in [&lf, &crlf] {
+                let mut reader = std::io::BufReader::with_capacity(3, text.as_bytes());
+                let mut first = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut first).unwrap();
+                assert_eq!(skip_frontmatter(&mut reader, &first).is_ok(), extra == 0);
+                let mut visitor = crate::scanner::FrontmatterCollector::new(false);
+                assert_eq!(
+                    crate::scanner::scan_slice_multi(text.as_bytes(), &mut [&mut visitor]).is_ok(),
+                    extra == 0
+                );
+            }
+        }
     }
 
     #[test]
