@@ -219,6 +219,69 @@ fn codex_override_warning_is_part_of_the_json_report() {
 
 #[cfg(unix)]
 #[test]
+fn codex_updates_preserve_existing_permission_bits() {
+    use std::os::unix::fs::PermissionsExt;
+
+    for mode in [0o640, 0o444, 0o4755, 0o2755] {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        ok(root, &["init", "--codex"]);
+        let paths = ["AGENTS.md", ".agents/skills/hyalo/SKILL.md"];
+        for relative in paths {
+            let path = root.join(relative);
+            let stale = if relative == "AGENTS.md" {
+                "<!-- hyalo:start -->\nold\n<!-- hyalo:end -->\n"
+            } else {
+                "<!-- hyalo:managed -->\nold\n"
+            };
+            fs::write(&path, stale).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
+                mode,
+                "fixture permissions"
+            );
+        }
+        ok(root, &["init", "--codex"]);
+        for relative in paths {
+            let actual = fs::metadata(root.join(relative))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777;
+            assert_eq!(actual, mode, "permissions changed for {relative}");
+        }
+    }
+}
+
+#[test]
+fn codex_guidance_uses_the_project_root_or_configured_vault() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("notes/nested")).unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    fs::write(root.join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
+    fs::write(
+        root.join("notes/note.md"),
+        "---\ntitle: Note\nstatus: planned\n---\n",
+    )
+    .unwrap();
+    ok(root, &["init", "--codex"]);
+    for cwd in [root.to_path_buf(), root.join("notes/nested")] {
+        let found = ok(&cwd, &["find", "--property", "status=planned"]);
+        assert_eq!(found["results"].as_array().unwrap().len(), 1);
+    }
+    let outside = ok(&root.join("src"), &["find", "--property", "status=planned"]);
+    assert!(outside["results"].as_array().unwrap().is_empty());
+    let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+    assert!(agents.contains(
+        "Run commands from the project root containing .hyalo.toml or inside the configured vault."
+    ));
+    assert!(!agents.contains("this project or its descendants"));
+}
+
+#[cfg(unix)]
+#[test]
 fn codex_symlink_destinations_never_modify_the_referent() {
     use std::os::unix::fs::symlink;
     for relative in ["AGENTS.md", ".agents", ".hyalo.toml"] {

@@ -12,8 +12,11 @@ is an alternative when present. If unavailable, report that and suggest the proj
 documented installation (`cargo install hyalo-cli`); do not install software as a
 side effect of a knowledgebase query.
 
-Start with `hyalo config --format json` to locate the vault and its configuration.
-Run from the project or a descendant directory. Do not assume the vault is named
+Run from the project root containing `.hyalo.toml`, then use `hyalo config --format json`
+to locate and confirm the vault. Commands also work inside that configured vault,
+including its nested folders. Other project subdirectories (for example `src/`
+beside a `notes/` vault) do not inherit the vault configuration: return to the
+project root before querying or editing. Do not assume the vault is named
 `hyalo-knowledgebase` and do not repeat `--dir` when configuration already selects it.
 File arguments are relative to the vault, including when launched from a nested folder.
 

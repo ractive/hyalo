@@ -161,18 +161,26 @@ fn write_asset(root: &Path, relative: &str, text: &str, report: &mut Report) -> 
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let parent = path.parent().context("Codex artifact has no parent")?;
+    let existing_permissions = if old.is_some() {
+        Some(fs::metadata(&path)?.permissions())
+    } else {
+        None
+    };
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .with_context(|| format!("creating temporary file in {}", parent.display()))?;
-    if old.is_some() {
-        temporary
-            .as_file()
-            .set_permissions(fs::metadata(&path)?.permissions())?;
-    }
     temporary.write_all(text.as_bytes())?;
+    // Writing can clear set-ID bits. Apply permissions only after all content.
+    if let Some(permissions) = &existing_permissions {
+        temporary.as_file().set_permissions(permissions.clone())?;
+    }
     temporary.as_file().sync_all()?;
-    temporary
+    let persisted = temporary
         .persist(&path)
         .with_context(|| format!("writing {}", path.display()))?;
+    // Match the core atomic writer: persist can alter platform attributes.
+    if let Some(permissions) = existing_permissions {
+        persisted.set_permissions(permissions)?;
+    }
     report.push(if old.is_some() { "updated" } else { "created" }, relative);
     Ok(())
 }
@@ -228,7 +236,8 @@ pub(super) fn install(root: &Path, mode: CodexMode, report: &mut Report) -> Resu
          {skill_location}\n\
          Use the hyalo CLI for knowledgebase search, reading, frontmatter, tags, tasks, and links.\n\
          Run hyalo config to inspect the effective vault; file arguments are vault-relative.\n\
-         Run commands from this project or its descendants so configuration is discovered.\n\
+         Run commands from the project root containing .hyalo.toml or inside the configured vault.\n\
+         Other project subdirectories do not inherit this vault configuration; return to the project root first.\n\
          Use normal editing tools for body prose; run hyalo lint on changed markdown before handoff.\n\
          An audit request authorizes inspection; apply repairs only within the user's requested scope.\n"
     );
