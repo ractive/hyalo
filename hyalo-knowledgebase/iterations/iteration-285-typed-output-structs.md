@@ -25,18 +25,24 @@ the commands serialize a real struct for `results` (`find` via `FileObject`, `li
 ad hoc: `read`, `summary`, `config`, `types` (20 `json!` sites), `lint-rules` (15), `links` (7),
 `views`, `okf`, `madr`, `new`, `tasks`, `changelog`, `create-index`, `drop-index`.
 
-Two reasons to fix it, in this order: it is the "one concept in two code paths" defect class the
-retrospective is expected to name (text vs JSON renderers drift because nothing pins the shape),
-and it is the precondition for generating TypeScript types with `ts-rs` in
+Two reasons to fix it: explicit output-family contracts can guard shape drift, and typed
+results are the precondition for generating TypeScript types with `ts-rs` in
 [[iterations/iteration-287-typed-typescript-api]]. This iteration is **Rust only** and changes
 **no JSON byte**.
+
+[[research/stability-retrospective-2026-09-06]] supports output-contract and parity guards,
+while showing that existing named structs also drifted and cannot force missing planning
+to happen. Keep byte-parity tests and shared family contracts; deriving Serialize alone
+does not establish semantic correctness or explain every output/help defect.
 
 ## Tasks
 
 - [ ] TASK-1: `Envelope<T: Serialize>` with `results`, `total`, `hints`, the optional `dir`
       hoist and the three `files_*` counters as typed optional fields, replacing
       `build_envelope_value` and the post-hoc key injection. One `ErrorEnvelope` for the exit-1
-      path (`error`, `cause`, `hints`). Serialization must be byte-identical to today, including
+      path (`error`, optional `path`, `hint`, and `cause`; preserve the existing singular
+      `hint` key). Preserve specialized structured error payloads as well. Serialization must
+      be byte-identical to today, including
       key order and which keys are omitted vs `null`; the `results` key conventions in
       `rule-knowledgebase.md` are the spec.
 - [ ] TASK-2: results structs for `read` and `summary` first (the first two API consumers), then
@@ -64,6 +70,14 @@ and it is the precondition for generating TypeScript types with `ts-rs` in
 - [ ] `hyalo config --jq`, `--files-from` counters and the `dir` hoist behave exactly as before.
 - [ ] `check-pi-package-sync` fails when `pi-package/package.json` disagrees with Cargo.
 - [ ] Gates green.
+
+## Plan reconciliation — 2026-09-06, iteration 284
+
+Baseline inspection of `output::format_error` found a singular optional `hint` and an
+optional `path`, rather than the proposed `hints` field. Corrected TASK-1 to preserve the
+existing wire contract, including specialized budget-error fields. The completed retrospective
+also replaces the goal's anticipated causal claim with its evidence-backed limitations.
+The byte-parity outcome and acceptance strength are unchanged.
 
 ## Links
 

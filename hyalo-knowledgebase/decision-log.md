@@ -28,6 +28,33 @@ and keep `cargo package` independent of files outside the crate. Live Codex
 installation, update, and discovery verification follow the Pi package precedent.
 See [[iterations/iteration-288-codex-integration]].
 
+## DEC-328: A shared concept needs parity and boundary fixtures (2026-09-06)
+
+**Decision:** When fixing behavior exposed through several paths, extend the existing
+fixture across the relevant paths and include the nearest valid and invalid input
+neighbors. Share the semantic function and inputs where appropriate; preserve separate
+syntax-specific rewrite implementations where their byte-preservation needs differ.
+An intentional default change records its before/after consumer behavior.
+
+Use the existing four guard families: semantic parity (selectors, disk/index,
+reader/rewrite and cross-command counts); mutation round-trip/protected bytes;
+output-family contracts (text/JSON facts, single/batch shape and one complete JSON error
+stream); literal shipped-recipe execution and safety. Recipe checks must inspect the
+actual example, not silently add dry-run and thereby conceal an unsafe example.
+This adds no acceptance-criteria framework and no new public flags.
+
+**Why:** [[research/stability-retrospective-2026-09-06]] classifies 232 report observations,
+including 138 real-defect observations. Its six-area audit finds 23 direct alternate-path
+divergences, but also counterexamples: DEC-293's wrong fence rule was already shared;
+the single/batch move results were already typed; an optional emitted target cannot
+force missing planning to happen. A passing original reproducer, a shared helper or a
+serializable struct therefore establishes less than full semantic correctness.
+
+Typed final output contracts remain useful preparation for iteration 287, with the
+compatibility scope of iteration 285 preserved. They do not replace parity tests or
+justify claiming that all output/help defects arose from ad-hoc JSON. The retrospective's
+release recommendations do not reorder the owner's execution queue or authorize a release.
+
 ## DEC-001: CLI Flag Style (2026-03-20)
 
 **Decision:** Use idiomatic `--flag` style with clap subcommands, not Obsidian's `key=value` style.
