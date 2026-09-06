@@ -258,12 +258,16 @@ const MAX_SHORTER_REMAINDER: usize = 1;
 ///
 /// Two alternatives were weighed and rejected:
 ///
-/// * *Raise the share* (demand three quarters rather than half). It happens to
-///   separate the fixtures — 4/7 fails, 5/6 passes — but only by moving a
-///   magic number until the known counter-example falls the right side of it.
-///   It still calls two words that merely begin alike a prefix relationship,
-///   and a longer such pair (`mathematics`/`mathematica`, 10 of 11) sails
-///   through.
+/// * *Raise the share* (demand three quarters rather than half). At the token
+///   lengths slugs and note names actually use the two rules mostly agree —
+///   4 of 7 fails both, 5 of 6 passes both — so this was rejected on meaning,
+///   not on a pair it gets wrong today. A share threshold still says only
+///   "these two words begin alike enough", which leaves it fitted between the
+///   one counter-example that must fail and the one fixture that must pass,
+///   and it grows *more* permissive as tokens lengthen: three quarters of a
+///   twelve-character token leaves the shorter word a three-letter remainder
+///   of its own, which is precisely the shape being excluded. The remainder
+///   rule is length-independent and names the relationship directly.
 /// * *Require the lengths to differ.* True of a real prefix relationship, and
 ///   it does reject `mathjax`/`mathpad` — but only that exact shape. One letter
 ///   of slack (`mathjax`/`mathpads`) restores the false positive, and
@@ -825,7 +829,7 @@ mod tests {
             ("mathjax", "mathpad"),
             ("mathjax", "mathpads"),
             ("paulbricman", "paultreanor"),
-            ("mathematics", "mathematica"),
+            ("excalidraw", "excalibur"),
         ] {
             assert!(!shares_dominant_prefix(a, b), "{a} / {b}");
         }

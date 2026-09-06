@@ -59,6 +59,7 @@ mod iteration277_graph_parity_and_write_perf;
 mod iteration278_literal_probe_from_index;
 mod iteration279_fuzzy_near_neighbours;
 mod iteration280_fuzzy_candidacy_gate;
+mod iteration281_dominant_prefix_exemption;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;
