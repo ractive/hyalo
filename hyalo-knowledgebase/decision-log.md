@@ -5993,7 +5993,7 @@ does not.
 | corpus | fuzzy proposals | above floor | notes |
 |---|---|---|---|
 | Obsidian Hub | 18 → 16 | **4 → 1** | the 3 wrong ones closed, the 1 correct one kept at 1.0 |
-| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 226 → 2 159 | 67 dropped (13 distinct targets), **0 gained** |
+| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 241 → 2 174 | 67 dropped (13 distinct targets), **0 gained** |
 | MDN (`files/en-us`) | 0 → 0 | 0 → 0 | not a fuzzy corpus — all 14 375 files are `index.md`, so no basename ever clears the candidacy gate (DEC-321) |
 
 On the Hub the four above-floor proposals were `Obsidian Publish.` (correct,

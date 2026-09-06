@@ -105,7 +105,7 @@ which damped the *correct* 1.0 winner to 0.444.
 | corpus | fuzzy proposals | above floor |
 |---|---|---|
 | Obsidian Hub | 18 → 16 | **4 → 1** |
-| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 226 → 2 159 |
+| GitHub Docs (`content/`) | 5 493 → 5 476 | 2 241 → 2 174 |
 | MDN (`files/en-us`) | 0 → 0 | 0 → 0 |
 
 All three named examples are closed: `[[Cat]]`'s winner moved from `CatMuse.md`
@@ -143,7 +143,7 @@ A basename that gains or loses a whole word scores below the floor:
 `fuzzy_fixes`; `--min-confidence 0.5` applies it.
 
 This is the whole of the residual cost: **67** GitHub Docs fixes (13 distinct
-targets, 3.0% of the 2 226 that were applicable), **0** new false positives.
+targets, 3.0% of the 2 241 that were applicable), **0** new false positives.
 Three of the 13 were plainly wrong and are closed on purpose
 (`about-the-audit-log-…` → `accessing-the-audit-log-…`,
 `modifying-a-github-app` → `deleting-a-github-app`, `block-copilot-cloud-agent`
