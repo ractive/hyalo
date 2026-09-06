@@ -417,9 +417,12 @@ Prefer `hyalo` CLI for operations on files in this directory:
   lowercased, rejoined with `-`. `[[my-long-note]]` therefore fixes to `MyLongNote.md` at 1.0.
   A plain lowercase-hyphen slug is its own key byte for byte, so a documentation corpus is
   untouched — GitHub Docs and MDN produce byte-identical `links fix` output, at the same wall
-  time. Widening candidacy exposes the scorer as it is: on the Obsidian Hub `[[Mathjax]]` now
-  offers `mathpad.md` at 0.886 (one token each, admitted by the shared `math` prefix), which is
-  wrong and is a known carry-over.
+  time. DEC-326 (iter-281) closed the exposed `[[Mathjax]]` → `mathpad.md` false match:
+  a basename prefix must exceed twice its leftover in the shorter token. Directory overlap
+  uses its own looser rule (DEC-329, iter-282): the prefix must outweigh the leftover, so
+  `management`/`managing` qualifies. Both features retain the 0.85 Jaro-Winkler floor.
+  The SAML directory relocation returns from 0.795 to 0.804, above the default apply floor;
+  basename `Mathjax`/`mathpad` stays closed.
 - **Hints keep `--site-prefix`** (iter-277): a `--site-prefix` given on the CLI is threaded
   into every hint, like `--dir`, `--format` and `--index-file`, so the follow-up answers the
   same question. `hyalo config` reports `site_prefix_source`, and `links fix` says

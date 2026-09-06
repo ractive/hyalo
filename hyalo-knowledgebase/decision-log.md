@@ -6221,3 +6221,54 @@ relocation.
 `PREFIX_DOMINANCE`),
 `crates/hyalo-cli/tests/e2e/iteration281_dominant_prefix_exemption.rs`.
 See [[iterations/iteration-281-dominant-prefix-equal-length-exemption]].
+
+## DEC-329: directory tokens use majority-prefix admission (2026-09-06)
+
+**Decision:** The directory-overlap feature uses a separate prefix dominance
+factor of **one**: the shared prefix must strictly outweigh the leftover in the
+shorter token. The basename retains DEC-326's factor of **two**. Both paths
+require Jaro-Winkler at least 0.85; plain Jaro at least 0.85 still admits a pair
+without an exemption. Tokenisation, leading-directory weighting, basename
+character charge, candidacy and runner-up damping are unchanged.
+
+**Why separate the rule.** Directory names describe where the same document
+moved; a basename names the document itself. DEC-324 already treats directory
+reorganisation more leniently by omitting unmatched-character charges. A
+majority prefix gives the directory feature bounded evidence of a renamed
+level: `management`/`managing` shares five characters and leaves three in the
+shorter word. Equal halves do not qualify. The token overlap contributes only
+one quarter of the 30% directory feature; shared leading components continue
+to carry the other three quarters. This is a deliberate heuristic, not a claim
+that majority-prefix words are semantically identical.
+
+**Alternatives weighed.** Keeping one factor-two rule is defensible if a
+0.004-margin relocation is deemed too uncertain, but it makes the directory
+feature inherit a restriction justified by basename false positives. Separate
+factor one restores that directory evidence without reopening `Mathjax` as a
+basename match. Removing the directory exemption while retaining plain-Jaro
+admission keeps `management`/`managing` rejected and also rejects genuine
+prefix extensions such as `get`/`getting`. Using Jaro-Winkler alone would
+restore them but admits `paulbricman`/`paultreanor` on a four-character given
+name; dropping the floor entirely would also credit unrelated-token noise.
+The chosen majority rule retains the floor and a length-relative bound. It is
+stricter than the pre-281 half-inclusive rule at the equal-half boundary.
+
+**Exact reproducer and consumer behavior.** A two-file vault contains
+`src.md` with `[AUTOTITLE]` linked to
+`/admin/identity-and-access-management/using-saml-for-enterprise-iam/saml-configuration-reference`
+and the sole candidate
+`admin/managing-iam/iam-configuration-reference/saml-configuration-reference.md`.
+Baseline confidence is **0.795**; the directory-only change restores **0.804**.
+The default dry-run switches `below_floor` from true to false. Plain `--apply`
+still withholds fuzzy fixes, while `--apply --apply-fuzzy` now writes this
+relocation. A floor of 0.805 still withholds it. These facts are covered on disk
+and index; inline Markdown and wikilinks preserve anchors, labels and titles
+while inline/fenced code remains byte-identical. Reference definitions remain
+unchanged: they are outside the current `links fix` inventory, not another
+rewrite path added by this iteration.
+Unit fixtures cover the strict majority boundary, Unicode character counting,
+Winkler-floor rejection and unchanged basename admission. Existing iteration
+279/280/281 fixtures are retained without edits.
+
+See [[iterations/iteration-282-directory-token-dominance-rule]] for the corpus
+comparison and validation outcome.
