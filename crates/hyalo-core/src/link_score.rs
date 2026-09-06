@@ -61,8 +61,8 @@
 //!   word (`Cat` vs `CatMuse`) is two tokens against one rather than one
 //!   opaque token that looks like a typo of the other.
 //! * [`token_similarity`] admits a pair on plain Jaro, not Jaro-Winkler,
-//!   unless their common prefix covers at least half the shorter token
-//!   ([`shares_dominant_prefix`]) — `creat` is five of six in `create`, but
+//!   unless their common prefix consumes the shorter token
+//!   ([`shares_dominant_prefix`]) — `creat` is all but the `e` of `create`, but
 //!   `paul` is four of eleven in `paulbricman`, and a shared given name must
 //!   not buy token identity.
 //! * [`scored_token_f1`] charges for unmatched tokens by their character share,
@@ -218,21 +218,66 @@ pub fn gate_key(stem: &str) -> String {
     tokens.join("-")
 }
 
-/// `true` when the two tokens' common prefix covers at least half of the
-/// shorter one.
+/// Longest trailing remainder the shorter token may keep past the shared
+/// prefix and still count as a prefix relationship (iter-281, DEC-326).
+///
+/// One character, because that is exactly what English gerund-to-imperative
+/// morphology leaves behind: `creat` + `ing` against `creat` + **`e`**,
+/// `manag`/`manage`, `enabl`/`enable`, `writ`/`write`, `us`/`use`,
+/// `configur`/`configure`. Zero would reject every one of those; two admits
+/// `excalidraw`/`excalibur`.
+const MAX_SHORTER_REMAINDER: usize = 1;
+
+/// `true` when the two tokens' common prefix consumes the shorter one, give or
+/// take a single trailing character.
 ///
 /// This is the question Jaro-Winkler's prefix bonus *should* ask and does not:
 /// Winkler credits a shared prefix up to four characters regardless of how much
 /// of the words that is. Four characters are the whole of `get` in `getting`
-/// and five are most of `create` in `creating` — real morphology — but they are
-/// barely a third of `paulbricman` and `paultreanor`, two different people.
-/// Measuring the prefix against the shorter token's length separates the two.
+/// and five are all but the `e` of `create` in `creating` — real morphology —
+/// but they are barely a third of `paulbricman` and `paultreanor`, two
+/// different people.
+///
+/// # Why the remainder and not the share (iter-281, DEC-326)
+///
+/// Until iter-281 this asked only for the prefix to cover *at least half* of
+/// the shorter token, and half is not a prefix relationship. `mathjax` and
+/// `mathpad` are seven characters each and share `math`: four of seven on both
+/// sides clears "half", so the Obsidian Hub's `[[Mathjax]]` — no such note
+/// exists — was admitted as a single-token match against `Plugins/mathpad.md`
+/// and reported at 0.886, over the [`DEFAULT_FUZZY_MIN_CONFIDENCE`] apply
+/// floor, even though plain Jaro rates the pair 0.810, *below*
+/// [`TOKEN_MATCH_FLOOR`]. Widening the candidacy gate in iter-280 (DEC-325) is
+/// what exposed it; the defect is the exemption's.
+///
+/// A prefix relationship is definitionally *one word extending into another*:
+/// the shorter token is spent, and only the longer one carries on. So the test
+/// is the **shorter token's own remainder**, which is empty for `get`/`getting`
+/// and `run`/`running` and a lone `e` for `create`/`creating` — but `pad`
+/// against `jax`, two distinct words' worth, for `mathjax`/`mathpad`.
+///
+/// Two alternatives were weighed and rejected:
+///
+/// * *Raise the share* (demand three quarters rather than half). It happens to
+///   separate the fixtures — 4/7 fails, 5/6 passes — but only by moving a
+///   magic number until the known counter-example falls the right side of it.
+///   It still calls two words that merely begin alike a prefix relationship,
+///   and a longer such pair (`mathematics`/`mathematica`, 10 of 11) sails
+///   through.
+/// * *Require the lengths to differ.* True of a real prefix relationship, and
+///   it does reject `mathjax`/`mathpad` — but only that exact shape. One letter
+///   of slack (`mathjax`/`mathpads`) restores the false positive, and
+///   `excalidraw`/`excalibur` never had equal lengths to begin with. Under the
+///   remainder rule the requirement is redundant anyway: equal lengths plus a
+///   remainder of at most one means the tokens differ in their last character
+///   alone, which clears [`TOKEN_MATCH_FLOOR`] on plain Jaro and needs no
+///   exemption.
 ///
 /// Both arguments come from [`tokenize`] and are already lowercase.
 fn shares_dominant_prefix(a: &str, b: &str) -> bool {
     let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
     let shorter = a.chars().count().min(b.chars().count());
-    shorter > 0 && common * 2 >= shorter
+    shorter > 0 && shorter - common <= MAX_SHORTER_REMAINDER
 }
 
 /// Similarity of two slug tokens, `0.0` when they are not the same token.
@@ -246,8 +291,8 @@ fn shares_dominant_prefix(a: &str, b: &str) -> bool {
 /// [`TOKEN_MATCH_FLOOR`]. So the bonus may *sharpen* a match but may not
 /// *create* one: the pair must clear the floor on plain Jaro.
 ///
-/// The exception is a pair whose common prefix covers most of the shorter
-/// token ([`shares_dominant_prefix`]) — `get` in `getting`, `creat` in
+/// The exception is a pair whose common prefix *consumes* the shorter token
+/// ([`shares_dominant_prefix`]) — `get` in `getting`, `creat` in
 /// `create`/`creating`. There the shared beginning is not a coincidence between
 /// two diverging words, it is nearly all of one of them, and the bonus is
 /// measuring the real relationship: this is the morphology
@@ -718,6 +763,95 @@ mod tests {
         // Which is what takes the pair from 0.857 to below the apply floor.
         assert!((f1 - 6.0 / 7.0).abs() < 1e-9, "got {f1}");
         assert!(f1 * mass < DEFAULT_FUZZY_MIN_CONFIDENCE);
+    }
+
+    // -----------------------------------------------------------------
+    // iter-281 / DEC-326 — the dominant-prefix exemption is a prefix
+    // *relationship*, not a shared beginning
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn two_words_that_merely_begin_alike_are_not_one_token() {
+        // The premise, exactly as iter-280 reported it: plain Jaro puts
+        // `mathjax` and `mathpad` below the floor, and only the exemption
+        // admitted them.
+        assert!(strsim::jaro("mathjax", "mathpad") < TOKEN_MATCH_FLOOR);
+        assert!(strsim::jaro_winkler("mathjax", "mathpad") >= TOKEN_MATCH_FLOOR);
+        // Half of the shorter token — the pre-iter-281 bar — was cleared on
+        // both sides: `math` is four of seven either way.
+        let common = "mathjax"
+            .chars()
+            .zip("mathpad".chars())
+            .take_while(|(x, y)| x == y)
+            .count();
+        assert_eq!(common, 4);
+        assert!(common * 2 >= "mathjax".len(), "test premise: half was met");
+        // And it is no longer enough.
+        assert!(!shares_dominant_prefix("mathjax", "mathpad"));
+        assert!(approx(token_similarity("mathjax", "mathpad"), 0.0));
+        // Two plugin names sharing six characters go the same way.
+        assert!(!shares_dominant_prefix("excalidraw", "excalibur"));
+        assert!(approx(token_similarity("excalidraw", "excalibur"), 0.0));
+        // One token each, so the whole basename feature collapses with it and
+        // `[[Mathjax]]` lands far under the apply floor rather than at 0.886.
+        assert!(approx(basename_similarity("mathjax", "mathpad"), 0.0));
+        assert!(
+            candidate_confidence("Mathjax", "Plugins/mathpad.md") < DEFAULT_FUZZY_MIN_CONFIDENCE,
+            "got {}",
+            candidate_confidence("Mathjax", "Plugins/mathpad.md")
+        );
+    }
+
+    #[test]
+    fn a_prefix_relationship_spends_the_shorter_token() {
+        // Empty remainder: the shorter token is literally a prefix.
+        for (a, b) in [("get", "getting"), ("run", "running"), ("plugin", "plugins")] {
+            assert!(shares_dominant_prefix(a, b), "{a} / {b}");
+        }
+        // One character of remainder: the gerund-to-imperative `e`, which is
+        // the whole reason MAX_SHORTER_REMAINDER is 1 and not 0.
+        for (a, b) in [
+            ("creating", "create"),
+            ("managing", "manage"),
+            ("enabling", "enable"),
+            ("writing", "write"),
+            ("configuring", "configure"),
+        ] {
+            assert!(shares_dominant_prefix(a, b), "{a} / {b}");
+            assert!(token_similarity(a, b) >= TOKEN_MATCH_FLOOR, "{a} / {b}");
+        }
+        // Both sides carrying their own word-sized remainder is not that.
+        for (a, b) in [
+            ("mathjax", "mathpad"),
+            ("mathjax", "mathpads"),
+            ("paulbricman", "paultreanor"),
+            ("mathematics", "mathematica"),
+        ] {
+            assert!(!shares_dominant_prefix(a, b), "{a} / {b}");
+        }
+        // The rejected alternative, recorded as a test: requiring the *lengths*
+        // to differ would have admitted this pair, because they do.
+        assert_ne!("mathjax".len(), "mathpads".len());
+        assert!(!shares_dominant_prefix("mathjax", "mathpads"));
+        // And an equal-length pair that survives the remainder rule differs in
+        // its last character alone — which clears the floor on plain Jaro, so
+        // the exemption is not what carries it.
+        assert!(shares_dominant_prefix("notea", "noteb"));
+        assert!(strsim::jaro("notea", "noteb") >= TOKEN_MATCH_FLOOR);
+    }
+
+    #[test]
+    fn tightening_the_exemption_leaves_the_iteration_279_fixtures_alone() {
+        // Every basename-level assertion iter-279 made about the exemption,
+        // re-run against the narrower rule.
+        assert!(
+            basename_similarity("creating-a-composite-action", "create-a-composite-action")
+                >= DEFAULT_FUZZY_MIN_CONFIDENCE
+        );
+        assert!(basename_similarity("get-started", "getting-started") >= DEFAULT_FUZZY_MIN_CONFIDENCE);
+        // A typo still rides in on plain Jaro, with no prefix help at all.
+        assert!(token_similarity("acions", "actions") > 0.9);
+        assert!(!shares_dominant_prefix("acions", "actions"));
     }
 
     // -----------------------------------------------------------------
