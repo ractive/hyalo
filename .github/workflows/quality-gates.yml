@@ -33,3 +33,5 @@ jobs:
         run: cargo run -p xtask -- check-jq-recipes
       - name: Check mutating commands go through MutationJournal
         run: cargo run -p xtask -- check-mutation-journal
+      - name: Check typed command output contracts
+        run: cargo run -p xtask -- check-typed-output

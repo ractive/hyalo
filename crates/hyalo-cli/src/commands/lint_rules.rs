@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::commands::lint::SCHEMA_PSEUDO_RULE;
-use crate::output::{CommandOutcome, Format, format_error, format_success};
+use crate::output::{CommandOutcome, Format, format_error, format_output};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -30,7 +30,7 @@ pub(crate) fn list_rules(
 ) -> CommandOutcome {
     let rules = engine.available_rules();
 
-    let results: Vec<serde_json::Value> = rules
+    let results: Vec<RuleResult> = rules
         .iter()
         .filter(|e| {
             // Apply prefix filter
@@ -54,25 +54,22 @@ pub(crate) fn list_rules(
             let eff_enabled = effective_enabled(e, md_lint);
             let has_override = md_lint.rules.contains_key(&e.id);
             let activation = activation_for(&e.id, schema);
-            let mut entry = serde_json::json!({
-                "id": e.id,
-                "name": e.name,
-                "description": e.description,
-                "default_enabled": e.default_enabled,
-                "default_severity": format!("{}", e.default_severity),
-                "effective_enabled": eff_enabled,
-                "effective_severity": format!("{}", eff_sev),
-                "autofixable": e.autofixable,
-                "source": e.source,
-                "has_override": has_override,
-            });
-            if let Some(act) = activation {
-                entry["activation"] = serde_json::json!({
-                    "predicate": act.predicate,
-                    "satisfied": act.satisfied,
-                });
+            RuleResult {
+                id: &e.id,
+                name: &e.name,
+                description: &e.description,
+                default_enabled: e.default_enabled,
+                default_severity: format!("{}", e.default_severity),
+                effective_enabled: eff_enabled,
+                effective_severity: format!("{eff_sev}"),
+                autofixable: e.autofixable,
+                source: &e.source,
+                has_override: Some(has_override),
+                activation,
+                configurable: None,
+                r#override: None,
+                note: None,
             }
-            entry
         })
         .collect();
 
@@ -88,34 +85,13 @@ pub(crate) fn list_rules(
             .starts_with(&p.to_ascii_lowercase())
     }) && !disabled_only;
     if schema_row_matches {
-        results.push(serde_json::json!({
-            "id": SCHEMA_PSEUDO_RULE,
-            "name": "frontmatter-schema",
-            "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections. Not configurable through lint-rules — edit the schema with `hyalo types set`.",
-            "default_enabled": true,
-            "default_severity": "error",
-            "effective_enabled": true,
-            "effective_severity": "error",
-            "autofixable": false,
-            "source": "hyalo-schema",
-            "has_override": false,
-            "configurable": false,
-        }));
-        results.sort_by(|a, b| {
-            let key = |v: &serde_json::Value| {
-                v.get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned()
-            };
-            key(a).cmp(&key(b))
-        });
+        results.push(RuleResult { id: SCHEMA_PSEUDO_RULE, name: "frontmatter-schema", description: "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections. Not configurable through lint-rules — edit the schema with `hyalo types set`.", default_enabled: true, default_severity: "error".to_owned(), effective_enabled: true, effective_severity: "error".to_owned(), autofixable: false, source: "hyalo-schema", has_override: Some(false), configurable: Some(false), activation: None, r#override: None, note: None });
+        results.sort_by(|a, b| a.id.cmp(b.id));
     }
 
     let _ = config_dir; // not used currently, kept for potential future hints
     let total = results.len() as u64;
-    let val = serde_json::json!(results);
-    CommandOutcome::success_with_total(format_success(Format::Json, &val), total)
+    CommandOutcome::success_with_total(format_output(Format::Json, &results), total)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,22 +109,26 @@ pub(crate) fn show_rule(
     // UX-5 (iter-274): `SCHEMA` is listed and selectable, so it must also be
     // inspectable — a catalog entry `show` refuses is worse than no entry.
     if rule_id.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) {
-        return CommandOutcome::success(format_success(
+        return CommandOutcome::success(format_output(
             Format::Json,
-            &serde_json::json!({
-                "id": SCHEMA_PSEUDO_RULE,
-                "name": "frontmatter-schema",
-                "description": "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
-                "default_enabled": true,
-                "default_severity": "error",
-                "effective_enabled": true,
-                "effective_severity": "error",
-                "autofixable": false,
-                "source": "hyalo-schema",
-                "configurable": false,
-                "override": serde_json::Value::Null,
-                "note": "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
-            }),
+            &RuleResult {
+                id: SCHEMA_PSEUDO_RULE,
+                name: "frontmatter-schema",
+                description: "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
+                default_enabled: true,
+                default_severity: "error".to_owned(),
+                effective_enabled: true,
+                effective_severity: "error".to_owned(),
+                autofixable: false,
+                source: "hyalo-schema",
+                has_override: None,
+                configurable: Some(false),
+                activation: None,
+                r#override: Some(None),
+                note: Some(
+                    "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
+                ),
+            },
         ));
     }
     let Some(entry) = engine.rule_entry(rule_id) else {
@@ -166,41 +146,27 @@ pub(crate) fn show_rule(
     let override_entry = md_lint.rules.get(rule_id);
     let activation = activation_for(&entry.id, schema);
 
-    let mut val = serde_json::json!({
-        "id": entry.id,
-        "name": entry.name,
-        "description": entry.description,
-        "default_enabled": entry.default_enabled,
-        "default_severity": format!("{}", entry.default_severity),
-        "effective_enabled": eff_enabled,
-        "effective_severity": format!("{}", eff_sev),
-        "autofixable": entry.autofixable,
-        "source": entry.source,
-        // iter-274 (UX-14): report what the override actually SETS. A rule
-        // whose `.hyalo.toml` entry pins only the severity used to render
-        // `enabled: null`, which reads as "unknown" rather than "not
-        // overridden" — and the reader then had to know that `effective_enabled`
-        // is the answer. An unset dimension is now simply absent from the
-        // object, so every key present in `override` is a value the config set.
-        "override": override_entry.map(|ov| {
-            let mut o = serde_json::Map::new();
-            if let Some(enabled) = ov.enabled() {
-                o.insert("enabled".to_owned(), serde_json::json!(enabled));
-            }
-            if let Some(severity) = ov.severity() {
-                o.insert("severity".to_owned(), serde_json::json!(severity));
-            }
-            serde_json::Value::Object(o)
-        }),
-    });
-    if let Some(act) = activation {
-        val["activation"] = serde_json::json!({
-            "predicate": act.predicate,
-            "satisfied": act.satisfied,
-        });
-    }
+    let val = RuleResult {
+        id: &entry.id,
+        name: &entry.name,
+        description: &entry.description,
+        default_enabled: entry.default_enabled,
+        default_severity: format!("{}", entry.default_severity),
+        effective_enabled: eff_enabled,
+        effective_severity: format!("{eff_sev}"),
+        autofixable: entry.autofixable,
+        source: &entry.source,
+        has_override: None,
+        activation,
+        configurable: None,
+        r#override: Some(override_entry.map(|ov| RuleOverrideResult {
+            enabled: ov.enabled(),
+            severity: ov.severity(),
+        })),
+        note: None,
+    };
 
-    CommandOutcome::success(format_success(Format::Json, &val))
+    CommandOutcome::success(format_output(Format::Json, &val))
 }
 
 // ---------------------------------------------------------------------------
@@ -390,25 +356,27 @@ pub(crate) fn set_rule(
         // distinguish a tautological dry-run (no diff) from one that would
         // mutate the file.
         let would_write = new_contents != contents;
-        let val = serde_json::json!({
-            "action": "set",
-            "rule_id": rule_id,
-            "dry_run": true,
-            "enabled": enabled,
-            "severity": severity,
-            "before": {
-                "enabled": before_enabled,
-                "severity": before_severity,
+        let val = RuleMutationResult {
+            action: "set",
+            rule_id,
+            dry_run: true,
+            enabled: Some(enabled),
+            severity: Some(severity),
+            before: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
             },
-            "after": {
-                "enabled": after_enabled,
-                "severity": after_severity,
+            after: RuleStateResult {
+                enabled: after_enabled,
+                severity: &after_severity,
             },
-            "config_path": path_str,
-            "preview": new_contents,
-            "wrote": would_write,
-        });
-        return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
+            config_path: &path_str,
+            preview: Some(&new_contents),
+            wrote: Some(would_write),
+            removed: None,
+            reason: None,
+        };
+        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
     }
 
     // Skip the write when the on-disk content would not change (BUG-2:
@@ -422,24 +390,27 @@ pub(crate) fn set_rule(
         true
     };
 
-    let val = serde_json::json!({
-        "action": "set",
-        "rule_id": rule_id,
-        "dry_run": false,
-        "enabled": enabled,
-        "severity": severity,
-        "before": {
-            "enabled": before_enabled,
-            "severity": before_severity,
+    let val = RuleMutationResult {
+        action: "set",
+        rule_id,
+        dry_run: false,
+        enabled: Some(enabled),
+        severity: Some(severity),
+        before: RuleStateResult {
+            enabled: before_enabled,
+            severity: &before_severity,
         },
-        "after": {
-            "enabled": after_enabled,
-            "severity": after_severity,
+        after: RuleStateResult {
+            enabled: after_enabled,
+            severity: &after_severity,
         },
-        "config_path": path_str,
-        "wrote": wrote,
-    });
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+        config_path: &path_str,
+        preview: None,
+        wrote: Some(wrote),
+        removed: None,
+        reason: None,
+    };
+    Ok(CommandOutcome::success(format_output(Format::Json, &val)))
 }
 
 /// Get (creating if absent) the `[lint.rules]` table as a mutable `Item`.
@@ -525,17 +496,27 @@ pub(crate) fn remove_rule(
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // No config file — nothing to remove
-            let val = serde_json::json!({
-                "action": "remove",
-                "rule_id": rule_id,
-                "dry_run": dry_run,
-                "removed": false,
-                "reason": "no .hyalo.toml found",
-                "before": {"enabled": before_enabled, "severity": before_severity},
-                "after": {"enabled": before_enabled, "severity": before_severity},
-                "config_path": path_str,
-            });
-            return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
+            let val = RuleMutationResult {
+                action: "remove",
+                rule_id,
+                dry_run,
+                enabled: None,
+                severity: None,
+                before: RuleStateResult {
+                    enabled: before_enabled,
+                    severity: &before_severity,
+                },
+                after: RuleStateResult {
+                    enabled: before_enabled,
+                    severity: &before_severity,
+                },
+                config_path: &path_str,
+                preview: None,
+                wrote: None,
+                removed: Some(false),
+                reason: Some("no .hyalo.toml found"),
+            };
+            return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
         }
         Err(e) => return Err(e).with_context(|| format!("reading {}", toml_path.display())),
     };
@@ -552,17 +533,27 @@ pub(crate) fn remove_rule(
     }
 
     if !removed {
-        let val = serde_json::json!({
-            "action": "remove",
-            "rule_id": rule_id,
-            "dry_run": dry_run,
-            "removed": false,
-            "reason": "no override found",
-            "before": {"enabled": before_enabled, "severity": before_severity},
-            "after": {"enabled": before_enabled, "severity": before_severity},
-            "config_path": path_str,
-        });
-        return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
+        let val = RuleMutationResult {
+            action: "remove",
+            rule_id,
+            dry_run,
+            enabled: None,
+            severity: None,
+            before: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
+            },
+            after: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
+            },
+            config_path: &path_str,
+            preview: None,
+            wrote: None,
+            removed: Some(false),
+            reason: Some("no override found"),
+        };
+        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
     }
 
     let new_contents = doc.to_string();
@@ -572,31 +563,53 @@ pub(crate) fn remove_rule(
     let after_severity = format!("{}", entry.default_severity);
 
     if dry_run {
-        let val = serde_json::json!({
-            "action": "remove",
-            "rule_id": rule_id,
-            "dry_run": true,
-            "removed": true,
-            "before": {"enabled": before_enabled, "severity": before_severity},
-            "after": {"enabled": after_enabled, "severity": after_severity},
-            "config_path": path_str,
-        });
-        return Ok(CommandOutcome::success(format_success(Format::Json, &val)));
+        let val = RuleMutationResult {
+            action: "remove",
+            rule_id,
+            dry_run: true,
+            enabled: None,
+            severity: None,
+            before: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
+            },
+            after: RuleStateResult {
+                enabled: after_enabled,
+                severity: &after_severity,
+            },
+            config_path: &path_str,
+            preview: None,
+            wrote: None,
+            removed: Some(true),
+            reason: None,
+        };
+        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
     }
 
     std::fs::write(&toml_path, &new_contents)
         .with_context(|| format!("writing {}", toml_path.display()))?;
 
-    let val = serde_json::json!({
-        "action": "remove",
-        "rule_id": rule_id,
-        "dry_run": false,
-        "removed": true,
-        "before": {"enabled": before_enabled, "severity": before_severity},
-        "after": {"enabled": after_enabled, "severity": after_severity},
-        "config_path": path_str,
-    });
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+    let val = RuleMutationResult {
+        action: "remove",
+        rule_id,
+        dry_run: false,
+        enabled: None,
+        severity: None,
+        before: RuleStateResult {
+            enabled: before_enabled,
+            severity: &before_severity,
+        },
+        after: RuleStateResult {
+            enabled: after_enabled,
+            severity: &after_severity,
+        },
+        config_path: &path_str,
+        preview: None,
+        wrote: None,
+        removed: Some(true),
+        reason: None,
+    };
+    Ok(CommandOutcome::success(format_output(Format::Json, &val)))
 }
 
 /// Remove the `[lint.rules.<rule_id>]` entry (or scalar `rule_id = bool` entry)
@@ -670,8 +683,11 @@ fn compute_after_state(
 /// Activation predicate description for rules whose effective behaviour depends
 /// on schema state at runtime. Returns `None` for rules that always run when
 /// enabled.
+#[derive(serde::Serialize)]
 struct Activation {
+    /// Runtime condition required for this rule.
     predicate: String,
+    /// Whether this vault satisfies the runtime condition.
     satisfied: bool,
 }
 
@@ -1069,4 +1085,103 @@ pub(crate) fn run(
             )
         }
     }
+}
+
+/// Serialized RuleResult command contract.
+#[derive(serde::Serialize)]
+struct RuleResult<'a> {
+    /// Stable rule identifier.
+    id: &'a str,
+    /// Rule name.
+    name: &'a str,
+    /// Rule purpose and behavior.
+    description: &'a str,
+    /// Built-in enabled state.
+    default_enabled: bool,
+    /// Built-in severity.
+    default_severity: String,
+    /// Enabled state after overrides.
+    effective_enabled: bool,
+    /// Severity after overrides.
+    effective_severity: String,
+    /// Whether the rule supports automatic fixes.
+    autofixable: bool,
+    /// Rule provider.
+    source: &'a str,
+    /// Whether config overrides exist; list-only field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    has_override: Option<bool>,
+    /// Present and false for the schema pseudo-rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configurable: Option<bool>,
+    /// Runtime activation predicate when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activation: Option<Activation>,
+    /// Configured override dimensions; null when show finds none.
+    #[serde(rename = "override", skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::option_option)]
+    // Omitted, explicit null, and populated are distinct wire states.
+    r#override: Option<Option<RuleOverrideResult<'a>>>,
+    /// Additional schema configuration guidance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
+}
+
+/// Serialized RuleOverrideResult command contract.
+#[derive(serde::Serialize)]
+struct RuleOverrideResult<'a> {
+    /// Configured enabled state, omitted when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    /// Configured severity, omitted when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    severity: Option<&'a str>,
+}
+
+/// Serialized RuleStateResult command contract.
+#[derive(serde::Serialize)]
+struct RuleStateResult<'a> {
+    /// Effective enabled state.
+    enabled: bool,
+    /// Effective severity.
+    severity: &'a str,
+}
+
+/// Serialized RuleMutationResult command contract.
+#[derive(serde::Serialize)]
+struct RuleMutationResult<'a> {
+    /// Set or remove action.
+    action: &'a str,
+    /// Rule being configured.
+    rule_id: &'a str,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Requested enabled setting for set, including null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::option_option)]
+    // Omitted, explicit null, and populated are distinct wire states.
+    enabled: Option<Option<bool>>,
+    /// Requested severity for set, including null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::option_option)]
+    // Omitted, explicit null, and populated are distinct wire states.
+    severity: Option<Option<&'a str>>,
+    /// Effective state before the mutation.
+    before: RuleStateResult<'a>,
+    /// Effective state after the mutation.
+    after: RuleStateResult<'a>,
+    /// Path of the configuration file.
+    config_path: &'a str,
+    /// Proposed config content in set preview mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<&'a str>,
+    /// Whether set writes or would write different content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wrote: Option<bool>,
+    /// Whether remove found an override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    removed: Option<bool>,
+    /// Reason a remove action found nothing to remove.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a str>,
 }

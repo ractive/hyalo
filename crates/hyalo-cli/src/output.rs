@@ -1,10 +1,10 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use jaq_core::{Native, data};
 use jaq_json::Val;
 use serde::Serialize;
-use serde_json::json;
 
 // ---------------------------------------------------------------------------
 // Filter cache
@@ -140,7 +140,8 @@ pub(crate) fn sanitize_control_chars(s: &str) -> String {
         .collect()
 }
 
-/// Format a successful JSON value for output.
+/// Format an already-materialized JSON value without copying its tree.
+/// Typed contracts enter through [`format_output`] instead.
 #[must_use]
 pub fn format_success(format: Format, value: &serde_json::Value) -> String {
     match format {
@@ -161,21 +162,113 @@ pub fn format_success(format: Format, value: &serde_json::Value) -> String {
 /// can operate on a uniform representation.
 #[must_use]
 pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
-    let json = serde_json::to_value(value).expect("derived Serialize impl should not fail");
-    format_success(format, &json)
+    format_success(format, &output_value(value))
 }
 
-/// Serialize one hint for the JSON envelope.
-///
-/// `writes` is always present (never omitted when `false`) so a consumer can
-/// filter on it without having to distinguish "absent" from "read-only"
-/// (iter-201, M-7).
-fn hint_to_json(hint: &crate::hints::Hint) -> serde_json::Value {
-    serde_json::json!({
-        "description": &hint.description,
-        "cmd": &hint.cmd,
-        "writes": hint.writes,
-    })
+/// Convert a derived output contract to the sorted JSON representation used by
+/// the text/jq boundary. This retains the historic alphabetical object ordering.
+/// Output contracts contain only JSON-compatible fields and string map keys.
+pub(crate) fn output_value<T: Serialize>(value: &T) -> serde_json::Value {
+    serde_json::to_value(value).expect("derived Serialize impl should not fail")
+}
+
+/// Successful output contract. Optional metadata is omitted, including all
+/// counters when no file list was supplied; hints are always an array.
+#[derive(Serialize)]
+pub struct Envelope<'a, T: Serialize> {
+    /// Optional vault directory hoisted from the command result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dir: Option<String>,
+    /// Missing paths from an explicitly supplied file list, including zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) files_missing: Option<u64>,
+    /// Non-Markdown paths skipped from the supplied file list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) files_skipped_non_md: Option<u64>,
+    /// Paths outside the vault skipped from the supplied file list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) files_skipped_outside_vault: Option<u64>,
+    /// Read-only suggestions and explicitly marked mutation suggestions.
+    pub(crate) hints: &'a [crate::hints::Hint],
+    /// Named command output; arrays contain named result items.
+    pub(crate) results: T,
+    /// Total matching items before pagination, omitted for non-list commands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) total: Option<u64>,
+}
+
+impl<'a, T: Serialize> Envelope<'a, T> {
+    pub(crate) fn new(results: T, total: Option<u64>, hints: &'a [crate::hints::Hint]) -> Self {
+        Self {
+            dir: None,
+            files_missing: None,
+            files_skipped_non_md: None,
+            files_skipped_outside_vault: None,
+            hints,
+            results,
+            total,
+        }
+    }
+}
+
+impl<'a> Envelope<'a, Cow<'a, serde_json::Value>> {
+    /// Adapt the pipeline's erased result at its boundary, preserving the
+    /// historical summary directory hoist. Results stay borrowed unless the
+    /// hoist requires removing a directory key. Config constructs its envelope
+    /// directly because its inner directory is intentionally retained.
+    pub(crate) fn from_result(
+        value: &'a serde_json::Value,
+        total: Option<u64>,
+        hints: &'a [crate::hints::Hint],
+        counters: Option<&crate::commands::files_from::FilesFromCounters>,
+    ) -> Self {
+        let mut envelope = Self::new(Cow::Borrowed(value), total, hints);
+        if let Some(dir) = value.get("dir").and_then(serde_json::Value::as_str) {
+            envelope.dir = Some(dir.to_owned());
+            if let Some(result) = envelope.results.to_mut().as_object_mut() {
+                result.remove("dir");
+            }
+        }
+        if let Some(c) = counters {
+            envelope.files_missing = Some(c.files_missing);
+            envelope.files_skipped_non_md = Some(c.files_skipped_non_md);
+            envelope.files_skipped_outside_vault = Some(c.files_skipped_outside_vault);
+        }
+        envelope
+    }
+}
+
+/// Exit-1 error contract; the singular `hint` key is intentional.
+#[derive(Serialize)]
+struct ErrorEnvelope<'a> {
+    /// Underlying diagnostic, omitted when there is no additional cause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cause: Option<&'a str>,
+    /// User-facing description of the failure.
+    error: &'a str,
+    /// Suggested recovery action, omitted when unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<&'a str>,
+    /// Relevant path, omitted for failures unrelated to a specific path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<&'a str>,
+}
+
+/// Specialized frontmatter budget refusal, preserving its distinct wire shape.
+#[derive(Serialize)]
+struct BudgetErrorEnvelope<'a> {
+    /// Description of the size-budget failure.
+    error: &'a str,
+    /// Sanitized file path.
+    file: &'a str,
+    /// Maximum allowed frontmatter bytes.
+    limit_bytes: usize,
+    /// Maximum allowed frontmatter lines.
+    limit_lines: usize,
+    /// Proposed frontmatter bytes.
+    would_be_bytes: usize,
+    /// Proposed frontmatter lines.
+    would_be_lines: usize,
 }
 
 /// Append the `-> hyalo …` drill-down block to text output.
@@ -218,44 +311,6 @@ fn append_hint_lines(text: &mut String, hints: &[crate::hints::Hint]) {
     }
 }
 
-/// Build the JSON envelope value: `{"results": ..., "total": <optional>, "hints": [...]}`.
-///
-/// The envelope is always present even when hints is empty (hints becomes `[]`).
-/// `total` is included only when `Some`.
-#[must_use]
-pub fn build_envelope_value(
-    value: &serde_json::Value,
-    total: Option<u64>,
-    hints: &[crate::hints::Hint],
-) -> serde_json::Value {
-    let hints_json: Vec<serde_json::Value> = hints.iter().map(hint_to_json).collect();
-    let mut envelope = serde_json::json!({
-        "results": value,
-        "hints": hints_json,
-    });
-    if let Some(t) = total {
-        envelope["total"] = serde_json::json!(t);
-    }
-    // Hoist a top-level `dir` field when results carry one (e.g. `summary`),
-    // so consumers can read it without traversing into `results`. This matches
-    // the shape of `hyalo config --format json`, which surfaces `dir` at the
-    // top level. After hoisting, strip `dir` from the inner results so it
-    // is not duplicated at both `.dir` and `.results.dir` (NEW-5).
-    if let Some(dir) = value
-        .as_object()
-        .and_then(|o| o.get("dir"))
-        .and_then(serde_json::Value::as_str)
-    {
-        envelope["dir"] = serde_json::json!(dir);
-        // Remove from the results copy (envelope["results"] is already cloned
-        // by the json! macro above so the borrow on `value` is no longer active).
-        if let Some(obj) = envelope["results"].as_object_mut() {
-            obj.remove("dir");
-        }
-    }
-    envelope
-}
-
 /// Format the output envelope for the user.
 ///
 /// - **JSON**: serializes `{"results": ..., "total": <optional>, "hints": [...]}`
@@ -269,7 +324,7 @@ pub fn format_envelope(
 ) -> String {
     match format {
         Format::Json | Format::Github => {
-            let envelope = build_envelope_value(value, total, hints);
+            let envelope = output_value(&Envelope::from_result(value, total, hints, None));
             serde_json::to_string_pretty(&envelope)
                 .expect("serializing serde_json::Value is infallible")
         }
@@ -448,19 +503,15 @@ pub fn format_error(
     cause: Option<&str>,
 ) -> String {
     match format {
-        Format::Json | Format::Github => {
-            let mut obj = json!({"error": error});
-            if let Some(p) = path {
-                obj["path"] = json!(p);
-            }
-            if let Some(h) = hint {
-                obj["hint"] = json!(h);
-            }
-            if let Some(c) = cause {
-                obj["cause"] = json!(c);
-            }
-            serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
-        }
+        Format::Json | Format::Github => format_output(
+            Format::Json,
+            &ErrorEnvelope {
+                cause,
+                error,
+                hint,
+                path,
+            },
+        ),
         Format::Text => {
             // iter-267 (UX-18): lowercase `error:`, matching clap's own parse
             // errors and the Rust CLI convention. The two prefixes used to
@@ -497,17 +548,17 @@ pub fn format_budget_error(
 ) -> String {
     let safe_file = sanitize_control_chars(&e.file);
     match format {
-        Format::Json | Format::Github => {
-            let obj = serde_json::json!({
-                "error": "frontmatter would exceed size budget",
-                "limit_bytes": e.limit_bytes,
-                "would_be_bytes": e.would_be_bytes,
-                "limit_lines": e.limit_lines,
-                "would_be_lines": e.would_be_lines,
-                "file": safe_file,
-            });
-            serde_json::to_string_pretty(&obj).expect("serializing serde_json::Value is infallible")
-        }
+        Format::Json | Format::Github => format_output(
+            Format::Json,
+            &BudgetErrorEnvelope {
+                error: "frontmatter would exceed size budget",
+                file: &safe_file,
+                limit_bytes: e.limit_bytes,
+                limit_lines: e.limit_lines,
+                would_be_bytes: e.would_be_bytes,
+                would_be_lines: e.would_be_lines,
+            },
+        ),
         Format::Text => {
             format!(
                 "error: frontmatter would exceed size budget\n  file: {}\n  would_be_bytes: {} (limit {})\n  would_be_lines: {} (limit {})",

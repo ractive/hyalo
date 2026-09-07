@@ -118,9 +118,11 @@ pub fn drop_index(
         }
     }
 
-    let result = serde_json::json!({
-        "deleted": index_path.display().to_string(),
-    });
+    let result = crate::output::output_value(
+        &(DropIndexResult {
+            deleted: &index_path.display().to_string(),
+        }),
+    );
 
     Ok(CommandOutcome::success(format_success(format, &result)))
 }
@@ -135,4 +137,11 @@ fn index_not_found_error(format: Format, index_path: &Path) -> String {
         Some("create one with `hyalo create-index`"),
         None,
     )
+}
+
+/// Serialized DropIndexResult command contract.
+#[derive(serde::Serialize)]
+struct DropIndexResult<'a> {
+    /// Path of the deleted index.
+    deleted: &'a str,
 }

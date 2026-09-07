@@ -5,7 +5,7 @@ use hyalo_core::discovery;
 use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
 use std::path::{Path, PathBuf};
 
-use crate::output::{CommandOutcome, Format, format_success};
+use crate::output::{CommandOutcome, Format, format_output};
 
 /// Build a snapshot index from disk and write it to `output` (default:
 /// `<dir>/.hyalo-index`).
@@ -165,14 +165,26 @@ pub fn create_index(
     }
 
     let file_count = build.index.entries().len();
-    let mut result = serde_json::json!({
-        "path": index_path.display().to_string(),
-        "files_indexed": file_count,
-        "warnings": build.warnings.len(),
-    });
-    if replacing_existing {
-        result["note"] = serde_json::json!("replaced existing index");
-    }
+    let result = CreateIndexResult {
+        path: index_path.display().to_string(),
+        files_indexed: file_count,
+        warnings: build.warnings.len(),
+        note: replacing_existing.then_some("replaced existing index"),
+    };
 
-    Ok(CommandOutcome::success(format_success(format, &result)))
+    Ok(CommandOutcome::success(format_output(format, &result)))
+}
+
+/// Serialized CreateIndexResult command contract.
+#[derive(serde::Serialize)]
+struct CreateIndexResult<'a> {
+    /// Path of the created index.
+    path: String,
+    /// Number of indexed Markdown files.
+    files_indexed: usize,
+    /// Number of scan warnings.
+    warnings: usize,
+    /// Replacement notice, omitted for a new index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<&'a str>,
 }

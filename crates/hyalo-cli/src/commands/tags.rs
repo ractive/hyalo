@@ -161,22 +161,32 @@ pub fn tags_summary(
 /// appeared in.
 #[derive(Debug, Serialize)]
 pub struct RenamedTag {
+    /// Original path or value.
     pub from: String,
+    /// Destination path or value.
     pub to: String,
+    /// Number of files containing this renamed tag.
     pub files: usize,
 }
 
 /// Result of a `tags rename` operation.
 #[derive(Debug, Serialize)]
 pub struct RenameTagResult {
+    /// Original path or value.
     pub from: String,
+    /// Destination path or value.
     pub to: String,
+    /// Whether this result describes a preview without writing changes.
     pub dry_run: bool,
+    /// Vault-relative files whose content changed.
     pub modified: Vec<String>,
     /// Every tag the rename actually touched, parent and children alike.
     pub renamed_tags: Vec<RenamedTag>,
+    /// Number of files left unchanged.
     pub skipped_count: usize,
+    /// Total number of considered items.
     pub total: usize,
+    /// Number of files scanned.
     pub scanned: usize,
 }
 

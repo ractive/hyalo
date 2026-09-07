@@ -17,13 +17,16 @@ use hyalo_core::schema::SchemaConfig;
 /// Result of a `set --property K=V` operation across files.
 #[derive(Debug, Serialize)]
 pub(crate) struct SetPropertyResult {
+    /// User-defined frontmatter property name.
     pub(crate) property: String,
     /// The coerced value that was written to the frontmatter, not the raw input
     /// string. For a list assignment like `x=[a, b]` this echoes the parsed YAML
     /// list `["a", "b"]` rather than the literal `"[a, b]"` the user typed
     /// (iter-181 task 3).
     pub(crate) value: Value,
+    /// Vault-relative files whose content changed.
     pub(crate) modified: Vec<String>,
+    /// Vault-relative files left unchanged.
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar.
     ///
@@ -39,8 +42,11 @@ pub(crate) struct SetPropertyResult {
     /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
     /// needed changing" and "nothing could be changed".
     pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
+    /// Total number of considered items.
     pub(crate) total: usize,
+    /// Number of files scanned.
     pub(crate) scanned: usize,
+    /// Whether this result describes a preview without writing changes.
     pub(crate) dry_run: bool,
     /// Files where this `set` replaced an existing **list** value with a
     /// scalar (iter-262, UX-12 / DEC-270).
@@ -54,14 +60,18 @@ pub(crate) struct SetPropertyResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) list_collapsed: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Additional explanation of the mutation outcome.
     pub(crate) note: Option<String>,
 }
 
 /// Result of a `set --tag T` operation across files.
 #[derive(Debug, Serialize)]
 pub(crate) struct SetTagResult {
+    /// Tag being added or removed.
     pub(crate) tag: String,
+    /// Vault-relative files whose content changed.
     pub(crate) modified: Vec<String>,
+    /// Vault-relative files left unchanged.
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar — see [`SetPropertyResult::skipped_count`].
     pub(crate) skipped_count: usize,
@@ -71,8 +81,11 @@ pub(crate) struct SetTagResult {
     /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
     /// needed changing" and "nothing could be changed".
     pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
+    /// Total number of considered items.
     pub(crate) total: usize,
+    /// Number of files scanned.
     pub(crate) scanned: usize,
+    /// Whether this result describes a preview without writing changes.
     pub(crate) dry_run: bool,
 }
 

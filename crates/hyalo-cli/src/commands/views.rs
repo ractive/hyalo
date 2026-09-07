@@ -53,17 +53,12 @@ pub(crate) fn load_views(dir: &Path) -> HashMap<String, FindFilters> {
 /// List all saved views.
 pub(crate) fn list_views(dir: &Path, _format: Format) -> Result<CommandOutcome> {
     let views = load_views(dir);
-    let mut items: Vec<serde_json::Value> = Vec::new();
+    let mut items: Vec<ViewResult> = Vec::new();
     let mut sorted_keys: Vec<&String> = views.keys().collect();
     sorted_keys.sort();
     for name in sorted_keys {
         let filters = &views[name];
-        let filters_json =
-            serde_json::to_value(filters).context("failed to serialize view filters")?;
-        items.push(serde_json::json!({
-            "name": name,
-            "filters": filters_json,
-        }));
+        items.push(ViewResult { name, filters });
     }
     let total = items.len() as u64;
     let output = serde_json::to_string_pretty(&items).context("failed to serialize views list")?;
@@ -135,10 +130,10 @@ pub(crate) fn set_view(
 
     write_toml_doc(&toml_path, &doc)?;
 
-    let output = serde_json::to_string_pretty(&serde_json::json!({
-        "action": "set",
-        "name": name,
-    }))
+    let output = serde_json::to_string_pretty(&ViewMutationResult {
+        action: "set",
+        name,
+    })
     .context("failed to serialize result")?;
     Ok(CommandOutcome::success(output))
 }
@@ -175,10 +170,10 @@ pub(crate) fn remove_view(dir: &Path, name: &str, format: Format) -> Result<Comm
 
     write_toml_doc(&toml_path, &doc)?;
 
-    let output = serde_json::to_string_pretty(&serde_json::json!({
-        "action": "removed",
-        "name": name,
-    }))
+    let output = serde_json::to_string_pretty(&ViewMutationResult {
+        action: "removed",
+        name,
+    })
     .context("failed to serialize result")?;
     Ok(CommandOutcome::success(output))
 }
@@ -658,4 +653,22 @@ pub(crate) fn run(
             }
         }
     }
+}
+
+/// Serialized ViewResult command contract.
+#[derive(serde::Serialize)]
+struct ViewResult<'a> {
+    /// Saved view name.
+    name: &'a str,
+    /// Typed saved find filters.
+    filters: &'a FindFilters,
+}
+
+/// Serialized ViewMutationResult command contract.
+#[derive(serde::Serialize)]
+struct ViewMutationResult<'a> {
+    /// Configuration mutation action.
+    action: &'a str,
+    /// Saved view name.
+    name: &'a str,
 }

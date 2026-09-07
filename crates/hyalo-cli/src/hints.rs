@@ -51,9 +51,11 @@ pub struct BodySearchSuggestion {
 }
 
 /// A single drill-down hint: a concrete command plus a short human-readable description.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Hint {
+    /// Human-readable purpose of the suggested command.
     pub(crate) description: String,
+    /// Concrete command to run, or empty for advice-only hints.
     pub(crate) cmd: String,
     /// `true` when running `cmd` would modify the vault or `.hyalo.toml`.
     ///

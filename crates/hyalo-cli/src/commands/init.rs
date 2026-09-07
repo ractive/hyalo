@@ -211,7 +211,8 @@ impl Report {
     /// strings cannot fail; an empty object is returned instead of panicking.
     #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::to_value(self)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
     }
 }
 

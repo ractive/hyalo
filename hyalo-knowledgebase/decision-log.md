@@ -10,6 +10,28 @@ status: reference
 
 # Decision Log
 
+## DEC-331: Named output contracts preserve the existing JSON wire format (2026-09-07)
+
+**Decision:** Every command result is a named serializable struct, or a collection
+of named result items. Fixed fields use concrete Rust types; only authored
+frontmatter values retain a documented dynamic JSON value. Shared envelope
+metadata and ordinary errors have typed contracts, including the singular `hint`
+error field. Optional fields distinguish omission from explicit JSON `null`.
+
+`check-typed-output` parses production command modules and rejects `json!` calls,
+while excluding actual test-only syntax. The serialization boundary retains
+alphabetical object ordering and the existing directory-hoist and file-counter
+conventions. The pi manifest gate also compares the canonical, root and embedded
+package versions with the Cargo workspace; the Codex plugin version is independent.
+
+**Why:** Named contracts make field changes reviewable and prepare iteration 287's
+TypeScript API. They do not prove semantic correctness. Iteration 285 compares
+original renderer logic against the new structs on integration-suite fixtures,
+preserves the existing snapshots, and archives temporary parity shims and their
+execution evidence before removing them. See
+[[iterations/iteration-285-typed-output-structs]] and
+[[research/stability-retrospective-2026-09-06]].
+
 ## DEC-327: Codex skills and plugin share one canonical package (2026-09-06)
 
 **Decision:** Ship Codex skills in `plugins/hyalo/skills/` and mirror them inside

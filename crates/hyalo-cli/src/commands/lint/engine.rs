@@ -578,7 +578,7 @@ pub(super) struct InternalViolation {
     pub(super) column: usize,
     pub(super) message: String,
     pub(super) severity: String,
-    pub(super) fix: Option<serde_json::Value>,
+    pub(super) fix: Option<hyalo_mdlint::DiagFix>,
     /// True when this body diagnostic's fix was successfully applied during
     /// the current fix-mode run. Always `false` for read-only and frontmatter
     /// (SCHEMA) violations — frontmatter fixes are tracked separately via

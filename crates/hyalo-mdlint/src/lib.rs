@@ -56,7 +56,7 @@ impl std::fmt::Display for DiagSeverity {
 
 /// A byte-range autofix for a single violation in the body portion of a file.
 /// `start`/`end` are byte offsets from the beginning of the **body** (post-frontmatter) content.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DiagFix {
     /// Human-readable description of the fix.
     pub description: String,

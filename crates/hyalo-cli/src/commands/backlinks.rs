@@ -9,8 +9,11 @@ use hyalo_core::link_graph::is_self_link;
 
 #[derive(Serialize)]
 struct BacklinkItem {
+    /// Vault-relative file containing the authored link.
     source: String,
+    /// One-based source line number.
     line: usize,
+    /// Resolved or authored link target, according to the command.
     target: String,
     /// The link's own target text, exactly as `LinkGraph::build` left it —
     /// relative path components resolved (so `../target.md` reports
@@ -37,6 +40,7 @@ struct BacklinkItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     property: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Label reported for this result.
     label: Option<String>,
 }
 
@@ -115,7 +119,10 @@ pub fn backlinks(
             label: e.link.label.clone(),
         })
         .collect();
-    let result = serde_json::json!({ "file": rel, "backlinks": items });
+    let result = BacklinksResult {
+        file: &rel,
+        backlinks: &items,
+    };
     Ok(CommandOutcome::success_with_total(
         serde_json::to_string_pretty(&result).context("failed to serialize")?,
         total,
@@ -189,4 +196,13 @@ pub(crate) fn run(
             }
         }
     }
+}
+
+/// Serialized BacklinksResult command contract.
+#[derive(serde::Serialize)]
+struct BacklinksResult<'a> {
+    /// Vault-relative target path.
+    file: &'a str,
+    /// Inbound authored links to the target.
+    backlinks: &'a [BacklinkItem],
 }

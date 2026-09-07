@@ -776,14 +776,7 @@ pub(super) fn lint_one_file_extended(
     // followed by whatever remains after the loop above (or the single
     // read-only lint pass, when fix-mode is off).
     let diag_to_violation = |d: hyalo_mdlint::Diagnostic, fixed: bool| {
-        let fix = d.fix.as_ref().map(|f| {
-            serde_json::json!({
-                "description": f.description,
-                "start": f.start,
-                "end": f.end,
-                "replacement": f.replacement,
-            })
-        });
+        let fix = d.fix;
         InternalViolation {
             line: to_file_line(d.line),
             column: d.column,

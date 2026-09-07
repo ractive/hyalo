@@ -122,20 +122,24 @@ pub fn run_toc(
         "unchanged"
     };
 
-    let mut payload = serde_json::json!({
-        "command": "madr toc",
-        "apply": apply,
-        "dry_run": !apply,
-        "adr_dir": adr_rel,
-        "adrs": entries.len(),
-        "changed": changed,
-        "file": plan.rel_path,
-        "action": action,
-        "hint": crate::commands::profile_lint_hint("madr", active_profiles, "validate ADR conformance"),
-    });
-    if action == "adopt" {
-        payload["preserved_lines"] = serde_json::Value::from(plan.old_content.lines().count());
-    }
+    let payload = crate::output::output_value(
+        &(MadrTocResult {
+            command: "madr toc",
+            apply,
+            dry_run: !apply,
+            adr_dir: adr_rel,
+            adrs: entries.len(),
+            changed,
+            file: &(plan.rel_path),
+            action,
+            hint: &(crate::commands::profile_lint_hint(
+                "madr",
+                active_profiles,
+                "validate ADR conformance",
+            )),
+            preserved_lines: (action == "adopt").then(|| plan.old_content.lines().count()),
+        }),
+    );
 
     let exit_override = if !apply && changed { Some(1) } else { None };
 
@@ -633,4 +637,30 @@ pub(crate) fn run(
             Ok(outcome)
         }
     }
+}
+
+/// Serialized MadrTocResult command contract.
+#[derive(serde::Serialize)]
+struct MadrTocResult<'a> {
+    /// Invoked command name.
+    command: &'a str,
+    /// Whether apply was requested.
+    apply: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// ADR directory relative to the vault.
+    adr_dir: &'a str,
+    /// Number of ADR entries.
+    adrs: usize,
+    /// Whether the TOC differs.
+    changed: bool,
+    /// Generated TOC path.
+    file: &'a str,
+    /// Planned or performed action.
+    action: &'a str,
+    /// Follow-up profile lint command.
+    hint: &'a str,
+    /// Existing lines preserved during adoption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preserved_lines: Option<usize>,
 }

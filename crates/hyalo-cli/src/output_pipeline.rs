@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::commands::files_from::FilesFromCounters;
 use crate::hints::{FilesFromCounterSummary, HintContext, generate_hints_with_counters};
-use crate::output::{CommandOutcome, Format, apply_jq_filter_result, build_envelope_value};
+use crate::output::{CommandOutcome, Envelope, Format, apply_jq_filter_result, output_value};
 
 /// Error message for `--count` on non-list commands (shared across match arms).
 ///
@@ -37,43 +37,6 @@ pub(crate) struct OutputPipeline<'a> {
     /// resolves annotations against the repo root. Empty when the vault dir is
     /// the CWD. Only consulted when `user_format == Format::Github`.
     pub github_path_prefix: String,
-}
-
-/// Inject `files_missing`, `files_skipped_non_md`, and `files_skipped_outside_vault`
-/// counters as **top-level** envelope keys when `--files-from` was used.
-///
-/// When `counters` is `None` (no `--files-from` on this invocation, and not a
-/// command that always reports them), the envelope is left untouched and the
-/// fields are omitted entirely. When `counters` is `Some`, all three fields are
-/// written — including zero values — so consumers can reliably distinguish
-/// "used `--files-from`, zero skips" from "`--files-from` was not used".
-///
-/// iter-264 (BUG-22): the counters used to live *inside* `results`, which meant
-/// `find --files-from -` promoted its result array to
-/// `{"files": [...], "files_missing": N, …}` while `find --file` returned the
-/// bare array — the same query answered in two shapes, so `.results[0]` worked
-/// for one and not the other. They are siblings of `results` now, next to
-/// `total` and `hints`, and `results` keeps whatever shape the command gives it.
-fn inject_files_from_counters(
-    envelope: &mut serde_json::Value,
-    counters: Option<&FilesFromCounters>,
-) {
-    let Some(c) = counters else { return };
-    let Some(envelope_obj) = envelope.as_object_mut() else {
-        return;
-    };
-    envelope_obj.insert(
-        "files_missing".to_owned(),
-        serde_json::json!(c.files_missing),
-    );
-    envelope_obj.insert(
-        "files_skipped_non_md".to_owned(),
-        serde_json::json!(c.files_skipped_non_md),
-    );
-    envelope_obj.insert(
-        "files_skipped_outside_vault".to_owned(),
-        serde_json::json!(c.files_skipped_outside_vault),
-    );
 }
 
 impl OutputPipeline<'_> {
@@ -190,8 +153,12 @@ impl OutputPipeline<'_> {
 
                 if let Some(filter) = self.jq_filter {
                     // Build the full envelope first so jq can address any field.
-                    let mut envelope = build_envelope_value(&value, total, &hints);
-                    inject_files_from_counters(&mut envelope, self.files_from_counters.as_ref());
+                    let envelope = output_value(&Envelope::from_result(
+                        &value,
+                        total,
+                        &hints,
+                        self.files_from_counters.as_ref(),
+                    ));
                     match apply_jq_filter_result(filter, &envelope) {
                         Ok(filtered) => println!("{filtered}"),
                         Err(e) => {
@@ -207,8 +174,12 @@ impl OutputPipeline<'_> {
                         }
                     }
                 } else {
-                    let mut envelope = build_envelope_value(&value, total, &hints);
-                    inject_files_from_counters(&mut envelope, self.files_from_counters.as_ref());
+                    let envelope = output_value(&Envelope::from_result(
+                        &value,
+                        total,
+                        &hints,
+                        self.files_from_counters.as_ref(),
+                    ));
                     let formatted = crate::output::format_prebuilt_envelope(
                         self.user_format,
                         &envelope,
