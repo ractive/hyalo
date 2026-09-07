@@ -459,25 +459,14 @@ pub fn run(
         Some(n) => n,
         None => scanner::count_file_lines(&full_path)?,
     };
-    let mut obj = serde_json::json!({
-        "file": rel_path,
-        "size": file_size,
-        "lines": total_lines,
-    });
-    if let Some(ref props) = fm_value {
-        let json_val =
-            serde_json::to_value(props).context("failed to serialize frontmatter as JSON")?;
-        obj["frontmatter"] = json_val;
-        // The parsed map stays the machine-readable shape; `frontmatter_raw`
-        // carries the block's exact source text beside it (iter-266 OUT-1).
-        obj["frontmatter_raw"] = match fm_raw {
-            Some(ref raw) => serde_json::json!(raw),
-            None => serde_json::Value::Null,
-        };
-    }
-    if need_body {
-        obj["content"] = serde_json::json!(content_str);
-    }
+    let obj = ReadResult {
+        file: &rel_path,
+        size: file_size,
+        lines: total_lines,
+        frontmatter: fm_value.as_ref().map(crate::output::output_value),
+        frontmatter_raw: fm_value.as_ref().map(|_| fm_raw.as_deref()),
+        content: need_body.then_some(content_str.as_str()),
+    };
 
     // For JSON user format: return structured JSON (pipeline wraps in envelope).
     // For text user format: return raw text (bypasses pipeline).
@@ -1025,4 +1014,26 @@ pub(crate) fn run_command(
             )
         }
     }
+}
+
+/// Serialized ReadResult command contract.
+#[derive(serde::Serialize)]
+struct ReadResult<'a> {
+    /// Vault-relative file path.
+    file: &'a str,
+    /// Size of the whole file in bytes.
+    size: u64,
+    /// Line count of the whole file, before section selection.
+    lines: usize,
+    /// Parsed user-authored frontmatter, whose keys and values are genuinely dynamic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frontmatter: Option<serde_json::Value>,
+    /// Exact frontmatter source; null when requested but no source block exists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::option_option)]
+    // Omitted, explicit null, and populated are distinct wire states.
+    frontmatter_raw: Option<Option<&'a str>>,
+    /// Selected body text, omitted for frontmatter-only reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
 }

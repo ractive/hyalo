@@ -16,11 +16,14 @@ use hyalo_core::frontmatter;
 /// Result of a `remove --property K` (or `K=V`) operation across files.
 #[derive(Debug, Serialize)]
 pub(crate) struct RemovePropertyResult {
+    /// User-defined frontmatter property name.
     pub(crate) property: String,
     /// Present when `remove --property K=V` was used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) value: Option<String>,
+    /// Vault-relative files whose content changed.
     pub(crate) modified: Vec<String>,
+    /// Vault-relative files left unchanged.
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar (iter-216 D-1) — the whole
     /// mutation family exposes this key so one query answers "how many were
@@ -32,16 +35,22 @@ pub(crate) struct RemovePropertyResult {
     /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
     /// needed changing" and "nothing could be changed".
     pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
+    /// Total number of considered items.
     pub(crate) total: usize,
+    /// Number of files scanned.
     pub(crate) scanned: usize,
+    /// Whether this result describes a preview without writing changes.
     pub(crate) dry_run: bool,
 }
 
 /// Result of a `remove --tag T` operation across files.
 #[derive(Debug, Serialize)]
 pub(crate) struct RemoveTagResult {
+    /// Tag being added or removed.
     pub(crate) tag: String,
+    /// Vault-relative files whose content changed.
     pub(crate) modified: Vec<String>,
+    /// Vault-relative files left unchanged.
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar (iter-216 D-1) — the whole
     /// mutation family exposes this key so one query answers "how many were
@@ -53,8 +62,11 @@ pub(crate) struct RemoveTagResult {
     /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
     /// needed changing" and "nothing could be changed".
     pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
+    /// Total number of considered items.
     pub(crate) total: usize,
+    /// Number of files scanned.
     pub(crate) scanned: usize,
+    /// Whether this result describes a preview without writing changes.
     pub(crate) dry_run: bool,
 }
 

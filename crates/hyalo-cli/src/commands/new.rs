@@ -10,7 +10,7 @@ use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default};
 
 use anyhow::Result;
 
-use crate::output::{CommandOutcome, Format, format_error, format_success};
+use crate::output::{CommandOutcome, Format, format_error, format_output};
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -160,16 +160,14 @@ pub(crate) fn create_new(
         let out = match format {
             Format::Text => format!("[dry-run] would create {rel_path}\n\n{content}"),
             Format::Json | Format::Github => {
-                let val = serde_json::json!({
-                    "type": type_name,
-                    "file": rel_path,
-                    "created": false,
-                    "dry_run": true,
-                    // The scaffold itself, so a preview does not require a
-                    // second command to see what would land on disk.
-                    "content": content,
-                });
-                format_success(Format::Json, &val)
+                let val = NewResult {
+                    r#type: type_name,
+                    file: rel_path,
+                    created: false,
+                    dry_run: true,
+                    content: Some(&content),
+                };
+                format_output(Format::Json, &val)
             }
         };
         return Ok(CommandOutcome::success(out));
@@ -214,16 +212,14 @@ pub(crate) fn create_new(
         Format::Text => format!("created {rel_path}\n"),
         // `github` is rejected for non-lint commands upstream; treat as JSON here.
         Format::Json | Format::Github => {
-            let val = serde_json::json!({
-                "type": type_name,
-                "file": rel_path,
-                "created": true,
-                // iter-256 COH-9: `new` has no --dry-run, but the mutation
-                // envelope contract says every object-shaped mutation result
-                // carries `dry_run`, so scripts can branch on one key.
-                "dry_run": false,
-            });
-            format_success(Format::Json, &val)
+            let val = NewResult {
+                r#type: type_name,
+                file: rel_path,
+                created: true,
+                dry_run: false,
+                content: None,
+            };
+            format_output(Format::Json, &val)
         }
     };
     Ok(CommandOutcome::success(out))
@@ -451,4 +447,21 @@ fn yaml_scalar(s: &str) -> String {
     } else {
         s.to_owned()
     }
+}
+
+/// Serialized NewResult command contract.
+#[derive(serde::Serialize)]
+struct NewResult<'a> {
+    /// Document schema type.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// Created or proposed vault-relative path.
+    file: &'a str,
+    /// Whether the file was created.
+    created: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Scaffold source included only in a preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
 }

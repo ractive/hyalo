@@ -82,15 +82,14 @@ impl FuzzyApply {
 /// The JSON `strategy` field keeps the PascalCase enum variant for machine
 /// consumers; `rule` is the presentation-level spelling the text renderer
 /// prints in brackets (`[basename-fallback 0.7]`).
-fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<serde_json::Value> {
+fn fixes_with_rule(fixes: &[hyalo_core::link_fix::FixPlan]) -> Vec<FixResult<'_>> {
     fixes
         .iter()
-        .map(|f| {
-            let mut v = serde_json::to_value(f).unwrap_or(serde_json::Value::Null);
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("rule".to_owned(), serde_json::json!(f.strategy.code()));
-            }
-            v
+        .map(|f| FixResult {
+            plan: f,
+            rule: f.strategy.code(),
+            below_floor: None,
+            col: None,
         })
         .collect()
 }
@@ -517,18 +516,8 @@ pub fn links_fix(
     // fix's own rule code into the payload and let the renderer use it.
     let mut fuzzy_json = fixes_with_rule(&fuzzy_fixes);
     for (v, f) in fuzzy_json.iter_mut().zip(fuzzy_fixes.iter()) {
-        if let Some(obj) = v.as_object_mut() {
-            obj.insert(
-                "below_floor".to_owned(),
-                serde_json::json!(f.confidence < fuzzy.floor()),
-            );
-            // NEW-18 (dogfood pre3): only when it can be found — a stale
-            // proposal whose on-disk text has already changed (or a read
-            // failure) simply omits `col` rather than reporting a wrong one.
-            if let Some(col) = find_column(dir, &f.source, f.line, &f.old_target) {
-                obj.insert("col".to_owned(), serde_json::json!(col));
-            }
-        }
+        v.below_floor = Some(f.confidence < fuzzy.floor());
+        v.col = find_column(dir, &f.source, f.line, &f.old_target);
     }
 
     let unapplied_count = unapplied_fixes.len();
@@ -616,79 +605,39 @@ pub fn links_fix(
     let templated_links = fix_report.templated.clone();
     let templated_count = templated_links.len();
 
-    let output = serde_json::json!({
-        "broken": broken.len(),
-        // NEW-15 / UX-2 (dogfood pre3): counted only when `broken` is empty
-        // (see above) — `Some(0)` either means genuinely no dead anchors, or
-        // that targets are broken too and this run didn't check (targets
-        // take priority; fix those first). `find --broken-links` remains the
-        // source of truth for the full picture including this case. `null`
-        // (PR #251 review L6) means the vault directory itself could not be
-        // canonicalized — a real "could not check", not a clean bill.
-        "broken_anchors": broken_anchor_count,
-        // `fixable`/`fixes` cover only the non-fuzzy (certain) fixes that
-        // plain `--apply` writes. Fuzzy matches are reported exclusively in
-        // the `fuzzy`/`fuzzy_fixes` bucket below — counting them here too
-        // would make "Fixable: N" (and the "Apply N fixes" hint) overpromise
-        // what a plain `--apply` actually writes.
-        "fixable": certain_fixes.len(),
-        "unfixable": unfixable_links.len(),
-        "ignored": ignored_count,
-        "fixes": certain_fixes,
-        "unfixable_links": unfixable_links,
-        "applied": !dry_run && !applied_fixes.is_empty(),
-        // BUG-2 (iter-243): `applied` means "something was actually written",
-        // not "apply mode was requested" — an agent reading `applied: true`
-        // next to `fixes: 0` misread the old meaning and concluded the vault
-        // was repaired. Apply mode is reported by `dry_run: false`; whether
-        // any fix landed is `applied` (and `applied_fixes` lists them).
-        // iter-216 D-4: every other mutating command reports `dry_run`, and a
-        // caller that switches between `links fix`, `links auto` and `set`
-        // should not have to know that this one spells it `applied` inverted.
-        "dry_run": dry_run,
-        "applied_fixes": applied_fixes,
-        "unapplied": unapplied_count,
-        "unapplied_fixes": unapplied_fixes,
-        // L-11: fixes whose durable write failed mid-batch. Non-empty ⇒
-        // partial failure ⇒ non-zero exit code.
-        "failed": failed_count,
-        "failed_fixes": failed_fixes,
-        "case_mismatches": case_mismatch_count,
-        "case_mismatch_fixes": case_mismatch_json,
-        // NEW-13 (dogfood pre3): bare-stem relocations to a different
-        // directory, split out of `case_mismatches` — see
-        // `BrokenLinkReport::relocations`.
-        "relocations": relocation_count,
-        "relocation_fixes": relocation_json,
-        // iter-275 (ALIAS-2, DEC-308): alias-backed rewrites — exact,
-        // confidence 1.0, written by plain `--apply`.
-        "alias_fixes": alias_fix_count,
-        "alias_fix_plans": alias_fix_json,
-        "ambiguous": ambiguous_count,
-        "ambiguous_links": ambiguous,
-        // iter-193: targets resolving above the vault root are out of scope,
-        // not broken. Reported so they stay visible, but excluded from
-        // `broken`/`unfixable` — there is nothing in the vault to fix them to.
-        "out_of_vault": out_of_vault_count,
-        "out_of_vault_links": out_of_vault_links,
-        // iter-207: templated destinations. Reported so they stay visible,
-        // but never rewritten — see `link_fix::is_templated_target`.
-        "templated": templated_count,
-        "templated_links": templated_links,
-        // Fuzzy-match fixes are reported in their own bucket. They are excluded
-        // from --apply unless --apply-fuzzy / --min-confidence opts in; the
-        // `fuzzy_applied` flag tells the caller whether they were written.
-        "fuzzy": fuzzy_fixes.len(),
-        "fuzzy_fixes": fuzzy_json,
-        "fuzzy_applied": fuzzy.enabled(),
-        // The floor actually in force this run — the `--min-confidence` value
-        // when given, otherwise `DEFAULT_FUZZY_MIN_CONFIDENCE` (iter-212).
-        // Always a number, so a consumer never has to know the default.
-        "fuzzy_min_confidence": fuzzy.floor(),
-        // How many of `fuzzy_fixes` fall below that floor and are therefore
-        // reported-but-not-applied even under `--apply-fuzzy`.
-        "fuzzy_below_floor": below_floor,
-    });
+    let output = LinksFixResult {
+        broken: broken.len(),
+        broken_anchors: broken_anchor_count,
+        fixable: certain_fixes.len(),
+        unfixable: unfixable_links.len(),
+        ignored: ignored_count,
+        fixes: &certain_fixes,
+        unfixable_links: &unfixable_links,
+        applied: !dry_run && !applied_fixes.is_empty(),
+        dry_run,
+        applied_fixes: &applied_fixes,
+        unapplied: unapplied_count,
+        unapplied_fixes: &unapplied_fixes,
+        failed: failed_count,
+        failed_fixes: &failed_fixes,
+        case_mismatches: case_mismatch_count,
+        case_mismatch_fixes: &case_mismatch_json,
+        relocations: relocation_count,
+        relocation_fixes: &relocation_json,
+        alias_fixes: alias_fix_count,
+        alias_fix_plans: &alias_fix_json,
+        ambiguous: ambiguous_count,
+        ambiguous_links: &ambiguous,
+        out_of_vault: out_of_vault_count,
+        out_of_vault_links: &out_of_vault_links,
+        templated: templated_count,
+        templated_links: &templated_links,
+        fuzzy: fuzzy_fixes.len(),
+        fuzzy_fixes: &fuzzy_json,
+        fuzzy_applied: fuzzy.enabled(),
+        fuzzy_min_confidence: fuzzy.floor(),
+        fuzzy_below_floor: below_floor,
+    };
 
     let _ = format;
     Ok((
@@ -1314,47 +1263,22 @@ pub fn links_auto(
                 hyalo_core::auto_link::AutoApplyStatus::Failed => (a, s, f + 1),
             });
 
-    let mut output = serde_json::json!({
-        "scanned": report.scanned,
-        // iter-216 D-3: `matched` (was `total`) — `results.total` is reserved
-        // for the denominator, which on this command is `scanned`.
-        "matched": report.matched,
-        "matches": report.matches,
-        "ambiguous_titles": report.ambiguous_titles,
-        "applied": report.applied,
-        // iter-216 D-4: `applied` is not the inverse of `dry_run` here — a
-        // `--apply` run over a vault with no linkable titles also reports
-        // `applied: false`, so without this key a script cannot tell a preview
-        // from an apply that had no work to do.
-        "dry_run": !apply,
-        // L-11: per-file apply outcomes (applied/skipped/failed with reason).
-        // Empty in preview mode. `files_applied`/`files_skipped`/`files_failed`
-        // are the counts; `apply_outcomes` carries the per-file detail.
-        "files_applied": applied_count,
-        "files_skipped": skipped_count,
-        "files_failed": failed_count,
-        "apply_outcomes": report.apply_outcomes,
-        // iter-267 (UX-9, DEC-286): always present so a consumer never has to
-        // distinguish "absent" from "nothing held back" — the lowercased
-        // titles the built-in stop-list removed from this run, and how many
-        // mentions that was. Empty and 0 when the stop-list is off.
-        "default_excluded_titles": default_excluded_titles,
-        "default_excluded_mentions": default_excluded_mentions,
-    });
-    // Omitted when zero, matching the `links.out_of_vault` precedent: the keys
-    // only appear when `[links.auto]` config actually removed candidates.
-    if config_excluded_titles > 0
-        && let Some(obj) = output.as_object_mut()
-    {
-        obj.insert(
-            "config_excluded_titles".to_owned(),
-            serde_json::json!(config_excluded_titles),
-        );
-        obj.insert(
-            "config_excluded_mentions".to_owned(),
-            serde_json::json!(config_excluded_mentions),
-        );
-    }
+    let output = LinksAutoResult {
+        scanned: report.scanned,
+        matched: report.matched,
+        matches: &report.matches,
+        ambiguous_titles: &report.ambiguous_titles,
+        applied: report.applied,
+        dry_run: !apply,
+        files_applied: applied_count,
+        files_skipped: skipped_count,
+        files_failed: failed_count,
+        apply_outcomes: &report.apply_outcomes,
+        default_excluded_titles: &default_excluded_titles,
+        default_excluded_mentions,
+        config_excluded_titles: (config_excluded_titles > 0).then_some(config_excluded_titles),
+        config_excluded_mentions: (config_excluded_titles > 0).then_some(config_excluded_mentions),
+    };
 
     let _ = format;
     Ok((
@@ -2287,4 +2211,122 @@ pub(crate) fn run(
             Ok(outcome)
         }
     }
+}
+
+/// Serialized FixResult command contract.
+#[derive(serde::Serialize)]
+struct FixResult<'a> {
+    /// Typed fix plan, flattened to preserve the existing wire contract.
+    #[serde(flatten)]
+    plan: &'a hyalo_core::link_fix::FixPlan,
+    /// Kebab-case presentation rule code.
+    rule: &'a str,
+    /// Whether a fuzzy proposal falls below the effective confidence floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    below_floor: Option<bool>,
+    /// One-based Unicode scalar column when the source still matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    col: Option<usize>,
+}
+
+/// Serialized LinksFixResult command contract.
+#[derive(serde::Serialize)]
+struct LinksFixResult<'a> {
+    /// Number of broken.
+    broken: usize,
+    /// Broken heading anchors, or null when checking was impossible.
+    broken_anchors: Option<usize>,
+    /// Number of fixable.
+    fixable: usize,
+    /// Number of unfixable.
+    unfixable: usize,
+    /// Number of ignored.
+    ignored: usize,
+    /// Detailed fixes.
+    fixes: &'a [hyalo_core::link_fix::FixPlan],
+    /// Detailed unfixable links.
+    unfixable_links: &'a [hyalo_core::link_fix::BrokenLinkInfo],
+    /// Whether at least one fix was written.
+    applied: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Detailed applied fixes.
+    applied_fixes: &'a [hyalo_core::link_fix::FixPlan],
+    /// Number of unapplied.
+    unapplied: usize,
+    /// Detailed unapplied fixes.
+    unapplied_fixes: &'a [hyalo_core::link_fix::FixPlan],
+    /// Number of failed.
+    failed: usize,
+    /// Detailed failed fixes.
+    failed_fixes: &'a [hyalo_core::link_fix::FailedFix],
+    /// Number of case mismatches.
+    case_mismatches: usize,
+    /// Detailed case mismatch fixes.
+    case_mismatch_fixes: &'a [FixResult<'a>],
+    /// Number of relocations.
+    relocations: usize,
+    /// Detailed relocation fixes.
+    relocation_fixes: &'a [FixResult<'a>],
+    /// Number of alias fixes.
+    alias_fixes: usize,
+    /// Detailed alias fix plans.
+    alias_fix_plans: &'a [FixResult<'a>],
+    /// Number of ambiguous.
+    ambiguous: usize,
+    /// Detailed ambiguous links.
+    ambiguous_links: &'a [hyalo_core::link_fix::BrokenLinkInfo],
+    /// Number of out of vault.
+    out_of_vault: usize,
+    /// Detailed out of vault links.
+    out_of_vault_links: &'a [hyalo_core::link_fix::BrokenLinkInfo],
+    /// Number of templated.
+    templated: usize,
+    /// Detailed templated links.
+    templated_links: &'a [hyalo_core::link_fix::BrokenLinkInfo],
+    /// Number of fuzzy.
+    fuzzy: usize,
+    /// Detailed fuzzy fixes.
+    fuzzy_fixes: &'a [FixResult<'a>],
+    /// Whether fuzzy application was requested.
+    fuzzy_applied: bool,
+    /// Effective confidence floor for fuzzy application.
+    fuzzy_min_confidence: f64,
+    /// Number of fuzzy below floor.
+    fuzzy_below_floor: usize,
+}
+
+/// Serialized LinksAutoResult command contract.
+#[derive(serde::Serialize)]
+struct LinksAutoResult<'a> {
+    /// Effective scanned.
+    scanned: usize,
+    /// Effective matched.
+    matched: usize,
+    /// Detailed matches.
+    matches: &'a [hyalo_core::auto_link::AutoLinkMatch],
+    /// Detailed ambiguous titles.
+    ambiguous_titles: &'a [String],
+    /// Effective applied.
+    applied: bool,
+    /// Effective dry run.
+    dry_run: bool,
+    /// Effective files applied.
+    files_applied: usize,
+    /// Effective files skipped.
+    files_skipped: usize,
+    /// Effective files failed.
+    files_failed: usize,
+    /// Detailed apply outcomes.
+    apply_outcomes: &'a [hyalo_core::auto_link::AutoApplyOutcome],
+    /// Detailed default excluded titles.
+    default_excluded_titles: &'a [String],
+    /// Effective default excluded mentions.
+    default_excluded_mentions: usize,
+    /// Config exclusions; omitted when no titles were excluded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_excluded_titles: Option<usize>,
+    /// Config exclusions; omitted when no titles were excluded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_excluded_mentions: Option<usize>,
 }

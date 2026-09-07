@@ -902,7 +902,7 @@ pub fn unwrap_single_file_result(
     if files.len() == 1 && results.len() == 1 {
         results.pop().unwrap_or_default()
     } else {
-        serde_json::json!(results)
+        crate::output::output_value(&results)
     }
 }
 

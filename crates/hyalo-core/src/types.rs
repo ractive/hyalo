@@ -14,9 +14,12 @@ use serde::{Deserialize, Serialize};
 /// Used by `properties` (aggregate summary).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertyInfo {
+    /// Name of this entry.
     pub name: String,
     #[serde(rename = "type")]
+    /// Inferred property type name.
     pub prop_type: String,
+    /// User-authored property value; the value shape is genuinely dynamic.
     pub value: serde_json::Value,
 }
 
@@ -24,9 +27,12 @@ pub struct PropertyInfo {
 /// Used by `properties` command and `summary`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PropertySummaryEntry {
+    /// Name of this entry.
     pub name: String,
     #[serde(rename = "type")]
+    /// Inferred property type name.
     pub prop_type: String,
+    /// Number of matching occurrences.
     pub count: usize,
     /// Present only when the property has inconsistent types across files.
     /// Each entry is `(type_name, file_count)` for that type variant.
@@ -39,7 +45,9 @@ pub struct PropertySummaryEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MixedTypeEntry {
     #[serde(rename = "type")]
+    /// Inferred property type name.
     pub prop_type: String,
+    /// Number of matching occurrences.
     pub count: usize,
 }
 
@@ -51,14 +59,18 @@ pub struct MixedTypeEntry {
 /// Used by `tags` command and `summary`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSummary {
+    /// Tag occurrence summary.
     pub tags: Vec<TagSummaryEntry>,
+    /// Total number of considered items.
     pub total: usize,
 }
 
 /// A single tag with its file count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagSummaryEntry {
+    /// Name of this entry.
     pub name: String,
+    /// Number of matching occurrences.
     pub count: usize,
 }
 
@@ -181,8 +193,11 @@ pub fn is_note_graph_edge(target: &str, external: bool, is_attachment: bool) -> 
 /// Used by `find` (links field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkInfo {
+    /// Resolved or authored link target, according to the command.
     pub target: String,
+    /// Path associated with this result.
     pub path: Option<String>,
+    /// Authored link display label, when present.
     pub label: Option<String>,
     /// What this link is: `wikilink` | `embed` | `markdown` | `external` |
     /// `attachment` (iter-261, dogfood UX-6). Always serialized — a link
@@ -262,9 +277,12 @@ pub const LINK_VIA_ALIAS: &str = "alias";
 /// Used by `find` (backlinks field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacklinkInfo {
+    /// Vault-relative file containing the authored link.
     pub source: String,
+    /// One-based source line number.
     pub line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Authored link display label, when present.
     pub label: Option<String>,
 }
 
@@ -275,7 +293,9 @@ pub struct BacklinkInfo {
 /// Task checkbox counts within a section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCount {
+    /// Total number of considered items.
     pub total: usize,
+    /// Number of checked tasks.
     pub done: usize,
 }
 
@@ -283,12 +303,18 @@ pub struct TaskCount {
 /// Used by `find` (sections field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutlineSection {
+    /// ATX heading level (one through six).
     pub level: u8,
+    /// Heading text, or null for the preamble.
     pub heading: Option<String>,
+    /// One-based source line number.
     pub line: usize,
+    /// Link targets occurring within this section.
     pub links: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Task checkbox counts.
     pub tasks: Option<TaskCount>,
+    /// Languages of fenced code blocks in the section.
     pub code_blocks: Vec<String>,
 }
 
@@ -300,9 +326,13 @@ pub struct OutlineSection {
 /// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
+    /// One-based source line number.
     pub line: usize,
+    /// Task checkbox marker or grouped status value.
     pub status: char,
+    /// Authored task text without its checkbox marker.
     pub text: String,
+    /// Whether the task is checked.
     pub done: bool,
 }
 
@@ -310,10 +340,15 @@ pub struct TaskInfo {
 /// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskReadResult {
+    /// Vault-relative Markdown file path.
     pub file: String,
+    /// One-based source line number.
     pub line: usize,
+    /// Task checkbox marker or grouped status value.
     pub status: char,
+    /// Authored task text without its checkbox marker.
     pub text: String,
+    /// Whether the task is checked.
     pub done: bool,
 }
 
@@ -323,11 +358,17 @@ pub struct TaskReadResult {
 /// change explicit.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskDryRunResult {
+    /// Vault-relative Markdown file path.
     pub file: String,
+    /// One-based source line number.
     pub line: usize,
+    /// Task checkbox marker before the proposed change.
     pub old_status: char,
+    /// Task checkbox marker or grouped status value.
     pub status: char,
+    /// Authored task text without its checkbox marker.
     pub text: String,
+    /// Whether the task is checked.
     pub done: bool,
 }
 
@@ -338,7 +379,9 @@ pub struct TaskDryRunResult {
 /// Lint violation counts for the vault summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LintSummary {
+    /// Number of error-severity violations.
     pub errors: usize,
+    /// Number of warning-severity violations.
     pub warnings: usize,
     /// Number of files with at least one schema violation.
     ///
@@ -354,14 +397,23 @@ pub struct LintSummary {
 pub struct VaultSummary {
     /// Resolved vault directory (display string).
     pub dir: String,
+    /// File counts and directory breakdown.
     pub files: FileCounts,
+    /// Files with neither inbound nor outbound links.
     pub orphans: usize,
+    /// Files with inbound links and no outbound links.
     pub dead_ends: usize,
+    /// Vault-wide link health counts.
     pub links: LinkHealthSummary,
+    /// Property usage and value summaries.
     pub properties: Vec<PropertySummaryEntry>,
+    /// Tag occurrence summary.
     pub tags: TagSummary,
+    /// Task checkbox marker or grouped status value.
     pub status: Vec<StatusGroup>,
+    /// Task checkbox counts.
     pub tasks: TaskCount,
+    /// Files ordered by modification time.
     pub recent_files: Vec<RecentFile>,
     /// Schema lint counts — `None` when no `[schema]` block is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -379,7 +431,9 @@ pub struct VaultSummary {
 /// Vault-wide link health: total links and broken count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkHealthSummary {
+    /// Total number of considered items.
     pub total: usize,
+    /// Number of unresolved links.
     pub broken: usize,
     /// Links pointing above the scanned vault root (`../..` escapes). Kept out
     /// of `broken` because the target is out of scope rather than missing
@@ -436,6 +490,7 @@ fn is_zero_broken_anchors(value: &Option<usize>) -> bool {
 /// File counts by directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileCounts {
+    /// Total number of considered items.
     pub total: usize,
     /// Files the scan found but could not use because their frontmatter would
     /// not parse (iter-265). `summary` reported only `total` before, so a vault
@@ -446,13 +501,16 @@ pub struct FileCounts {
     /// Files dropped before the scan by `[scan] exclude` in `.hyalo.toml`.
     /// Zero unless the vault configures exclusions.
     pub excluded: usize,
+    /// File counts grouped by directory.
     pub directories: Vec<DirectoryCount>,
 }
 
 /// Count of files in a directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectoryCount {
+    /// Vault-relative directory path.
     pub directory: String,
+    /// Number of matching occurrences.
     pub count: usize,
     /// Files under this directory skipped for unparsable frontmatter.
     /// Omitted from JSON when zero, so an all-clean vault's per-directory rows
@@ -470,14 +528,18 @@ fn is_zero_usize(value: &usize) -> bool {
 /// Files grouped by status property value (count only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusGroup {
+    /// Authored status property value.
     pub value: String,
+    /// Number of matching occurrences.
     pub count: usize,
 }
 
 /// A recently modified file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentFile {
+    /// Path associated with this result.
     pub path: String,
+    /// File modification time.
     pub modified: String,
 }
 
@@ -489,18 +551,26 @@ pub struct RecentFile {
 /// Extends `TaskInfo` with section heading information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FindTaskInfo {
+    /// One-based source line number.
     pub line: usize,
+    /// Containing section heading, including its ATX prefix.
     pub section: String,
+    /// Task checkbox marker or grouped status value.
     pub status: char,
+    /// Authored task text without its checkbox marker.
     pub text: String,
+    /// Whether the task is checked.
     pub done: bool,
 }
 
 /// A content search match within a file body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentMatch {
+    /// One-based source line number.
     pub line: usize,
+    /// Containing section heading, including its ATX prefix.
     pub section: String,
+    /// Matched source line or ranked snippet text.
     pub text: String,
 }
 
@@ -539,21 +609,30 @@ pub struct FileObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// User-authored frontmatter properties with genuinely dynamic values.
     pub properties: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Frontmatter properties paired with their inferred types.
     pub properties_typed: Option<Vec<PropertyInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Tags authored on this file.
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Document outline with section-level metadata.
     pub sections: Option<Vec<OutlineSection>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Tasks in the selected file or sections.
     pub tasks: Option<Vec<FindTaskInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Outbound authored links.
     pub links: Option<Vec<LinkInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Inbound links from other vault files.
     pub backlinks: Option<Vec<BacklinkInfo>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Body matches or ranked snippets; present and empty for title-only ranked hits.
     pub matches: Option<Vec<ContentMatch>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// BM25 relevance score for positional ranked searches.
     pub score: Option<f64>,
 }

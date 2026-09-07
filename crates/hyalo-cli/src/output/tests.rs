@@ -1483,7 +1483,7 @@ fn envelope_hoists_dir_and_removes_from_results() {
         "files": {"total": 10},
         "other": "value"
     });
-    let envelope = build_envelope_value(&results, None, &[]);
+    let envelope = output_value(&Envelope::from_result(&results, None, &[], None));
     // dir is hoisted to top level.
     assert_eq!(
         envelope["dir"].as_str().unwrap(),
@@ -1505,7 +1505,7 @@ fn envelope_hoists_dir_and_removes_from_results() {
 #[test]
 fn envelope_without_dir_in_results_has_no_top_dir() {
     let results = json!({"files": {"total": 5}});
-    let envelope = build_envelope_value(&results, None, &[]);
+    let envelope = output_value(&Envelope::from_result(&results, None, &[], None));
     assert!(
         envelope.get("dir").is_none() || envelope["dir"].is_null(),
         "no dir should be at envelope root when results has none"
@@ -1547,4 +1547,26 @@ fn a_projected_file_object_still_renders_its_optional_sections() {
     let map = payload.as_object().unwrap().clone();
     let filter = build_file_object_filter(&map);
     assert_eq!(jq(&filter, &payload).unwrap(), "\"a.md\"\n  title: Alpha");
+}
+
+#[test]
+fn envelope_borrows_results_unless_a_directory_must_be_hoisted() {
+    for results in [
+        json!([{"file": "a.md", "content": "body"}]),
+        json!({"dir": null}),
+    ] {
+        let envelope = Envelope::from_result(&results, None, &[], None);
+        assert!(
+            matches!(envelope.results, Cow::Borrowed(value) if std::ptr::eq(value, &raw const results))
+        );
+    }
+    let results = json!({"dir": "/vault", "files": ["a.md"]});
+    let envelope = Envelope::from_result(&results, None, &[], None);
+    assert!(matches!(envelope.results, Cow::Owned(_)));
+    assert_eq!(envelope.dir.as_deref(), Some("/vault"));
+    assert!(envelope.results.get("dir").is_none());
+    assert_eq!(
+        results["dir"], "/vault",
+        "hoisting must not mutate the caller"
+    );
 }

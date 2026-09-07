@@ -19,3 +19,5 @@ serde-saphyr = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = "1"

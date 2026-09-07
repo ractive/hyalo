@@ -18,9 +18,13 @@ use hyalo_core::schema::SchemaConfig;
 /// Result of an `append --property K=V` operation across files.
 #[derive(Debug, Serialize)]
 pub(crate) struct AppendPropertyResult {
+    /// User-defined frontmatter property name.
     pub(crate) property: String,
+    /// Requested property value as command-line text.
     pub(crate) value: String,
+    /// Vault-relative files whose content changed.
     pub(crate) modified: Vec<String>,
+    /// Vault-relative files left unchanged.
     pub(crate) skipped: Vec<String>,
     /// `skipped.len()`, restated as a scalar (iter-216 D-1) — the whole
     /// mutation family exposes this key so one query answers "how many were
@@ -32,8 +36,11 @@ pub(crate) struct AppendPropertyResult {
     /// `skipped`, so `modified: []` is no longer ambiguous between "nothing
     /// needed changing" and "nothing could be changed".
     pub(crate) skipped_detail: Vec<crate::commands::mutation::SkippedFile>,
+    /// Total number of considered items.
     pub(crate) total: usize,
+    /// Number of files scanned.
     pub(crate) scanned: usize,
+    /// Whether this result describes a preview without writing changes.
     pub(crate) dry_run: bool,
 }
 

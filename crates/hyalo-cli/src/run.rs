@@ -89,7 +89,12 @@ fn emit_init_report(
         );
         return Ok(());
     }
-    let envelope = crate::output::build_envelope_value(&report.to_json(), None, &[]);
+    let envelope = crate::output::output_value(&crate::output::Envelope::from_result(
+        &report.to_json(),
+        None,
+        &[],
+        None,
+    ));
     if let Some(filter) = jq {
         return match crate::output::apply_jq_filter_result(filter, &envelope) {
             Ok(filtered) => {

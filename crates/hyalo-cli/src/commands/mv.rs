@@ -21,11 +21,17 @@ use hyalo_core::link_rewrite::{
 
 #[derive(Serialize)]
 struct MvResult {
+    /// Original path or value.
     from: String,
+    /// Destination path or value.
     to: String,
+    /// Whether this result describes a preview without writing changes.
     dry_run: bool,
+    /// Files with link replacements caused by the move.
     updated_files: Vec<UpdatedFile>,
+    /// Number of files with rewritten links.
     total_files_updated: usize,
+    /// Number of rewritten links.
     total_links_updated: usize,
     /// Links that were skipped because the stem was ambiguous (NEW-3).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -44,13 +50,17 @@ struct MvResult {
 
 #[derive(Serialize, Clone)]
 struct UpdatedFile {
+    /// Vault-relative Markdown file path.
     file: String,
+    /// Link replacements within this file.
     replacements: Vec<Replacement>,
 }
 
 #[derive(Serialize)]
 struct MoveEntry {
+    /// Original path or value.
     from: String,
+    /// Destination path or value.
     to: String,
     /// Frontmatter wikilinks naming *this* move's source that could not be
     /// rewritten because their `[[…]]` spans a line break (iter-273, MV-2).
@@ -62,8 +72,11 @@ struct MoveEntry {
 
 #[derive(Serialize)]
 struct BatchTotals {
+    /// Number of proposed or performed file moves.
     moves: usize,
+    /// Number of files whose content changed.
     files_changed: usize,
+    /// Number of rewritten link occurrences.
     replacements: usize,
 }
 
@@ -77,32 +90,41 @@ struct BatchTotals {
 /// what `mv --glob` promises).
 #[derive(Serialize)]
 struct Collision {
+    /// Source path whose proposed destination conflicts.
     source: String,
+    /// Conflicting destination path.
     destination: String,
 }
 
 #[derive(Serialize)]
 struct BatchMvResult {
+    /// Proposed or performed file moves.
     moves: Vec<MoveEntry>,
+    /// Files with link replacements caused by the move.
     updated_files: Vec<UpdatedFile>,
+    /// Aggregated move and rewrite counts.
     totals: BatchTotals,
     /// `totals.files_changed` and `totals.replacements` under the names
     /// single-file `mv` uses (iter-275, MV-5). Batch JSON had neither, so a
     /// caller reading `total_links_updated` got `null` from one mode and a
     /// number from the other.
     total_files_updated: usize,
+    /// Number of rewritten links.
     total_links_updated: usize,
     /// Destination collisions, listed rather than fatal in a dry run.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     collisions: Vec<Collision>,
+    /// Whether apply mode was requested.
     applied: bool,
     /// `!applied`, restated under the name the rest of the mutation family
     /// uses (iter-256 COH-9). `applied` predates the convention and is kept
     /// for back-compat; the two are always exact inverses.
     dry_run: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Paths whose conflicting state prevented a change.
     conflicts: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Vault-relative files left unchanged.
     skipped: Vec<String>,
 }
 

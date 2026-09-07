@@ -83,6 +83,18 @@ distinct-token coverage then line number; title-only and cross-line phrase hits 
 empty array. Include these cases in the typed `find` contract fixtures. The generated shape
 and the full 285/286 prerequisites remain unchanged.
 
+## Plan reconciliation — 2026-09-07, iteration 285
+
+The named output contracts and typed envelope are implemented. The Rust envelope has a
+borrowed lifetime (`Envelope<'a, T>`); its pipeline adapter borrows existing JSON values
+and copies only when removing the hoisted directory. Keep generated TypeScript focused
+on the serialized contract. With `ts-rs` as a dev-dependency, gate its derives/exports
+to the test build so normal production builds do not require that dependency. Preserve
+the documented dynamic JSON fields as `unknown`, optional omissions and singular error
+`hint`. Existing summary/task models were retained. Both the full 286 prerequisite and
+the external consumer migration remain unfinished; this reconciliation does not start
+the TypeScript implementation.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — decision record

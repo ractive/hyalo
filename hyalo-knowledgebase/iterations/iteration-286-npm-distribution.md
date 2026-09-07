@@ -70,6 +70,14 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 - [ ] The polyglot DEC is filed and `CLAUDE.md` reflects it.
 - [ ] Gates green.
 
+## Plan reconciliation — 2026-09-07, iteration 285
+
+Iteration 285 added Cargo-version enforcement to `check-pi-package-sync` for the root,
+canonical pi and embedded pi manifests, now all 0.22.0. TASK-5 should extend that existing
+gate to the eight npm packages and their exact platform dependency pins. The launcher
+does not depend on the new typed output contracts. Publishing, trusted-publisher setup
+and real-platform registry installation remain unfinished external requirements.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — proposal, naming table, settled section

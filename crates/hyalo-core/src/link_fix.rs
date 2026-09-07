@@ -49,8 +49,11 @@ use crate::scanner::{LineClass, LineScanner, MAX_FILE_SIZE, lines_with_rest};
 /// A single broken link with source file, line number, and raw target.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokenLinkInfo {
+    /// Vault-relative file containing the authored link.
     pub source: String,
+    /// One-based source line number.
     pub line: usize,
+    /// Resolved or authored link target, according to the command.
     pub target: String,
     /// The vault files an *ambiguous* target matches (iter-275, ALIAS-5 /
     /// BUG-26) — two files sharing a basename stem, or two notes declaring
@@ -66,7 +69,9 @@ pub struct BrokenLinkInfo {
 /// Summary of broken link detection across the vault.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokenLinkReport {
+    /// Total links reported for this result.
     pub total_links: usize,
+    /// Number of unresolved links.
     pub broken: Vec<BrokenLinkInfo>,
     /// Links that resolve via case-insensitive fallback but whose written casing
     /// differs from the canonical on-disk path.  These are NOT broken — the

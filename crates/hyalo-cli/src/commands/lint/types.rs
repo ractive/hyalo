@@ -19,33 +19,45 @@ use std::path::Path;
 /// A group of violations for one rule within one file.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RuleGroup {
+    /// Stable lint rule identifier.
     pub rule: String,
+    /// Number of matching occurrences.
     pub count: usize,
+    /// Number of detailed violations included after limiting.
     pub shown: usize,
+    /// Whether detailed violations were omitted by a limit.
     pub truncated: bool,
+    /// Aggregate severity of this rule group.
     pub severity: String,
+    /// Whether this rule supports automatic fixes.
     pub autofixable: bool,
+    /// Detailed violations included after limiting.
     pub violations: Vec<BodyViolation>,
 }
 
 /// A single body violation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BodyViolation {
+    /// One-based source line number.
     pub line: usize,
+    /// One-based Unicode scalar column.
     pub column: usize,
     /// Per-violation severity (`"error"` / `"warn"`). Carried alongside the
     /// group severity because a folded group (notably `SCHEMA`) can mix the
     /// two, and the text renderer must label each line with its own severity
     /// so the display agrees with the `errors`/`warnings` counts (BUG-17).
     pub severity: String,
+    /// Human-readable violation diagnostic.
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fix: Option<serde_json::Value>,
+    /// Proposed body-relative byte-range replacement.
+    pub fix: Option<hyalo_mdlint::DiagFix>,
 }
 
 /// Extended lint output for one file (read-only shape).
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExtFileLintResult {
+    /// Vault-relative Markdown file path.
     pub file: String,
     /// Frontmatter `type:` discriminator, if the file declared one. Used by
     /// the hint layer to surface `hyalo types show <T>` for SCHEMA failures.
@@ -59,7 +71,9 @@ pub struct ExtFileLintResult {
 /// Includes `violations` so text renderers can show line/message details.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FixedGroup {
+    /// Stable lint rule identifier.
     pub rule: String,
+    /// Number of matching occurrences.
     pub count: usize,
     /// Violations that were fixed (same shape as `RuleGroup.violations`).
     pub violations: Vec<BodyViolation>,
@@ -73,15 +87,18 @@ pub struct FixedGroup {
 /// at (iteration 263, dogfood v0.22.0 UX-16).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConflictEntry {
+    /// Stable lint rule identifier.
     pub rule: String,
     /// 1-based line of the violation whose fix was skipped.
     pub line: usize,
+    /// Explanation of the reported action or refusal.
     pub reason: String,
 }
 
 /// Extended lint output for one file in fix-mode.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExtFileLintFixResult {
+    /// Vault-relative Markdown file path.
     pub file: String,
     /// Frontmatter `type:` discriminator, if the file declared one. Mirrors
     /// [`ExtFileLintResult::doc_type`] so the iter-143 SCHEMA-→-`types show`
@@ -108,6 +125,7 @@ pub struct ExtFileLintFixResult {
 /// here, mirroring [`ExtLintFixOutput`]'s empty-result shape.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintOutput {
+    /// Per-file lint results.
     pub files: Vec<ExtFileLintResult>,
     /// Total number of violations found across all files.
     ///
@@ -117,10 +135,13 @@ pub struct ExtLintOutput {
     /// `total` on the very same document is the *file* count, so one name
     /// used to carry two quantities in one payload.
     pub violations: usize,
+    /// Number of distinct rules that reported violations.
     pub rules_fired: usize,
+    /// Number of files with at least one violation.
     pub files_with_violations: usize,
     /// Total number of files that were examined (including clean files).
     pub files_checked: usize,
+    /// Whether file results were omitted by a limit.
     pub files_truncated: bool,
     /// Number of error-severity violations.
     pub errors: usize,
@@ -153,10 +174,15 @@ pub struct ExtLintOutput {
 /// path.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExtLintFixOutput {
+    /// Per-file lint results.
     pub files: Vec<ExtFileLintFixResult>,
+    /// Number of violations fixed.
     pub total_fixed: usize,
+    /// Number of violations remaining.
     pub total_remaining: usize,
+    /// Number of overlapping fixes skipped.
     pub total_conflicts: usize,
+    /// Number of distinct rules that reported violations.
     pub rules_fired: usize,
     /// How many violations each rule actually fixed, keyed by rule id.
     ///
@@ -167,8 +193,11 @@ pub struct ExtLintFixOutput {
     /// present (an empty object when nothing was fixed), like every other
     /// top-level `results` key.
     pub rules_fixed: std::collections::BTreeMap<String, usize>,
+    /// Number of files with at least one violation.
     pub files_with_violations: usize,
+    /// Number of files examined.
     pub files_checked: usize,
+    /// Whether file results were omitted by a limit.
     pub files_truncated: bool,
     /// Error-severity violations left unfixed after this run.
     ///
@@ -180,6 +209,7 @@ pub struct ExtLintFixOutput {
     /// `lint` and `lint --fix` JSON silently got answers to different
     /// questions.
     pub remaining_errors: usize,
+    /// Warning-severity violations left unfixed.
     pub remaining_warnings: usize,
     /// `true` when `--dry-run` previewed fixes without writing them.
     /// Always present (iter-216 D-4) — see [`ExtLintOutput::dry_run`].

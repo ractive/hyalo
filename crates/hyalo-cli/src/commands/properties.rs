@@ -102,13 +102,21 @@ pub fn collapse_property_types(
 /// Result of a `properties rename` operation.
 #[derive(Debug, Serialize)]
 pub struct RenamePropertyResult {
+    /// Original path or value.
     pub from: String,
+    /// Destination path or value.
     pub to: String,
+    /// Whether this result describes a preview without writing changes.
     pub dry_run: bool,
+    /// Vault-relative files whose content changed.
     pub modified: Vec<String>,
+    /// Number of files left unchanged.
     pub skipped_count: usize,
+    /// Paths whose conflicting state prevented a change.
     pub conflicts: Vec<String>,
+    /// Total number of considered items.
     pub total: usize,
+    /// Number of files scanned.
     pub scanned: usize,
 }
 

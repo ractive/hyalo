@@ -12,7 +12,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use serde_json::json;
 
 use crate::output::{CommandOutcome, Format, format_success};
 
@@ -129,7 +128,7 @@ pub(crate) struct ConfigReport {
 /// two lists per-run and `--first-only` can turn `first_only` on for a run, so
 /// what is reported here is the *baseline* every `links auto` invocation starts
 /// from.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct LinksAutoReport {
     /// `[links.auto] exclude_titles`.
     pub exclude_titles: Vec<String>,
@@ -155,7 +154,7 @@ impl Default for LinksAutoReport {
 }
 
 /// Effective `[scan]` settings, as `hyalo config` reports them (iter-265).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub(crate) struct ScanReport {
     /// `[scan] include` — hidden dot-subtrees the walker descends into.
     pub include: Vec<String>,
@@ -304,99 +303,49 @@ pub(crate) fn config_hints(report: &ConfigReport) -> Vec<crate::hints::Hint> {
 ///   latter for compatibility with pre-192 consumers of `hyalo config
 ///   --format json | jq .dir`.
 pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
-    let hints: Vec<serde_json::Value> = config_hints(report)
-        .iter()
-        .map(|h| json!({"description": &h.description, "cmd": &h.cmd, "writes": h.writes}))
-        .collect();
-    json!({
-        "results": {
-            "config_path": report.config_path.as_ref().map(|p| p.display().to_string()),
-            // Always present (iter-213, UX-2). `malformed: true` means the
-            // config file exists but could not be parsed, so every sibling
-            // value below is a built-in default; `parse_error` carries the
-            // diagnostic that was previously stderr-only.
-            // A `[schema]` that did not parse counts too (BUG-20, iter-276):
-            // the schema is dropped and validates nothing, which is the same
-            // silent-default state `malformed` exists to expose.
-            // `schema_error` says which of the two it was.
-            "malformed": report.malformed.is_some() || report.schema_error.is_some(),
-            "parse_error": report.malformed.clone().or_else(|| report.schema_error.clone()),
-            "schema_error": report.schema_error,
-            // G4 (iter-276): the snapshot format this binary writes and
-            // accepts. `summary --index` reports the loaded snapshot's own
-            // `index_format_version`; a lower number there means the index
-            // predates this binary and is refused with a fallback to disk.
-            "snapshot_format_version": hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
-            // `true` when `dir` below was salvaged from an otherwise
-            // unusable file rather than defaulted (NEW-17, dogfood pre3) —
-            // meaningful only alongside `malformed: true`.
-            "dir_salvaged": report.dir_salvaged,
-            // `true` when `dir` was refused for resolving outside its own
-            // config directory (H-1, iter-221); `dir_out_of_bounds_reason`
-            // carries the diagnostic. Every other command refuses to run
-            // while this is `true` — `hyalo config` is the exception.
-            "dir_out_of_bounds": report.dir_out_of_bounds.is_some(),
-            "dir_out_of_bounds_reason": report.dir_out_of_bounds,
-            // Only present with --raw; `null` otherwise so the key's shape
-            // never changes between invocations.
-            "raw_contents": report.raw_contents,
-            "cwd": report.cwd.display().to_string(),
-            "dir": report.dir.display().to_string(),
-            "dir_overridden": report.dir_overridden,
-            // `format` is the format this run resolved to (iter-267, UX-18):
-            // always a string, never null, with `format_source` naming where
-            // it came from. `format_configured` keeps the raw `.hyalo.toml`
-            // value (null when the file pins nothing) for consumers that need
-            // to know whether the file said anything at all.
-            "format": report.effective_format,
-            "format_source": report.format_source,
-            "format_configured": report.format,
-            // `hints` is the effective boolean; `hints_enabled` is its
-            // longstanding alias, kept so existing `--jq` filters keep working.
-            "hints": report.hints,
-            "hints_enabled": report.hints,
-            "site_prefix": report.site_prefix,
-            "site_prefix_source": report.site_prefix_source.as_str(),
-            "exempt": report.exempt,
-            // Effective `[links]` link-graph settings (iter-262). `frontmatter`
-            // is always a boolean; `frontmatter_properties` is `null` unless an
-            // explicit allow-list narrows the scan.
-            "links": {
-                "frontmatter": report.frontmatter_links,
-                "frontmatter_properties": report.frontmatter_link_properties,
-                "aliases": report.alias_links,
-                "case_insensitive": report.case_insensitive,
+    {
+        let hints = config_hints(report);
+        let results = ConfigResult {
+            config_path: report.config_path.as_ref().map(|p| p.display().to_string()),
+            malformed: report.malformed.is_some() || report.schema_error.is_some(),
+            parse_error: report
+                .malformed
+                .as_deref()
+                .or(report.schema_error.as_deref()),
+            schema_error: report.schema_error.as_deref(),
+            snapshot_format_version: hyalo_core::index::SNAPSHOT_FORMAT_VERSION,
+            dir_salvaged: report.dir_salvaged,
+            dir_out_of_bounds: report.dir_out_of_bounds.is_some(),
+            dir_out_of_bounds_reason: report.dir_out_of_bounds.as_deref(),
+            raw_contents: report.raw_contents.as_deref(),
+            cwd: report.cwd.display().to_string(),
+            dir: report.dir.display().to_string(),
+            dir_overridden: report.dir_overridden,
+            format: &report.effective_format,
+            format_source: report.format_source,
+            format_configured: report.format.as_deref(),
+            hints: report.hints,
+            hints_enabled: report.hints,
+            site_prefix: report.site_prefix.as_deref(),
+            site_prefix_source: report.site_prefix_source.as_str(),
+            exempt: &report.exempt,
+            links: ConfigLinksResult {
+                frontmatter: report.frontmatter_links,
+                frontmatter_properties: report.frontmatter_link_properties.as_deref(),
+                aliases: report.alias_links,
+                case_insensitive: report.case_insensitive,
             },
-            // Effective `[links.auto]` baseline for `hyalo links auto`
-            // (iter-195a). Always present, empty lists / false when unset, so
-            // consumers never have to distinguish "absent" from "off".
-            // Effective `[scan]` settings (iter-265). `exclude` is the
-            // vault-wide exclusion list every command honours; `include`
-            // re-admits hidden dot-subtrees.
-            "scan": {
-                "include": report.scan.include,
-                "exclude": report.scan.exclude,
-                "verbose_skips": report.scan.verbose_skips,
+            scan: &report.scan,
+            links_auto: &report.links_auto,
+            links_fuzzy_min_confidence: report.fuzzy_min_confidence,
+            pi: ConfigPiResult {
+                session_summary: report.pi_session_summary,
             },
-            "links_auto": {
-                "exclude_titles": report.links_auto.exclude_titles,
-                "exclude_target_globs": report.links_auto.exclude_target_globs,
-                "first_only": report.links_auto.first_only,
-                "warn_common_titles": report.links_auto.warn_common_titles,
-            },
-            // Effective `links fix --apply-fuzzy` confidence floor (iter-212).
-            // Always a number — the built-in default when the key is unset.
-            "links_fuzzy_min_confidence": report.fuzzy_min_confidence,
-            // Effective `[pi]` agent-integration settings (iter-230).
-            // Always present, `false` when unset, so consumers never have to
-            // distinguish "absent" from "off".
-            "pi": {
-                "session_summary": report.pi_session_summary,
-            },
-        },
-        "hints": hints,
-        "dir": report.dir.display().to_string(),
-    })
+        };
+        let mut envelope = crate::output::Envelope::new(results, None, &hints);
+        envelope.dir = Some(report.dir.display().to_string());
+        crate::output::output_value(&envelope)
+    }
 }
 
 /// Run `hyalo config` and return a `CommandOutcome` ready for the output pipeline.
@@ -419,7 +368,7 @@ pub(crate) fn run_config(
 fn run_config_json(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     let mut envelope = config_envelope(report);
     if !show_hints {
-        envelope["hints"] = json!([]);
+        envelope["hints"] = serde_json::Value::Array(Vec::new());
     }
     CommandOutcome::success(format_success(Format::Json, &envelope))
 }
@@ -600,4 +549,79 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     }
 
     CommandOutcome::RawOutput(out)
+}
+
+/// Serialized ConfigResult command contract.
+#[derive(serde::Serialize)]
+struct ConfigResult<'a> {
+    /// Discovered config path, or null when absent.
+    config_path: Option<String>,
+    /// Whether config or schema parsing failed.
+    malformed: bool,
+    /// Primary parsing diagnostic, or null.
+    parse_error: Option<&'a str>,
+    /// Schema parsing diagnostic, or null.
+    schema_error: Option<&'a str>,
+    /// Snapshot format written and accepted by this binary.
+    snapshot_format_version: u32,
+    /// Effective dir salvaged setting.
+    dir_salvaged: bool,
+    /// Effective dir out of bounds setting.
+    dir_out_of_bounds: bool,
+    /// Effective dir out of bounds reason setting.
+    dir_out_of_bounds_reason: Option<&'a str>,
+    /// Original config text with --raw; null otherwise.
+    raw_contents: Option<&'a str>,
+    /// Effective cwd setting.
+    cwd: String,
+    /// Resolved vault directory, intentionally retained alongside envelope.dir.
+    dir: String,
+    /// Effective dir overridden setting.
+    dir_overridden: bool,
+    /// Effective format setting.
+    format: &'a str,
+    /// Effective format source setting.
+    format_source: &'a str,
+    /// Configured format, or null when unset.
+    format_configured: Option<&'a str>,
+    /// Effective hints setting.
+    hints: bool,
+    /// Compatibility alias of the effective hints setting.
+    hints_enabled: bool,
+    /// Effective site prefix setting.
+    site_prefix: Option<&'a str>,
+    /// Effective site prefix source setting.
+    site_prefix_source: &'a str,
+    /// Effective exempt setting.
+    exempt: &'a [String],
+    /// Effective links setting.
+    links: ConfigLinksResult<'a>,
+    /// Effective scan setting.
+    scan: &'a ScanReport,
+    /// Effective links auto setting.
+    links_auto: &'a LinksAutoReport,
+    /// Effective links fuzzy min confidence setting.
+    links_fuzzy_min_confidence: f64,
+    /// Effective pi setting.
+    pi: ConfigPiResult,
+}
+
+/// Serialized ConfigLinksResult command contract.
+#[derive(serde::Serialize)]
+struct ConfigLinksResult<'a> {
+    /// Whether all frontmatter values contribute graph edges.
+    frontmatter: bool,
+    /// Explicit property allow-list, or null.
+    frontmatter_properties: Option<&'a [String]>,
+    /// Whether authored aliases resolve links.
+    aliases: bool,
+    /// Effective case resolution mode.
+    case_insensitive: &'a str,
+}
+
+/// Effective pi integration settings.
+#[derive(serde::Serialize)]
+struct ConfigPiResult {
+    /// Whether session summaries are enabled.
+    session_summary: bool,
 }

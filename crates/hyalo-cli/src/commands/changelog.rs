@@ -423,16 +423,22 @@ pub fn run_release(
             .with_context(|| format!("failed to write {display}"))?;
     }
 
-    let payload = serde_json::json!({
-        "command": "changelog release",
-        "apply": apply,
-        "dry_run": !apply,
-        "file": display,
-        "version": version,
-        "date": date_owned,
-        "changed": changed,
-        "hint": crate::commands::profile_lint_hint("changelog", active_profiles, "validate the rotated changelog"),
-    });
+    let payload = crate::output::output_value(
+        &(ChangelogReleaseResult {
+            command: "changelog release",
+            apply,
+            dry_run: !apply,
+            file: &(display),
+            version,
+            date: &(date_owned),
+            changed,
+            hint: &(crate::commands::profile_lint_hint(
+                "changelog",
+                active_profiles,
+                "validate the rotated changelog",
+            )),
+        }),
+    );
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
         CommandOutcome::success_with_total(payload.to_string(), u64::from(changed)),
@@ -588,16 +594,22 @@ pub fn run_add(
             .with_context(|| format!("failed to write {display}"))?;
     }
 
-    let payload = serde_json::json!({
-        "command": "changelog add",
-        "apply": apply,
-        "dry_run": !apply,
-        "file": display,
-        "category": canonical,
-        "message": message.trim(),
-        "changed": changed,
-        "hint": crate::commands::profile_lint_hint("changelog", active_profiles, "validate the changelog"),
-    });
+    let payload = crate::output::output_value(
+        &(ChangelogAddResult {
+            command: "changelog add",
+            apply,
+            dry_run: !apply,
+            file: &(display),
+            category: canonical,
+            message: message.trim(),
+            changed,
+            hint: &(crate::commands::profile_lint_hint(
+                "changelog",
+                active_profiles,
+                "validate the changelog",
+            )),
+        }),
+    );
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
         CommandOutcome::success_with_total(payload.to_string(), u64::from(changed)),
@@ -1475,4 +1487,46 @@ pub(crate) fn run(
             Ok(outcome)
         }
     }
+}
+
+/// Serialized ChangelogReleaseResult command contract.
+#[derive(serde::Serialize)]
+struct ChangelogReleaseResult<'a> {
+    /// Invoked command name.
+    command: &'a str,
+    /// Whether apply was requested.
+    apply: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Changelog path.
+    file: &'a str,
+    /// Released semantic version.
+    version: &'a str,
+    /// Release date.
+    date: &'a str,
+    /// Whether the rendered changelog differs.
+    changed: bool,
+    /// Follow-up profile lint command.
+    hint: &'a str,
+}
+
+/// Serialized ChangelogAddResult command contract.
+#[derive(serde::Serialize)]
+struct ChangelogAddResult<'a> {
+    /// Invoked command name.
+    command: &'a str,
+    /// Whether apply was requested.
+    apply: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Changelog path.
+    file: &'a str,
+    /// Canonical entry category.
+    category: &'a str,
+    /// Trimmed entry text.
+    message: &'a str,
+    /// Whether the rendered changelog differs.
+    changed: bool,
+    /// Follow-up profile lint command.
+    hint: &'a str,
 }

@@ -10,6 +10,7 @@ mod jq_recipes;
 mod mutation_journal;
 mod pi_package_sync;
 mod stubs;
+mod typed_output;
 mod workspace;
 
 #[derive(Parser)]
@@ -36,6 +37,8 @@ enum Commands {
     /// Gate: verify the vendored `crates/hyalo-cli/templates/pi/` copies
     /// match the canonical `pi-package/` files byte-for-byte.
     CheckPiPackageSync,
+    /// Reject ad-hoc JSON macros in production command output.
+    CheckTypedOutput,
     /// Verify Codex plugin assets, metadata, and embedded-copy parity.
     CheckCodexPackage,
     /// Refresh the embedded Codex skills from plugins/hyalo/skills.
@@ -64,6 +67,7 @@ fn main() {
         Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckPiPackageSync => pi_package_sync::run(),
+        Commands::CheckTypedOutput => typed_output::run(),
         Commands::CheckCodexPackage => codex_package::run(false),
         Commands::SyncCodexPackage => codex_package::run(true),
         Commands::CheckJqRecipes => jq_recipes::run(),

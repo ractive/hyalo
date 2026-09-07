@@ -13,7 +13,7 @@ use hyalo_core::discovery;
 use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter_within};
 use hyalo_core::schema::{SchemaConfig, expand_default};
 
-use crate::output::{CommandOutcome, Format, format_error, format_success};
+use crate::output::{CommandOutcome, Format, format_error, format_output, format_success};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -26,22 +26,21 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> CommandOutcome {
     let mut sorted_types: Vec<&str> = schema.types.keys().map(String::as_str).collect();
     sorted_types.sort_unstable();
 
-    let results: Vec<Value> = sorted_types
+    let results: Vec<TypeListResult> = sorted_types
         .iter()
         .map(|name| {
             let ts = &schema.types[*name];
-            serde_json::json!({
-                "type": name,
-                "required": ts.required,
-                "has_filename_template": ts.filename_template.is_some(),
-                "property_count": ts.properties.len(),
-            })
+            TypeListResult {
+                r#type: name,
+                required: &ts.required,
+                has_filename_template: ts.filename_template.is_some(),
+                property_count: ts.properties.len(),
+            }
         })
         .collect();
 
     let total = results.len() as u64;
-    let val = serde_json::json!(results);
-    CommandOutcome::success_with_total(format_success(Format::Json, &val), total)
+    CommandOutcome::success_with_total(format_output(Format::Json, &results), total)
 }
 
 // ---------------------------------------------------------------------------
@@ -62,103 +61,22 @@ pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) 
 
     let merged = schema.merged_schema_for_type(type_name);
 
-    // Serialize property constraints.
-    let props: serde_json::Map<String, Value> = merged
-        .properties
-        .iter()
-        .map(|(k, constraint)| {
-            let c_val = constraint_to_json(constraint);
-            (k.clone(), c_val)
-        })
-        .collect();
-
-    let val = serde_json::json!({
-        "type": type_name,
-        "required": merged.required,
-        "filename_template": merged.filename_template,
-        "defaults": merged.defaults,
-        "properties": props,
-        "required_sections": merged.required_sections,
-    });
+    let val = crate::output::output_value(
+        &(TypeShowResult {
+            r#type: type_name,
+            required: &merged.required,
+            filename_template: merged.filename_template.as_deref(),
+            defaults: &merged.defaults,
+            properties: merged
+                .properties
+                .iter()
+                .map(|(k, c)| (k.as_str(), ConstraintResult::from(c)))
+                .collect(),
+            required_sections: &merged.required_sections,
+        }),
+    );
 
     CommandOutcome::success(format_success(Format::Json, &val))
-}
-
-fn constraint_to_json(c: &hyalo_core::schema::PropertyConstraint) -> Value {
-    use hyalo_core::schema::PropertyConstraint;
-    match c {
-        PropertyConstraint::String {
-            pattern,
-            min_length,
-            max_length,
-        } => {
-            let mut obj = serde_json::Map::new();
-            obj.insert("type".to_owned(), Value::from("string"));
-            if let Some(pat) = pattern {
-                obj.insert("pattern".to_owned(), Value::from(pat.as_str()));
-            }
-            if let Some(min) = min_length {
-                obj.insert("min-length".to_owned(), Value::from(*min));
-            }
-            if let Some(max) = max_length {
-                obj.insert("max-length".to_owned(), Value::from(*max));
-            }
-            Value::Object(obj)
-        }
-        PropertyConstraint::Date => serde_json::json!({"type": "date"}),
-        PropertyConstraint::DateTime => serde_json::json!({"type": "datetime"}),
-        PropertyConstraint::DateTimeTz => serde_json::json!({"type": "datetime-tz"}),
-        PropertyConstraint::Number { minimum, maximum } => {
-            let mut obj = serde_json::Map::new();
-            obj.insert("type".to_owned(), Value::from("number"));
-            if let Some(min) = minimum {
-                obj.insert("minimum".to_owned(), Value::from(*min));
-            }
-            if let Some(max) = maximum {
-                obj.insert("maximum".to_owned(), Value::from(*max));
-            }
-            Value::Object(obj)
-        }
-        PropertyConstraint::Boolean => serde_json::json!({"type": "boolean"}),
-        PropertyConstraint::List => serde_json::json!({"type": "list"}),
-        PropertyConstraint::Enum { values } => {
-            serde_json::json!({"type": "enum", "values": values})
-        }
-        PropertyConstraint::StringList { item_pattern } => {
-            if let Some(pat) = item_pattern {
-                serde_json::json!({"type": "string-list", "item_pattern": pat})
-            } else {
-                serde_json::json!({"type": "string-list"})
-            }
-        }
-        PropertyConstraint::ObjectList {
-            required_keys,
-            allowed_keys,
-            key_patterns,
-        } => {
-            // Key names mirror the TOML spelling so the output doubles as a
-            // template for `.hyalo.toml` (DEC-287).
-            let mut obj = serde_json::Map::new();
-            obj.insert("type".to_owned(), Value::from("object-list"));
-            obj.insert(
-                "required-keys".to_owned(),
-                Value::from(required_keys.clone()),
-            );
-            if let Some(allowed) = allowed_keys {
-                obj.insert("allowed-keys".to_owned(), Value::from(allowed.clone()));
-            }
-            if !key_patterns.is_empty() {
-                // serde_json's map sorts keys, so the JSON (and the text block
-                // rendered from it) lists the patterns alphabetically.
-                let patterns: serde_json::Map<String, Value> = key_patterns
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Value::from(v.as_str())))
-                    .collect();
-                obj.insert("key-patterns".to_owned(), Value::Object(patterns));
-            }
-            Value::Object(obj)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -205,13 +123,13 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
 
     write_toml_doc(&toml_path, &doc)?;
 
-    let val = serde_json::json!({
-        "action": "removed",
-        "type": type_name,
-        // iter-256 COH-9: `types remove` has no --dry-run; the key is still
-        // emitted so `.results.dry_run` answers "did this write?" uniformly.
-        "dry_run": false,
-    });
+    let val = crate::output::output_value(
+        &(TypeRemoveResult {
+            action: "removed",
+            r#type: type_name,
+            dry_run: false,
+        }),
+    );
     Ok(CommandOutcome::success(format_success(Format::Json, &val)))
 }
 
@@ -518,7 +436,7 @@ pub(crate) fn set_type(
     }
 
     // --- Side effects: --default auto-apply ---
-    let mut defaults_applied: Vec<Value> = Vec::new();
+    let mut defaults_applied: Vec<DefaultAppliedOwned> = Vec::new();
 
     if !defaults_map.is_empty() {
         let all_vault_files = discovery::discover_files(dir)?;
@@ -573,12 +491,12 @@ pub(crate) fn set_type(
             let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
             let applied_files = per_default_files.get(key).cloned().unwrap_or_default();
             let count = applied_files.len();
-            defaults_applied.push(serde_json::json!({
-                "property": key,
-                "value": expanded,
-                "files": applied_files,
-                "count": count,
-            }));
+            defaults_applied.push(DefaultAppliedOwned {
+                property: key.to_owned(),
+                value: expanded,
+                files: applied_files,
+                count,
+            });
         }
     }
 
@@ -586,7 +504,7 @@ pub(crate) fn set_type(
     let needs_violation_check =
         !required_fields.is_empty() || !prop_type_map.is_empty() || !prop_values_map.is_empty();
 
-    let mut constraint_violations: Vec<Value> = Vec::new();
+    let mut constraint_violations: Vec<ConstraintViolationsOwned> = Vec::new();
 
     if needs_violation_check && !dry_run {
         let updated_schema = load_schema_from_doc(&doc)?;
@@ -622,23 +540,29 @@ pub(crate) fn set_type(
         )?;
 
         if counts.errors > 0 || counts.warnings > 0 {
-            constraint_violations.push(serde_json::json!({
-                "file_count": counts.files_with_issues,
-                "error_count": counts.errors,
-                "warning_count": counts.warnings,
-                "message": "Run `hyalo lint` for details.",
-            }));
+            constraint_violations.push(ConstraintViolationsOwned {
+                file_count: counts.files_with_issues,
+                error_count: counts.errors,
+                warning_count: counts.warnings,
+                message: "Run `hyalo lint` for details.",
+            });
         }
     }
 
-    let val = serde_json::json!({
-        "action": if is_new { "created_and_updated" } else { "updated" },
-        "type": type_name,
-        "dry_run": dry_run,
-        "toml_changes": toml_changes,
-        "defaults_applied": defaults_applied,
-        "constraint_violations": constraint_violations,
-    });
+    let val = crate::output::output_value(
+        &(TypeSetResult {
+            action: if is_new {
+                "created_and_updated"
+            } else {
+                "updated"
+            },
+            r#type: type_name,
+            dry_run,
+            toml_changes: &toml_changes,
+            defaults_applied: &defaults_applied,
+            constraint_violations: &constraint_violations,
+        }),
+    );
 
     Ok(CommandOutcome::success(format_success(Format::Json, &val)))
 }
@@ -1532,5 +1456,178 @@ pub(crate) fn run(
             effective_format,
             ctx.case_insensitive_mode,
         ),
+    }
+}
+
+/// Serialized TypeListResult command contract.
+#[derive(serde::Serialize)]
+struct TypeListResult<'a> {
+    /// Schema type name.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// Required property names.
+    required: &'a [String],
+    /// Whether a filename template is configured.
+    has_filename_template: bool,
+    /// Number of local property constraints.
+    property_count: usize,
+}
+
+/// Serialized TypeShowResult command contract.
+#[derive(serde::Serialize)]
+struct TypeShowResult<'a> {
+    /// Schema type name.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// Merged required property names.
+    required: &'a [String],
+    /// Filename template, or null when unset.
+    filename_template: Option<&'a str>,
+    /// User-named property default templates.
+    defaults: &'a HashMap<String, String>,
+    /// Typed constraints keyed by user-defined property name.
+    properties: std::collections::BTreeMap<&'a str, ConstraintResult<'a>>,
+    /// Required body sections in order.
+    required_sections: &'a [String],
+}
+
+/// Serialized TypeRemoveResult command contract.
+#[derive(serde::Serialize)]
+struct TypeRemoveResult<'a> {
+    /// Configuration mutation action.
+    action: &'a str,
+    /// Removed schema type.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// Whether this is a preview; always false for remove.
+    dry_run: bool,
+}
+
+/// Serialized TypeSetResult command contract.
+#[derive(serde::Serialize)]
+struct TypeSetResult<'a> {
+    /// Configuration mutation action.
+    action: &'a str,
+    /// Updated schema type.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Descriptions of planned configuration changes.
+    toml_changes: &'a [String],
+    /// Defaults applied to existing documents.
+    defaults_applied: &'a [DefaultAppliedOwned],
+    /// Aggregated violations after updating the schema.
+    constraint_violations: &'a [ConstraintViolationsOwned],
+}
+
+/// A default applied to existing documents.
+#[derive(serde::Serialize)]
+struct DefaultAppliedOwned {
+    /// User-defined property name.
+    property: String,
+    /// Expanded default text.
+    value: String,
+    /// Affected vault-relative files.
+    files: Vec<String>,
+    /// Number of affected files.
+    count: usize,
+}
+/// Aggregated schema violations following a type mutation.
+#[derive(serde::Serialize)]
+struct ConstraintViolationsOwned {
+    /// Number of files with violations.
+    file_count: usize,
+    /// Number of errors.
+    error_count: usize,
+    /// Number of warnings.
+    warning_count: usize,
+    /// Follow-up guidance.
+    message: &'static str,
+}
+
+/// Serialized ConstraintResult command contract.
+#[derive(Default, serde::Serialize)]
+struct ConstraintResult<'a> {
+    /// Constraint kind.
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    /// String pattern when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pattern: Option<&'a str>,
+    /// Minimum string length.
+    #[serde(rename = "min-length", skip_serializing_if = "Option::is_none")]
+    min_length: Option<usize>,
+    /// Maximum string length.
+    #[serde(rename = "max-length", skip_serializing_if = "Option::is_none")]
+    max_length: Option<usize>,
+    /// Minimum numeric value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum: Option<f64>,
+    /// Maximum numeric value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maximum: Option<f64>,
+    /// Allowed enum values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    values: Option<&'a [String]>,
+    /// Pattern applied to each string-list item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_pattern: Option<&'a str>,
+    /// Required keys for object-list entries, including an empty list.
+    #[serde(rename = "required-keys", skip_serializing_if = "Option::is_none")]
+    required_keys: Option<&'a [String]>,
+    /// Allowed keys for object-list entries.
+    #[serde(rename = "allowed-keys", skip_serializing_if = "Option::is_none")]
+    allowed_keys: Option<&'a [String]>,
+    /// Patterns keyed by user-defined object field name.
+    #[serde(rename = "key-patterns", skip_serializing_if = "Option::is_none")]
+    key_patterns: Option<&'a indexmap::IndexMap<String, String>>,
+}
+
+impl<'a> From<&'a hyalo_core::schema::PropertyConstraint> for ConstraintResult<'a> {
+    fn from(c: &'a hyalo_core::schema::PropertyConstraint) -> Self {
+        use hyalo_core::schema::PropertyConstraint;
+        let mut out = Self::default();
+        out.r#type = match c {
+            PropertyConstraint::String {
+                pattern,
+                min_length,
+                max_length,
+            } => {
+                out.pattern = pattern.as_deref();
+                out.min_length = *min_length;
+                out.max_length = *max_length;
+                "string"
+            }
+            PropertyConstraint::Date => "date",
+            PropertyConstraint::DateTime => "datetime",
+            PropertyConstraint::DateTimeTz => "datetime-tz",
+            PropertyConstraint::Number { minimum, maximum } => {
+                out.minimum = *minimum;
+                out.maximum = *maximum;
+                "number"
+            }
+            PropertyConstraint::Boolean => "boolean",
+            PropertyConstraint::List => "list",
+            PropertyConstraint::Enum { values } => {
+                out.values = Some(values);
+                "enum"
+            }
+            PropertyConstraint::StringList { item_pattern } => {
+                out.item_pattern = item_pattern.as_deref();
+                "string-list"
+            }
+            PropertyConstraint::ObjectList {
+                required_keys,
+                allowed_keys,
+                key_patterns,
+            } => {
+                out.required_keys = Some(required_keys);
+                out.allowed_keys = allowed_keys.as_deref();
+                out.key_patterns = (!key_patterns.is_empty()).then_some(key_patterns);
+                "object-list"
+            }
+        };
+        out
     }
 }

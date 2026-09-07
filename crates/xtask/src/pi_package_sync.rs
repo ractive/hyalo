@@ -90,7 +90,7 @@ pub fn run() -> Result<bool> {
         return Ok(false);
     }
 
-    let mut all_ok = true;
+    let mut all_ok = versions_match(&root)?;
     let mut checked = 0usize;
     for (source, vendored_copy) in &pairs {
         checked += 1;
@@ -138,6 +138,37 @@ pub fn run() -> Result<bool> {
         println!("check-pi-package-sync: {checked} pi-package file(s) match their vendored copies");
     }
     Ok(all_ok)
+}
+
+/// Check each published/embedded pi manifest against the Cargo workspace.
+/// The independently versioned Codex plugin is intentionally outside this set.
+fn versions_match(root: &Path) -> Result<bool> {
+    let cargo: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml"))?)
+        .context("parsing workspace Cargo.toml")?;
+    let version = cargo
+        .get("workspace")
+        .and_then(|v| v.get("package"))
+        .and_then(|v| v.get("version"))
+        .and_then(toml::Value::as_str)
+        .context("missing workspace.package.version")?;
+    let mut matches = true;
+    for manifest in [
+        "package.json",
+        "pi-package/package.json",
+        "crates/hyalo-cli/templates/pi/package.json",
+    ] {
+        let package: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join(manifest))?)
+                .with_context(|| format!("parsing {manifest}"))?;
+        let actual = package.get("version").and_then(serde_json::Value::as_str);
+        if actual != Some(version) {
+            matches = false;
+            eprintln!(
+                "check-pi-package-sync: {manifest} version {actual:?} differs from Cargo workspace {version}"
+            );
+        }
+    }
+    Ok(matches)
 }
 
 /// The vendored files the gate is responsible for: `skills/*/SKILL.md`,
@@ -232,5 +263,43 @@ mod tests {
 
         fs::write(&b, b"different").expect("write b");
         assert_ne!(fs::read(&a).unwrap(), fs::read(&b).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn detects_each_manifest_mismatch_even_when_pi_copies_agree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace.package]\nversion = \"0.22.0\"\n",
+        )
+        .unwrap();
+        let manifests = [
+            "package.json",
+            "pi-package/package.json",
+            "crates/hyalo-cli/templates/pi/package.json",
+        ];
+        for path in manifests {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, r#"{"version":"0.22.0"}"#).unwrap();
+        }
+        assert!(versions_match(root).unwrap());
+        for path in manifests {
+            std::fs::write(root.join(path), r#"{"version":"0.1.1"}"#).unwrap();
+            assert!(!versions_match(root).unwrap(), "{path}");
+            std::fs::write(root.join(path), r#"{"version":"0.22.0"}"#).unwrap();
+        }
+        for path in manifests {
+            std::fs::write(root.join(path), r#"{"version":"0.1.1"}"#).unwrap();
+        }
+        assert!(!versions_match(root).unwrap());
+        std::fs::write(root.join("pi-package/package.json"), "{}").unwrap();
+        assert!(!versions_match(root).unwrap());
     }
 }

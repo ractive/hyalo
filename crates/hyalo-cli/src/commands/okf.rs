@@ -373,45 +373,39 @@ pub fn run_index(
         }
     }
 
-    let mut results: Vec<serde_json::Value> = changed
+    let mut results: Vec<OkfIndexFileResult> = changed
         .iter()
         .filter(|p| !write_failures.contains(&p.rel_path))
-        .map(|p| {
-            let mut obj = serde_json::json!({
-                "file": p.rel_path,
-                "action": p.action.as_str(),
-            });
-            // On an adopt, report how many existing lines are being preserved so
-            // `--dry-run` can print an explicit "preserving N existing lines"
-            // notice, distinct from a plain update.
-            if p.action == IndexAction::Adopt {
-                obj["preserved_lines"] = serde_json::Value::from(count_lines(&p.old_content));
-            }
-            obj
+        .map(|p| OkfIndexFileResult {
+            file: &p.rel_path,
+            action: p.action.as_str(),
+            preserved_lines: (p.action == IndexAction::Adopt).then(|| count_lines(&p.old_content)),
+            reason: None,
         })
         .collect();
 
     // Report the skipped malformed-marker files so `--dry-run` surfaces them and
     // apply records why they were left alone.
     for plan in &skipped_markers {
-        results.push(serde_json::json!({
-            "file": plan.rel_path,
-            "action": IndexAction::Skip.as_str(),
-            "reason": plan.skip_reason,
-        }));
+        results.push(OkfIndexFileResult {
+            file: &plan.rel_path,
+            action: IndexAction::Skip.as_str(),
+            preserved_lines: None,
+            reason: Some(plan.skip_reason),
+        });
     }
 
-    let payload = serde_json::json!({
-        "command": "okf index",
-        "apply": apply,
-        "dry_run": !apply,
-        "scanned": plans.len(),
-        "changed": changed.len() - write_failures.len(),
-        "skipped_malformed": skipped_malformed,
-        "skipped_markers": skipped_markers.len(),
-        "write_failures": write_failures,
-        "files": results,
-    });
+    let payload = OkfIndexResult {
+        command: "okf index",
+        apply,
+        dry_run: !apply,
+        scanned: plans.len(),
+        changed: changed.len() - write_failures.len(),
+        skipped_malformed,
+        skipped_markers: skipped_markers.len(),
+        write_failures: &write_failures,
+        files: &results,
+    };
 
     // Exit code:
     // - apply with any write failure → non-zero (partial failure, BUG-11).
@@ -433,7 +427,10 @@ pub fn run_index(
     };
 
     Ok((
-        CommandOutcome::success_with_total(payload.to_string(), changed.len() as u64),
+        CommandOutcome::success_with_total(
+            crate::output::output_value(&payload).to_string(),
+            changed.len() as u64,
+        ),
         exit_override,
     ))
 }
@@ -1017,16 +1014,18 @@ pub fn run_log(
             .with_context(|| format!("failed to write {rel_path}"))?;
     }
 
-    let payload = serde_json::json!({
-        "command": "okf log",
-        "apply": apply,
-        "dry_run": !apply,
-        "file": rel_path,
-        "date": today,
-        "entry": entry_line,
-        "created": old_content.is_empty(),
-    });
-    Ok(CommandOutcome::success(payload.to_string()))
+    let payload = OkfLogResult {
+        command: "okf log",
+        apply,
+        dry_run: !apply,
+        file: &(rel_path),
+        date: &(today),
+        entry: &(entry_line),
+        created: old_content.is_empty(),
+    };
+    Ok(CommandOutcome::success(
+        crate::output::output_value(&payload).to_string(),
+    ))
 }
 
 /// Indent the continuation lines of a (possibly multi-line) log message so the
@@ -1846,4 +1845,61 @@ pub(crate) fn run(
             effective_format,
         ),
     }
+}
+
+/// Serialized OkfIndexFileResult command contract.
+#[derive(serde::Serialize)]
+struct OkfIndexFileResult<'a> {
+    /// Vault-relative index path.
+    file: &'a str,
+    /// Planned or performed index action.
+    action: &'a str,
+    /// Existing lines preserved during adoption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preserved_lines: Option<usize>,
+    /// Reason for skipping malformed markers; absent for other actions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a str>,
+}
+
+/// Serialized OkfIndexResult command contract.
+#[derive(serde::Serialize)]
+struct OkfIndexResult<'a> {
+    /// Invoked command name.
+    command: &'a str,
+    /// Whether apply was requested.
+    apply: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Number of planned index files.
+    scanned: usize,
+    /// Number of files changed successfully.
+    changed: usize,
+    /// Files skipped for malformed frontmatter.
+    skipped_malformed: usize,
+    /// Files skipped for malformed index markers.
+    skipped_markers: usize,
+    /// Paths whose durable write failed.
+    write_failures: &'a [String],
+    /// Per-file actions and adoption details.
+    files: &'a [OkfIndexFileResult<'a>],
+}
+
+/// Serialized OkfLogResult command contract.
+#[derive(serde::Serialize)]
+struct OkfLogResult<'a> {
+    /// Invoked command name.
+    command: &'a str,
+    /// Whether apply was requested.
+    apply: bool,
+    /// Whether this is a preview.
+    dry_run: bool,
+    /// Vault-relative log path.
+    file: &'a str,
+    /// Date of the new log entry.
+    date: &'a str,
+    /// Rendered entry source.
+    entry: &'a str,
+    /// Whether the log was newly created.
+    created: bool,
 }
