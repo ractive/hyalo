@@ -243,6 +243,13 @@ and this project adheres to
 
 ### Fixed
 
+- Ranked search checks canonical vault containment before snippet and fallback
+  body reads, refusing file and directory symlink escapes. Indexed document
+  languages now honor CLI/config overrides consistently with scoring and snippets.
+- Successful typed API diagnostics reach stderr or `onDiagnostics`; Pi displays
+  them alongside tool results. Non-publishing npm dry runs no longer query
+  registry publication eligibility; real publishing retains immutable-version checks.
+
 - Frontmatter reads and rewrites briefly retry Windows file-open errors 5 and 32,
   which can occur while another process replaces a file. Five attempts add at most
   40 ms of intentional delay; persistent failures keep their original error and

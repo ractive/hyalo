@@ -229,6 +229,15 @@ jobs:
                 --ignore-scripts --access public \
                 --registry https://registry.npmjs.org
           done
+      - name: Plan immutable npm publication
+        if: >-
+          github.event_name == 'release' ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_npm)
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+        run: |
+          set -euo pipefail
           cargo run -q -p xtask -- plan-npm-publication --pack-json \
             "$PACK_DIR/darwin-arm64.json" \
             "$PACK_DIR/linux-x64.json" \

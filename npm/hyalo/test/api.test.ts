@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import {
   HyaloAbortError,
@@ -330,5 +330,86 @@ describe("Pi adapters", () => {
     const untouched = await read({ file: ["control.md"], frontmatter: true, ...real() });
     expect(changed.results.frontmatter).toMatchObject({ status: "-active" });
     expect(untouched.results.frontmatter).toMatchObject({ status: "planned" });
+  });
+});
+
+
+describe("successful diagnostics", () => {
+  const warning = "warning: index older than vault\nsecond diagnostic\n";
+  const stdout = '{"results":[],"total":0,"hints":[]}';
+  const transport: HyaloTransport = async () => ({ code: 0, stdout, stderr: warning });
+
+  it("delivers original stderr once, awaits callbacks, and preserves the envelope", async () => {
+    const seen: string[] = [];
+    const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const result = await find({ index: true, quiet: false, transport, onDiagnostics: async (stderr) => {
+        await Promise.resolve();
+        seen.push(stderr);
+      } });
+      expect(seen).toEqual([warning]);
+      expect(result).toEqual(JSON.parse(stdout));
+      expect(output).not.toHaveBeenCalled();
+      await find({ transport });
+      expect(output.mock.calls).toEqual([[warning]]);
+    } finally { output.mockRestore(); }
+  });
+
+  it("does not suppress quiet exceptions, notify empty stderr, or double-report failures/raw calls", async () => {
+    const onDiagnostics = vi.fn();
+    await find({ quiet: true, transport, onDiagnostics });
+    expect(onDiagnostics.mock.calls).toEqual([[warning]]);
+    onDiagnostics.mockClear();
+    await find({ transport: async () => ({ code: 0, stdout, stderr: "" }), onDiagnostics });
+    await expect(find({ transport: async () => ({ code: 1, stdout, stderr: warning }), onDiagnostics }))
+      .rejects.toMatchObject({ stderr: warning, stdout, exitCode: 1 });
+    await expect(find({ transport: async () => ({ code: 0, stdout: "bad JSON", stderr: warning }), onDiagnostics }))
+      .rejects.toMatchObject({ stderr: warning, stdout: "bad JSON" });
+    expect(await raw([], { transport, onDiagnostics })).toEqual({ code: 0, stdout, stderr: warning });
+    expect(onDiagnostics).not.toHaveBeenCalled();
+  });
+
+  it("propagates consumer exceptions unchanged for sync and async callbacks", async () => {
+    const failure = new Error("consumer callback failed");
+    await expect(find({ transport, onDiagnostics: () => { throw failure; } })).rejects.toBe(failure);
+    await expect(find({ transport, onDiagnostics: async () => { throw failure; } })).rejects.toBe(failure);
+  });
+
+  it("reports successful mutation diagnostics and leaves their raw streams intact", async () => {
+    const onDiagnostics = vi.fn();
+    const options = { file: "note.md", transport, onDiagnostics };
+    expect((await set({ ...options, property: "status=done" })).stderr).toBe(warning);
+    expect((await task({ ...options, mode: "all" })).stderr).toBe(warning);
+    expect(onDiagnostics.mock.calls).toEqual([[warning], [warning]]);
+  });
+
+  it("forwards native malformed-config success diagnostics with exact CLI quiet behavior", async () => {
+    const cwd = path.join(scratch, "success malformed config");
+    await mkdir(path.join(cwd, "vault"), { recursive: true });
+    await writeFile(path.join(cwd, ".hyalo.toml"), "not = [valid\n");
+    await writeFile(path.join(cwd, "vault", "note.md"), "# Note\ncontent\n");
+    const output = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      for (const quiet of [false, true]) {
+        const baseline = await raw(["read", "--dir=vault", "--format=json", "--no-hints", ...(quiet ? ["--quiet"] : []), "--", "note.md"], { binaryPath: binary, cwd });
+        expect(baseline.code).toBe(0);
+        // Malformed configuration is a deliberate CLI quiet-mode exception.
+        expect(baseline.stderr).toContain("warning: malformed .hyalo.toml");
+        const onDiagnostics = vi.fn();
+        const result = await read({ file: ["note.md"], dir: "vault", quiet, binaryPath: binary, cwd, onDiagnostics });
+        expect(result).toEqual(JSON.parse(baseline.stdout));
+        expect(onDiagnostics.mock.calls).toEqual(baseline.stderr ? [[baseline.stderr]] : []);
+        output.mockClear();
+        await read({ file: ["note.md"], dir: "vault", quiet, binaryPath: binary, cwd });
+        expect(output.mock.calls).toEqual(baseline.stderr ? [[baseline.stderr]] : []);
+      }
+    } finally { output.mockRestore(); }
+  });
+
+  it("preserves diagnostics through Pi transport", async () => {
+    const onDiagnostics = vi.fn();
+    const piTransport = createPiTransport({ exec: async () => ({ code: 0, stdout, stderr: warning, killed: false }) });
+    await find({ transport: piTransport, onDiagnostics });
+    expect(onDiagnostics.mock.calls).toEqual([[warning]]);
   });
 });

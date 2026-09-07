@@ -508,6 +508,18 @@ pub fn find(
                 .map(|&idx| scoped_entries[idx].rel_path.as_str())
                 .collect();
 
+            // The persisted corpus must use the same effective document languages as
+            // live scoring and snippet extraction, including documents excluded by
+            // metadata filters: their tokens still contribute to corpus statistics.
+            let cached_language_matches = |entry: &hyalo_core::index::IndexEntry| {
+                let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                entry
+                    .bm25_language
+                    .as_deref()
+                    .and_then(|s| parse_language(s).ok())
+                    == Some(resolve_language(fm_lang, language, config_language))
+            };
+
             // Fastest path: use the persisted BM25 inverted index when available, no section
             // filter is active, AND it was built by the current tokenizer (DEC-094 / F-2) — a
             // persisted index from before a `tokenize()` algorithm change (e.g. the CJK-bigram
@@ -517,6 +529,9 @@ pub fn find(
             if !has_section_filter
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
+                && bm25_idx
+                    .document_paths()
+                    .all(|path| index.get(path).is_some_and(cached_language_matches))
             {
                 let all_scored = bm25_idx.score(pat, &stemmer);
                 let map: HashMap<String, f64> = all_scored
@@ -552,6 +567,31 @@ pub fn find(
             //
             // Slow path: read each file from disk for entries that lack stored tokens
             // or when a section filter is active.
+            // Persisted snapshots omit duplicated per-entry token arrays. Recover
+            // compatible documents from the inverted index during mixed-language
+            // fallback instead of reading their bodies again.
+            let cached_tokens_compatible = |entry: &hyalo_core::index::IndexEntry| {
+                cached_language_matches(entry)
+                    && entry.bm25_tokenizer_version == Some(TOKENIZER_VERSION)
+            };
+            let recovery_paths: std::collections::HashSet<&str> = scoped_entries
+                .iter()
+                .filter(|entry| {
+                    !has_section_filter
+                        && entry.bm25_tokens.is_none()
+                        && cached_tokens_compatible(entry)
+                })
+                .map(|entry| entry.rel_path.as_str())
+                .collect();
+            let mut reconstructed = if recovery_paths.is_empty() {
+                HashMap::new()
+            } else {
+                index
+                    .bm25_index()
+                    .filter(|bm25| bm25.tokenizer_version() == TOKENIZER_VERSION)
+                    .map(|bm25| bm25.reconstruct_selected_tokens(&recovery_paths))
+                    .unwrap_or_default()
+            };
             let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();
             let mut doc_inputs: Vec<DocumentInput> = Vec::new();
 
@@ -561,7 +601,10 @@ pub fn find(
             // block so the closure (and its mutable borrows of `pre_tok_inputs` /
             // `doc_inputs`) is dropped before those vectors are consumed below.
             {
-                let mut collect_entry = |entry: &hyalo_core::index::IndexEntry| {
+                let mut collect_entry = |entry: &hyalo_core::index::IndexEntry| -> std::result::Result<
+                    (),
+                    discovery::FileResolveError,
+                > {
                     // Use pre-tokenized data only when:
                     // 1. The index entry has stored tokens, AND
                     // 2. No section filter is active (section filters require line-level body slicing), AND
@@ -571,30 +614,38 @@ pub fn find(
                     //    CJK-bigram fix) carries tokens a fresh tokenize would never produce,
                     //    so trusting them would silently keep queries broken until the next
                     //    `create-index` — re-tokenize from disk instead, same as a language miss.
-                    if !has_section_filter && let Some(ref tokens) = entry.bm25_tokens {
-                        let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
-                        let effective_lang = resolve_language(fm_lang, language, config_language);
-                        let cached_lang_matches = entry
-                            .bm25_language
-                            .as_deref()
-                            .and_then(|s| parse_language(s).ok())
-                            == Some(effective_lang);
-                        let cached_tokenizer_current =
-                            entry.bm25_tokenizer_version == Some(TOKENIZER_VERSION);
-
-                        if cached_lang_matches && cached_tokenizer_current {
+                    if !has_section_filter && cached_tokens_compatible(entry) {
+                        // Borrowed per-entry caches need an owned corpus copy;
+                        // recovered tokens are already owned and consumed directly.
+                        let tokens = entry
+                            .bm25_tokens
+                            .clone()
+                            .or_else(|| reconstructed.remove(entry.rel_path.as_str()));
+                        if let Some(tokens) = tokens {
                             pre_tok_inputs.push(PreTokenizedInput {
                                 rel_path: entry.rel_path.clone(),
-                                tokens: tokens.clone(),
+                                tokens,
                             });
-                            return;
+                            return Ok(());
                         }
-                        // Fall through to disk-read tokenization when the language or the
-                        // tokenizer version mismatches.
                     }
 
                     // Slow path: read the file from disk.
-                    let full_path = dir.join(&entry.rel_path);
+                    let full_path =
+                        match hyalo_core::bm25::resolve_document_path(dir, &entry.rel_path) {
+                            Ok(path) => path,
+                            Err(error) => match error.downcast::<discovery::FileResolveError>() {
+                                Ok(error) => return Err(error),
+                                Err(error) => {
+                                    hyalo_core::warn::record_skip(
+                                        entry.rel_path.as_str(),
+                                        format!("{error:#}"),
+                                        hyalo_core::warn::SkipKind::Other,
+                                    );
+                                    return Ok(());
+                                }
+                            },
+                        };
                     let file_content = match std::fs::read_to_string(&full_path) {
                         Ok(s) => s,
                         // UX-3 (iter-255): `read_to_string` reports invalid
@@ -610,7 +661,7 @@ pub fn find(
                                 crate::commands::INVALID_UTF8_CONSEQUENCE,
                                 hyalo_core::warn::SkipKind::Other,
                             );
-                            return;
+                            return Ok(());
                         }
                         Err(e) => {
                             hyalo_core::warn::record_skip(
@@ -618,7 +669,7 @@ pub fn find(
                                 e.to_string(),
                                 hyalo_core::warn::SkipKind::Other,
                             );
-                            return;
+                            return Ok(());
                         }
                     };
                     // Feed only the body (after frontmatter) to BM25 so that frontmatter
@@ -635,7 +686,7 @@ pub fn find(
                         if scope_ranges.is_empty() {
                             // No matching section — this candidate should have been filtered
                             // in Phase 1, but guard here just in case.
-                            return;
+                            return Ok(());
                         }
                         // Index line numbers are 1-based relative to the full file (frontmatter + body).
                         // Count lines in the frontmatter prefix to offset body line numbers correctly.
@@ -670,6 +721,7 @@ pub fn find(
                         body,
                         language: lang,
                     });
+                    Ok(())
                 };
 
                 if has_section_filter {
@@ -678,7 +730,9 @@ pub fn find(
                     // filter is active — so both the --index and no-index runs already build
                     // this exact candidates-only corpus. No cross-path parity gap here.
                     for &idx in &candidates {
-                        collect_entry(scoped_entries[idx]);
+                        if let Err(error) = collect_entry(scoped_entries[idx]) {
+                            return Ok(super::resolve_error_to_outcome(error, format, dir));
+                        }
                     }
                 } else {
                     // H-8 fix: build corpus statistics (N, per-term document frequency, avgdl)
@@ -688,7 +742,9 @@ pub fn find(
                     // whole indexed vault) so --index and no-index runs agree on ranking.
                     // Scoring is intersected with metadata-passing candidates below.
                     for entry in scoped_entries.iter().copied() {
-                        collect_entry(entry);
+                        if let Err(error) = collect_entry(entry) {
+                            return Ok(super::resolve_error_to_outcome(error, format, dir));
+                        }
                     }
                 }
             } // end collect_entry scope
@@ -1489,7 +1545,7 @@ pub fn find(
                 );
                 obj.matches = Some(
                     query
-                        .snippets(&dir.join(&obj.file), doc_language, &entry.sections, &scope)
+                        .snippets(dir, &obj.file, doc_language, &entry.sections, &scope)
                         .with_context(|| format!("reading ranked snippets for {}", obj.file))?,
                 );
                 Ok(())
@@ -1497,7 +1553,12 @@ pub fn find(
             .collect();
         // Report the first failure in result order, independent of scheduling.
         for outcome in outcomes {
-            outcome?;
+            if let Err(error) = outcome {
+                return match error.downcast::<discovery::FileResolveError>() {
+                    Ok(error) => Ok(super::resolve_error_to_outcome(error, format, dir)),
+                    Err(error) => Err(error),
+                };
+            }
         }
     }
 

@@ -384,3 +384,36 @@ API into `pi-package/lib`, outside Pi's extension auto-discovery directory, then
 mirrored into the Rust crate. `init --pi` installs them offline under `.pi/lib`;
 deinit and sync checks cover the same assets. This deliberately avoids depending
 on the public 0.22.0 package, whose immutable bytes contain only the CLI.
+
+## Integrated review corrections — iteration 289
+
+Successful typed calls accept `onDiagnostics(stderr)`, receiving the original
+nonempty stderr once. Without a callback they forward those bytes to the caller's
+stderr. The callback may return a promise; its rejection or synchronous exception
+rejects the call unchanged after CLI success. Empty stderr does not notify.
+`quiet` is passed to the CLI, preserving warnings the CLI deliberately leaves
+visible. Failed commands and invalid envelopes keep stderr in their existing
+error objects without reporting it again. `raw()` and `execute()` preserve streams
+without automatic reporting. Successful `set`, `task`, and `lint` calls also report
+diagnostics while retaining their stream results. Pi's typed tools collect these
+warnings into separate visible text blocks alongside the original response.
+
+Ranked live reads resolve each selected destination against the canonical vault
+boundary before opening content, including fallback scoring reads. This detects
+file and parent-directory symlink substitutions; it does not promise protection
+against every concurrent filesystem race. Ordinary missing or unreadable fallback
+files retain their skip diagnostics, and selected snippet failures retain errors.
+
+Persisted scoring now checks the document language of the entire stored corpus
+against effective frontmatter/CLI/config/default precedence. New snapshots retain
+language metadata when duplicated token arrays are stripped. Earlier snapshots
+without that metadata still load, but use live tokenization until rebuilt with
+`create-index`. Compatible persisted corpora preserve their scoring and read only
+selected snippet bodies. Query language remains distinct from document language.
+
+Offline release packaging and publication planning are separate workflow steps.
+Default manual validation and either bootstrap mode pack and dry-run without
+registry eligibility queries. Release publication and explicit `publish_npm`
+first obtain an immutable publication plan; integrity mismatch rejection and
+platform-first/main-last ordering remain enforced. No package publication or
+version change is part of this iteration; public 0.22.0 remains CLI-only.

@@ -78,12 +78,16 @@ async function runHyalo(
 
 async function runTyped(
   command: string,
-  operation: () => Promise<string>,
+  operation: (onDiagnostics: (stderr: string) => void) => Promise<string>,
 ) {
   try {
-    const text = await operation();
+    const diagnostics: string[] = [];
+    const text = await operation((stderr) => { diagnostics.push(stderr); });
     return {
-      content: [{ type: "text" as const, text: text || "(no output)" }],
+      content: [
+        { type: "text" as const, text: text || "(no output)" },
+        ...diagnostics.map((stderr) => ({ type: "text" as const, text: `Stderr:\n${stderr}` })),
+      ],
       details: undefined,
     };
   } catch (error) {
@@ -295,7 +299,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_find: search/filter knowledgebase files (query, property, tag, task status)",
     parameters: hyaloFindParams,
     async execute(_toolCallId, params: Static<typeof hyaloFindParams>, signal) {
-      return runTyped("find", async () => {
+      return runTyped("find", async (onDiagnostics) => {
         const result = await hyaloFind({
           pattern: params.query,
           properties: params.property,
@@ -305,6 +309,7 @@ export default function (pi: ExtensionAPI) {
           limit: params.limit === undefined ? undefined : Math.trunc(params.limit),
           transport,
           signal,
+          onDiagnostics,
         });
         return params.countOnly
           ? String(result.total ?? result.results.length)
@@ -331,8 +336,8 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_read: read a vault file (optionally a single section) as text",
     parameters: hyaloReadParams,
     async execute(_toolCallId, params: Static<typeof hyaloReadParams>, signal) {
-      return runTyped("read", async () => {
-        const result = await hyaloRead({ file: [params.file], section: params.section, transport, signal });
+      return runTyped("read", async (onDiagnostics) => {
+        const result = await hyaloRead({ file: [params.file], section: params.section, transport, signal, onDiagnostics });
         return result.results.content ?? result.results.frontmatter_raw ?? "";
       });
     },
@@ -357,8 +362,8 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_set: set a file's frontmatter property (K=V), optionally add a tag",
     parameters: hyaloSetParams,
     async execute(_toolCallId, params: Static<typeof hyaloSetParams>, signal) {
-      return runTyped("set", async () => {
-        const result = await hyaloSet({ ...params, transport, signal });
+      return runTyped("set", async (onDiagnostics) => {
+        const result = await hyaloSet({ ...params, transport, signal, onDiagnostics });
         return result.stdout;
       });
     },
@@ -386,7 +391,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_task: toggle task checkboxes (all / by section / by line)",
     parameters: hyaloTaskParams,
     async execute(_toolCallId, params: Static<typeof hyaloTaskParams>, signal) {
-      return runTyped("task", async () => {
+      return runTyped("task", async (onDiagnostics) => {
         const result = await hyaloTask({
           file: params.file,
           mode: params.mode,
@@ -394,6 +399,7 @@ export default function (pi: ExtensionAPI) {
           lines: params.lines,
           transport,
           signal,
+          onDiagnostics,
         });
         return result.stdout;
       });

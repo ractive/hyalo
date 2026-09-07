@@ -32,7 +32,16 @@ export type HyaloTransport = (
   options: TransportOptions,
 ) => Promise<ProcessResult>;
 
+/** Receives the original successful stderr once; returned promises are awaited. */
+export type DiagnosticsCallback = (stderr: string) => void | Promise<void>;
+
 export interface ExecutionOptions {
+  /**
+   * Successful typed-call stderr. Defaults to process.stderr.write.
+   * Empty stderr is ignored. Callback throws/rejections reject the call unchanged.
+   * Failed calls retain diagnostics in their error; raw()/execute() retain streams only.
+   */
+  onDiagnostics?: DiagnosticsCallback;
   /** Explicit native binary. Useful for Cargo/Homebrew installations and tests. */
   binaryPath?: string;
   /** Process transport override. Pi uses this to retain its `pi.exec("hyalo", ...)` path. */
@@ -137,6 +146,7 @@ export function isClosedStdinWriteError(
 
 function executionOptions(options: Record<string, unknown>): ExecutionOptions {
   return {
+    onDiagnostics: options.onDiagnostics as DiagnosticsCallback | undefined,
     binaryPath: options.binaryPath as string | undefined,
     transport: options.transport as HyaloTransport | undefined,
     cwd: options.cwd as string | undefined,
@@ -393,11 +403,22 @@ function parseEnvelope<T>(result: ProcessResult): Envelope<T> {
   return parsed as Envelope<T>;
 }
 
+/** @internal Report only a successfully interpreted typed call, never failed/raw streams. */
+export async function reportDiagnostics(result: ProcessResult, options: ExecutionOptions): Promise<void> {
+  if (!result.stderr) return;
+  if (options.onDiagnostics) await options.onDiagnostics(result.stderr);
+  else process.stderr.write(result.stderr);
+}
+
 async function jsonCall<T>(argv: string[], options: Record<string, unknown>): Promise<Envelope<T>> {
   assertNoOutputTransforms(options);
   const terminator = argv.indexOf("--");
   argv.splice(terminator === -1 ? argv.length : terminator, 0, "--format=json", "--no-hints");
-  return parseEnvelope<T>(await execute(argv, executionOptions(options)));
+  const execution = executionOptions(options);
+  const result = await execute(argv, execution);
+  const envelope = parseEnvelope<T>(result);
+  await reportDiagnostics(result, execution);
+  return envelope;
 }
 
 export function find(options: FindCallOptions = {}): Promise<Envelope<FindResult>> {
@@ -435,6 +456,7 @@ export async function set(options: SetOptions): Promise<ProcessResult> {
   argv.push("--", options.file);
   const result = await execute(argv, options);
   if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
+  await reportDiagnostics(result, options);
   return result;
 }
 
@@ -461,6 +483,7 @@ export async function task(options: TaskOptions): Promise<ProcessResult> {
   argv.push("--", options.file);
   const result = await execute(argv, options);
   if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
+  await reportDiagnostics(result, options);
   return result;
 }
 
@@ -475,6 +498,7 @@ export async function lint(
   if (result.code !== 0 && result.code !== 1) {
     throw new HyaloError(result, parseErrorEnvelope(result));
   }
+  if (result.code === 0) await reportDiagnostics(result, options);
   return result;
 }
 
