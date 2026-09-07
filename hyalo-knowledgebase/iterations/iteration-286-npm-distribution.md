@@ -144,6 +144,24 @@ Linux x64 glibc, Windows x64 and Alpine x64 musl, checking the actual installed 
 dependency and CLI version. It does not publish packages. These preparations preserve
 iteration 287's full prerequisite and iteration 288's deferred desktop verification.
 
+## Native-build recovery — 2026-09-07
+
+PR #338 merged bootstrap signing and registry verification preparation after all
+eleven runnable PR checks passed. Native build `34090552288` then failed its strict
+Windows x64 concurrency observer: `File::open` returned access denied (OS error 5)
+while writers replaced the same note. Six other native targets completed. Signing
+and npm publication did not run.
+
+The recovery adds a private Windows-only retry policy to the three frontmatter
+file-open paths: at most five attempts, 10 ms between attempts, only raw errors 5
+and 32. Persistent and unrelated errors retain normal failure behavior; parsing,
+body reads and atomic writes are not retried. The strict concurrency observer stays
+unchanged. Deterministic injected-open tests cover the retry boundary; native Windows
+CI and a new same-commit signed build remain required before publication proceeds.
+
+This recovery preserves iteration 287's full prerequisite and iteration 288's
+deferred desktop verification. No external acceptance criterion is waived.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — proposal, naming table, settled section
