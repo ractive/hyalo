@@ -71,7 +71,8 @@ pub struct IndexEntry {
     pub bm25_tokens: Option<Vec<String>>,
     /// Stemming language used when producing [`bm25_tokens`]. Matches the
     /// `language` frontmatter property of this document (or `"english"` as the
-    /// default). `None` when [`bm25_tokens`] is `None`.
+    /// default). Retained when tokens are stored only in the inverted index;
+    /// older snapshots may omit this metadata and require live re-tokenization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bm25_language: Option<String>,
     /// [`crate::bm25::TOKENIZER_VERSION`] that produced [`bm25_tokens`]. `None`
@@ -1687,7 +1688,7 @@ fn write_snapshot(
             .map(|e| {
                 let mut e = e.clone();
                 e.bm25_tokens = None;
-                e.bm25_language = None;
+                // Keep the language so persisted scoring can validate overrides.
                 e
             })
             .collect();

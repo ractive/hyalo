@@ -1315,3 +1315,417 @@ fn bm25_section_survives_a_mutating_command() {
         "results must still carry a positive BM25 score: {arr:?}"
     );
 }
+
+// Iteration 289: a cached path is not authority to read its current destination.
+fn replace_with_symlink(target: &std::path::Path, link: &std::path::Path, directory: bool) -> bool {
+    #[cfg(unix)]
+    let result = {
+        let _ = directory;
+        std::os::unix::fs::symlink(target, link)
+    };
+    #[cfg(windows)]
+    let result = if directory {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    #[cfg(windows)]
+    if result
+        .as_ref()
+        .is_err_and(|error| error.raw_os_error() == Some(1314))
+    {
+        eprintln!("symlink capability unavailable: Windows requires Developer Mode or privilege");
+        return false;
+    }
+    result.unwrap();
+    true
+}
+
+fn indexed_ranked_fixture() -> TempDir {
+    let vault = TempDir::new().unwrap();
+    std::fs::write(
+        vault.path().join(".hyalo.toml"),
+        "[scan]\nverbose_skips = true\n",
+    )
+    .unwrap();
+    write_md(
+        vault.path(),
+        "notes/note.md",
+        "# Fruit\npineapple safe fixture\n",
+    );
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(vault.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    vault
+}
+
+#[test]
+fn ranked_live_reads_refuse_file_and_directory_symlink_escape() {
+    for directory in [false, true] {
+        let vault = indexed_ranked_fixture();
+        let outside = TempDir::new().unwrap();
+        write_md(
+            outside.path(),
+            "note.md",
+            "# Fruit\npineapple EXTERNAL_FIXTURE_MARKER\n",
+        );
+        let (link, target) = if directory {
+            std::fs::remove_dir_all(vault.path().join("notes")).unwrap();
+            (vault.path().join("notes"), outside.path().to_owned())
+        } else {
+            std::fs::remove_file(vault.path().join("notes/note.md")).unwrap();
+            (
+                vault.path().join("notes/note.md"),
+                outside.path().join("note.md"),
+            )
+        };
+        if !replace_with_symlink(&target, &link, directory) {
+            continue;
+        }
+        // Persisted snippets, section fallback, and language-miss fallback.
+        for extra in [
+            vec![],
+            vec!["--section", "Fruit"],
+            vec!["--language", "german"],
+        ] {
+            let output = hyalo_no_hints()
+                .arg("--dir")
+                .arg(vault.path())
+                .args(["find", "pineapple", "--index"])
+                .args(&extra)
+                .output()
+                .unwrap();
+            assert!(
+                !output.status.success(),
+                "{directory}, {extra:?}: {output:?}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("outside vault"), "{stderr}");
+            assert!(stderr.contains("notes/note.md"), "{stderr}");
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("EXTERNAL_FIXTURE_MARKER"));
+            assert!(!stderr.contains("EXTERNAL_FIXTURE_MARKER"));
+        }
+        // No selected snippets means no body reads on the compatible fast path.
+        // Public --limit 0 means unlimited, so narrow with metadata instead.
+        let output = hyalo_no_hints()
+            .arg("--dir")
+            .arg(vault.path())
+            .args([
+                "find",
+                "pineapple",
+                "--index",
+                "--limit",
+                "0",
+                "--tag",
+                "absent",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["results"], serde_json::json!([]));
+    }
+}
+
+#[test]
+fn ranked_live_reads_allow_in_vault_symlink_destinations() {
+    for directory in [false, true] {
+        let vault = indexed_ranked_fixture();
+        std::fs::rename(vault.path().join("notes"), vault.path().join("real")).unwrap();
+        let (link, target) = if directory {
+            (vault.path().join("notes"), vault.path().join("real"))
+        } else {
+            std::fs::create_dir(vault.path().join("notes")).unwrap();
+            (
+                vault.path().join("notes/note.md"),
+                vault.path().join("real/note.md"),
+            )
+        };
+        if !replace_with_symlink(&target, &link, directory) {
+            continue;
+        }
+        for extra in [
+            vec![],
+            vec!["--section", "Fruit"],
+            vec!["--language", "german"],
+        ] {
+            let output = hyalo_no_hints()
+                .arg("--dir")
+                .arg(vault.path())
+                .args(["find", "pineapple", "--index"])
+                .args(extra)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("pineapple safe fixture"));
+        }
+    }
+}
+
+#[test]
+fn ranked_live_reads_preserve_missing_target_diagnostics() {
+    let vault = indexed_ranked_fixture();
+    std::fs::remove_file(vault.path().join("notes/note.md")).unwrap();
+    for fallback in [false, true] {
+        let mut command = hyalo_no_hints();
+        command
+            .current_dir(vault.path())
+            .arg("--dir")
+            .arg(vault.path())
+            .args(["find", "pineapple", "--index"]);
+        if fallback {
+            command.args(["--section", "Fruit"]);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.success(), fallback, "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("notes/note.md"), "{stderr}");
+        assert!(!stderr.contains("outside vault"), "{stderr}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ranked_live_reads_preserve_permission_errors() {
+    use std::os::unix::fs::PermissionsExt;
+    let vault = indexed_ranked_fixture();
+    let note = vault.path().join("notes/note.md");
+    std::fs::set_permissions(&note, std::fs::Permissions::from_mode(0o0)).unwrap();
+    if std::fs::File::open(&note).is_ok() {
+        eprintln!("permission test unavailable: privileged process can read mode-000 fixture");
+        return;
+    }
+    for fallback in [false, true] {
+        let mut command = hyalo_no_hints();
+        command
+            .current_dir(vault.path())
+            .arg("--dir")
+            .arg(vault.path())
+            .args(["find", "pineapple", "--index"]);
+        if fallback {
+            command.args(["--section", "Fruit"]);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.success(), fallback, "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Permission denied"), "{stderr}");
+        assert!(!stderr.contains("outside vault"), "{stderr}");
+    }
+    std::fs::set_permissions(note, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn ranked_language_overrides_match_live_scoring_and_snippets() {
+    for config_language in ["english", "german"] {
+        let vault = TempDir::new().unwrap();
+        write_md(vault.path(), "default.md", "# Sport\nrunning\n");
+        write_md(
+            vault.path(),
+            "english.md",
+            "---\nlanguage: english\ntags: [selected]\n---\n# Sport\nrunning run\n",
+        );
+        write_md(
+            vault.path(),
+            "german.md",
+            "---\nlanguage: german\n---\n# Sport\nrunning\n",
+        );
+        let output = hyalo_no_hints()
+            .arg("--dir")
+            .arg(vault.path())
+            .arg("create-index")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        // Change only effective config after indexing with the English default.
+        std::fs::write(
+            vault.path().join(".hyalo.toml"),
+            format!("[search]\nlanguage = \"{config_language}\"\n"),
+        )
+        .unwrap();
+        for args in [
+            vec!["run"],
+            vec!["run", "--language", "english"],
+            vec!["run", "--language", "german"],
+            vec!["run", "--language", "german", "--section", "Sport"],
+            // Candidate language stays English; excluded default.md changes corpus IDF.
+            vec!["run", "--language", "german", "--tag", "selected"],
+            vec!["run", "--language", "german", "--glob", "english.md"],
+        ] {
+            let mut envelopes = Vec::new();
+            for indexed in [false, true] {
+                let mut command = hyalo_no_hints();
+                command
+                    .current_dir(vault.path())
+                    .arg("--dir")
+                    .arg(vault.path())
+                    .args(["find", "--format", "json"])
+                    .args(&args);
+                if indexed {
+                    command.arg("--index");
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{config_language}, {args:?}: {output:?}"
+                );
+                let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                let german = args.contains(&"german")
+                    || (config_language == "german" && !args.contains(&"english"));
+                let files: Vec<_> = envelope["results"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|result| result["file"].as_str().unwrap())
+                    .collect();
+                assert!(
+                    files.contains(&"english.md"),
+                    "frontmatter wins: {envelope}"
+                );
+                if german {
+                    assert!(!files.contains(&"default.md"), "{envelope}");
+                }
+                for result in envelope["results"].as_array().unwrap() {
+                    assert!(
+                        !result["matches"].as_array().unwrap().is_empty(),
+                        "{result}"
+                    );
+                }
+                envelopes.push(envelope);
+            }
+            assert_eq!(envelopes[0], envelopes[1], "{config_language}, {args:?}");
+        }
+    }
+}
+
+#[test]
+fn ranked_legacy_language_metadata_falls_back_and_checks_containment() {
+    use hyalo_core::index::SnapshotIndex;
+    let vault = indexed_ranked_fixture();
+    let snapshot_path = vault.path().join(".hyalo-index");
+    let mut snapshot = SnapshotIndex::load(&snapshot_path).unwrap().unwrap();
+    assert!(snapshot.bm25_index().is_some());
+    let entry = snapshot.get_mut("notes/note.md").unwrap();
+    assert_eq!(entry.bm25_language.as_deref(), Some("english"));
+    assert!(entry.bm25_tokens.is_none());
+    entry.bm25_language = None; // Snapshot shape produced before iteration 289.
+    snapshot.save_to(&snapshot_path).unwrap();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(vault.path())
+        .args(["find", "pineapple", "--index"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("safe fixture"));
+    let outside = TempDir::new().unwrap();
+    write_md(
+        outside.path(),
+        "note.md",
+        "pineapple EXTERNAL_FIXTURE_MARKER\n",
+    );
+    let link = vault.path().join("notes/note.md");
+    std::fs::remove_file(&link).unwrap();
+    if !replace_with_symlink(&outside.path().join("note.md"), &link, false) {
+        return;
+    }
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(vault.path())
+        .args(["find", "pineapple", "--index"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside vault"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("EXTERNAL_FIXTURE_MARKER"));
+}
+
+#[test]
+fn ranked_compatible_persisted_corpus_does_not_read_nonselected_bodies() {
+    let vault = TempDir::new().unwrap();
+    write_md(vault.path(), "keep.md", "pineapple safe\n");
+    write_md(vault.path(), "other.md", "pineapple unrelated\n");
+    // This indexed note has no BM25 tokens/language and does not belong to
+    // the stored corpus; it must not invalidate otherwise compatible languages.
+    std::fs::write(vault.path().join("invalid.md"), b"# Invalid\n\xff\xfe").unwrap();
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(vault.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let query = || {
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(vault.path())
+            .args([
+                "find",
+                "pineapple",
+                "--index",
+                "--sort",
+                "file",
+                "--limit",
+                "1",
+            ])
+            .output()
+            .unwrap()
+    };
+    let before = query();
+    std::fs::remove_file(vault.path().join("other.md")).unwrap();
+    let after = query();
+    assert!(after.status.success(), "{after:?}");
+    assert_eq!(before.stdout, after.stdout);
+    assert!(!String::from_utf8_lossy(&after.stderr).contains("unreadable"));
+}
+
+#[test]
+fn ranked_language_fallback_reuses_compatible_persisted_document_tokens() {
+    let vault = TempDir::new().unwrap();
+    write_md(
+        vault.path(),
+        "keep.md",
+        "---\nlanguage: english\n---\nrunning run\n",
+    );
+    write_md(
+        vault.path(),
+        "compatible.md",
+        "---\nlanguage: english\n---\nrunning\n",
+    );
+    write_md(vault.path(), "changed.md", "running\n");
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(vault.path())
+        .arg("create-index")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let query = || {
+        hyalo_no_hints()
+            .arg("--dir")
+            .arg(vault.path())
+            .args([
+                "find",
+                "run",
+                "--index",
+                "--language",
+                "german",
+                "--sort",
+                "file",
+                "--reverse",
+                "--limit",
+                "1",
+            ])
+            .output()
+            .unwrap()
+    };
+    let before = query();
+    std::fs::remove_file(vault.path().join("compatible.md")).unwrap();
+    let after = query();
+    assert!(after.status.success(), "{after:?}");
+    assert_eq!(before.stdout, after.stdout);
+    assert!(!String::from_utf8_lossy(&after.stderr).contains("unreadable"));
+}

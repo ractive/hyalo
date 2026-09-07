@@ -3,6 +3,7 @@ import {
   HyaloError,
   HyaloParseError,
   raw,
+  reportDiagnostics,
 } from "./api.js";
 
 /** The only configuration fields consumed by the Pi extension. */
@@ -39,6 +40,7 @@ export async function configForPi(options: ExecutionOptions = {}): Promise<PiCon
   const pi = typeof nested.pi === "object" && nested.pi !== null
     ? nested.pi as Record<string, unknown>
     : undefined;
+  await reportDiagnostics(result, options);
   return {
     vaultDir: typeof candidateDir === "string" && candidateDir ? candidateDir : null,
     sessionSummary: pi?.session_summary === true,

@@ -1523,7 +1523,15 @@ interface TransportOptions {
     stdin?: string | Uint8Array;
 }
 type HyaloTransport = (argv: readonly string[], options: TransportOptions) => Promise<ProcessResult>;
+/** Receives the original successful stderr once; returned promises are awaited. */
+type DiagnosticsCallback = (stderr: string) => void | Promise<void>;
 interface ExecutionOptions {
+    /**
+     * Successful typed-call stderr. Defaults to process.stderr.write.
+     * Empty stderr is ignored. Callback throws/rejections reject the call unchanged.
+     * Failed calls retain diagnostics in their error; raw()/execute() retain streams only.
+     */
+    onDiagnostics?: DiagnosticsCallback;
     /** Explicit native binary. Useful for Cargo/Homebrew installations and tests. */
     binaryPath?: string;
     /** Process transport override. Pi uses this to retain its `pi.exec("hyalo", ...)` path. */

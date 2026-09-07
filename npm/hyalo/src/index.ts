@@ -18,6 +18,7 @@ export {
 } from "./api.js";
 export type {
   ConfigCallOptions,
+  DiagnosticsCallback,
   ExecutionOptions,
   FindCallOptions,
   HyaloTransport,

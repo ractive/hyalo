@@ -369,6 +369,27 @@ pub struct SnippetQuery {
     terms: HashSet<String>,
 }
 
+/// Resolve a ranked-search live read using the vault's canonical boundary.
+/// Return the checked destination so callers do not reopen the original symlink.
+/// This is a pre-open check, not a guarantee against concurrent filesystem changes.
+pub fn resolve_document_path(
+    dir: &std::path::Path,
+    rel_path: &str,
+) -> anyhow::Result<std::path::PathBuf> {
+    use anyhow::Context;
+    let canonical_dir = crate::discovery::canonicalize_vault_dir(dir)?;
+    let path = dunce::canonicalize(dir.join(rel_path))
+        .with_context(|| format!("resolving ranked document {rel_path}"))?;
+    if !path.starts_with(&canonical_dir) {
+        return Err(crate::discovery::FileResolveError::OutsideVault {
+            path: rel_path.to_owned(),
+            resolved: Some(path.display().to_string()),
+        }
+        .into());
+    }
+    Ok(path)
+}
+
 impl SnippetQuery {
     /// Compile with the query-time stemming language (no document override).
     pub fn new(query: &str, language: StemLanguage) -> Self {
@@ -407,7 +428,8 @@ impl SnippetQuery {
     /// have no original text or file-line offsets, so cannot supply snippets.
     pub fn snippets(
         &self,
-        path: &std::path::Path,
+        dir: &std::path::Path,
+        rel_path: &str,
         language: StemLanguage,
         sections: &[crate::types::OutlineSection],
         scope: &[crate::heading::SectionRange],
@@ -422,6 +444,7 @@ impl SnippetQuery {
             scope,
             best: Vec::with_capacity(4),
         };
+        let path = resolve_document_path(dir, rel_path)?;
         let file = std::fs::File::open(path)?;
         if file.metadata()?.len() > crate::scanner::MAX_FILE_SIZE {
             return Ok(Vec::new());
@@ -865,40 +888,63 @@ impl Bm25InvertedIndex {
     /// One pass over all postings: O(total postings), no per-document scans.
     #[must_use]
     pub fn reconstruct_all_tokens(&self) -> std::collections::HashMap<&str, Vec<String>> {
-        use std::collections::HashMap;
+        self.reconstruct_tokens_where(|_| true)
+    }
 
-        let mut by_doc: HashMap<u32, Vec<(u32, &str)>> = HashMap::new();
+    /// Recover only selected documents, preserving token order and duplicates.
+    /// Empty selections return without traversing postings. Nonempty selections
+    /// use one posting traversal and allocate token storage only for selected docs.
+    #[must_use]
+    pub fn reconstruct_selected_tokens(
+        &self,
+        selected: &HashSet<&str>,
+    ) -> HashMap<&str, Vec<String>> {
+        self.reconstruct_tokens_where(|path| selected.contains(path))
+    }
+
+    fn reconstruct_tokens_where(
+        &self,
+        include: impl Fn(&str) -> bool,
+    ) -> HashMap<&str, Vec<String>> {
+        let selected: Vec<_> = self
+            .doc_paths
+            .iter()
+            .enumerate()
+            .filter(|(_, path)| include(path))
+            .map(|(id, path)| {
+                #[allow(clippy::cast_possible_truncation)]
+                (id as u32, path.as_str())
+            })
+            .collect();
+        if selected.is_empty() {
+            return HashMap::new();
+        }
+        let mut by_doc: HashMap<u32, Vec<(u32, &str)>> =
+            selected.iter().map(|&(id, _)| (id, Vec::new())).collect();
         for (term, posts) in &self.postings {
-            for p in posts {
-                if !p.positions.is_empty() {
-                    let entry = by_doc.entry(p.doc_id).or_default();
-                    for &pos in &p.positions {
-                        entry.push((pos, term.as_str()));
-                    }
+            for posting in posts {
+                if let Some(parts) = by_doc.get_mut(&posting.doc_id) {
+                    parts.extend(posting.positions.iter().map(|&pos| (pos, term.as_str())));
                 }
             }
         }
-
-        let mut out: HashMap<&str, Vec<String>> = HashMap::with_capacity(self.doc_paths.len());
-        for (doc_id, path) in self.doc_paths.iter().enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let doc_id = doc_id as u32;
-            // Each (position, term) pair is unique per doc: a posting pushes
-            // one pair per occurrence, and positions within a posting list are
-            // strictly increasing, so two postings for the same doc can never
-            // claim the same position. A stable sort by position therefore
-            // restores the original token order exactly.
-            if let Some(mut parts) = by_doc.remove(&doc_id) {
-                parts.sort_unstable_by_key(|&(pos, _)| pos);
-                out.insert(
-                    path.as_str(),
-                    parts.into_iter().map(|(_, t)| t.to_owned()).collect(),
-                );
-            } else {
-                out.insert(path.as_str(), Vec::new());
-            }
+        let mut out = HashMap::with_capacity(selected.len());
+        for (doc_id, path) in selected {
+            let mut parts = by_doc.remove(&doc_id).unwrap_or_default();
+            // Positions uniquely identify occurrences, restoring the token order
+            // required for phrase matching while retaining repeated terms.
+            parts.sort_unstable_by_key(|&(pos, _)| pos);
+            out.insert(
+                path,
+                parts.into_iter().map(|(_, term)| term.to_owned()).collect(),
+            );
         }
         out
+    }
+
+    /// Paths of the documents that contribute to this corpus's statistics.
+    pub fn document_paths(&self) -> impl Iterator<Item = &str> {
+        self.doc_paths.iter().map(String::as_str)
     }
 
     /// Returns the total number of documents in the index.
@@ -1233,6 +1279,45 @@ mod tests {
             reconstructed.get("empty.md").unwrap(),
             &Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn selected_token_reconstruction_preserves_subset_empty_docs_and_unknown_paths() {
+        let index = Bm25InvertedIndex::build_from_tokens(vec![
+            PreTokenizedInput {
+                rel_path: "selected.md".into(),
+                tokens: vec!["beta".into(), "alpha".into(), "beta".into()],
+            },
+            PreTokenizedInput {
+                rel_path: "excluded.md".into(),
+                tokens: vec!["unrelated".into(); 1000],
+            },
+            PreTokenizedInput {
+                rel_path: "empty.md".into(),
+                tokens: vec![],
+            },
+        ]);
+        let selected = HashSet::from(["selected.md", "empty.md", "missing.md"]);
+        let recovered = index.reconstruct_selected_tokens(&selected);
+        assert_eq!(recovered.len(), 2);
+        assert_eq!(recovered["selected.md"], ["beta", "alpha", "beta"]);
+        assert!(recovered["empty.md"].is_empty());
+        assert!(!recovered.contains_key("excluded.md"));
+        assert!(!recovered.contains_key("missing.md"));
+        assert!(
+            index
+                .reconstruct_selected_tokens(&HashSet::new())
+                .is_empty()
+        );
+        assert!(
+            index
+                .reconstruct_selected_tokens(&HashSet::from(["missing.md"]))
+                .is_empty()
+        );
+        let all = index.reconstruct_all_tokens();
+        for path in ["selected.md", "empty.md"] {
+            assert_eq!(recovered[path], all[path]);
+        }
     }
 
     /// Scores must be identical between an index built from the original

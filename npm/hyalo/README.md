@@ -72,6 +72,26 @@ Nonzero typed calls throw `HyaloError`, preserving `exitCode`, `stdout`,
 diagnostics remain plain stderr. Spawn, timeout, abort, invalid JSON, and empty
 JSON failures have distinct error classes.
 
+Successful typed calls forward nonempty stderr to the caller's stderr by default.
+To collect it instead, pass `onDiagnostics`:
+
+```ts
+const warnings: string[] = [];
+const response = await find({
+  pattern: "rust",
+  index: true,
+  onDiagnostics: (stderr) => { warnings.push(stderr); },
+});
+```
+
+The callback receives the original stderr once and may return a promise, which is
+awaited. A throw or rejection rejects the call unchanged after CLI success. Empty
+stderr does not notify. `quiet` follows the CLI's suppression rules and exceptions.
+Failed calls and invalid envelopes preserve stderr in their error objects without
+reporting it again. Successful `set`, `task`, and `lint` calls also report while
+retaining their stream results. `raw()` and `execute()` only return streams.
+Pi renders collected typed-tool warnings as separate text alongside the result.
+
 ## Generated types
 
 Rust owns the serialized contracts. Test-only `ts-rs` derives export declarations

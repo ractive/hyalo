@@ -762,6 +762,7 @@ function isClosedStdinWriteError(error) {
 }
 function executionOptions(options) {
   return {
+    onDiagnostics: options.onDiagnostics,
     binaryPath: options.binaryPath,
     transport: options.transport,
     cwd: options.cwd,
@@ -974,11 +975,20 @@ function parseEnvelope(result) {
   }
   return parsed;
 }
+async function reportDiagnostics(result, options) {
+  if (!result.stderr) return;
+  if (options.onDiagnostics) await options.onDiagnostics(result.stderr);
+  else process.stderr.write(result.stderr);
+}
 async function jsonCall(argv, options) {
   assertNoOutputTransforms(options);
   const terminator = argv.indexOf("--");
   argv.splice(terminator === -1 ? argv.length : terminator, 0, "--format=json", "--no-hints");
-  return parseEnvelope(await execute(argv, executionOptions(options)));
+  const execution = executionOptions(options);
+  const result = await execute(argv, execution);
+  const envelope = parseEnvelope(result);
+  await reportDiagnostics(result, execution);
+  return envelope;
 }
 function find(options = {}) {
   const values = options;
@@ -1005,6 +1015,7 @@ async function set(options) {
   argv.push("--", options.file);
   const result = await execute(argv, options);
   if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
+  await reportDiagnostics(result, options);
   return result;
 }
 async function task(options) {
@@ -1023,6 +1034,7 @@ async function task(options) {
   argv.push("--", options.file);
   const result = await execute(argv, options);
   if (result.code !== 0) throw new HyaloError(result, parseErrorEnvelope(result));
+  await reportDiagnostics(result, options);
   return result;
 }
 async function lint(file, options = {}) {
@@ -1033,6 +1045,7 @@ async function lint(file, options = {}) {
   if (result.code !== 0 && result.code !== 1) {
     throw new HyaloError(result, parseErrorEnvelope(result));
   }
+  if (result.code === 0) await reportDiagnostics(result, options);
   return result;
 }
 function raw(argv, options = {}) {
@@ -1057,6 +1070,7 @@ async function configForPi(options = {}) {
   const nested = typeof top.results === "object" && top.results !== null ? top.results : top;
   const candidateDir = typeof top.dir === "string" ? top.dir : nested.dir;
   const pi = typeof nested.pi === "object" && nested.pi !== null ? nested.pi : void 0;
+  await reportDiagnostics(result, options);
   return {
     vaultDir: typeof candidateDir === "string" && candidateDir ? candidateDir : null,
     sessionSummary: pi?.session_summary === true

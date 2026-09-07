@@ -414,7 +414,7 @@ fn main_manifest(version: &str) -> Value {
         },
         "scripts": {
             "build": "node scripts/build.mjs",
-            "test": "node --test test/launcher.test.js && node --test test/package.test.js && vitest run test/api.test.ts",
+            "test": "node --test test/launcher.test.js && node --test test/package.test.js && node --test test/pi.test.js && vitest run test/api.test.ts",
             "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
         },
         "repository": {
@@ -753,6 +753,160 @@ fn set_executable(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Evaluate the actual workflow expressions for fixture contexts. Unknown syntax
+    // fails the test instead of silently treating an unfamiliar gate as enabled.
+    fn workflow_condition(
+        expression: &str,
+        event: &str,
+        publish: bool,
+        bootstrap: bool,
+        main: bool,
+    ) -> bool {
+        let mut expression = expression
+            .trim()
+            .trim_start_matches("${{")
+            .trim_end_matches("}}")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let release_result = if main { "skipped" } else { "success" };
+        for (atom, value) in [
+            ("github.event_name == 'release'", event == "release"),
+            (
+                "github.event_name == 'workflow_dispatch'",
+                event == "workflow_dispatch",
+            ),
+            (
+                "github.event_name != 'workflow_dispatch'",
+                event != "workflow_dispatch",
+            ),
+            (
+                "needs.release.result == 'success'",
+                release_result == "success",
+            ),
+            (
+                "needs.release.result == 'skipped'",
+                release_result == "skipped",
+            ),
+            ("inputs.prepare_npm_main_bootstrap", main),
+            ("inputs.prepare_npm_bootstrap", bootstrap),
+            ("inputs.publish_npm", publish),
+            ("always()", true),
+            ("cancelled()", false),
+        ] {
+            expression = expression.replace(atom, if value { "1" } else { "0" });
+        }
+        let tokens: Vec<_> = expression.chars().filter(|c| !c.is_whitespace()).collect();
+        fn primary(tokens: &[char], cursor: &mut usize) -> bool {
+            let token = tokens[*cursor];
+            *cursor += 1;
+            match token {
+                '1' => true,
+                '0' => false,
+                '!' => !primary(tokens, cursor),
+                '(' => {
+                    let result = disjunction(tokens, cursor);
+                    assert_eq!(tokens.get(*cursor), Some(&')'));
+                    *cursor += 1;
+                    result
+                }
+                _ => panic!("unsupported workflow expression token {token}"),
+            }
+        }
+        fn conjunction(tokens: &[char], cursor: &mut usize) -> bool {
+            let mut result = primary(tokens, cursor);
+            while tokens.get(*cursor..*cursor + 2) == Some(&['&', '&']) {
+                *cursor += 2;
+                result &= primary(tokens, cursor);
+            }
+            result
+        }
+        fn disjunction(tokens: &[char], cursor: &mut usize) -> bool {
+            let mut result = conjunction(tokens, cursor);
+            while tokens.get(*cursor..*cursor + 2) == Some(&['|', '|']) {
+                *cursor += 2;
+                result |= conjunction(tokens, cursor);
+            }
+            result
+        }
+        let mut cursor = 0;
+        let result = disjunction(&tokens, &mut cursor);
+        assert_eq!(cursor, tokens.len(), "unconsumed expression: {expression}");
+        result
+    }
+
+    #[test]
+    fn release_workflow_separates_offline_validation_from_registry_planning() -> Result<()> {
+        let workflow: Value =
+            serde_saphyr::from_str(include_str!("../../../.github/workflows/release.yml"))?;
+        let npm = &workflow["jobs"]["npm"];
+        let steps = npm["steps"].as_array().context("npm workflow steps")?;
+        for (event, publish, bootstrap, main, planned) in [
+            ("workflow_dispatch", false, false, false, false),
+            ("workflow_dispatch", true, false, false, true),
+            ("workflow_dispatch", false, true, false, false),
+            ("workflow_dispatch", false, false, true, false),
+            ("release", false, false, false, true),
+        ] {
+            let enabled = |value: &Value| {
+                value.as_str().is_none_or(|expression| {
+                    workflow_condition(expression, event, publish, bootstrap, main)
+                })
+            };
+            assert!(
+                enabled(&npm["if"]),
+                "npm job must validate {event}/{publish}/{bootstrap}/{main}"
+            );
+            assert_eq!(enabled(&workflow["jobs"]["release"]["if"]), !main);
+            let active: Vec<_> = steps
+                .iter()
+                .enumerate()
+                .filter(|(_, step)| enabled(&step["if"]))
+                .collect();
+            let scripts: Vec<_> = active
+                .iter()
+                .filter_map(|(i, step)| step["run"].as_str().map(|run| (*i, run)))
+                .collect();
+            let packs: Vec<_> = scripts
+                .iter()
+                .filter(|(_, run)| run.contains("npm pack "))
+                .collect();
+            assert_eq!(packs.len(), 1, "exactly one packing route");
+            assert!(packs[0].1.contains("--dry-run --offline"));
+            assert!(packs[0].1.contains("--pack-destination"));
+            assert!(!packs[0].1.contains("plan-npm-publication"));
+            let plans: Vec<_> = scripts
+                .iter()
+                .filter(|(_, run)| run.contains("plan-npm-publication"))
+                .collect();
+            let publications: Vec<_> = scripts
+                .iter()
+                .filter(|(_, run)| run.contains("--provenance --access public"))
+                .collect();
+            assert_eq!(plans.len(), usize::from(planned));
+            assert_eq!(publications.len(), usize::from(planned));
+            if planned {
+                assert!(packs[0].0 < plans[0].0 && plans[0].0 < publications[0].0);
+                assert!(publications[0].1.contains("publication-plan.json"));
+            }
+            let signing = scripts
+                .iter()
+                .filter(|(_, run)| run.contains("generateProvenance"))
+                .count();
+            assert_eq!(signing, usize::from(bootstrap || main));
+            let uploads = active
+                .iter()
+                .filter(|(_, step)| {
+                    step["uses"]
+                        .as_str()
+                        .is_some_and(|v| v.starts_with("actions/upload-artifact"))
+                })
+                .count();
+            assert_eq!(uploads, usize::from(bootstrap || main));
+        }
+        Ok(())
+    }
 
     const VERSION: &str = "1.2.3";
 
