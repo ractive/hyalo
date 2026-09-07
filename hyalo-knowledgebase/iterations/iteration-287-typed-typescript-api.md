@@ -68,7 +68,7 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
       struct, verified by the contract suite against the same-commit binary.
 - [x] Error paths surface `ErrorEnvelope` with the original exit code.
 - [x] The pi extension no longer hand-parses any hyalo JSON.
-- [ ] Gates green, including `npm test` in CI.
+- [x] Gates green, including `npm test` in CI.
 
 ## Plan reconciliation — 2026-09-06, iteration 284
 
@@ -156,6 +156,14 @@ offline `init --pi` layouts import the same artifacts; sync, embed, install,
 deinit, static type checking, and freshness checks cover them. Public npm 0.22.0
 remains unchanged and CLI-only. Homefinder TASK-7 and iteration 288's desktop
 verification remain deferred.
+
+## Hyalo delivery — 2026-09-07
+
+PR #342 implements TASK-1 through TASK-6. Fresh independent reviews and all eleven
+applicable CI checks passed at `88bb2a7f`, including the same-source API tests on
+Linux, macOS, and Windows. The Windows early-stdin-close regression is covered.
+Homefinder TASK-7 remains deferred, so this iteration remains in progress. The API
+has not been published; public npm 0.22.0 remains CLI-only.
 
 ## Links
 
