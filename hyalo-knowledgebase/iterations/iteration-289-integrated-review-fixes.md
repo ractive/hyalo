@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 289 — Integrated review fixes before API dogfooding
 date: 2026-09-07
-status: in-progress
+status: completed
 tags:
   - iteration
   - review
@@ -146,7 +146,7 @@ are restated below so a fresh checkout can implement this plan.
     planner's existing simulated-registry tests. No live publish, auth, or
     all-platform release rebuild is needed to verify the gating correction.
 
-- [ ] TASK-5: complete integrated verification, documentation, fresh review, and
+- [x] TASK-5: complete integrated verification, documentation, fresh review, and
       plan reconciliation; record the final PR and actual check results.
   - Add focused regressions to the existing Rust BM25/e2e and npm/Pi suites.
     Symlink tests must run on capable platforms; retain any justified Windows
@@ -185,7 +185,7 @@ are restated below so a fresh checkout can implement this plan.
       callback, and Pi displays them without altering the typed envelope.
 - [x] Non-publishing packaging validation never invokes registry publication
       planning; actual publishing retains all immutable-version safeguards.
-- [ ] All four review findings have regression evidence, required gates and
+- [x] All four review findings have regression evidence, required gates and
       final-head CI pass, independent review is resolved, and plans remain honest.
 
 ## Fresh-session handoff
@@ -239,5 +239,20 @@ All 282 iteration plans were inventoried after the final implementation. There
 are no upcoming plans after 289. The remaining plans 287 and 288 were reread and
 need no changes: their external consumer and desktop tasks remain unfinished,
 and their package identity, wire shapes, and companion-asset paths remain valid.
-TASK-5 and the final acceptance criterion remain open for exact PR-head review,
-CI, and the remote checkpoint.
+The subsequent PR verification below completes the implementation and acceptance
+evidence; the remote checkpoint remains subject to final-head checks.
+
+## PR verification — 2026-09-07
+
+[PR #343](https://github.com/ractive/hyalo/pull/343) contains the reviewed source at
+`3b220a7a8c66927681f7675f4afc3d42fb33c4a7`. A fresh restricted read-only review of
+that exact head found no actionable findings. All 11 applicable CI checks passed:
+formatting, Clippy, Rust tests on Linux/macOS/Windows, quality gates, knowledgebase
+lint, npm/API tests on Linux/macOS/Windows, and npm packaging. The full-vault lint
+job is push-only and was correctly skipped on the PR.
+
+This final plan-status update changes documentation only. Its strict lint and
+diff checks must pass, and the supervisor must verify CI and review coverage at
+the resulting final head before merging through GitHub. The merge SHA and final
+checks are retained in the run ledger rather than predicted here. Iterations
+287 and 288 retain their unfinished external tasks.
