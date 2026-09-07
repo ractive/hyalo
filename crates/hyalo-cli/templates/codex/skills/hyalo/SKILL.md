@@ -12,7 +12,7 @@ is an alternative when present. If unavailable, report that and suggest the proj
 documented installation (`cargo install hyalo-cli`); do not install software as a
 side effect of a knowledgebase query. The prepared npm distribution remains
 unpublished pending owner bootstrap, trusted publisher setup, and real-platform
-registry checks; do not suggest `npm install hyalo` before that acceptance.
+registry checks; do not suggest `npm install @ractive-ch/hyalo` before that acceptance.
 
 Run from the project root containing `.hyalo.toml`, then use `hyalo config --format json`
 to locate and confirm the vault. Commands also work inside that configured vault,

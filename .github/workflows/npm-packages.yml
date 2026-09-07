@@ -82,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir "$PACK_DIR"
+          PUBLISH_DRY_RUN_CACHE=$(mktemp -d "$RUNNER_TEMP/hyalo-npm-dry-run.XXXXXX")
           : > "$PACK_DIR/packages.tsv"
           for package_dir in \
             darwin-arm64 linux-x64 linux-arm64 linux-x64-musl \
@@ -109,8 +110,11 @@ jobs:
             else
               grep -qx 'package/hyalo' <<< "$files"
             fi
-            npm publish "$tarball" --dry-run --ignore-scripts --access public \
-              --registry https://registry.npmjs.org
+            env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              npm publish "$tarball" \
+                --dry-run --offline --cache "$PUBLISH_DRY_RUN_CACHE" \
+                --ignore-scripts --access public \
+                --registry https://registry.npmjs.org
           done < "$PACK_DIR/packages.tsv"
 
           mkdir "$CONSUMER_DIR"

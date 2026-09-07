@@ -18,7 +18,7 @@ related:
 
 ## Goal
 
-`import { find, read, summary } from "hyalo"` with result types that come from the Rust
+`import { find, read, summary } from "@ractive-ch/hyalo"` with result types that come from the Rust
 structs, not from a hand-written mirror. Decided in
 [[research/npm-package-and-typed-typescript-api]]: `ts-rs` derives on the output structs from
 [[iterations/iteration-285-typed-output-structs]] and on the clap argument structs; `cargo test`
@@ -55,7 +55,7 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
 - [ ] TASK-6: docs: API README with the three calls, the generated-types workflow, how to add a
       command; `skill-hyalo.md` note; research note outcome. Gates: `cargo fmt`, clippy,
       `cargo test --workspace -q`, every xtask `check-*`, `npm test`, `hyalo lint --strict`.
-- [ ] TASK-7 (consumer, outside this repo): switch `homefinder-eco-mcp` to `npm install hyalo`
+- [ ] TASK-7 (consumer, outside this repo): switch `homefinder-eco-mcp` to `npm install @ractive-ch/hyalo`
       and the typed `find`; record what the wrapper lacked.
       Deferred by the user on 2026-09-07 to concentrate on Hyalo; retain this requirement
       as unfinished and do not modify that repository during the current batch.
@@ -110,6 +110,16 @@ CRLF metadata-check fix. npm bootstrap, trusted publishing, actual publication a
 four-platform registry installation checks remain outstanding. Both full prerequisites remain
 required; no TypeScript implementation has started. TASK-7 still requires separate
 authority to modify `homefinder-eco-mcp` and is not waived by repository-only work.
+
+## Plan reconciliation — 2026-09-07, scoped main recovery
+
+The canonical registry spec is now `@ractive-ch/hyalo`; the installed executable,
+source directory `npm/hyalo`, and direct native-binary resolver stay unchanged.
+TASK-2 and TASK-3 must generate exports and build metadata into that scoped package.
+They must also extend the main-only bootstrap package-content check when API files
+are added to the manifest allowlist. Iteration 287 remains blocked until scoped
+publication, trust configuration, and four-platform installation acceptance finish.
+Homefinder and iteration 288 remain deferred.
 
 ## Links
 

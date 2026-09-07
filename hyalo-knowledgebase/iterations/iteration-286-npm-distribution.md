@@ -17,9 +17,9 @@ related:
 
 ## Goal
 
-`npm install hyalo` on any supported machine, with no Homebrew step and no download script: the
+`npm install @ractive-ch/hyalo` on any supported machine, with no Homebrew step and no download script: the
 esbuild / Biome pattern from [[research/npm-package-and-typed-typescript-api]]. One main
-package `hyalo` whose `bin` is a small JS launcher, plus one package per release target under
+package `@ractive-ch/hyalo` whose `hyalo` bin is a small JS launcher, plus one package per release target under
 the `@ractive-ch` scope (org created 2026-09-06, owner `ractive.ch`, two-factor auth on),
 selected by npm through `os` / `cpu` / `libc` in `optionalDependencies`. Needs **no
 TypeScript types** — it is independent of 285 and 287.
@@ -51,7 +51,7 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 - [x] TASK-5: version gate: extend the `check-pi-package-sync` xtask (or the gate 285 adds) so
       `npm/hyalo/package.json`, every platform package and `pi-package/package.json` equal the
       Cargo workspace version.
-- [ ] TASK-6: verify on real machines: `npm install hyalo` on macOS arm64, Linux x64 glibc,
+- [ ] TASK-6: verify on real machines: `npm install @ractive-ch/hyalo` on macOS arm64, Linux x64 glibc,
       Linux x64 musl (Alpine container) and Windows x64; `npx hyalo --version` prints the
       release version. Record timings for a musl vs glibc `summary` on MDN if a musl host is at
       hand (the allocator question in the note).
@@ -61,7 +61,7 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 
 ## Acceptance criteria
 
-- [ ] `npm install hyalo && npx hyalo --version` works on the four verified platforms with
+- [ ] `npm install @ractive-ch/hyalo && npx hyalo --version` works on the four verified platforms with
       exactly one platform package installed.
 - [x] On an unsupported platform the launcher exits non-zero with the message naming the
       platform and the cargo fallback.
@@ -204,6 +204,23 @@ updates plus newly signed main-package bytes. Preserve the seven immutable platf
 versions and their existing artifacts; do not republish rebuilt bytes over them.
 Iteration 287 remains blocked by full iteration 286; Homefinder and iteration 288's
 desktop verification remain deferred. No acceptance requirement is waived.
+
+## Scoped main recovery authorization — 2026-09-07
+
+After npm rejected the unscoped main name as too similar to `yalc`, the user
+authorized `@ractive-ch/hyalo` as the canonical main package. The CLI executable
+remains `hyalo`, and the seven public platform packages remain immutable at 0.22.0
+with their previously verified bytes. Repository recovery must generate and sign
+only the newly scoped main tarball; it must not rebuild or republish those platform
+versions.
+
+The recovery workflow adds a mutually exclusive `prepare_npm_main_bootstrap` mode.
+It skips the reusable native build, verifies generated metadata, packs the tracked
+`npm/hyalo` source as `ractive-ch-hyalo-0.22.0.tgz`, dry-runs publication, signs that
+one tarball and uploads it with the existing `npm-bootstrap-0.22.0` artifact naming.
+Actual scoped publication, all eight trusted-publisher configurations, direct-publish
+settings, and four-platform registry installs remain unchecked external work. This
+does not start iteration 287 or iteration 288, and Homefinder remains deferred.
 
 ## Links
 
