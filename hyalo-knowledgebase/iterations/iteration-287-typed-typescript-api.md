@@ -124,10 +124,11 @@ Homefinder and iteration 288 remain deferred.
 ## Plan reconciliation — 2026-09-07, final npm publication status
 
 All eight 0.22.0 packages are public with verified integrity, and registry installs
-now pass on the four required platforms, fulfilling iteration 287's publication and
-platform prerequisites. Trusted-publisher configuration for all eight packages still
-blocks full iteration 286 completion. No iteration 287 implementation has started;
-Homefinder TASK-7 and iteration 288 desktop verification remain deferred.
+now pass on the four required platforms. Trusted publishers for all eight packages
+are configured for `ractive/hyalo` and `release.yml` with direct publishing enabled,
+so iteration 287's full iteration-286 prerequisite is fulfilled. No iteration 287
+implementation has started; Homefinder TASK-7 and iteration 288 desktop verification
+remain deferred.
 
 ## Links
 

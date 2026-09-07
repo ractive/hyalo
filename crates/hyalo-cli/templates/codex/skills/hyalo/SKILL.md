@@ -10,9 +10,8 @@ description: "Search and edit structured markdown knowledgebases with the Hyalo 
 Use the installed `hyalo` executable. In a Hyalo source checkout, `target/release/hyalo`
 is an alternative when present. If unavailable, report that and suggest the project's
 documented installation (`cargo install hyalo-cli`); do not install software as a
-side effect of a knowledgebase query. The prepared npm distribution remains
-unpublished pending owner bootstrap, trusted publisher setup, and real-platform
-registry checks; do not suggest `npm install @ractive-ch/hyalo` before that acceptance.
+side effect of a knowledgebase query. On supported Node.js platforms, the published
+npm route is `npm install --global @ractive-ch/hyalo`.
 
 Run from the project root containing `.hyalo.toml`, then use `hyalo config --format json`
 to locate and confirm the vault. Commands also work inside that configured vault,

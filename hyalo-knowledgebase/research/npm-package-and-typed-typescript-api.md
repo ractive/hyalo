@@ -350,9 +350,10 @@ each, and reported `hyalo 0.22.0` through `npx`. Attempt 1 saw a transient 404 f
 the just-published main packument; a delayed probe returned 200 and the unchanged
 retry passed. The optional MDN musl-versus-glibc timing remains unmeasured.
 
-Trusted-publisher configuration has not been completed or verified for the eight
-packages because browser authentication expired during inspection. The successful
-owner upload with CI-signed provenance did not exercise OIDC-authenticated
-publication. Trust configuration remains the sole iteration-286 prerequisite
-blocking iteration 287 implementation; Homefinder and iteration 288 desktop
-verification remain deferred.
+All eight packages now have npm trusted publishers bound to `ractive/hyalo` and
+`release.yml`, with direct publishing enabled; each creation returned `publish` and
+`stage publish`, reflecting npm's current default permissions. The owner-authenticated
+bootstrap with CI-signed provenance did not exercise OIDC-authenticated publication,
+which can be verified by a future release. The full iteration-286 prerequisite for
+iteration 287 is fulfilled, while Homefinder and iteration 288 desktop verification
+remain deferred. The optional MDN musl-versus-glibc timing remains unmeasured.

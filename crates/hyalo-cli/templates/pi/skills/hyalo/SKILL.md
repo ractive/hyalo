@@ -261,8 +261,8 @@ hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.m
 ## Setup Checklist for New Projects
 
 1. **Install hyalo**: Ensure `hyalo` is on PATH (`which hyalo`). Use the
-   published `cargo install hyalo-cli` route. Do not suggest an npm package
-   while the project's documentation says its registry acceptance is pending.
+   published `cargo install hyalo-cli` route or, on a supported Node.js platform,
+   `npm install --global @ractive-ch/hyalo`.
 2. **Configure vault**: Create `.hyalo.toml` with `dir = "knowledgebase"`
 3. **Add to AGENTS.md**: Include: "Use `hyalo` CLI for all markdown knowledgebase operations. Always use `--format text` for compact output."
 4. **Create views**: Set up common views (`stale-in-progress`, `orphans`, etc.)
