@@ -1,0 +1,105 @@
+name: npm Registry Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published hyalo version to verify
+        type: string
+        required: true
+        default: 0.22.0
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            runner: macos-15
+            platform: darwin
+            arch: arm64
+            libc: none
+            package: "@ractive-ch/hyalo-darwin-arm64"
+          - name: Linux x64 glibc
+            runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            libc: glibc
+            package: "@ractive-ch/hyalo-linux-x64"
+          - name: Windows x64
+            runner: windows-2022
+            platform: win32
+            arch: x64
+            libc: none
+            package: "@ractive-ch/hyalo-win32-x64"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Pin npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.1
+          test "$(npm --version)" = 11.19.1
+      - name: Install and run the published CLI
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          CONSUMER_DIR: ${{ runner.temp }}/hyalo-registry-consumer
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_LIBC: ${{ matrix.libc }}
+          EXPECTED_PLATFORM_PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          mkdir "$CONSUMER_DIR"
+          cd "$CONSUMER_DIR"
+          npm init --yes
+          npm install --ignore-scripts --save-exact \
+            --registry https://registry.npmjs.org "hyalo@$VERSION"
+          node "$GITHUB_WORKSPACE/npm/hyalo/test/registry-smoke.cjs"
+
+  alpine:
+    name: Linux x64 musl
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Install and run the published CLI in Alpine
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          CONSUMER_DIR: ${{ runner.temp }}/hyalo-registry-consumer-alpine
+          ALPINE_IMAGE: node:24.19.0-alpine3.23@sha256:244cc2b53f46f9e876304391d17682b0ddae9ac33491f4857e25e35a36ba7995
+        run: |
+          set -euo pipefail
+          mkdir "$CONSUMER_DIR"
+          docker run --rm --platform linux/amd64 \
+            --env VERSION \
+            --env CONSUMER_DIR=/consumer \
+            --env EXPECTED_PLATFORM=linux \
+            --env EXPECTED_ARCH=x64 \
+            --env EXPECTED_LIBC=musl \
+            --env EXPECTED_PLATFORM_PACKAGE=@ractive-ch/hyalo-linux-x64-musl \
+            --volume "$CONSUMER_DIR:/consumer" \
+            --volume "$GITHUB_WORKSPACE/npm/hyalo/test/registry-smoke.cjs:/registry-smoke.cjs:ro" \
+            --workdir /consumer \
+            "$ALPINE_IMAGE" sh -euxc '
+              npm install --global npm@11.19.1
+              test "$(npm --version)" = 11.19.1
+              npm init --yes
+              npm install --ignore-scripts --save-exact \
+                --registry https://registry.npmjs.org "hyalo@$VERSION"
+              node /registry-smoke.cjs
+            '
