@@ -258,6 +258,11 @@ hyalo types set iteration --filename-template "iterations/iteration-{n}-{slug}.m
 | Create new markdown files | **write** | `write` tool for new files |
 | Complex text transformations | **edit** | `edit` tool for regex replacements |
 
+The typed Pi tools use the generated Hyalo API runtime shipped with this package.
+They always request JSON without hints and preserve typed envelopes and errors;
+use the generic `hyalo` tool when text output, `--jq`, or an unsupported command
+is required.
+
 ## Setup Checklist for New Projects
 
 1. **Install hyalo**: Ensure `hyalo` is on PATH (`which hyalo`). Use the

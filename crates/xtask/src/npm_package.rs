@@ -385,14 +385,38 @@ fn main_manifest(version: &str) -> Value {
     json!({
         "name": MAIN_PACKAGE_NAME,
         "version": version,
-        "description": "Hyalo knowledgebase CLI",
+        "description": "Hyalo knowledgebase CLI and typed TypeScript API",
         "license": "MIT",
         "bin": {"hyalo": "bin/hyalo.js"},
-        "files": ["bin", "lib", "README.md", "LICENSE", "platforms.json"],
+        "files": ["bin", "dist", "lib", "README.md", "LICENSE", "platforms.json"],
         "engines": {"node": ">=22.14.0", "npm": ">=11.5.1"},
         "dependencies": {"detect-libc": "2.1.2"},
+        "devDependencies": {
+            "@types/node": "26.4.1",
+            "@typescript/typescript6": "6.0.2",
+            "esbuild": "0.28.2",
+            "rollup": "4.63.1",
+            "rollup-plugin-dts": "6.5.1",
+            "typescript": "7.0.2",
+            "vitest": "5.0.0"
+        },
         "optionalDependencies": optional,
-        "scripts": {"test": "node --test test/*.test.js"},
+        "main": "./dist/index.cjs",
+        "module": "./dist/index.mjs",
+        "types": "./dist/index.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/index.d.ts",
+                "import": "./dist/index.mjs",
+                "require": "./dist/index.cjs"
+            },
+            "./package.json": "./package.json"
+        },
+        "scripts": {
+            "build": "node scripts/build.mjs",
+            "test": "node --test test/launcher.test.js && node --test test/package.test.js && vitest run test/api.test.ts",
+            "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
+        },
         "repository": {
             "type": "git",
             "url": "https://github.com/ractive/hyalo.git",
@@ -421,6 +445,18 @@ fn json_bytes(value: &Value) -> Result<Vec<u8>> {
     Ok(format!("{}\n", serde_json::to_string_pretty(value)?).into_bytes())
 }
 
+fn main_manifest_bytes(version: &str) -> Result<Vec<u8>> {
+    let manifest = main_manifest(version);
+    let text = format!("{}\n", serde_json::to_string_pretty(&manifest)?);
+    let alphabetical = "      \"import\": \"./dist/index.mjs\",\n      \"require\": \"./dist/index.cjs\",\n      \"types\": \"./dist/index.d.ts\"";
+    let types_first = "      \"types\": \"./dist/index.d.ts\",\n      \"import\": \"./dist/index.mjs\",\n      \"require\": \"./dist/index.cjs\"";
+    let ordered = text.replace(alphabetical, types_first);
+    if ordered == text {
+        bail!("internal npm manifest export ordering template did not match");
+    }
+    Ok(ordered.into_bytes())
+}
+
 fn platform_readme(platform: Platform) -> Vec<u8> {
     format!(
         "# {}\n\nNative Hyalo CLI binary for {}.\n",
@@ -435,7 +471,7 @@ fn expected_metadata(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>
     let mut expected = vec![
         (
             root.join("npm/hyalo/package.json"),
-            json_bytes(&main_manifest(version))?,
+            main_manifest_bytes(version)?,
         ),
         (
             root.join("npm/hyalo/platforms.json"),
@@ -514,6 +550,12 @@ fn check_metadata_with_version(root: &Path, version: &str) -> Result<bool> {
         root.join("npm/hyalo/bin/hyalo.js"),
         root.join("npm/hyalo/lib/resolve-platform.js"),
         root.join("npm/hyalo/lib/run-child.js"),
+        root.join("npm/hyalo/lib/resolve-platform.d.ts"),
+        root.join("npm/hyalo/scripts/build.mjs"),
+        root.join("npm/hyalo/src/index.ts"),
+        root.join("npm/hyalo/tsconfig.json"),
+        root.join("npm/hyalo/tsconfig.test.json"),
+        root.join("npm/hyalo/package-lock.json"),
     ] {
         if !path.is_file() {
             eprintln!("npm package source missing: {}", display_path(root, &path));
@@ -573,6 +615,7 @@ fn stage(root: &Path, out: &Path, input: &Path, version: &str) -> Result<()> {
     }
     copy_tree(&root.join("npm/hyalo/bin"), &main.join("bin"))?;
     copy_tree(&root.join("npm/hyalo/lib"), &main.join("lib"))?;
+    copy_tree(&root.join("npm/hyalo/dist"), &main.join("dist"))?;
     set_executable(&main.join("bin/hyalo.js"))?;
 
     for platform in PLATFORMS {
@@ -598,12 +641,19 @@ fn preflight_package_sources(root: &Path) -> Result<()> {
         root.join("npm/hyalo/package.json"),
         root.join("npm/hyalo/platforms.json"),
         root.join("npm/hyalo/bin/hyalo.js"),
+        root.join("npm/hyalo/dist/index.mjs"),
+        root.join("npm/hyalo/dist/index.cjs"),
+        root.join("npm/hyalo/dist/index.d.ts"),
     ] {
         if !path.is_file() {
             bail!("missing main package file {}", path.display());
         }
     }
-    for path in [root.join("npm/hyalo/bin"), root.join("npm/hyalo/lib")] {
+    for path in [
+        root.join("npm/hyalo/bin"),
+        root.join("npm/hyalo/lib"),
+        root.join("npm/hyalo/dist"),
+    ] {
         if !path.is_dir() {
             bail!("missing main package directory {}", path.display());
         }
@@ -716,6 +766,9 @@ mod tests {
         fs::write(root.join("LICENSE"), b"fixture license\n")?;
         fs::create_dir_all(root.join("npm/hyalo/bin/nested"))?;
         fs::create_dir_all(root.join("npm/hyalo/lib/nested"))?;
+        fs::create_dir_all(root.join("npm/hyalo/dist/generated"))?;
+        fs::create_dir_all(root.join("npm/hyalo/scripts"))?;
+        fs::create_dir_all(root.join("npm/hyalo/src"))?;
         fs::write(root.join("npm/hyalo/README.md"), b"# fixture main\n")?;
         fs::write(
             root.join("npm/hyalo/bin/hyalo.js"),
@@ -728,6 +781,16 @@ mod tests {
         )?;
         fs::write(root.join("npm/hyalo/lib/run-child.js"), b"runner\n")?;
         fs::write(root.join("npm/hyalo/lib/nested/helper.js"), b"helper\n")?;
+        fs::write(root.join("npm/hyalo/lib/resolve-platform.d.ts"), b"types\n")?;
+        fs::write(root.join("npm/hyalo/dist/index.mjs"), b"esm\n")?;
+        fs::write(root.join("npm/hyalo/dist/index.cjs"), b"cjs\n")?;
+        fs::write(root.join("npm/hyalo/dist/index.d.ts"), b"types\n")?;
+        fs::write(root.join("npm/hyalo/dist/generated/type.d.ts"), b"type\n")?;
+        fs::write(root.join("npm/hyalo/scripts/build.mjs"), b"build\n")?;
+        fs::write(root.join("npm/hyalo/src/index.ts"), b"source\n")?;
+        fs::write(root.join("npm/hyalo/tsconfig.json"), b"{}\n")?;
+        fs::write(root.join("npm/hyalo/tsconfig.test.json"), b"{}\n")?;
+        fs::write(root.join("npm/hyalo/package-lock.json"), b"{}\n")?;
         set_executable(&root.join("npm/hyalo/bin/hyalo.js"))?;
         generate_metadata(root, VERSION)?;
         Ok(temp)
@@ -779,6 +842,13 @@ mod tests {
         let main: Value = serde_json::from_slice(&fs::read(root.join("npm/hyalo/package.json"))?)?;
         assert_eq!(main["name"], MAIN_PACKAGE_NAME);
         assert_eq!(main["bin"]["hyalo"], "bin/hyalo.js");
+        let source = fs::read_to_string(root.join("npm/hyalo/package.json"))?;
+        let types = source.find("\"types\": \"./dist/index.d.ts\"").unwrap();
+        let import = source.find("\"import\": \"./dist/index.mjs\"").unwrap();
+        assert!(
+            types < import,
+            "conditional exports must put types before import"
+        );
 
         let manifests = std::iter::once(root.join("npm/hyalo/package.json")).chain(
             PLATFORMS.iter().map(|platform| {
@@ -885,6 +955,7 @@ mod tests {
             fs::read(output.join("hyalo/lib/nested/helper.js"))?,
             b"helper\n"
         );
+        assert_eq!(fs::read(output.join("hyalo/dist/index.mjs"))?, b"esm\n");
         assert_eq!(
             fs::read(output.join("hyalo/package.json"))?,
             fs::read(root.join("npm/hyalo/package.json"))?

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cli::args::Commands;
+use crate::cli::args::{Commands, FindArgs, ReadArgs, SummaryArgs};
 use crate::commands::{
     append as append_commands, backlinks as backlinks_commands, changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
@@ -532,24 +532,24 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
     let effective_format = ctx.effective_format;
 
     match command {
-        Commands::Find {
+        Commands::Find(FindArgs {
             pattern,
             file_positional,
             view: _, // resolved before dispatch
             filters,
             index_flags: _, // consumed in run.rs before dispatch
-        } => {
+        }) => {
             // ARCH-1 (iter-225): the ~310-line arm body now lives in
             // `commands::find::run` — dispatch only forwards the parsed args.
             find_commands::run::run(ctx, pattern, file_positional, filters)
         }
-        Commands::Read {
+        Commands::Read(ReadArgs {
             selection,
             section,
             lines,
             frontmatter,
             index_flags: _, // consumed in run.rs before dispatch
-        } => {
+        }) => {
             // ARCH-1 (iter-225): the arm body now lives in
             // `commands::read::run_command`.
             read_commands::run_command(ctx, selection, section, lines, frontmatter)
@@ -576,12 +576,12 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
             // ARCH-1 (iter-225): the arm body now lives in `commands::tasks::run`.
             task_commands::run(ctx, action)
         }
-        Commands::Summary {
+        Commands::Summary(SummaryArgs {
             glob,
             recent,
             depth,
             index_flags: _, // consumed in run.rs before dispatch
-        } => {
+        }) => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::summary::run`.
             summary_commands::run(ctx, glob, recent, depth)
         }

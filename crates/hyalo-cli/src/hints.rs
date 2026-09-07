@@ -52,6 +52,8 @@ pub struct BodySearchSuggestion {
 
 /// A single drill-down hint: a concrete command plus a short human-readable description.
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct Hint {
     /// Human-readable purpose of the suggested command.
     pub(crate) description: String,

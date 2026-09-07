@@ -152,6 +152,11 @@ jobs:
             exit 1
           fi
           echo "CARGO_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build npm API artifacts
+        run: |
+          npm --prefix npm/hyalo ci --ignore-scripts
+          npm --prefix npm/hyalo run typecheck
+          npm --prefix npm/hyalo run build
       - name: Download native release archives
         if: ${{ !inputs.prepare_npm_main_bootstrap }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -253,13 +258,19 @@ jobs:
           test "$(jq -r '.[0].version' "$PACK_DIR/hyalo.json")" = "$CARGO_VERSION"
           tarball=$(jq -r '.[0].filename' "$PACK_DIR/hyalo.json")
           test "$tarball" = "ractive-ch-hyalo-$CARGO_VERSION.tgz"
-          jq -e '
-            ([.[0].files[].path] | sort) as $files |
-            ([
-              "LICENSE", "README.md", "bin/hyalo.js", "lib/resolve-platform.js",
-              "lib/run-child.js", "package.json", "platforms.json"
-            ] | sort) == $files
-          ' "$PACK_DIR/hyalo.json" > /dev/null
+          {
+            printf '%s\n' \
+              LICENSE README.md bin/hyalo.js \
+              dist/api.d.ts dist/index.cjs dist/index.d.ts dist/index.mjs \
+              dist/pi-runtime.d.ts dist/types.d.ts \
+              lib/resolve-platform.d.ts lib/resolve-platform.js \
+              lib/run-child.js package.json platforms.json
+            find npm/hyalo/src/generated -maxdepth 1 -type f -name '*.ts' -print \
+              | sed -e 's#npm/hyalo/src/#dist/#' -e 's#\.ts$#.d.ts#'
+          } | sort > "$PACK_DIR/hyalo-expected-files.txt"
+          jq -r '.[0].files[].path' "$PACK_DIR/hyalo.json" \
+            | sort > "$PACK_DIR/hyalo-actual-files.txt"
+          diff -u "$PACK_DIR/hyalo-expected-files.txt" "$PACK_DIR/hyalo-actual-files.txt"
           printf 'hyalo\t%s\n' "$PACK_DIR/$tarball" > "$PACK_DIR/packages.tsv"
           env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
             npm publish "$PACK_DIR/$tarball" \

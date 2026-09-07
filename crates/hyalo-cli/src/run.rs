@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches};
 
-use crate::cli::args::{Cli, Commands, FindFilters, IndexFlags};
+use crate::cli::args::{Cli, Commands, FindArgs, FindFilters, IndexFlags, ReadArgs, SummaryArgs};
 use crate::cli::banner::cwd_help_banner;
 use crate::cli::help::{filter_examples, filter_long_help};
 use crate::commands::files_from::FilesFromCounters;
@@ -183,14 +183,14 @@ fn effective_index_path_for(
     use crate::cli::args::{LinksAction, PropertiesAction, TagsAction, TaskAction};
 
     let flags: Option<&IndexFlags> = match cmd {
-        Commands::Find { index_flags, .. }
-        | Commands::Summary { index_flags, .. }
+        Commands::Find(FindArgs { index_flags, .. })
+        | Commands::Summary(SummaryArgs { index_flags, .. })
         | Commands::Backlinks { index_flags, .. }
         | Commands::Set { index_flags, .. }
         | Commands::Remove { index_flags, .. }
         | Commands::Append { index_flags, .. }
         | Commands::Mv { index_flags, .. }
-        | Commands::Read { index_flags, .. }
+        | Commands::Read(ReadArgs { index_flags, .. })
         | Commands::Lint { index_flags, .. }
         | Commands::New { index_flags, .. } => Some(index_flags),
         // iter-266 IDX-1: `--index` is accepted on the bare group as well as on
@@ -298,10 +298,10 @@ fn task_selector(line: &[usize], section: Option<&String>, all: bool) -> Option<
 #[allow(clippy::match_same_arms)]
 fn files_from_command_file_list_is_empty(cmd: &Commands) -> bool {
     match cmd {
-        Commands::Find {
+        Commands::Find(FindArgs {
             filters: FindFilters { file, .. },
             ..
-        } => file.is_empty(),
+        }) => file.is_empty(),
         Commands::Lint { file, .. } => file.is_empty(),
         Commands::Set { file, .. } => file.is_empty(),
         Commands::Remove { file, .. } => file.is_empty(),
@@ -318,7 +318,7 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
     // For lint: empty lint output.
     // For mutation commands (set/remove/append/mv): empty array.
     match cmd {
-        Commands::Find { .. } => {
+        Commands::Find(_) => {
             CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0)
         }
         Commands::Lint { fix, dry_run, .. } if *fix => {
@@ -398,7 +398,7 @@ fn resolve_files_from_for_command(
     use crate::commands::inputs::resolve_files_from_to_rel_paths;
 
     match cmd {
-        Commands::Find {
+        Commands::Find(FindArgs {
             filters:
                 FindFilters {
                     files_from,
@@ -407,7 +407,7 @@ fn resolve_files_from_for_command(
                     ..
                 },
             ..
-        } => {
+        }) => {
             let Some(source) = files_from.take() else {
                 return Ok(None);
             };
@@ -1438,11 +1438,11 @@ fn run_inner() -> Result<(), AppError> {
     };
 
     // Resolve --view: load the named view from .hyalo.toml and merge CLI overrides.
-    if let Commands::Find {
+    if let Commands::Find(FindArgs {
         view: Some(view_name),
         filters,
         ..
-    } = &mut cli.command
+    }) = &mut cli.command
     {
         let views = crate::commands::views::load_views(&config_dir);
         if let Some(base) = views.get(view_name) {
@@ -1478,9 +1478,9 @@ fn run_inner() -> Result<(), AppError> {
     // If the CLI didn't supply a pattern but the view did, propagate it.
     // Skip when --regexp is active — BM25 pattern and regex are mutually exclusive
     // (clap enforces this for CLI args, but a view's pattern bypasses clap).
-    if let Commands::Find {
+    if let Commands::Find(FindArgs {
         pattern, filters, ..
-    } = &mut cli.command
+    }) = &mut cli.command
         && pattern.is_none()
         && filters.regexp.is_none()
         && let Some(ref view_pattern) = filters.pattern
@@ -1502,8 +1502,7 @@ fn run_inner() -> Result<(), AppError> {
     // `read` defaults to text output (unlike other commands which default to json).
     // Skip the override when --jq is active (jq needs JSON).
     let format =
-        if !format_from_cli && jq_filter.is_none() && matches!(&cli.command, Commands::Read { .. })
-        {
+        if !format_from_cli && jq_filter.is_none() && matches!(&cli.command, Commands::Read(_)) {
             Format::Text
         } else {
             format
@@ -1548,7 +1547,7 @@ fn run_inner() -> Result<(), AppError> {
     // overrides the format so a piped `find --filenames-only | sort` works
     // without a `--format text` chore, which is the whole point of the flags.
     let filename_projection = match &cli.command {
-        Commands::Find {
+        Commands::Find(FindArgs {
             filters:
                 FindFilters {
                     filenames_only,
@@ -1556,7 +1555,7 @@ fn run_inner() -> Result<(), AppError> {
                     ..
                 },
             ..
-        } if *filenames_only || *filenames0 => {
+        }) if *filenames_only || *filenames0 => {
             if *filenames_only {
                 "--filenames-only"
             } else {
@@ -1656,7 +1655,7 @@ fn run_inner() -> Result<(), AppError> {
         };
 
         match &cli.command {
-            Commands::Summary { glob, .. } => {
+            Commands::Summary(SummaryArgs { glob, .. }) => {
                 let mut ctx = HintContext::from_common(HintSource::Summary, &common);
                 ctx.glob.clone_from(glob);
                 Some(ctx)
@@ -1701,7 +1700,7 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.has_limit = limit.is_some();
                 Some(ctx)
             }
-            Commands::Find {
+            Commands::Find(FindArgs {
                 pattern,
                 file_positional,
                 view,
@@ -1725,7 +1724,7 @@ fn run_inner() -> Result<(), AppError> {
                         ..
                     },
                 ..
-            } => {
+            }) => {
                 // Merge positional files for hint context (view merging happens later)
                 let file = if file_positional.is_empty() {
                     file
@@ -1810,12 +1809,12 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.dry_run = *dry_run;
                 Some(ctx)
             }
-            Commands::Read {
+            Commands::Read(ReadArgs {
                 selection,
                 section,
                 lines,
                 ..
-            } => {
+            }) => {
                 let mut ctx = HintContext::from_common(HintSource::Read, &common);
                 if let Some(f) = selection
                     .file_positional
@@ -2413,11 +2412,11 @@ fn run_inner() -> Result<(), AppError> {
     // word to FILE and the run died with a bare `file not found: plugin`,
     // which describes the symptom and hides the cause. Catch the argv shape
     // before dispatch and name the quoted command that does what was meant.
-    if let Commands::Find {
+    if let Commands::Find(FindArgs {
         pattern: Some(pattern),
         file_positional,
         ..
-    } = &cli.command
+    }) = &cli.command
         && let Some(bad) = file_positional
             .iter()
             .find(|t| looks_like_unquoted_query_word(t, &dir))
@@ -2592,8 +2591,7 @@ fn run_inner() -> Result<(), AppError> {
     // envelope still carries `dir`). Captured before dispatch because
     // `cli.command` is moved into it, and emitted only on success so a failed
     // run does not narrate a vault it never summarised.
-    let summary_kb_dir_note =
-        matches!(cli.command, Commands::Summary { .. }) && format == Format::Text;
+    let summary_kb_dir_note = matches!(cli.command, Commands::Summary(_)) && format == Format::Text;
 
     // iter-264 (BUG-22): `find`'s envelope always carries the three
     // `--files-from` counters, zero when the flag was not used, so a consumer
@@ -2602,7 +2600,7 @@ fn run_inner() -> Result<(), AppError> {
     // byte-identical to it. Captured before dispatch, which moves `cli.command`.
     let find_always_reports_counters = matches!(
         cli.command,
-        Commands::Find { .. }
+        Commands::Find(_)
             | Commands::Views {
                 action: Some(crate::cli::args::ViewsAction::Run { .. })
             }

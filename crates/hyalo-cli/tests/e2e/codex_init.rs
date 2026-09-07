@@ -111,6 +111,8 @@ fn codex_flag_combinations_and_plugin_mode_have_no_duplicate_local_skills() {
             mask & 1 != 0
         );
         assert_eq!(root.join(".pi/extensions/hyalo.ts").exists(), mask & 2 != 0);
+        assert_eq!(root.join(".pi/lib/hyalo-api.js").exists(), mask & 2 != 0);
+        assert_eq!(root.join(".pi/lib/hyalo-api.d.ts").exists(), mask & 2 != 0);
         assert_eq!(
             root.join(".agents/skills/hyalo/SKILL.md").exists(),
             mask & 4 != 0
@@ -131,6 +133,29 @@ fn codex_flag_combinations_and_plugin_mode_have_no_duplicate_local_skills() {
     ok(root, &["init", "--codex", "--codex-plugin"]);
     ok(root, &["init", "--codex"]);
     assert!(root.join(".agents/skills/hyalo/SKILL.md").is_file());
+}
+
+#[test]
+fn pi_install_is_self_contained_and_deinit_removes_companions() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    ok(root, &["init", "--pi"]);
+
+    let extension = fs::read_to_string(root.join(".pi/extensions/hyalo.ts")).unwrap();
+    let runtime = fs::read_to_string(root.join(".pi/lib/hyalo-api.js")).unwrap();
+    let declaration = fs::read_to_string(root.join(".pi/lib/hyalo-api.d.ts")).unwrap();
+    assert!(extension.contains("../lib/hyalo-api.js"));
+    assert!(runtime.contains("createPiTransport"));
+    assert!(runtime.contains("Copyright 2017 Lovell Fuller and others."));
+    assert!(runtime.contains("SPDX-License-Identifier: Apache-2.0"));
+    assert!(runtime.contains("END OF TERMS AND CONDITIONS"));
+    assert!(declaration.contains("declare function find"));
+    assert!(!root.join(".pi/node_modules").exists());
+
+    ok(root, &["deinit"]);
+    assert!(!root.join(".pi/extensions/hyalo.ts").exists());
+    assert!(!root.join(".pi/lib/hyalo-api.js").exists());
+    assert!(!root.join(".pi/lib/hyalo-api.d.ts").exists());
 }
 
 #[test]

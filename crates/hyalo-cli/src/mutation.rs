@@ -148,7 +148,7 @@ impl Commands {
     pub(crate) fn gates(&self) -> bool {
         match self {
             Self::Lint { .. } => true,
-            Self::Find { filters, .. } => filters.strict,
+            Self::Find(args) => args.filters.strict,
             Self::Views { action } => matches!(action, Some(ViewsAction::Run { .. })),
             _ => false,
         }
@@ -179,21 +179,26 @@ impl Commands {
             out
         };
         match self {
-            Self::Find {
+            Self::Find(crate::cli::args::FindArgs {
                 file_positional,
                 filters,
                 ..
-            } => named(&filters.file, file_positional, &filters.glob),
+            }) => named(&filters.file, file_positional, &filters.glob),
             Self::Lint {
                 file,
                 file_positional,
                 glob,
                 ..
             } => named(file, file_positional, glob),
-            Self::Backlinks { selection, .. } | Self::Read { selection, .. } => named(
+            Self::Backlinks { selection, .. } => named(
                 &selection.file,
                 selection.file_positional.as_slice(),
                 &selection.glob,
+            ),
+            Self::Read(args) => named(
+                &args.selection.file,
+                args.selection.file_positional.as_slice(),
+                &args.selection.glob,
             ),
             _ => Vec::new(),
         }

@@ -357,3 +357,30 @@ bootstrap with CI-signed provenance did not exercise OIDC-authenticated publicat
 which can be verified by a future release. The full iteration-286 prerequisite for
 iteration 287 is fulfilled, while Homefinder and iteration 288 desktop verification
 remain deferred. The optional MDN musl-versus-glibc timing remains unmeasured.
+
+## Outcome — typed API implementation (2026-09-07)
+
+Iteration 287 implements the API in repository source without changing or
+republishing immutable npm 0.22.0. Test-only `ts-rs` derives now cover the real
+Rust result graph and extracted clap `FindArgs`, `ReadArgs`, `SummaryArgs`, plus
+global arguments. A Rust xtask generates 40 TypeScript declarations and the
+public barrel, while its read-only check regenerates in a temporary directory
+and rejects drift, missing files, and stale extras. Skipped optional keys remain
+non-nullable when present; explicit nullable fields remain nullable; dynamic
+JSON values are `unknown`; JSON integers are `number`.
+
+The ESM/CommonJS API resolves the native platform binary directly and provides
+typed `find`, `read`, `summary`, and `config` calls, structured Pi mutation/lint
+adapters, a raw escape hatch, injected transports, and distinct process, parse,
+timeout, and abort errors. Contract tests use the same-commit release binary and
+an isolated fixture. They also install a fresh local tarball, exercise both
+module formats, and run the default resolver instead of relying only on
+`binaryPath`.
+
+Pi retains `pi.exec("hyalo", ...)` through an injected transport. Its extension
+no longer parses Hyalo JSON or constructs argv for typed tools. Deterministic
+self-contained runtime and declaration bundles are generated from the canonical
+API into `pi-package/lib`, outside Pi's extension auto-discovery directory, then
+mirrored into the Rust crate. `init --pi` installs them offline under `.pi/lib`;
+deinit and sync checks cover the same assets. This deliberately avoids depending
+on the public 0.22.0 package, whose immutable bytes contain only the CLI.

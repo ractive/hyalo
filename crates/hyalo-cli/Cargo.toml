@@ -48,6 +48,7 @@ libc = { workspace = true }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
+ts-rs = { workspace = true }
 
 [package.metadata.deb]
 maintainer = "ractive"

@@ -9,3 +9,8 @@
 # unaffected (their gcc-style linker uses a different flag).
 [target.'cfg(all(target_os = "windows", target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[env]
+TS_RS_EXPORT_DIR = { value = "npm/hyalo/src/generated", relative = true }
+TS_RS_IMPORT_EXTENSION = "js"
+TS_RS_LARGE_INT = "number"

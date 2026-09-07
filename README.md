@@ -118,6 +118,9 @@ npx --no-install hyalo --version
 All eight packages are public at version 0.22.0 with verified integrity.
 Registry installation is verified on macOS arm64, Linux x64 glibc, Alpine x64
 musl, and Windows x64; npm selects exactly one native platform dependency.
+That immutable version is CLI-only. The typed TypeScript API in `npm/hyalo/src`
+is available from a source build and will require a future release before it is
+available from the registry.
 
 ### Manual download
 
@@ -275,7 +278,12 @@ This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyal
 
 A `hyalo` binary on `PATH` is required (any recent release; typed tools need ≥ 0.21). See `pi-package/README.md` for details.
 
-**Vendored fallback** — if you prefer no git dependency, `hyalo init --pi` writes the same extension and skills into your vault's `.pi/` directory. The vendored copy only changes when you upgrade hyalo and re-run the command, so the package install above is the recommended path.
+**Vendored fallback** — if you prefer no git dependency, `hyalo init --pi` writes
+the same extension, generated API runtime, declarations, and skills into your
+vault's `.pi/` directory. The runtime is self-contained and calls the `hyalo`
+binary on `PATH`; it does not install or import the CLI-only public npm 0.22.0
+API. The vendored copy only changes when you upgrade hyalo and re-run the
+command, so the package install above is the recommended path.
 
 ## Profiles
 

@@ -360,6 +360,12 @@ guardrail: when pi's
 `hyalo lint <file>` on it and appends any violations to the tool result, so
 schema drift cannot land silently.
 
+The installed extension imports `.pi/lib/hyalo-api.js`, a self-contained bundle
+generated from the canonical TypeScript API. Its matching declaration bundle is
+installed beside it. No `npm install` or registry API package is needed; command
+execution continues through Pi's `pi.exec("hyalo", ...)` transport and therefore
+uses the binary on `PATH`.
+
 The `[pi]` section configures the extension:
 
 ```toml

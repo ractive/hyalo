@@ -58,3 +58,14 @@ shape. Whoever picks this up should:
       (near) zero for links whose only defect was pointing at a declared `redirect_from:` value.
 - [ ] If staying backlog (won't-do): a DEC amendment records why, with the property name
       confirmed or ruled out.
+
+## Plan reconciliation — iteration 287 (2026-09-07)
+
+The typed API now derives both `LinkInfo` and the `config()` result from Rust.
+If redirect support adds a reported configuration field or changes the serialized
+link contract, update the owning test-only `ts-rs` derives and regenerate the
+declarations with `cargo run -p xtask -- generate-ts-types`. Cover the new
+configuration and link output in the same-binary API fixtures, rebuild and sync
+the Pi companions, and run both freshness gates. This adds contract maintenance
+to the proposed implementation; precedence decisions and corpus measurement
+remain required before this item can be completed.

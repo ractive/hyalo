@@ -11,6 +11,11 @@ npx --no-install hyalo --version
 npm selects one exact-version native package through `optionalDependencies`.
 The launcher requires Node.js 22.14 or newer and npm 11.5.1 or newer.
 
+The public `0.22.0` package contains the CLI launcher only. The typed API below
+is implemented in this repository for a future, separately authorized release;
+build and test it from this source tree rather than expecting it from public
+`0.22.0`.
+
 | Rust target | npm package | os | cpu | libc |
 | --- | --- | --- | --- | --- |
 | `aarch64-apple-darwin` | `@ractive-ch/hyalo-darwin-arm64` | darwin | arm64 | — |
@@ -20,6 +25,69 @@ The launcher requires Node.js 22.14 or newer and npm 11.5.1 or newer.
 | `aarch64-unknown-linux-musl` | `@ractive-ch/hyalo-linux-arm64-musl` | linux | arm64 | musl |
 | `x86_64-pc-windows-msvc` | `@ractive-ch/hyalo-win32-x64` | win32 | x64 | — |
 | `aarch64-pc-windows-msvc` | `@ractive-ch/hyalo-win32-arm64` | win32 | arm64 | — |
+
+## Typed API
+
+After `npm ci && npm run build` in this directory, ESM and CommonJS consumers
+can import the same API:
+
+```ts
+import { config, find, read, summary } from "@ractive-ch/hyalo";
+
+const matches = await find({
+  pattern: "error handling",
+  properties: ["status=planned"],
+  tag: ["project"],
+  limit: 10,
+});
+const note = await read({ file: [matches.results[0].file] });
+const vault = await summary({ recent: 5, depth: 1 });
+const settings = await config();
+```
+
+`find`, `read`, `summary`, and `config` force `--format json --no-hints` and
+return `Envelope<T>`. They reject `format`, `jq`, `count`, hint controls, and
+filename-only projections at runtime because those flags would break the typed
+result contract. Use `raw(argv)` when a command needs text, jq, or another
+projection. `find` exposes the envelope's `total`, so callers do not need
+`--count`.
+
+By default the API resolves and spawns the installed platform binary directly,
+without a shell. `binaryPath` selects an explicit Cargo/Homebrew/test binary;
+`transport` injects another process runner. The Pi integration uses
+`createPiTransport(pi)` so `pi.exec("hyalo", ...)` still finds a binary on
+`PATH`. Pi reports killed children through the same timeout and abort error
+classes. Its process API does not accept stdin, so the adapter rejects `stdin`
+instead of running with an empty input. Every call also accepts `cwd`,
+`timeoutMs`, and `AbortSignal`.
+
+The Pi bundle projects only the vault directory and session-summary opt-in from
+configuration. It accepts current config envelopes, pre-`[pi]` envelopes, and
+the earlier flat config shape; legacy payloads keep linting enabled and default
+session summaries to off. Generated ESM, CommonJS, and Pi JavaScript bundles
+embed detect-libc's Apache-2.0 license and source notice.
+
+Nonzero typed calls throw `HyaloError`, preserving `exitCode`, `stdout`,
+`stderr`, and a parsed `ErrorEnvelope` when Hyalo emitted one. Plain exit-2
+diagnostics remain plain stderr. Spawn, timeout, abort, invalid JSON, and empty
+JSON failures have distinct error classes.
+
+## Generated types
+
+Rust owns the serialized contracts. Test-only `ts-rs` derives export declarations
+to `src/generated`, while `src/types.ts` composes ergonomic partial argument
+aliases and the summary `dir` projection. Refresh them with:
+
+```sh
+cargo run -p xtask -- generate-ts-types
+```
+
+CI runs `check-ts-types`, which regenerates into a temporary directory and
+rejects changed, missing, or extra declarations without writing the checkout.
+To add another typed command, extract its real clap `Args` struct if necessary,
+add test-only `TS` derives to the argument/result graph, export it in each owning
+crate's tests, regenerate, then implement and contract-test the wrapper. Do not
+copy the Rust schema into a handwritten TypeScript interface.
 
 Intel macOS, unsupported CPU combinations, and Linux systems whose libc cannot
 be identified receive an error naming `os`, `cpu`, and `libc`, with
@@ -54,15 +122,12 @@ publication. A published release remains the broad release path: it validates
 the release tag against the Cargo version, runs the configured reusable release
 publishing, and publishes the npm packages.
 
-The original `prepare_npm_bootstrap` mode remains available for a complete new
-eight-package version. For the 0.22.0 scoped-main recovery, enable
-`prepare_npm_main_bootstrap` and enter the same exact `npm_version`. The three
-manual modes are mutually exclusive. Main-only preparation skips the reusable
-native release job and all native artifact handling, verifies the canonical
-metadata, packs `./npm/hyalo`, dry-runs that publication, signs its exact
-tarball with the workflow's GitHub OIDC identity, and uploads
-`npm-bootstrap-<version>`. It does not publish to npm or rebuild any of the
-seven immutable platform packages.
+The original `prepare_npm_bootstrap` mode remains available for preparing a
+complete new eight-package version. Future releases should use the normal
+trusted-publisher path above. The `prepare_npm_main_bootstrap` path was used
+only for the completed 0.22.0 scoped-main recovery; current source contains
+new API bytes and must not be used to recreate or upload that immutable
+version.
 
 Bootstrap signing deliberately calls the provenance generator and
 `npm-package-arg` bundled inside the workflow's pinned npm 11.19.1. This is an
@@ -82,44 +147,10 @@ an immutable version is published, it compares the local tarball integrity with
 existing artifact, publishes an explicitly missing version, and stops on
 mismatched integrity or an inconclusive registry response.
 
-For the 0.22.0 scoped-main recovery, the npm owner uses this runbook:
-
-1. Run `prepare_npm_main_bootstrap` for the real Cargo version and
-   download its `npm-bootstrap-<version>` artifact. Before uploading anything,
-   verify that the main `.sigstore.json` bundle still matches the SHA-512 bytes
-   of `ractive-ch-hyalo-<version>.tgz`, and verify the certificate identity names
-   repository `ractive/hyalo`, workflow `.github/workflows/release.yml`, and the
-   expected GitHub ref. Keep those reviewed tarball bytes unchanged.
-2. Confirm the public `dist.integrity` of all seven immutable 0.22.0 platform
-   packages still matches the previously verified artifacts. Do not rebuild or
-   republish them. As the npm owner, bootstrap only the scoped main package:
-
-   ```bash
-   version=0.22.0 # replace with the confirmed Cargo version
-   tarball="ractive-ch-hyalo-$version.tgz"
-   npm publish "$tarball" \
-     --provenance-file "${tarball%.tgz}.sigstore.json" \
-     --access public --ignore-scripts --registry https://registry.npmjs.org
-   ```
-
-   `--provenance-file` verifies and attaches the prepared bundle. It is
-   mutually exclusive with `--provenance`; do not pass both. Before retrying,
-   inspect the scoped main version's `dist.integrity` and compare it with the
-   preserved tarball. Skip only an immutable version whose integrity matches.
-   Never try to overwrite a version or continue past a mismatch, missing proof,
-   or another inconclusive registry response.
-
-   GitHub OIDC authenticates the bootstrap workflow's Sigstore provenance
-   generation. This attended owner upload authenticates to npm separately and
-   therefore does not exercise npm trusted-publisher OIDC; a later workflow
-   publication must verify that path.
-3. Configure all eight existing packages' trusted publishers for repository
-   `ractive/hyalo` and workflow `release.yml`.
-4. Explicitly allow direct publishing for each configuration. New trusted
-   publisher configurations may allow staged publishing only by default.
-5. Verify `npm install @ractive-ch/hyalo` and
-   `npx --no-install hyalo --version` on macOS arm64,
-   Linux x64 glibc, Linux x64 musl, and Windows x64.
+The 0.22.0 scoped-main recovery and all eight trusted-publisher configurations
+are complete. Its exact source runbook remains available at commit `8c05111a`
+for audit purposes. Do not repeat that recovery with the current tree or
+publish different bytes under 0.22.0.
 
 See npm's official [trusted publishing guide](https://docs.npmjs.com/trusted-publishers/)
 and [`npm trust` requirements](https://docs.npmjs.com/cli/v11/commands/npm-trust/).

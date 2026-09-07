@@ -10,7 +10,9 @@ mod jq_recipes;
 mod mutation_journal;
 mod npm_package;
 mod pi_package_sync;
+mod pi_runtime;
 mod stubs;
+mod ts_types;
 mod typed_output;
 mod workspace;
 
@@ -38,12 +40,18 @@ enum Commands {
     /// Gate: verify the vendored `crates/hyalo-cli/templates/pi/` copies
     /// match the canonical `pi-package/` files byte-for-byte.
     CheckPiPackageSync,
+    /// Rebuild the self-contained Pi API runtime in isolation and reject drift.
+    CheckPiRuntime,
     /// Generate or verify npm launcher/platform package metadata.
     GenerateNpmPackages(npm_package::NpmArgs),
     /// Plan an immutable npm publication from npm pack integrity metadata.
     PlanNpmPublication(npm_package::NpmPublishPlanArgs),
     /// Reject ad-hoc JSON macros in production command output.
     CheckTypedOutput,
+    /// Regenerate Rust-derived TypeScript declarations in a temporary directory and reject drift.
+    CheckTsTypes,
+    /// Refresh committed Rust-derived TypeScript declarations and generated barrels.
+    GenerateTsTypes,
     /// Verify Codex plugin assets, metadata, and embedded-copy parity.
     CheckCodexPackage,
     /// Refresh the embedded Codex skills from plugins/hyalo/skills.
@@ -72,9 +80,12 @@ fn main() {
         Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
         Commands::CheckPiPackageSync => pi_package_sync::run(),
+        Commands::CheckPiRuntime => pi_runtime::run(),
         Commands::GenerateNpmPackages(args) => npm_package::run(args),
         Commands::PlanNpmPublication(args) => npm_package::run_publication_plan(args),
         Commands::CheckTypedOutput => typed_output::run(),
+        Commands::CheckTsTypes => ts_types::check(),
+        Commands::GenerateTsTypes => ts_types::generate(),
         Commands::CheckCodexPackage => codex_package::run(false),
         Commands::SyncCodexPackage => codex_package::run(true),
         Commands::CheckJqRecipes => jq_recipes::run(),
