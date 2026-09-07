@@ -42,10 +42,22 @@ through a temporary local install. Foreign-target fixture bytes in that job
 verify package layout only.
 
 `.github/workflows/release.yml` downloads the seven native archives produced
-by the pinned reusable release workflow. A manual workflow dispatch only packs
-and dry-runs the packages. A published release event is the only path that can
-publish: all seven platform tarballs publish first, followed by `hyalo`, using
-npm provenance and GitHub OIDC without a repository token fallback.
+by the pinned reusable release workflow. By default, a manual workflow dispatch
+builds the native archives, packs all eight npm packages, and dry-runs every
+publication. The reusable workflow remains in dry-run mode for every manual
+dispatch, so it does not publish crates or configured package-manager and Linux
+repository releases.
+
+A manual dispatch can publish only the npm packages by enabling `publish_npm`
+and entering an `npm_version` that exactly matches the `hyalo-cli` Cargo
+version. A missing or mismatched confirmation stops the job before npm
+publication. A published release remains the broad release path: it validates
+the release tag against the Cargo version, runs the configured reusable release
+publishing, and publishes the npm packages.
+
+Both npm publishing paths use the same staged tarballs and publication plan:
+all seven platform packages are handled first, followed by `hyalo`, using npm
+provenance and GitHub OIDC without a repository token fallback.
 Before an immutable version is published, the workflow compares the local
 tarball integrity with `dist.integrity` from the public npm registry. A retry
 skips an identical existing artifact, publishes an explicitly missing version,
