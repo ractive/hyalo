@@ -334,3 +334,25 @@ real-platform registry installs remain external acceptance work. No external
 check was treated as completed by this repository change. Iteration 287 still
 depends on full iteration 286 completion, while Homefinder and iteration 288
 remain deferred.
+
+## Outcome — verified public distribution (2026-09-07)
+
+This supersedes the earlier publication and registry blockers. PR #340 merged as
+`8c05111a8b38fb57949df50e21bbbeffeaa6af85` with eleven passing CI checks and a
+fresh clean review. The owner published only `@ractive-ch/hyalo@0.22.0`, using the
+CI-signed provenance from run `34103532241`; the seven platform versions remain
+the immutable artifacts built from `6f6ff855`. Registry integrity now matches the
+verified tarballs for all eight public packages.
+
+Registry run `34112014061` attempt 2 installed from npm on macOS arm64, Linux x64
+glibc, Alpine x64 musl and Windows x64, selected exactly one native dependency on
+each, and reported `hyalo 0.22.0` through `npx`. Attempt 1 saw a transient 404 for
+the just-published main packument; a delayed probe returned 200 and the unchanged
+retry passed. The optional MDN musl-versus-glibc timing remains unmeasured.
+
+Trusted-publisher configuration has not been completed or verified for the eight
+packages because browser authentication expired during inspection. The successful
+owner upload with CI-signed provenance did not exercise OIDC-authenticated
+publication. Trust configuration remains the sole iteration-286 prerequisite
+blocking iteration 287 implementation; Homefinder and iteration 288 desktop
+verification remain deferred.

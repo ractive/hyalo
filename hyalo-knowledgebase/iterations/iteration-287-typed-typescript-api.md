@@ -121,6 +121,14 @@ are added to the manifest allowlist. Iteration 287 remains blocked until scoped
 publication, trust configuration, and four-platform installation acceptance finish.
 Homefinder and iteration 288 remain deferred.
 
+## Plan reconciliation — 2026-09-07, final npm publication status
+
+All eight 0.22.0 packages are public with verified integrity, and registry installs
+now pass on the four required platforms, fulfilling iteration 287's publication and
+platform prerequisites. Trusted-publisher configuration for all eight packages still
+blocks full iteration 286 completion. No iteration 287 implementation has started;
+Homefinder TASK-7 and iteration 288 desktop verification remain deferred.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — decision record

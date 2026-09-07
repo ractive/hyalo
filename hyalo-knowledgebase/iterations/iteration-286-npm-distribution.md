@@ -61,11 +61,11 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 
 ## Acceptance criteria
 
-- [ ] `npm install @ractive-ch/hyalo && npx hyalo --version` works on the four verified platforms with
+- [x] `npm install @ractive-ch/hyalo && npx hyalo --version` works on the four verified platforms with
       exactly one platform package installed.
 - [x] On an unsupported platform the launcher exits non-zero with the message naming the
       platform and the cargo fallback.
-- [ ] A release publishes eight packages at the Cargo version, platforms first, with provenance.
+- [x] A release publishes eight packages at the Cargo version, platforms first, with provenance.
 - [x] The version gate fails CI when any `package.json` disagrees with Cargo.
 - [x] The polyglot DEC is filed and `CLAUDE.md` reflects it.
 - [x] Gates green.
@@ -221,6 +221,29 @@ one tarball and uploads it with the existing `npm-bootstrap-0.22.0` artifact nam
 Actual scoped publication, all eight trusted-publisher configurations, direct-publish
 settings, and four-platform registry installs remain unchecked external work. This
 does not start iteration 287 or iteration 288, and Homefinder remains deferred.
+
+## Final publication status — 2026-09-07
+
+This supersedes the earlier publication and registry blockers. PR #340 merged as
+`8c05111a8b38fb57949df50e21bbbeffeaa6af85` after all eleven CI checks passed and
+a fresh review found no actionable defects. The owner published only the scoped
+`@ractive-ch/hyalo@0.22.0` main package, using the verified CI-signed provenance
+from run `34103532241`; the seven public platform packages remain unchanged from
+source `6f6ff855`. All eight public versions match their verified tarball integrity.
+
+Registry run `34112014061` attempt 2 passed on macOS arm64, Linux x64 glibc,
+Alpine x64 musl and Windows x64. Each install selected exactly one platform
+dependency and `npx hyalo --version` reported 0.22.0. Attempt 1 failed because
+the newly published main packument still returned 404; after a delayed public
+probe returned 200, the unchanged retry passed. This fulfills the real-platform
+portion of TASK-6; the optional musl-versus-glibc MDN timing remains unmeasured.
+
+Trusted-publisher configuration has not been completed or verified for the eight
+packages because browser authentication expired during inspection. CI signing
+proves artifact provenance but is distinct from an OIDC-authenticated npm upload,
+which remains unexercised. TASK-4 and this iteration therefore remain unfinished
+pending trust configuration; no new release is required merely to configure and
+inspect that trust path.
 
 ## Links
 
