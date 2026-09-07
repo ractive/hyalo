@@ -23,10 +23,8 @@ in directories of markdown files. Its killer features are combined filtering (e.
 replicate with Grep/Glob, and bulk mutations (`hyalo set --where-property`) that replace
 multiple Read + Edit calls.
 
-Install the published CLI with `cargo install hyalo-cli`. An npm distribution is
-prepared but remains unpublished until its owner bootstrap, trusted publisher setup,
-and real-platform registry checks are complete; do not direct users to
-`npm install @ractive-ch/hyalo` before that acceptance.
+Install the published CLI with `cargo install hyalo-cli` or, on a supported Node.js
+platform, `npm install --global @ractive-ch/hyalo`.
 
 Filters combine freely — content search + property conditions + tag + section + task status
 in a single call, something impossible with Grep/Glob alone:

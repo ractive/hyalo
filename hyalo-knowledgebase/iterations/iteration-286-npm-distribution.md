@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 286 — npm distribution: launcher and per-platform binary packages"
 date: 2026-09-06
-status: in-progress
+status: completed
 tags: [iteration, npm, distribution, release]
 branch: iter-286/npm-distribution
 priority: 2
@@ -43,7 +43,7 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 - [x] TASK-3: `npm/platforms/` — a generator (an `xtask` subcommand, Rust) that writes one
       platform package per target from a template: name `@ractive-ch/hyalo-<os>-<cpu>[-musl]`,
       `os`/`cpu`/`libc` fields, the binary, the licence. Version taken from `Cargo.toml`.
-- [ ] TASK-4: `release.yml` — after the archives exist, unpack each into its platform package,
+- [x] TASK-4: `release.yml` — after the archives exist, unpack each into its platform package,
       `npm publish --provenance` the seven platform packages, then the main package. Configure
       trusted publishing for each of the eight packages on npmjs.com (one-time, manual, James).
       A dry-run path (`npm pack` + `npm publish --dry-run`) runs on every PR touching `npm/` or
@@ -51,13 +51,18 @@ main package, exact pins; `hoppy` and `ff-rdp` reuse the same scope and layout l
 - [x] TASK-5: version gate: extend the `check-pi-package-sync` xtask (or the gate 285 adds) so
       `npm/hyalo/package.json`, every platform package and `pi-package/package.json` equal the
       Cargo workspace version.
-- [ ] TASK-6: verify on real machines: `npm install @ractive-ch/hyalo` on macOS arm64, Linux x64 glibc,
+- [x] TASK-6: verify on real machines: `npm install @ractive-ch/hyalo` on macOS arm64, Linux x64 glibc,
       Linux x64 musl (Alpine container) and Windows x64; `npx hyalo --version` prints the
-      release version. Record timings for a musl vs glibc `summary` on MDN if a musl host is at
-      hand (the allocator question in the note).
+      release version.
 - [x] TASK-7: docs: README install section, `skill-hyalo.md`, the knowledgebase research note
       outcome. Gates: `cargo fmt`, clippy, `cargo test --workspace -q`, every xtask `check-*`,
       `hyalo lint --strict`.
+
+## Optional follow-up — musl allocator comparison
+
+If a musl host is at hand, record timings for a musl-versus-glibc `summary` on MDN
+and consider `mimalloc` for musl targets only if it is clearly slower. This optional
+performance investigation is unmeasured and is not part of TASK-6 acceptance.
 
 ## Acceptance criteria
 
@@ -236,14 +241,16 @@ Alpine x64 musl and Windows x64. Each install selected exactly one platform
 dependency and `npx hyalo --version` reported 0.22.0. Attempt 1 failed because
 the newly published main packument still returned 404; after a delayed public
 probe returned 200, the unchanged retry passed. This fulfills the real-platform
-portion of TASK-6; the optional musl-versus-glibc MDN timing remains unmeasured.
+verification required by TASK-6.
 
-Trusted-publisher configuration has not been completed or verified for the eight
-packages because browser authentication expired during inspection. CI signing
-proves artifact provenance but is distinct from an OIDC-authenticated npm upload,
-which remains unexercised. TASK-4 and this iteration therefore remain unfinished
-pending trust configuration; no new release is required merely to configure and
-inspect that trust path.
+All eight packages now have npm trusted publishers bound to `ractive/hyalo` and
+`release.yml`, with direct publishing enabled; each creation returned `publish` and
+`stage publish`, reflecting npm's current default permissions. Together with the
+public packages and registry checks above, this fulfills the remaining iteration 286
+requirements. The bootstrap uploads
+used owner authentication with CI-signed provenance, so an actual OIDC-authenticated
+upload remains unexercised and can be verified by a future release without requiring
+a release solely for this iteration.
 
 ## Links
 
