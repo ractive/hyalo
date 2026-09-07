@@ -496,10 +496,56 @@ pub fn body_only(content: &str) -> &str {
     }
 }
 
+#[cfg(any(windows, test))]
+const WINDOWS_OPEN_ATTEMPTS: usize = 5;
+
+#[cfg(any(windows, test))]
+const WINDOWS_OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Open a frontmatter file, tolerating selected transient failures observed
+/// around concurrent atomic replacement on Windows.
+///
+/// The Windows policy is deliberately narrow and bounded: access-denied and
+/// sharing-violation errors get at most five total attempts with 10 ms between
+/// failures (40 ms maximum intentional delay). This mitigates a transient
+/// replacement race without assuming its exact kernel cause; it is not a
+/// general guarantee that every Windows open will succeed. Other platforms
+/// pay no retry or sleep cost.
+#[cfg(windows)]
+fn open_frontmatter_file(path: &Path) -> std::io::Result<File> {
+    open_with_windows_retry(|| File::open(path), std::thread::sleep)
+}
+
+#[cfg(not(windows))]
+fn open_frontmatter_file(path: &Path) -> std::io::Result<File> {
+    File::open(path)
+}
+
+/// Run the Windows open policy with injected operations so its attempt and
+/// wait bounds can be tested deterministically without sleeping.
+#[cfg(any(windows, test))]
+fn open_with_windows_retry<T>(
+    mut open: impl FnMut() -> std::io::Result<T>,
+    mut wait: impl FnMut(std::time::Duration),
+) -> std::io::Result<T> {
+    for _ in 1..WINDOWS_OPEN_ATTEMPTS {
+        match open() {
+            Ok(file) => return Ok(file),
+            Err(err) if matches!(err.raw_os_error(), Some(5 | 32)) => {
+                wait(WINDOWS_OPEN_RETRY_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    open()
+}
+
 /// Read only the YAML frontmatter from a file, stopping as soon as the closing `---` is found.
 /// The body is never read into memory. Use this for read-only property operations.
 pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let file = open_frontmatter_file(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
     read_frontmatter_from_reader(reader)
 }
@@ -551,8 +597,8 @@ pub fn write_frontmatter_within(
 /// parsed-map rendering). A block whose framing is malformed — an unclosed
 /// `---` — is an `Err`, the same parse error [`read_frontmatter`] reports.
 pub fn read_frontmatter_raw(path: &Path) -> Result<Option<String>> {
-    let mut file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut file = open_frontmatter_file(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
     let span = find_body_offset(&mut file)?;
     if span.body_offset == 0 {
         return Ok(None);
@@ -616,8 +662,8 @@ fn write_frontmatter_impl(
     // --- Step 0: open the file and guard against unbounded memory use ---
     // Step 2 below reads the whole body into memory; refuse up front rather
     // than let `read_to_end` allocate without bound for a huge file.
-    let mut file =
-        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut file = open_frontmatter_file(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
     let file_size = file
         .metadata()
         .with_context(|| format!("failed to stat {}", path.display()))?
@@ -1214,5 +1260,117 @@ fn find_closing_delimiter(s: &str) -> Option<usize> {
             return None;
         }
         line_start = line_end + 1;
+    }
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::{WINDOWS_OPEN_ATTEMPTS, WINDOWS_OPEN_RETRY_DELAY, open_with_windows_retry};
+    use std::cell::{Cell, RefCell};
+    use std::io;
+
+    #[test]
+    fn windows_open_retries_access_denied_and_sharing_violation_then_succeeds() {
+        let attempts = Cell::new(0);
+        let waits = RefCell::new(Vec::new());
+
+        let result = open_with_windows_retry(
+            || {
+                let attempt = attempts.get() + 1;
+                attempts.set(attempt);
+                match attempt {
+                    1 => Err(io::Error::from_raw_os_error(5)),
+                    2 => Err(io::Error::from_raw_os_error(32)),
+                    _ => Ok(17),
+                }
+            },
+            |delay| waits.borrow_mut().push(delay),
+        );
+
+        assert_eq!(result.expect("third open should succeed"), 17);
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(waits.into_inner(), vec![WINDOWS_OPEN_RETRY_DELAY; 2]);
+    }
+
+    #[test]
+    fn windows_open_returns_last_error_after_bounded_retries() {
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+
+        let result: io::Result<()> = open_with_windows_retry(
+            || {
+                let attempt = attempts.get() + 1;
+                attempts.set(attempt);
+                let code = if attempt == WINDOWS_OPEN_ATTEMPTS {
+                    32
+                } else {
+                    5
+                };
+                Err(io::Error::from_raw_os_error(code))
+            },
+            |_| waits.set(waits.get() + 1),
+        );
+
+        let err = result.expect_err("persistent sharing failures must be returned");
+        assert_eq!(err.raw_os_error(), Some(32));
+        assert_eq!(attempts.get(), WINDOWS_OPEN_ATTEMPTS);
+        assert_eq!(waits.get(), WINDOWS_OPEN_ATTEMPTS - 1);
+    }
+
+    #[test]
+    fn windows_open_returns_unrelated_os_errors_immediately() {
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+
+        let result: io::Result<()> = open_with_windows_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(io::Error::from_raw_os_error(2))
+            },
+            |_| waits.set(waits.get() + 1),
+        );
+
+        let err = result.expect_err("an unrelated OS error must be returned");
+        assert_eq!(err.raw_os_error(), Some(2));
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(waits.get(), 0);
+    }
+
+    #[test]
+    fn windows_open_does_not_retry_permission_denied_without_raw_code() {
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+
+        let result: io::Result<()> = open_with_windows_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            },
+            |_| waits.set(waits.get() + 1),
+        );
+
+        let err = result.expect_err("a synthetic permission error must be returned");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(err.raw_os_error(), None);
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(waits.get(), 0);
+    }
+
+    #[test]
+    fn windows_open_first_success_does_not_wait() {
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+
+        let result = open_with_windows_retry(
+            || {
+                attempts.set(attempts.get() + 1);
+                Ok(23)
+            },
+            |_| waits.set(waits.get() + 1),
+        );
+
+        assert_eq!(result.expect("first open should succeed"), 23);
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(waits.get(), 0);
     }
 }

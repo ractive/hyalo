@@ -243,6 +243,10 @@ and this project adheres to
 
 ### Fixed
 
+- Frontmatter reads and rewrites briefly retry Windows file-open errors 5 and 32,
+  which can occur while another process replaces a file. Five attempts add at most
+  40 ms of intentional delay; persistent failures keep their original error and
+  path context. Parsing and subsequent reads are not retried.
 - **`hyalo init --dir <tree-outside-CWD>` wrote a config it then refused to
   read.** The `.hyalo.toml` landed in the *current* directory with an
   absolute `dir`, which a project-local config is not allowed to set
