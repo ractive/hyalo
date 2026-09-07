@@ -757,6 +757,9 @@ var RESERVED_OUTPUT_KEYS = /* @__PURE__ */ new Set([
   "filenames0",
   "strict"
 ]);
+function isClosedStdinWriteError(error) {
+  return error.code === "EPIPE" || error.code === "EOF";
+}
 function executionOptions(options) {
   return {
     binaryPath: options.binaryPath,
@@ -885,7 +888,7 @@ function nativeTransport(binaryPath) {
       child.stdout.on("data", (chunk) => stdout.push(chunk));
       child.stderr.on("data", (chunk) => stderr.push(chunk));
       child.stdin.on("error", (error) => {
-        if (error.code !== "EPIPE") fail(new HyaloSpawnError(error));
+        if (!isClosedStdinWriteError(error)) fail(new HyaloSpawnError(error));
       });
       child.on("error", (error) => fail(new HyaloSpawnError(error)));
       child.on("close", (code) => {

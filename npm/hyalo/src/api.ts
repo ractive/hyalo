@@ -128,6 +128,13 @@ const RESERVED_OUTPUT_KEYS = new Set([
   "strict",
 ]);
 
+/** @internal Cross-platform closed-peer errors emitted while writing child stdin. */
+export function isClosedStdinWriteError(
+  error: Pick<NodeJS.ErrnoException, "code">,
+): boolean {
+  return error.code === "EPIPE" || error.code === "EOF";
+}
+
 function executionOptions(options: Record<string, unknown>): ExecutionOptions {
   return {
     binaryPath: options.binaryPath as string | undefined,
@@ -269,8 +276,8 @@ function nativeTransport(binaryPath?: string): HyaloTransport {
       child.stdin.on("error", (error: NodeJS.ErrnoException) => {
         // A command may reject argv and close stdin before a large input has
         // finished writing. Its exit status/stderr is the useful result;
-        // swallowing EPIPE prevents Node from crashing before `close` reports it.
-        if (error.code !== "EPIPE") fail(new HyaloSpawnError(error));
+        // Unix reports EPIPE and Windows reports EOF for the same closed peer.
+        if (!isClosedStdinWriteError(error)) fail(new HyaloSpawnError(error));
       });
       child.on("error", (error) => fail(new HyaloSpawnError(error)));
       child.on("close", (code) => {

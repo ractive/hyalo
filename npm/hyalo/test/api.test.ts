@@ -28,6 +28,7 @@ import {
   type ReadResult,
   type VaultSummary,
 } from "../src/index.js";
+import { isClosedStdinWriteError } from "../src/api.js";
 import { configForPi } from "../src/pi-runtime.js";
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -189,7 +190,11 @@ describe("process and argv behavior", () => {
     expect((failure as HyaloError).stderr).toContain('"error": "file not found"');
   });
 
-  it("times out, aborts, and survives EPIPE when a child exits before large stdin", async () => {
+  it("times out, aborts, and preserves exit results after closed-stdin errors", async () => {
+    expect(isClosedStdinWriteError({ code: "EPIPE" })).toBe(true);
+    expect(isClosedStdinWriteError({ code: "EOF" })).toBe(true);
+    expect(isClosedStdinWriteError({ code: "ECONNRESET" })).toBe(false);
+    expect(isClosedStdinWriteError({ code: undefined })).toBe(false);
     await expect(raw(["-e", "setTimeout(() => {}, 10000)"], { binaryPath: process.execPath, timeoutMs: 20 }))
       .rejects.toBeInstanceOf(HyaloTimeoutError);
     const controller = new AbortController();
