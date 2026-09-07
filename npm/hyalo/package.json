@@ -1,0 +1,43 @@
+{
+  "bin": {
+    "hyalo": "bin/hyalo.js"
+  },
+  "dependencies": {
+    "detect-libc": "2.1.2"
+  },
+  "description": "Hyalo knowledgebase CLI",
+  "engines": {
+    "node": ">=22.14.0",
+    "npm": ">=11.5.1"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md",
+    "LICENSE",
+    "platforms.json"
+  ],
+  "license": "MIT",
+  "name": "hyalo",
+  "optionalDependencies": {
+    "@ractive-ch/hyalo-darwin-arm64": "0.22.0",
+    "@ractive-ch/hyalo-linux-arm64": "0.22.0",
+    "@ractive-ch/hyalo-linux-arm64-musl": "0.22.0",
+    "@ractive-ch/hyalo-linux-x64": "0.22.0",
+    "@ractive-ch/hyalo-linux-x64-musl": "0.22.0",
+    "@ractive-ch/hyalo-win32-arm64": "0.22.0",
+    "@ractive-ch/hyalo-win32-x64": "0.22.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "directory": "npm/hyalo",
+    "type": "git",
+    "url": "https://github.com/ractive/hyalo.git"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "version": "0.22.0"
+}

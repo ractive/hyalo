@@ -227,3 +227,86 @@ Three separate iterations, not one, preceded by the stability retrospective
    platform binary directly, vitest contract tests against the freshly built
    binary. Port `pi-package/extensions/hyalo.ts` onto it. Then switch
    `homefinder-eco-mcp` to `npm install hyalo`.
+
+## Added 2026-09-07 — a generic markdown-KB MCP server?
+
+From the follow-up discussion in the eco-mcp session (findings recorded in
+that repo's `RUNTIME-KB-REFRESH.md`, section "2026-09-07"):
+
+- The consumer expects mapl-memory to grow to **thousands of pages**. The
+  eco-mcp ingests one product subtree; other product teams will want the
+  same over theirs, and none of that is ecosystem-specific. That argues for
+  a **generic markdown-KB MCP server**: repo + ref + paths in, hyalo for
+  search, index and page reads, `create-index` after every pull, queries
+  with `--index`. Since James owns hyalo, this is plausibly a hyalo feature
+  (a `hyalo mcp` / `hyalo serve --mcp` subcommand, or a separate package on
+  top of the npm wrapper from iteration 287) rather than a Comparis one.
+  Not planned; decide before the consumer builds its ingest twice.
+- Two consumer-side lessons that shape what such a server must do:
+  never put page names into a tool-description enum (the eco-mcp does, and
+  it does not survive thousands of pages); and derive the page list/titles
+  from hyalo's index rather than opening every file.
+- The consumer's provenance-comment bug is fixed on their side
+  (comment now after the closing `---`). The possible lint rule
+  "frontmatter present but not at byte 0" remains an idea here.
+
+## Outcome — iteration 286 repository preparation (2026-09-07)
+
+Iteration 285 completed the typed Rust output models and strengthened
+`check-pi-package-sync` so the three existing package manifests must match
+the Cargo workspace version. Iteration 286 extends that gate through one
+canonical Rust npm platform table: the main manifest, all seven platform
+manifests, exact optional-dependency pins, generated platform map, licenses,
+and target READMEs are checked byte-for-byte. The generator also stages an
+explicit seven-target binary input into a new output tree without deleting or
+overwriting tracked sources.
+
+The CommonJS launcher selects from the generated table, resolves the installed
+optional package, and spawns the binary with inherited stdio, unchanged
+arguments, numeric exit status, and signal propagation. Native `node:test`
+coverage exercises all seven mappings, unsupported and missing-package errors,
+and real child-process behavior.
+
+Local packaging evidence on macOS arm64 used npm 11.19.1 to stage and pack all
+eight packages, inspect every tarball allowlist, and run `npm publish --dry-run`
+for each. A temporary consumer installed the local main and Darwin arm64
+tarballs with optional registry packages omitted, then
+`npx --no-install hyalo --version` ran the release binary and reported
+`hyalo 0.22.0`. Foreign-target files were clearly labeled fixture bytes and
+prove package layout only. The PR workflow repeats launcher tests on GitHub
+Linux, macOS, and Windows runners and performs the packaging smoke with a real
+Linux x64 glibc binary. These workflow jobs have not yet run.
+
+The release workflow is prepared to consume the seven exact archives produced
+by `ractive/release-workflows/.github/workflows/release.yml@v0.2.0`, dry-run
+all eight packages on manual dispatch, and publish platform packages before the
+main package only for a published release. No workflow was dispatched and no
+package was published during this work.
+
+Publication retries are fail-closed: a Rust gate compares each local
+`npm pack` integrity with the exact version's `dist.integrity` at
+`https://registry.npmjs.org`. An explicit missing-version 404 remains
+publishable, an identical immutable artifact is skipped, and mismatched
+integrity, authorization, network, or malformed responses stop the job before
+publication. This allows a partial platform-package success to resume without
+attempting to overwrite earlier immutable versions, while keeping the main
+package last.
+
+External acceptance remains open. The owner must bootstrap all eight packages,
+configure each existing package's trusted publisher for `ractive/hyalo` and
+`release.yml`, explicitly allow direct publishing where new configurations
+default to staged publishing, authorize a release, and verify public-registry
+installs on macOS arm64, Linux x64 glibc, Linux x64 musl, and Windows x64. The
+2026-09-07 public metadata requests returned 404 for all eight names; that
+shows only that no public metadata existed, not ownership or private-package
+state.
+
+Authoritative references:
+
+- npm trusted publishing:
+  <https://docs.npmjs.com/trusted-publishers/>
+- npm 11 `npm trust` prerequisites:
+  <https://docs.npmjs.com/cli/v11/commands/npm-trust/>
+- Reusable release workflow source:
+  `ractive/release-workflows/.github/workflows/release.yml@v0.2.0`,
+  Git blob `300705e94fa0090441861a653ccd7f05c36a749a`

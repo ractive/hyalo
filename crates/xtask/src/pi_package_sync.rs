@@ -91,6 +91,7 @@ pub fn run() -> Result<bool> {
     }
 
     let mut all_ok = versions_match(&root)?;
+    all_ok &= crate::npm_package::check_metadata(&root)?;
     let mut checked = 0usize;
     for (source, vendored_copy) in &pairs {
         checked += 1;
@@ -157,6 +158,11 @@ fn versions_match(root: &Path) -> Result<bool> {
         "pi-package/package.json",
         "crates/hyalo-cli/templates/pi/package.json",
     ] {
+        if !root.join(manifest).is_file() {
+            matches = false;
+            eprintln!("check-pi-package-sync: missing required manifest {manifest}");
+            continue;
+        }
         let package: serde_json::Value =
             serde_json::from_slice(&std::fs::read(root.join(manifest))?)
                 .with_context(|| format!("parsing {manifest}"))?;

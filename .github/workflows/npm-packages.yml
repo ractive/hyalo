@@ -1,0 +1,129 @@
+name: npm Packages
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "npm/**"
+      - "crates/xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/npm-packages.yml"
+      - ".github/workflows/release.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  npm-launcher:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install launcher dependencies
+        run: npm --prefix npm/hyalo install --ignore-scripts --omit=optional --package-lock=false
+      - name: Test launcher
+        run: npm --prefix npm/hyalo test
+
+  npm-packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Pin npm
+        run: npm install --global npm@11.19.1
+      - name: Test generator and build host CLI
+        run: |
+          cargo test -p xtask npm_package
+          cargo run -p xtask -- generate-npm-packages --check
+          cargo build --release -p hyalo-cli
+      - name: Stage all eight packages
+        shell: bash
+        env:
+          BINARY_INPUT: ${{ runner.temp }}/hyalo-npm-binaries
+          STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
+        run: |
+          set -euo pipefail
+          [ ! -e "$BINARY_INPUT" ]
+          [ ! -e "$STAGE_DIR" ]
+          jq -r '.[] | [.target, (if .os == "win32" then "hyalo.exe" else "hyalo" end)] | @tsv' npm/hyalo/platforms.json |
+            while IFS=$'\t' read -r target binary; do
+              mkdir -p "$BINARY_INPUT/$target"
+              printf 'packaging-only fixture for %s\n' "$target" > "$BINARY_INPUT/$target/$binary"
+            done
+          install -m 755 target/release/hyalo \
+            "$BINARY_INPUT/x86_64-unknown-linux-gnu/hyalo"
+          cargo run -p xtask -- generate-npm-packages \
+            --stage "$STAGE_DIR" --binaries "$BINARY_INPUT"
+      - name: Pack, inspect, and dry-run publication
+        shell: bash
+        env:
+          STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+          CONSUMER_DIR: ${{ runner.temp }}/hyalo-npm-consumer
+        run: |
+          set -euo pipefail
+          mkdir "$PACK_DIR"
+          : > "$PACK_DIR/packages.tsv"
+          for package_dir in \
+            darwin-arm64 linux-x64 linux-arm64 linux-x64-musl \
+            linux-arm64-musl win32-x64 win32-arm64 hyalo; do
+            npm pack "$STAGE_DIR/$package_dir" \
+              --pack-destination "$PACK_DIR" --json > "$PACK_DIR/$package_dir.json"
+            tarball=$(jq -r '.[0].filename' "$PACK_DIR/$package_dir.json")
+            test -n "$tarball"
+            printf '%s\t%s\n' "$package_dir" "$PACK_DIR/$tarball" \
+              >> "$PACK_DIR/packages.tsv"
+          done
+
+          while IFS=$'\t' read -r package_dir tarball; do
+            files=$(tar -tzf "$tarball")
+            grep -qx 'package/package.json' <<< "$files"
+            grep -qx 'package/LICENSE' <<< "$files"
+            grep -qx 'package/README.md' <<< "$files"
+            if [ "$package_dir" = hyalo ]; then
+              grep -qx 'package/bin/hyalo.js' <<< "$files"
+              grep -qx 'package/lib/resolve-platform.js' <<< "$files"
+              grep -qx 'package/lib/run-child.js' <<< "$files"
+              grep -qx 'package/platforms.json' <<< "$files"
+            elif [[ "$package_dir" == win32-* ]]; then
+              grep -qx 'package/hyalo.exe' <<< "$files"
+            else
+              grep -qx 'package/hyalo' <<< "$files"
+            fi
+            npm publish "$tarball" --dry-run --ignore-scripts --access public \
+              --registry https://registry.npmjs.org
+          done < "$PACK_DIR/packages.tsv"
+
+          mkdir "$CONSUMER_DIR"
+          cd "$CONSUMER_DIR"
+          npm init --yes
+          main_tarball=$(awk -F '\t' '$1 == "hyalo" {print $2}' "$PACK_DIR/packages.tsv")
+          host_tarball=$(awk -F '\t' '$1 == "linux-x64" {print $2}' "$PACK_DIR/packages.tsv")
+          npm install --ignore-scripts --omit=optional "$main_tarball" "$host_tarball"
+          expected=$(cargo metadata --manifest-path "$GITHUB_WORKSPACE/Cargo.toml" \
+            --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "hyalo-cli") | .version')
+          actual=$(npx --no-install hyalo --version)
+          case "$actual" in
+            "hyalo $expected"*) ;;
+            *) echo "unexpected hyalo version output: $actual" >&2; exit 1 ;;
+          esac

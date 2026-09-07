@@ -95,6 +95,20 @@ the documented dynamic JSON fields as `unknown`, optional omissions and singular
 the external consumer migration remain unfinished; this reconciliation does not start
 the TypeScript implementation.
 
+## Plan reconciliation — 2026-09-07, iteration 286
+
+The repository-preparation branch introduces a CommonJS launcher and an internal
+binary resolver at `npm/hyalo/lib/resolve-platform.js`. TASK-3 should share that
+resolver while spawning the native binary directly. The Rust npm generator owns
+`npm/hyalo/package.json`; adding API exports, type entrypoints or build metadata
+must update the generator and its tests as well as the generated manifest.
+
+Iteration 286's repository preparation has passed fresh review, including its
+CRLF metadata-check fix. npm bootstrap, trusted publishing, actual publication and
+four-platform registry installation checks remain outstanding. Both full prerequisites remain
+required; no TypeScript implementation has started. TASK-7 still requires separate
+authority to modify `homefinder-eco-mcp` and is not waived by repository-only work.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — decision record
