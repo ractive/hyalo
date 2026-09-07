@@ -10,8 +10,13 @@ on:
         type: boolean
         required: false
         default: false
+      prepare_npm_bootstrap:
+        description: Sign and upload npm tarballs for the initial owner publication
+        type: boolean
+        required: false
+        default: false
       npm_version:
-        description: Cargo version to confirm when publish_npm is enabled
+        description: Cargo version to confirm for npm publication or bootstrap preparation
         type: string
         required: false
 
@@ -93,6 +98,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           PUBLISH_NPM: ${{ inputs.publish_npm }}
+          PREPARE_NPM_BOOTSTRAP: ${{ inputs.prepare_npm_bootstrap }}
           REQUESTED_NPM_VERSION: ${{ inputs.npm_version }}
         run: |
           set -euo pipefail
@@ -109,6 +115,12 @@ jobs:
             exit 1
           fi
           if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$PUBLISH_NPM" = true ] && \
+             [ "$PREPARE_NPM_BOOTSTRAP" = true ]; then
+            echo "publish_npm and prepare_npm_bootstrap are mutually exclusive" >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = workflow_dispatch ] && \
+             { [ "$PUBLISH_NPM" = true ] || [ "$PREPARE_NPM_BOOTSTRAP" = true ]; } && \
              [ "$REQUESTED_NPM_VERSION" != "$version" ]; then
             echo "npm_version '$REQUESTED_NPM_VERSION' does not match Cargo version '$version'" >&2
             exit 1
@@ -190,6 +202,82 @@ jobs:
             "$PACK_DIR/win32-arm64.json" \
             "$PACK_DIR/hyalo.json" \
             > "$PACK_DIR/publication-plan.json"
+      - name: Sign npm bootstrap tarballs with GitHub OIDC
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.prepare_npm_bootstrap
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+        run: |
+          set -euo pipefail
+          NPM_PACKAGE_DIR="$(npm root --global)/npm"
+          export NPM_PACKAGE_DIR
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { execFileSync } from 'node:child_process'
+          import { createHash } from 'node:crypto'
+          import { readFile, writeFile } from 'node:fs/promises'
+          import { createRequire } from 'node:module'
+          import path from 'node:path'
+
+          const packDir = process.env.PACK_DIR
+          const npmPackageDir = process.env.NPM_PACKAGE_DIR
+          assert(packDir && npmPackageDir && process.env.CARGO_VERSION)
+
+          const npmPackagePath = path.join(npmPackageDir, 'package.json')
+          const npmManifest = JSON.parse(await readFile(npmPackagePath, 'utf8'))
+          assert.equal(npmManifest.version, '11.19.1')
+          const requireFromNpm = createRequire(npmPackagePath)
+          const npa = requireFromNpm('npm-package-arg')
+          const { generateProvenance } = requireFromNpm(
+            'libnpmpublish/lib/provenance.js'
+          )
+
+          const packageDirs = [
+            'darwin-arm64', 'linux-x64', 'linux-arm64', 'linux-x64-musl',
+            'linux-arm64-musl', 'win32-x64', 'win32-arm64', 'hyalo',
+          ]
+          const rows = (await readFile(path.join(packDir, 'packages.tsv'), 'utf8'))
+            .trimEnd().split('\n').map((row) => row.split('\t'))
+          assert.deepEqual(rows.map(([packageDir]) => packageDir), packageDirs)
+
+          for (const [packageDir, tarball, ...extra] of rows) {
+            assert.equal(extra.length, 0)
+            const [pack] = JSON.parse(await readFile(
+              path.join(packDir, `${packageDir}.json`), 'utf8'
+            ))
+            assert.equal(path.basename(tarball), pack.filename)
+            const manifest = JSON.parse(execFileSync(
+              'tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }
+            ))
+            assert.equal(manifest.name, pack.name)
+            assert.equal(manifest.version, pack.version)
+            assert.equal(manifest.version, process.env.CARGO_VERSION)
+
+            const tarballBytes = await readFile(tarball)
+            const digest = createHash('sha512').update(tarballBytes).digest()
+            assert.equal(pack.integrity, `sha512-${digest.toString('base64')}`)
+            const subject = {
+              name: npa.toPurl(npa.resolve(manifest.name, manifest.version)),
+              digest: { sha512: digest.toString('hex') },
+            }
+            const bundle = await generateProvenance([subject], {})
+            const bundlePath = tarball.replace(/\.tgz$/, '.sigstore.json')
+            assert.notEqual(bundlePath, tarball)
+            await writeFile(bundlePath, `${JSON.stringify(bundle)}\n`, { flag: 'wx' })
+            console.log(`Signed ${path.basename(tarball)}`)
+          }
+          NODE
+      - name: Upload signed npm bootstrap packages
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.prepare_npm_bootstrap
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-bootstrap-${{ env.CARGO_VERSION }}
+          path: ${{ runner.temp }}/hyalo-npm-packs
+          if-no-files-found: error
       - name: Publish platform packages, then main package
         if: >-
           github.event_name == 'release' ||

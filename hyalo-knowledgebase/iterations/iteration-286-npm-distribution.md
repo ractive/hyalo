@@ -104,8 +104,9 @@ TASK-4 is partial: workflow and local dry runs exist, but owner bootstrap, trust
 publisher configuration and actual publication have not happened. TASK-6 is unperformed:
 public-registry installs on macOS arm64, Linux x64 glibc, Alpine musl and Windows x64
 are still required. Local fixtures and compilation checks do not satisfy these tasks.
-The owner reports npm login as `ractive.ch`; publication and trust changes still need
-separate authority. No token secret is required for the planned GitHub OIDC publisher.
+The owner login was verified as `ractive.ch`. On 2026-09-07 the user authorized
+Hyalo's eight-package npm bootstrap, publication and GitHub trusted-publisher setup.
+No token secret is required for the planned GitHub OIDC publisher.
 
 Resume external completion only with the required authority and real native artifacts.
 Bootstrap the eight package names, configure GitHub OIDC for `ractive/hyalo` and
@@ -128,6 +129,20 @@ runs remain unpublished, and normal published-release behavior is unchanged.
 This prepares the restricted publishing path; it does not complete owner bootstrap,
 trusted publishing, actual publication or registry platform verification. The user
 explicitly deferred `homefinder-eco-mcp`; iteration 287's consumer task remains open.
+
+## Authorized bootstrap preparation — 2026-09-07
+
+The npm-only bootstrap path builds the real 0.22.0 native archives, packs all eight
+packages and signs their exact tarball digests in GitHub Actions. The npm owner can
+then upload those unchanged tarballs with `--provenance-file` before configuring
+trusted publishers. This initial upload uses owner authentication and CI provenance;
+it does not demonstrate OIDC-authenticated publication. No placeholder version is
+needed. Keep publication and platform acceptance unchecked until verified.
+
+A separate manual registry workflow will install the public package on macOS arm64,
+Linux x64 glibc, Windows x64 and Alpine x64 musl, checking the actual installed native
+dependency and CLI version. It does not publish packages. These preparations preserve
+iteration 287's full prerequisite and iteration 288's deferred desktop verification.
 
 ## Links
 
