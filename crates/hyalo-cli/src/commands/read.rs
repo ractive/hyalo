@@ -1018,7 +1018,10 @@ pub(crate) fn run_command(
 
 /// Serialized ReadResult command contract.
 #[derive(serde::Serialize)]
-struct ReadResult<'a> {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct ReadResult<'a> {
     /// Vault-relative file path.
     file: &'a str,
     /// Size of the whole file in bytes.
@@ -1027,9 +1030,11 @@ struct ReadResult<'a> {
     lines: usize,
     /// Parsed user-authored frontmatter, whose keys and values are genuinely dynamic.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(type = "unknown", optional))]
     frontmatter: Option<serde_json::Value>,
     /// Exact frontmatter source; null when requested but no source block exists.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(type = "string | null", optional))]
     #[allow(clippy::option_option)]
     // Omitted, explicit null, and populated are distinct wire states.
     frontmatter_raw: Option<Option<&'a str>>,

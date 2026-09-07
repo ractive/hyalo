@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 /// A single frontmatter property with its inferred type and value.
 /// Used by `properties` (aggregate summary).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct PropertyInfo {
     /// Name of this entry.
     pub name: String,
@@ -20,12 +22,16 @@ pub struct PropertyInfo {
     /// Inferred property type name.
     pub prop_type: String,
     /// User-authored property value; the value shape is genuinely dynamic.
+    #[cfg_attr(test, ts(type = "unknown"))]
     pub value: serde_json::Value,
 }
 
 /// Aggregate property summary entry.
 /// Used by `properties` command and `summary`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 pub struct PropertySummaryEntry {
     /// Name of this entry.
     pub name: String,
@@ -43,6 +49,8 @@ pub struct PropertySummaryEntry {
 
 /// One type variant in a mixed-type property summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct MixedTypeEntry {
     #[serde(rename = "type")]
     /// Inferred property type name.
@@ -58,6 +66,8 @@ pub struct MixedTypeEntry {
 /// Aggregate tag summary.
 /// Used by `tags` command and `summary`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TagSummary {
     /// Tag occurrence summary.
     pub tags: Vec<TagSummaryEntry>,
@@ -67,6 +77,8 @@ pub struct TagSummary {
 
 /// A single tag with its file count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TagSummaryEntry {
     /// Name of this entry.
     pub name: String,
@@ -91,6 +103,8 @@ pub struct TagSummaryEntry {
 /// Precedence when several could apply — `external` beats `attachment` beats
 /// `embed` beats the syntax kinds — so exactly one label is reported per link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum LinkKindLabel {
     /// `[[note]]` — a plain wikilink to a vault note.
@@ -192,6 +206,8 @@ pub fn is_note_graph_edge(target: &str, external: bool, is_attachment: bool) -> 
 /// A single link with its resolution status.
 /// Used by `find` (links field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct LinkInfo {
     /// Resolved or authored link target, according to the command.
     pub target: String,
@@ -210,6 +226,7 @@ pub struct LinkInfo {
     /// (`meta.source`), the plain key otherwise (iter-262). Absent for body
     /// links, so the shape of an existing report is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub property: Option<String>,
     /// 1-based source line the link was written on (iter-215, dogfood UX-6).
     ///
@@ -233,6 +250,7 @@ pub struct LinkInfo {
     /// `#`. `None` for links with no fragment. Skipped from JSON when absent so
     /// non-anchored links keep today's shape (L-21, iter-190).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub fragment: Option<String>,
     /// `true` when the link's target file resolved (`path` is `Some`) but the
     /// `#fragment` does not name any heading in that file — a *broken anchor*.
@@ -250,6 +268,7 @@ pub struct LinkInfo {
     /// suggestion, never an automatic rewrite: a silent prefix match would hide
     /// the typos this rule exists to surface. Skipped from JSON when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub suggested_fragment: Option<String>,
     /// `true` when the link's target normalizes to a path *above* the vault
     /// root, so it can never resolve to a scanned file. Implies `path: None`,
@@ -266,6 +285,7 @@ pub struct LinkInfo {
     /// `wikilink`: an alias changes *what the target names*, not the syntax it
     /// was written in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub via: Option<String>,
 }
 
@@ -276,12 +296,15 @@ pub const LINK_VIA_ALIAS: &str = "alias";
 /// A single backlink: another file that links to this one.
 /// Used by `find` (backlinks field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct BacklinkInfo {
     /// Vault-relative file containing the authored link.
     pub source: String,
     /// One-based source line number.
     pub line: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     /// Authored link display label, when present.
     pub label: Option<String>,
 }
@@ -292,6 +315,8 @@ pub struct BacklinkInfo {
 
 /// Task checkbox counts within a section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TaskCount {
     /// Total number of considered items.
     pub total: usize,
@@ -302,6 +327,8 @@ pub struct TaskCount {
 /// A single section in the document outline.
 /// Used by `find` (sections field).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct OutlineSection {
     /// ATX heading level (one through six).
     pub level: u8,
@@ -312,6 +339,7 @@ pub struct OutlineSection {
     /// Link targets occurring within this section.
     pub links: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     /// Task checkbox counts.
     pub tasks: Option<TaskCount>,
     /// Languages of fenced code blocks in the section.
@@ -325,6 +353,8 @@ pub struct OutlineSection {
 /// A single task (checkbox) with its location and state.
 /// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TaskInfo {
     /// One-based source line number.
     pub line: usize,
@@ -339,6 +369,8 @@ pub struct TaskInfo {
 /// Result of reading or mutating a single task.
 /// Used by `task read`, `task toggle`, `task set`.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TaskReadResult {
     /// Vault-relative Markdown file path.
     pub file: String,
@@ -357,6 +389,8 @@ pub struct TaskReadResult {
 /// can render `"file":line [old] -> [new] text` and make the direction of
 /// change explicit.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct TaskDryRunResult {
     /// Vault-relative Markdown file path.
     pub file: String,
@@ -378,6 +412,8 @@ pub struct TaskDryRunResult {
 
 /// Lint violation counts for the vault summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct LintSummary {
     /// Number of error-severity violations.
     pub errors: usize,
@@ -394,6 +430,9 @@ pub struct LintSummary {
 
 /// High-level vault summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 pub struct VaultSummary {
     /// Resolved vault directory (display string).
     pub dir: String,
@@ -430,6 +469,8 @@ pub struct VaultSummary {
 
 /// Vault-wide link health: total links and broken count.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct LinkHealthSummary {
     /// Total number of considered items.
     pub total: usize,
@@ -465,6 +506,7 @@ pub struct LinkHealthSummary {
     /// omitting both would make them indistinguishable, which is exactly the
     /// false-clean-bill this finding exists to prevent.
     #[serde(skip_serializing_if = "is_zero_broken_anchors")]
+    #[cfg_attr(test, ts(optional = nullable))]
     pub broken_anchors: Option<usize>,
 }
 
@@ -489,6 +531,8 @@ fn is_zero_broken_anchors(value: &Option<usize>) -> bool {
 
 /// File counts by directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct FileCounts {
     /// Total number of considered items.
     pub total: usize,
@@ -507,6 +551,8 @@ pub struct FileCounts {
 
 /// Count of files in a directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct DirectoryCount {
     /// Vault-relative directory path.
     pub directory: String,
@@ -527,6 +573,8 @@ fn is_zero_usize(value: &usize) -> bool {
 
 /// Files grouped by status property value (count only).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct StatusGroup {
     /// Authored status property value.
     pub value: String,
@@ -536,6 +584,8 @@ pub struct StatusGroup {
 
 /// A recently modified file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct RecentFile {
     /// Path associated with this result.
     pub path: String,
@@ -550,6 +600,8 @@ pub struct RecentFile {
 /// A single task with section context, used by the `find` command.
 /// Extends `TaskInfo` with section heading information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct FindTaskInfo {
     /// One-based source line number.
     pub line: usize,
@@ -565,6 +617,8 @@ pub struct FindTaskInfo {
 
 /// A content search match within a file body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub struct ContentMatch {
     /// One-based source line number.
     pub line: usize,
@@ -577,6 +631,9 @@ pub struct ContentMatch {
 /// The unified file object returned by the `find` command.
 /// Always returned in an array. Optional fields are controlled by `--fields`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 pub struct FileObject {
     /// The only unconditional key (iteration 254, DEC-254): it names the
     /// result, so no projection may drop it.
@@ -599,6 +656,7 @@ pub struct FileObject {
     /// - `Some(Value::String(...))`: title found
     /// - `Some(Value::Null)`: title requested but not found
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(type = "unknown", optional))]
     pub title: Option<serde_json::Value>,
     /// Where [`Self::title`] came from: `"property"` (a scalar frontmatter
     /// `title`), `"h1"` (the first H1 heading) or `"filename"` (the filename
@@ -609,6 +667,7 @@ pub struct FileObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(type = "Record<string, unknown>", optional))]
     /// User-authored frontmatter properties with genuinely dynamic values.
     pub properties: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,0 +1,8 @@
+npm/hyalo/src/generated/*.ts text eol=lf
+npm/hyalo/src/types.ts text eol=lf
+pi-package/extensions/*.ts text eol=lf
+pi-package/lib/*.js text eol=lf
+pi-package/lib/*.d.ts text eol=lf
+crates/hyalo-cli/templates/pi/extensions/*.ts text eol=lf
+crates/hyalo-cli/templates/pi/lib/*.js text eol=lf
+crates/hyalo-cli/templates/pi/lib/*.d.ts text eol=lf

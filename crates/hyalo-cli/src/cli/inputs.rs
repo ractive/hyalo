@@ -15,6 +15,9 @@
 /// `task read/toggle/set` and `backlinks` — and each short line fits one
 /// rendered line instead of the three-to-five it used to wrap to.
 #[derive(Debug, Default, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 pub(crate) struct InputSelection {
     /// Target file (relative to --dir) — positional form (single file)
     #[arg(value_name = "FILE", conflicts_with_all = ["file", "glob", "files_from"])]

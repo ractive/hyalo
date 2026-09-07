@@ -1,5 +1,6 @@
 **/target
 **/node_modules
+npm/hyalo/dist
 .env
 .obsidian
 .claude/memory

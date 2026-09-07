@@ -22,6 +22,9 @@
 set -euo pipefail
 
 TEMPLATE="${1:-pi-package/extensions/hyalo.ts}"
+TEMPLATE="$(cd "$(dirname "$TEMPLATE")" && pwd)/$(basename "$TEMPLATE")"
+RUNTIME="$(dirname "$(dirname "$TEMPLATE")")/lib/hyalo-api.js"
+REPO_ROOT="$PWD"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -47,18 +50,41 @@ done
 echo "pi package: $PI_PKG ($(node -p "require('$PI_PKG/package.json').version"))"
 
 [[ -f "$TEMPLATE" ]] || fail "template not found: $TEMPLATE"
+[[ -f "$RUNTIME" ]] || fail "API runtime not found beside template: $RUNTIME"
+[[ -f "${RUNTIME%.js}.d.ts" ]] || fail "API declaration not found beside runtime"
 
-# --- layer 1: static type-check -----------------------------------------
-echo
-echo "== [1/3] type-checking template against installed pi types =="
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hyalo-pi-check.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
-mkdir -p "$WORK/node_modules/@earendil-works"
+check_pi_load() {
+    local extension="$1" label="$2" response
+    response="$(printf '%s\n' '{"type":"get_commands"}' | \
+        pi --mode rpc --no-session --offline --no-extensions --no-skills \
+            --extension "$extension")" || fail "$label: Pi failed to load extension"
+    grep -q '"name":"hyalo-summary"' <<<"$response" \
+        || fail "$label: registered commands missing after load: $response"
+}
+
+echo
+echo "== [1/5] loading source and offline init extension layouts =="
+check_pi_load "$TEMPLATE" "source package"
+mkdir "$WORK/init"
+(cd "$WORK/init" && "$REPO_ROOT/target/release/hyalo" init --pi --dir . >/dev/null)
+[[ ! -e "$WORK/init/.pi/node_modules" ]] || fail "init --pi unexpectedly installed dependencies"
+check_pi_load "$WORK/init/.pi/extensions/hyalo.ts" "fresh init --pi"
+echo "source and fresh-init loading OK"
+
+# --- layer 1: static type-check -----------------------------------------
+echo
+echo "== [2/5] type-checking template against installed pi types =="
+
+mkdir -p "$WORK/node_modules/@earendil-works" "$WORK/extensions" "$WORK/lib"
 ln -s "$PI_PKG" "$WORK/node_modules/@earendil-works/pi-coding-agent"
 ln -s "$PI_PKG/node_modules/typebox" "$WORK/node_modules/typebox"
 
-cp "$TEMPLATE" "$WORK/extension-hyalo.ts"
+cp "$TEMPLATE" "$WORK/extensions/extension-hyalo.ts"
+cp "$RUNTIME" "$WORK/lib/hyalo-api.js"
+cp "${RUNTIME%.js}.d.ts" "$WORK/lib/hyalo-api.d.ts"
 cat > "$WORK/tsconfig.json" <<'EOF'
 {
   "compilerOptions": {
@@ -70,7 +96,7 @@ cat > "$WORK/tsconfig.json" <<'EOF'
     "skipLibCheck": true,
     "types": []
   },
-  "files": ["extension-hyalo.ts"]
+  "files": ["extensions/extension-hyalo.ts"]
 }
 EOF
 
@@ -80,7 +106,7 @@ echo "type-check OK"
 
 # --- layer 2: live e2e with builtin tools disabled ----------------------
 echo
-echo "== [2/4] live e2e: forcing the hyalo tool (no bash fallback possible) =="
+echo "== [3/5] live e2e: forcing the hyalo tool (no bash fallback possible) =="
 # Query must return a plain count. Vault contents change, but the term
 # "iteration" always matches in hyalo's own knowledgebase and test vaults
 # that run this script; --count output is a bare number.
@@ -102,7 +128,7 @@ echo "e2e OK: hyalo tool returned count=$COUNT"
 # Catches drift in BOTH the pi event API and hyalo's config/lint output
 # shapes (e.g. the JSON envelope changing would break vault resolution).
 echo
-echo "== [3/4] guardrail e2e: lint findings appended to write result =="
+echo "== [4/5] guardrail e2e: lint findings appended to write result =="
 GUARD_FILE="hyalo-knowledgebase/.pi-e2e-guard.md"
 rm -f "$GUARD_FILE"
 OUT="$(pi -ne -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
@@ -128,7 +154,7 @@ echo "guardrail e2e OK: lint findings were appended to the write result"
 # schema/exec drift shows up as an error string instead of real output.
 # Uses a scratch file so the vault is left untouched.
 echo
-echo "== [4/4] typed-tool e2e: one forced call each (find/read/set/task) =="
+echo "== [5/5] typed-tool e2e: one forced call each (find/read/set/task) =="
 SCRATCH="hyalo-knowledgebase/pi-e2e-scratch/pi-e2e-typed.md"
 # The scratch file must live at a visible path inside the vault: hyalo skips
 # hidden files AND hidden directories during find queries. Cleaned up below.

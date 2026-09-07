@@ -1,6 +1,17 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import * as path from "node:path";
+import {
+  configForPi as hyaloConfig,
+  createPiTransport,
+  find as hyaloFind,
+  lint as hyaloLint,
+  raw as hyaloRaw,
+  read as hyaloRead,
+  set as hyaloSet,
+  summary as hyaloSummary,
+  task as hyaloTask,
+} from "../lib/hyalo-api.js";
 
 const HYALO_TIMEOUT_MS = 60_000;
 
@@ -23,14 +34,15 @@ interface HyaloToolArgs {
  * uniform tool result. One path — no behavioral divergence between tools.
  */
 async function runHyalo(
-  pi: ExtensionAPI,
+  transport: ReturnType<typeof createPiTransport>,
   argv: string[],
   signal?: AbortSignal,
 ) {
   try {
-    const { stdout, stderr, code } = await pi.exec("hyalo", argv, {
+    const { stdout, stderr, code } = await hyaloRaw(argv, {
+      transport,
       signal,
-      timeout: HYALO_TIMEOUT_MS,
+      timeoutMs: HYALO_TIMEOUT_MS,
     });
 
     if (code !== 0) {
@@ -59,6 +71,40 @@ async function runHyalo(
           text: `Error executing hyalo: ${error instanceof Error ? error.message : String(error)}`,
         },
       ],
+      details: undefined,
+    };
+  }
+}
+
+async function runTyped(
+  command: string,
+  operation: () => Promise<string>,
+) {
+  try {
+    const text = await operation();
+    return {
+      content: [{ type: "text" as const, text: text || "(no output)" }],
+      details: undefined,
+    };
+  } catch (error) {
+    const value = error as {
+      exitCode?: number;
+      stderr?: string;
+      stdout?: string;
+      message?: string;
+    };
+    if (typeof value.exitCode === "number") {
+      return {
+        content: [
+          { type: "text" as const, text: `hyalo ${command} failed with exit code ${value.exitCode}` },
+          ...(value.stderr ? [{ type: "text" as const, text: `Stderr:\n${value.stderr}` }] : []),
+          ...(value.stdout ? [{ type: "text" as const, text: `Stdout:\n${value.stdout}` }] : []),
+        ],
+        details: undefined,
+      };
+    }
+    return {
+      content: [{ type: "text" as const, text: `Error executing hyalo: ${value.message ?? String(error)}` }],
       details: undefined,
     };
   }
@@ -102,35 +148,13 @@ function buildCommand(params: HyaloToolArgs): string[] {
  * the session; files outside the vault (or a failed config lookup) skip
  * the check entirely, so non-hyalo projects pay zero cost.
  */
-/** Parsed `hyalo config --format json` — the bits the extension needs. */
-interface HyaloConfigInfo {
-  /** Vault directory name, or null when no vault is configured. */
-  vaultDir: string | null;
-  /** Effective `[pi] session_summary` (opt-in LLM context injection). */
-  sessionSummary: boolean;
-}
-
-async function loadHyaloConfig(pi: ExtensionAPI): Promise<HyaloConfigInfo | null> {
+async function loadHyaloConfig(
+  transport: ReturnType<typeof createPiTransport>,
+): Promise<Awaited<ReturnType<typeof hyaloConfig>> | null> {
   const cached = loadHyaloConfig.cache;
   if (cached !== undefined) return cached;
   try {
-    const { stdout, code } = await pi.exec("hyalo", ["config", "--format", "json"], {
-      timeout: 10_000,
-    });
-    if (code !== 0) {
-      loadHyaloConfig.cache = null;
-      return null;
-    }
-    // The JSON is an envelope with a top-level `dir` compat key (older
-    // hyalo versions printed the flat object without an envelope — both
-    // shapes carry the top-level `dir`). `pi` lives under `.results.pi`.
-    const parsed = JSON.parse(stdout);
-    const dir = parsed?.dir ?? parsed?.results?.dir;
-    const sessionSummary = parsed?.results?.pi?.session_summary === true;
-    const resolved: HyaloConfigInfo = {
-      vaultDir: typeof dir === "string" && dir ? dir : null,
-      sessionSummary,
-    };
+    const resolved = await hyaloConfig({ transport, timeoutMs: 10_000 });
     loadHyaloConfig.cache = resolved;
     return resolved;
   } catch {
@@ -140,23 +164,21 @@ async function loadHyaloConfig(pi: ExtensionAPI): Promise<HyaloConfigInfo | null
   }
 }
 // Module-level cache slot (survives across event handler invocations).
-loadHyaloConfig.cache = undefined as HyaloConfigInfo | null | undefined;
+loadHyaloConfig.cache = undefined as Awaited<ReturnType<typeof hyaloConfig>> | null | undefined;
 
-async function findVaultDir(pi: ExtensionAPI): Promise<string | null> {
-  return (await loadHyaloConfig(pi))?.vaultDir ?? null;
+async function findVaultDir(
+  transport: ReturnType<typeof createPiTransport>,
+): Promise<string | null> {
+  return (await loadHyaloConfig(transport))?.vaultDir ?? null;
 }
 
 async function lintVaultFile(
-  pi: ExtensionAPI,
+  transport: ReturnType<typeof createPiTransport>,
   filePath: string,
   signal: AbortSignal | undefined,
 ): Promise<string | null> {
   try {
-    const { stdout, code } = await pi.exec(
-      "hyalo",
-      ["lint", filePath, "--format", "text", "--no-hints"],
-      { signal, timeout: 30_000 },
-    );
+    const { stdout, code } = await hyaloLint(filePath, { transport, signal, timeoutMs: 30_000 });
     // lint exits 0 = clean, 1 = violations found (stdout holds them),
     // anything else = lint itself failed: stay silent, don't mask the write.
     if (code !== 0 && code !== 1) return null;
@@ -199,6 +221,7 @@ const hyaloToolParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+  const transport = createPiTransport(pi);
   pi.registerTool({
     name: "hyalo",
     label: "Hyalo",
@@ -214,7 +237,7 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: hyaloToolParams,
     async execute(_toolCallId, params: Static<typeof hyaloToolParams>, signal) {
-      return runHyalo(pi, buildCommand(params), signal);
+      return runHyalo(transport, buildCommand(params), signal);
     },
   });
 
@@ -272,15 +295,21 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_find: search/filter knowledgebase files (query, property, tag, task status)",
     parameters: hyaloFindParams,
     async execute(_toolCallId, params: Static<typeof hyaloFindParams>, signal) {
-      const argv = ["find", "--format", "text"];
-      if (params.query !== undefined) argv.push(params.query);
-      for (const prop of params.property ?? []) argv.push("--property", prop);
-      if (params.tag !== undefined) argv.push("--tag", params.tag);
-      if (params.glob !== undefined) argv.push("--glob", params.glob);
-      if (params.taskStatus !== undefined) argv.push("--task", params.taskStatus);
-      if (params.countOnly) argv.push("--count");
-      if (params.limit !== undefined) argv.push("--limit", String(Math.trunc(params.limit)));
-      return runHyalo(pi, argv, signal);
+      return runTyped("find", async () => {
+        const result = await hyaloFind({
+          pattern: params.query,
+          properties: params.property,
+          tag: params.tag === undefined ? undefined : [params.tag],
+          glob: params.glob === undefined ? undefined : [params.glob],
+          task: params.taskStatus,
+          limit: params.limit === undefined ? undefined : Math.trunc(params.limit),
+          transport,
+          signal,
+        });
+        return params.countOnly
+          ? String(result.total ?? result.results.length)
+          : JSON.stringify(result, null, 2);
+      });
     },
   });
 
@@ -302,9 +331,10 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_read: read a vault file (optionally a single section) as text",
     parameters: hyaloReadParams,
     async execute(_toolCallId, params: Static<typeof hyaloReadParams>, signal) {
-      const argv = ["read", "--format", "text", "--file", params.file];
-      if (params.section !== undefined) argv.push("--section", params.section);
-      return runHyalo(pi, argv, signal);
+      return runTyped("read", async () => {
+        const result = await hyaloRead({ file: [params.file], section: params.section, transport, signal });
+        return result.results.content ?? result.results.frontmatter_raw ?? "";
+      });
     },
   });
 
@@ -327,16 +357,10 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_set: set a file's frontmatter property (K=V), optionally add a tag",
     parameters: hyaloSetParams,
     async execute(_toolCallId, params: Static<typeof hyaloSetParams>, signal) {
-      const argv = [
-        "set",
-        "--format",
-        "text",
-        "--property",
-        params.property,
-      ];
-      if (params.tag !== undefined) argv.push("--tag", params.tag);
-      argv.push(params.file);
-      return runHyalo(pi, argv, signal);
+      return runTyped("set", async () => {
+        const result = await hyaloSet({ ...params, transport, signal });
+        return result.stdout;
+      });
     },
   });
 
@@ -362,29 +386,17 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "hyalo_task: toggle task checkboxes (all / by section / by line)",
     parameters: hyaloTaskParams,
     async execute(_toolCallId, params: Static<typeof hyaloTaskParams>, signal) {
-      const argv = ["task", "toggle"];
-      if (params.mode === "section") {
-        if (params.section === undefined) {
-          return {
-            content: [{ type: "text" as const, text: "hyalo_task: mode 'section' requires the section parameter" }],
-            details: undefined,
-          };
-        }
-        argv.push("--section", params.section);
-      } else if (params.mode === "line") {
-        const lines = (params.lines ?? []).map((l) => Math.trunc(l));
-        if (lines.length === 0) {
-          return {
-            content: [{ type: "text" as const, text: "hyalo_task: mode 'line' requires at least one line number" }],
-            details: undefined,
-          };
-        }
-        argv.push("--line", lines.join(","));
-      } else {
-        argv.push("--all");
-      }
-      argv.push(params.file);
-      return runHyalo(pi, argv, signal);
+      return runTyped("task", async () => {
+        const result = await hyaloTask({
+          file: params.file,
+          mode: params.mode,
+          section: params.section,
+          lines: params.lines,
+          transport,
+          signal,
+        });
+        return result.stdout;
+      });
     },
   });
 
@@ -396,21 +408,18 @@ export default function (pi: ExtensionAPI) {
   let summaryInjected = false;
   pi.on("session_start", async () => {
     if (summaryInjected) return;
-    const config = await loadHyaloConfig(pi);
+    const config = await loadHyaloConfig(transport);
     if (!config?.sessionSummary || !config.vaultDir) return;
     summaryInjected = true;
     try {
-      const { stdout, code } = await pi.exec(
-        "hyalo",
-        ["summary", "--format", "text", "--no-hints"],
-        { timeout: 30_000 },
-      );
-      if (code !== 0 || !stdout.trim()) return;
+      const snapshot = await hyaloSummary({ transport, timeoutMs: 30_000 });
+      const summaryText = JSON.stringify(snapshot.results, null, 2);
+      if (!summaryText) return;
       pi.sendMessage({
         customType: "hyalo-vault-summary",
         content:
           `Knowledgebase snapshot (${config.vaultDir}/) for this session:\n\n` +
-          stdout.trim() +
+          summaryText +
           "\n\nUse this to orient yourself; refine with the hyalo tool.",
         display: false,
         details: undefined,
@@ -429,7 +438,7 @@ export default function (pi: ExtensionAPI) {
     const rawPath = event.input.path;
     if (typeof rawPath !== "string" || !rawPath.endsWith(".md")) return;
 
-    const vaultDir = await findVaultDir(pi);
+    const vaultDir = await findVaultDir(transport);
     if (!vaultDir) return;
 
     // Vault membership: normalized absolute path containment check.
@@ -437,7 +446,7 @@ export default function (pi: ExtensionAPI) {
     const fileAbs = path.resolve(process.cwd(), rawPath);
     if (fileAbs !== vaultAbs && !fileAbs.startsWith(vaultAbs + path.sep)) return;
 
-    const lintOutput = await lintVaultFile(pi, rawPath, ctx.signal);
+    const lintOutput = await lintVaultFile(transport, rawPath, ctx.signal);
     if (!lintOutput) return; // clean or lint unavailable
 
     return {
@@ -458,7 +467,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("hyalo-help", {
     description: "Show hyalo help",
     handler: async (_args, ctx) => {
-      const { stdout } = await pi.exec("hyalo", ["--help"]);
+      const { stdout } = await hyaloRaw(["--help"], { transport });
       ctx.ui.notify(stdout, "info");
     },
   });
@@ -466,7 +475,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("hyalo-summary", {
     description: "Show knowledgebase summary",
     handler: async (_args, ctx) => {
-      const { stdout } = await pi.exec("hyalo", ["summary", "--format", "text"]);
+      const { stdout } = await hyaloRaw(["summary", "--format", "text"], { transport });
       ctx.ui.notify(stdout, "info");
     },
   });
@@ -474,12 +483,12 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("hyalo-lint", {
     description: "Run hyalo lint on knowledgebase",
     handler: async (_args, ctx) => {
-      const { stdout } = await pi.exec("hyalo", [
+      const { stdout } = await hyaloRaw([
         "lint",
         "--strict",
         "--format",
         "text",
-      ]);
+      ], { transport });
       ctx.ui.notify(stdout, "info");
     },
   });

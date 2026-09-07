@@ -1,7 +1,7 @@
 //! Gate — pi-package / vendored-copy sync check.
 //!
 //! `crates/hyalo-cli/src/commands/init.rs` embeds the pi integration files
-//! (`hyalo` and `hyalo-tidy` skills, the `hyalo.ts` extension, `package.json`)
+//! (`hyalo` and `hyalo-tidy` skills, extension sources/runtime, `package.json`)
 //! via `include_str!`. Those files must live *inside* `crates/hyalo-cli/`
 //! because `cargo package`/`cargo publish` build the verify tarball with only
 //! the crate directory on disk — an `include_str!` reaching outside the crate
@@ -77,6 +77,31 @@ pub fn run() -> Result<bool> {
             eprintln!("check-pi-package-sync: {extensions_dir:?} not found, skipping");
         }
         Err(e) => return Err(e).with_context(|| format!("reading {extensions_dir:?}")),
+    }
+
+    // lib/*.js: generated helpers imported by extensions, outside Pi's
+    // extension auto-discovery directory.
+    let lib_dir = pi_package.join("lib");
+    match std::fs::read_dir(&lib_dir) {
+        Ok(entries) => {
+            for entry in entries.filter_map(|entry| entry.ok()) {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default();
+                if path.extension().and_then(|extension| extension.to_str()) == Some("js")
+                    || name.ends_with(".d.ts")
+                {
+                    let name = path.file_name().unwrap_or_default();
+                    pairs.push((path.clone(), vendored.join("lib").join(name)));
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("check-pi-package-sync: {lib_dir:?} not found, skipping");
+        }
+        Err(error) => return Err(error).with_context(|| format!("reading {lib_dir:?}")),
     }
 
     // package.json
@@ -178,7 +203,7 @@ fn versions_match(root: &Path) -> Result<bool> {
 }
 
 /// The vendored files the gate is responsible for: `skills/*/SKILL.md`,
-/// `extensions/*.ts`, and `package.json` under `templates/pi/` — the same
+/// `extensions/*.ts`, `lib/*.js`, and `package.json` under `templates/pi/` — the same
 /// selection as the forward pass, so the two directions cannot disagree on
 /// scope. A missing directory yields an empty list.
 fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
@@ -198,6 +223,17 @@ fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
     }
     for path in read(&vendored.join("extensions"))? {
         if path.extension().and_then(|e| e.to_str()) == Some("ts") {
+            found.push(path);
+        }
+    }
+    for path in read(&vendored.join("lib"))? {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("js")
+            || name.ends_with(".d.ts")
+        {
             found.push(path);
         }
     }
@@ -240,15 +276,20 @@ mod tests {
         let v = dir.path();
         fs::create_dir_all(v.join("skills/hyalo")).expect("mkdir");
         fs::create_dir_all(v.join("extensions")).expect("mkdir");
+        fs::create_dir_all(v.join("lib")).expect("mkdir");
         fs::write(v.join("skills/hyalo/SKILL.md"), "s").expect("write");
         fs::write(v.join("skills/hyalo/notes.txt"), "ignored").expect("write");
         fs::write(v.join("extensions/hyalo.ts"), "t").expect("write");
+        fs::write(v.join("lib/hyalo-api.js"), "j").expect("write");
+        fs::write(v.join("lib/hyalo-api.d.ts"), "d").expect("write");
         fs::write(v.join("extensions/README.md"), "ignored").expect("write");
         fs::write(v.join("package.json"), "{}").expect("write");
         let mut found = vendored_files(v).expect("walk");
         found.sort();
         let mut expected = vec![
             v.join("extensions/hyalo.ts"),
+            v.join("lib/hyalo-api.js"),
+            v.join("lib/hyalo-api.d.ts"),
             v.join("package.json"),
             v.join("skills/hyalo/SKILL.md"),
         ];

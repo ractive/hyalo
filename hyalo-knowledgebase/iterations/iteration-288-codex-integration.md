@@ -36,7 +36,7 @@ Findings from the current code and repository documentation, checked 2026-09-06:
 | Surface | What ships today | Implication for Codex |
 | --- | --- | --- |
 | `init --claude` | Two skills, `.claude/rules/knowledgebase.md`, a managed block in `.claude/CLAUDE.md`, and skills for an explicitly selected profile | Match the workflow using Codex's project discovery locations |
-| `init --pi` | Two skills, `.pi/extensions/hyalo.ts`, and `.pi/package.json` | Reuse CLI workflows; the extension itself depends on Pi APIs |
+| `init --pi` | Two skills, `.pi/extensions/hyalo.ts`, `.pi/lib/hyalo-api.{js,d.ts}`, and `.pi/package.json` | Reuse CLI workflows; the extension itself depends on Pi APIs |
 | Pi package | Root `package.json` points into canonical `pi-package/`; five tools, session setup, and a post-write lint hook | Package installation and live loading need separate verification |
 | Claude plugin proposal | `backlog/done/claude-plugin-distribution.md` still has unchecked acceptance criteria; no plugin manifest ships in this checkout | Do not assume that a working Claude plugin can simply be converted |
 
@@ -293,6 +293,14 @@ accepted deferring it and requested merging PR #331. Keep this iteration
 `in-progress`, with the desktop task above unchecked, until that follow-up is
 performed and its evidence recorded. The successful interactive CLI test in cmux
 does not stand in for a desktop-app test. Its temporary pane has been closed.
+
+### Reconciliation — iteration 287 companion assets (2026-09-07)
+
+Iteration 287 adds the self-contained generated Pi API runtime and declaration
+under `.pi/lib/`, outside the auto-discovered extensions directory. The
+`init --pi` inventory above, crate-local mirror, sync gate, and deinit behavior
+now include these two companion files. This does not change Codex integration
+behavior or satisfy the deferred desktop verification task.
 
 ## Non-goals and follow-up
 

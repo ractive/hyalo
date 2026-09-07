@@ -43,6 +43,7 @@ toml = "1"
 toml_edit = "0.25"
 rust-stemmers = "1.2.0"
 walkdir = "2"
+ts-rs = { version = "12.0.1", features = ["serde-json-impl", "indexmap-impl", "format"] }
 
 [workspace.lints.clippy]
 # Enable the full pedantic group, then allow lints we intentionally skip.

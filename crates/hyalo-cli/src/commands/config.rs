@@ -129,6 +129,8 @@ pub(crate) struct ConfigReport {
 /// what is reported here is the *baseline* every `links auto` invocation starts
 /// from.
 #[derive(Debug, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub(crate) struct LinksAutoReport {
     /// `[links.auto] exclude_titles`.
     pub exclude_titles: Vec<String>,
@@ -155,6 +157,8 @@ impl Default for LinksAutoReport {
 
 /// Effective `[scan]` settings, as `hyalo config` reports them (iter-265).
 #[derive(Debug, Default, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
 pub(crate) struct ScanReport {
     /// `[scan] include` — hidden dot-subtrees the walker descends into.
     pub include: Vec<String>,
@@ -553,7 +557,9 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
 
 /// Serialized ConfigResult command contract.
 #[derive(serde::Serialize)]
-struct ConfigResult<'a> {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub(crate) struct ConfigResult<'a> {
     /// Discovered config path, or null when absent.
     config_path: Option<String>,
     /// Whether config or schema parsing failed.
@@ -608,7 +614,9 @@ struct ConfigResult<'a> {
 
 /// Serialized ConfigLinksResult command contract.
 #[derive(serde::Serialize)]
-struct ConfigLinksResult<'a> {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub(crate) struct ConfigLinksResult<'a> {
     /// Whether all frontmatter values contribute graph edges.
     frontmatter: bool,
     /// Explicit property allow-list, or null.
@@ -621,7 +629,9 @@ struct ConfigLinksResult<'a> {
 
 /// Effective pi integration settings.
 #[derive(serde::Serialize)]
-struct ConfigPiResult {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub(crate) struct ConfigPiResult {
     /// Whether session summaries are enabled.
     session_summary: bool,
 }

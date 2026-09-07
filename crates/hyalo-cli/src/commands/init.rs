@@ -34,6 +34,8 @@ const RULE_TEMPLATE: &str = include_str!("../../templates/rule-knowledgebase.md"
 const PI_SKILL_CONTENT: &str = include_str!("../../templates/pi/skills/hyalo/SKILL.md");
 const PI_TIDY_SKILL_CONTENT: &str = include_str!("../../templates/pi/skills/hyalo-tidy/SKILL.md");
 const PI_EXTENSION_CONTENT: &str = include_str!("../../templates/pi/extensions/hyalo.ts");
+const PI_API_RUNTIME_CONTENT: &str = include_str!("../../templates/pi/lib/hyalo-api.js");
+const PI_API_DECLARATION_CONTENT: &str = include_str!("../../templates/pi/lib/hyalo-api.d.ts");
 const PI_PACKAGE_JSON_CONTENT: &str = include_str!("../../templates/pi/package.json");
 
 const PI_INSTALL_HINT: &str = "tip: to get extension and skill updates automatically, install the pi package instead: pi install git:github.com/ractive/hyalo";
@@ -765,7 +767,36 @@ fn initialize_in(
             report.push("created", ".pi/extensions/hyalo.ts");
         }
 
-        // Step 9: write (overwrite) .pi/package.json
+        // Step 9: write (overwrite) the self-contained API runtime used by the extension.
+        let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
+        let pi_api_runtime_existed = pi_api_runtime_path.exists();
+        let pi_api_runtime_dir = pi_api_runtime_path
+            .parent()
+            .context("pi API runtime path has no parent directory")?;
+        fs::create_dir_all(pi_api_runtime_dir).with_context(|| {
+            format!(
+                "failed to create directory {}",
+                pi_api_runtime_dir.display()
+            )
+        })?;
+        fs::write(&pi_api_runtime_path, PI_API_RUNTIME_CONTENT)
+            .with_context(|| format!("failed to write {}", pi_api_runtime_path.display()))?;
+        if pi_api_runtime_existed {
+            report.push("updated", ".pi/lib/hyalo-api.js");
+        } else {
+            report.push("created", ".pi/lib/hyalo-api.js");
+        }
+        let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
+        let pi_api_declaration_existed = pi_api_declaration_path.exists();
+        fs::write(&pi_api_declaration_path, PI_API_DECLARATION_CONTENT)
+            .with_context(|| format!("failed to write {}", pi_api_declaration_path.display()))?;
+        if pi_api_declaration_existed {
+            report.push("updated", ".pi/lib/hyalo-api.d.ts");
+        } else {
+            report.push("created", ".pi/lib/hyalo-api.d.ts");
+        }
+
+        // Step 10: write (overwrite) .pi/package.json
         let pi_package_path = root.join(".pi").join("package.json");
         let pi_package_existed = pi_package_path.exists();
         let pi_package_dir = pi_package_path
@@ -956,9 +987,21 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
     let pi_skills_parent_dir = root.join(".pi").join("skills");
     remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut report)?;
 
-    // Remove .pi/extensions/hyalo.ts
+    // Remove the Pi extension and its generated API runtime.
     let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
     remove_artifact(&pi_extension_path, ".pi/extensions/hyalo.ts", &mut report)?;
+    let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
+    remove_artifact(&pi_api_runtime_path, ".pi/lib/hyalo-api.js", &mut report)?;
+    let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
+    remove_artifact(
+        &pi_api_declaration_path,
+        ".pi/lib/hyalo-api.d.ts",
+        &mut report,
+    )?;
+    let pi_api_runtime_dir = pi_api_runtime_path
+        .parent()
+        .context("pi API runtime path has no parent directory")?;
+    remove_dir_if_empty(pi_api_runtime_dir, ".pi/lib/", &mut report)?;
     let pi_extension_dir = pi_extension_path
         .parent()
         .context("pi extension path has no parent directory")?;

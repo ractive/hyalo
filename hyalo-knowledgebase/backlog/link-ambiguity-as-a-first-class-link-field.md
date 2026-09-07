@@ -69,3 +69,12 @@ which is the problem this item exists to remove.
       derived from the same computation, with a test that pins all three against one vault.
 - [ ] `--index` and disk scans report identical `candidates` (sorted, vault-relative).
 - [ ] Text mode prints `(ambiguous: a/note.md, b/note.md)` in place of `(unresolved)`.
+
+## Plan reconciliation — iteration 287 (2026-09-07)
+
+`LinkInfo` now supplies the generated TypeScript API contract. When adding the
+optional ambiguity fields, preserve their omission semantics in its test-only
+`ts-rs` derives, regenerate with `cargo run -p xtask -- generate-ts-types`, and
+extend the same-binary API contract fixtures. Rebuild and sync the generated Pi
+companions and run both freshness gates. The shared-computation, text-output,
+and index-parity acceptance criteria above remain required.

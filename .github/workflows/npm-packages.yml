@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "npm/**"
+      - "crates/hyalo-cli/**"
+      - "crates/hyalo-core/**"
       - "crates/xtask/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -32,10 +34,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
-      - name: Install launcher dependencies
-        run: npm --prefix npm/hyalo install --ignore-scripts --omit=optional --package-lock=false
-      - name: Test launcher
-        run: npm --prefix npm/hyalo test
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Build the same-commit CLI
+        run: cargo build --release -p hyalo-cli
+      - name: Install API dependencies
+        run: npm --prefix npm/hyalo ci --ignore-scripts
+      - name: Type-check, build, and test launcher and API
+        run: |
+          npm --prefix npm/hyalo run typecheck
+          npm --prefix npm/hyalo run build
+          npm --prefix npm/hyalo test
 
   npm-packaging:
     runs-on: ubuntu-latest
@@ -55,6 +64,9 @@ jobs:
           cargo test -p xtask npm_package
           cargo run -p xtask -- generate-npm-packages --check
           cargo build --release -p hyalo-cli
+          npm --prefix npm/hyalo ci --ignore-scripts
+          npm --prefix npm/hyalo run typecheck
+          npm --prefix npm/hyalo run build
       - name: Stage all eight packages
         shell: bash
         env:
@@ -102,6 +114,9 @@ jobs:
             grep -qx 'package/README.md' <<< "$files"
             if [ "$package_dir" = hyalo ]; then
               grep -qx 'package/bin/hyalo.js' <<< "$files"
+              grep -qx 'package/dist/index.mjs' <<< "$files"
+              grep -qx 'package/dist/index.cjs' <<< "$files"
+              grep -qx 'package/dist/index.d.ts' <<< "$files"
               grep -qx 'package/lib/resolve-platform.js' <<< "$files"
               grep -qx 'package/lib/run-child.js' <<< "$files"
               grep -qx 'package/platforms.json' <<< "$files"
@@ -131,3 +146,5 @@ jobs:
             "hyalo $expected"*) ;;
             *) echo "unexpected hyalo version output: $actual" >&2; exit 1 ;;
           esac
+          node --input-type=module -e \
+            "import('@ractive-ch/hyalo').then(async ({config}) => { const value = await config(); if (value.results.snapshot_format_version !== 2) process.exit(1) })"

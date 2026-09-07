@@ -175,18 +175,24 @@ pub(crate) fn output_value<T: Serialize>(value: &T) -> serde_json::Value {
 /// Successful output contract. Optional metadata is omitted, including all
 /// counters when no file list was supplied; hints are always an array.
 #[derive(Serialize)]
-pub struct Envelope<'a, T: Serialize> {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct Envelope<'a, T> {
     /// Optional vault directory hoisted from the command result.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) dir: Option<String>,
     /// Missing paths from an explicitly supplied file list, including zero.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) files_missing: Option<u64>,
     /// Non-Markdown paths skipped from the supplied file list.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) files_skipped_non_md: Option<u64>,
     /// Paths outside the vault skipped from the supplied file list.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) files_skipped_outside_vault: Option<u64>,
     /// Read-only suggestions and explicitly marked mutation suggestions.
     pub(crate) hints: &'a [crate::hints::Hint],
@@ -194,6 +200,7 @@ pub struct Envelope<'a, T: Serialize> {
     pub(crate) results: T,
     /// Total matching items before pagination, omitted for non-list commands.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub(crate) total: Option<u64>,
 }
 
@@ -240,7 +247,10 @@ impl<'a> Envelope<'a, Cow<'a, serde_json::Value>> {
 
 /// Exit-1 error contract; the singular `hint` key is intentional.
 #[derive(Serialize)]
-struct ErrorEnvelope<'a> {
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct ErrorEnvelope<'a> {
     /// Underlying diagnostic, omitted when there is no additional cause.
     #[serde(skip_serializing_if = "Option::is_none")]
     cause: Option<&'a str>,

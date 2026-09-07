@@ -5,19 +5,39 @@
   "dependencies": {
     "detect-libc": "2.1.2"
   },
-  "description": "Hyalo knowledgebase CLI",
+  "description": "Hyalo knowledgebase CLI and typed TypeScript API",
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "@typescript/typescript6": "6.0.2",
+    "esbuild": "0.28.2",
+    "rollup": "4.63.1",
+    "rollup-plugin-dts": "6.5.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  },
   "engines": {
     "node": ">=22.14.0",
     "npm": ">=11.5.1"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "bin",
+    "dist",
     "lib",
     "README.md",
     "LICENSE",
     "platforms.json"
   ],
   "license": "MIT",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
   "name": "@ractive-ch/hyalo",
   "optionalDependencies": {
     "@ractive-ch/hyalo-darwin-arm64": "0.22.0",
@@ -37,7 +57,10 @@
     "url": "https://github.com/ractive/hyalo.git"
   },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/launcher.test.js && node --test test/package.test.js && vitest run test/api.test.ts",
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
   },
+  "types": "./dist/index.d.ts",
   "version": "0.22.0"
 }

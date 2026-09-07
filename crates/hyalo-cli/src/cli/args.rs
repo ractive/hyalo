@@ -114,6 +114,9 @@ pub(crate) fn parse_threshold(s: &str) -> Result<f64, String> {
 
 /// Index flags, flattened into subcommands that can consume a snapshot index.
 #[derive(Args, Debug, Default, Clone)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 pub(crate) struct IndexFlags {
     // COH-8 (iter-254): the maintenance note below is for whoever edits this
     // list, not for the ~15 `--help` pages it used to be printed on. A rustdoc
@@ -321,6 +324,9 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
         See COMMAND REFERENCE below for full syntax of each command.";
 
 #[derive(Parser)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export, rename = "GlobalArgs"))]
+#[cfg_attr(test, ts(optional_fields))]
 #[command(
     name = "hyalo",
     version = build_version_string(),
@@ -365,6 +371,7 @@ pub(crate) struct Cli {
     /// Default: "text" when stdout is a terminal, "json" when piped.
     /// Override for a session via .hyalo.toml: format = "text"
     #[arg(long, global = true)]
+    #[cfg_attr(test, ts(type = "\"json\" | \"text\" | \"github\"", optional))]
     pub format: Option<Format>,
 
     /// jq filter over the JSON envelope
@@ -471,16 +478,21 @@ pub(crate) struct Cli {
     pub index_file: Option<PathBuf>,
 
     #[command(subcommand)]
+    #[cfg_attr(test, ts(skip))]
     pub command: Commands,
 }
 
 /// All filter arguments for `hyalo find`, extracted so they can be serialized as views.
 #[derive(Debug, Clone, Default, clap::Args, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
 #[serde(default)]
 pub(crate) struct FindFilters {
     /// BM25 search pattern (stored in views, not a CLI arg on find — find uses a positional arg instead)
     #[arg(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(skip))]
     pub pattern: Option<String>,
     /// Regex body search, case-insensitive (excludes PATTERN)
     ///
@@ -551,11 +563,18 @@ pub(crate) struct FindFilters {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file: Vec<String>,
-    /// Glob(s) relative to --dir, repeatable; '!' negates ('!**/draft-*')
+    /// Glob patterns relative to `--dir`, repeatable; `!` negates a pattern.
     ///
     /// Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
-    /// (e.g. '!**/draft-*').
-    #[arg(short, long, conflicts_with_all = ["file", "files_from"], help_heading = "Filters")]
+    /// recursive matches.
+    #[arg(
+        short,
+        long,
+        conflicts_with_all = ["file", "files_from"],
+        help = GLOB_FLAG_SHORT_DOC,
+        long_help = GLOB_FLAG_DOC,
+        help_heading = "Filters"
+    )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glob: Vec<String>,
     /// Read paths from PATH, one per line ('-' = stdin)
@@ -574,7 +593,8 @@ pub(crate) struct FindFilters {
     /// An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
     /// does not silence — in a gate, "no input" and "no findings" must not look alike.
     #[arg(long, value_name = "PATH", conflicts_with_all = ["file", "glob"], help_heading = "Filters")]
-    #[serde(skip)]
+    #[cfg_attr(not(test), serde(skip))]
+    #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
     pub files_from: Option<String>,
     /// all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
     ///
@@ -808,6 +828,105 @@ impl FindFilters {
     }
 }
 
+/// Arguments accepted by `hyalo find`.
+///
+/// The generated TypeScript declaration is the source for the public API's
+/// ergonomic `FindOptions` alias. Clap remains the authority for conflicts
+/// and validation.
+#[derive(Debug, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct FindArgs {
+    /// BM25 ranked full-text body search (stemmed; sorted by relevance)
+    ///
+    /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran");
+    /// results sorted by relevance.
+    #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
+    pub pattern: Option<String>,
+    /// Target file(s), positional form of --file
+    #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
+    pub file_positional: Vec<String>,
+    /// Start from a saved view; CLI filters merge on top
+    ///
+    /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
+    /// are merged on top: list filters (--property, --tag, --section, --glob) extend
+    /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it.
+    #[arg(long, value_name = "NAME", help_heading = "Filters")]
+    pub view: Option<String>,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub filters: FindFilters,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
+/// Arguments accepted by `hyalo read`.
+#[derive(Debug, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct ReadArgs {
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub selection: InputSelection,
+    /// Heading substring, '##' pins the level, or /regex/ (nested subsections included)
+    ///
+    /// Extract section(s) by case-insensitive substring match (e.g. 'Tasks' matches
+    /// 'Tasks [4/4]'); prefix '##' to pin the heading level; use '/regex/' for a regex.
+    /// Nested subsections are included.
+    #[arg(short, long, value_name = "HEADING")]
+    pub section: Option<String>,
+    /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
+    ///
+    /// The frontmatter block is not counted, so line 1 is the first line after it — even
+    /// with --frontmatter. Note that `task --line` counts differently: those numbers are
+    /// file-absolute, with the frontmatter included.
+    #[arg(short, long, value_name = "RANGE")]
+    pub lines: Option<String>,
+    /// Include the YAML frontmatter in output
+    ///
+    /// Text output echoes the block's own bytes between its `---` fences —
+    /// indentation, quote style and comments exactly as on disk; no YAML is
+    /// re-serialized on a read path. JSON keeps the parsed map under
+    /// `frontmatter` and adds the raw text as `frontmatter_raw` (null for a
+    /// file with no frontmatter block).
+    #[arg(long)]
+    pub frontmatter: bool,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
+/// Arguments accepted by `hyalo summary`.
+#[derive(Debug, Clone, clap::Args)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[cfg_attr(test, ts(optional_fields))]
+pub(crate) struct SummaryArgs {
+    #[arg(
+        short,
+        long,
+        value_name = "GLOB",
+        help = GLOB_FLAG_SHORT_DOC,
+        long_help = GLOB_FLAG_DOC,
+    )]
+    pub glob: Vec<String>,
+    /// Number of recent files to show
+    ///
+    /// NOTE: on this command -n means --recent, not --limit as on find and backlinks —
+    /// it caps only the "recently modified" list, never the summary's stats.
+    #[arg(short = 'n', long, value_name = "N", default_value = "10")]
+    pub recent: usize,
+    /// Limit directory listing depth (0 = root only; stats are always full)
+    #[arg(long)]
+    pub depth: Option<usize>,
+    #[command(flatten)]
+    #[cfg_attr(test, ts(flatten))]
+    pub index_flags: IndexFlags,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum Commands {
     /// Search and filter markdown files — returns one compact object per file (see --fields)
@@ -989,28 +1108,7 @@ pub(crate) enum Commands {
             hyalo find --broken-links --jq '[.results[] | .links[] | select(.path == null)]'\n\
             hyalo find --property status=planned --filenames-only   # agent/pipeline projection\n\
             git diff --name-only origin/main | hyalo find --files-from -")]
-    Find {
-        /// BM25 ranked full-text body search (stemmed; sorted by relevance)
-        ///
-        /// BM25 ranked body text search with stemming (e.g. "running" matches "run", "ran");
-        /// results sorted by relevance.
-        #[arg(value_name = "PATTERN", conflicts_with = "regexp")]
-        pattern: Option<String>,
-        /// Target file(s), positional form of --file
-        #[arg(value_name = "FILE", conflicts_with_all = ["glob", "file"])]
-        file_positional: Vec<String>,
-        /// Start from a saved view; CLI filters merge on top
-        ///
-        /// Use a saved view (named filter set from .hyalo.toml). Additional CLI filters
-        /// are merged on top: list filters (--property, --tag, --section, --glob) extend
-        /// the view; scalar filters (--sort, --limit, --regexp, --title, --task) override it.
-        #[arg(long, value_name = "NAME", help_heading = "Filters")]
-        view: Option<String>,
-        #[command(flatten)]
-        filters: FindFilters,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Find(FindArgs),
     /// Read file body content, optionally filtered by section or line range (read-only)
     #[command(
         alias = "show",
@@ -1037,35 +1135,7 @@ pub(crate) enum Commands {
             hyalo read --file notes/todo.md --lines 1:20\n\
             hyalo read --file notes/todo.md --frontmatter --format json"
     )]
-    Read {
-        #[command(flatten)]
-        selection: InputSelection,
-        /// Heading substring, '##' pins the level, or /regex/ (nested subsections included)
-        ///
-        /// Extract section(s) by case-insensitive substring match (e.g. 'Tasks' matches
-        /// 'Tasks [4/4]'); prefix '##' to pin the heading level; use '/regex/' for a regex.
-        /// Nested subsections are included.
-        #[arg(short, long, value_name = "HEADING")]
-        section: Option<String>,
-        /// Slice by line range: 5:10, 5:, :10, or 5 (1-based, inclusive, relative to the body)
-        ///
-        /// The frontmatter block is not counted, so line 1 is the first line after it — even
-        /// with --frontmatter. Note that `task --line` counts differently: those numbers are
-        /// file-absolute, with the frontmatter included.
-        #[arg(short, long, value_name = "RANGE")]
-        lines: Option<String>,
-        /// Include the YAML frontmatter in output
-        ///
-        /// Text output echoes the block's own bytes between its `---` fences —
-        /// indentation, quote style and comments exactly as on disk; no YAML is
-        /// re-serialized on a read path. JSON keeps the parsed map under
-        /// `frontmatter` and adds the raw text as `frontmatter_raw` (null for a
-        /// file with no frontmatter block).
-        #[arg(long)]
-        frontmatter: bool,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Read(ReadArgs),
     /// Property operations: summary or bulk rename
     #[command(long_about = "Property operations across matched files.\n\n\
         Subcommands:\n\
@@ -1200,27 +1270,7 @@ pub(crate) enum Commands {
             hyalo summary --jq '.results.tasks.total'\n\
             hyalo summary --jq '.results.links.broken'"
     )]
-    Summary {
-        #[arg(
-            short,
-            long,
-            value_name = "GLOB",
-            help = GLOB_FLAG_SHORT_DOC,
-            long_help = GLOB_FLAG_DOC,
-        )]
-        glob: Vec<String>,
-        /// Number of recent files to show
-        ///
-        /// NOTE: on this command -n means --recent, not --limit as on find and backlinks —
-        /// it caps only the "recently modified" list, never the summary's stats.
-        #[arg(short = 'n', long, value_name = "N", default_value = "10")]
-        recent: usize,
-        /// Limit directory listing depth (0 = root only; stats are always full)
-        #[arg(long)]
-        depth: Option<usize>,
-        #[command(flatten)]
-        index_flags: IndexFlags,
-    },
+    Summary(SummaryArgs),
     /// List all files that link to a given file (read-only)
     #[command(
         long_about = "List all files that link to a given file (reverse link lookup).\n\n\

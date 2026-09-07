@@ -26,6 +26,10 @@ multiple Read + Edit calls.
 Install the published CLI with `cargo install hyalo-cli` or, on a supported Node.js
 platform, `npm install --global @ractive-ch/hyalo`.
 
+The repository source also provides a typed TypeScript API with `find`, `read`,
+`summary`, and `config`. The public npm 0.22.0 package is CLI-only; API imports
+require a source build until a separate future release is authorized.
+
 Filters combine freely — content search + property conditions + tag + section + task status
 in a single call, something impossible with Grep/Glob alone:
 
