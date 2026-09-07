@@ -18,7 +18,7 @@
     "platforms.json"
   ],
   "license": "MIT",
-  "name": "hyalo",
+  "name": "@ractive-ch/hyalo",
   "optionalDependencies": {
     "@ractive-ch/hyalo-darwin-arm64": "0.22.0",
     "@ractive-ch/hyalo-linux-arm64": "0.22.0",

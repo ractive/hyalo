@@ -31,10 +31,10 @@ assert.equal(process.arch, expectedArch);
 
 const requireFromConsumer = createRequire(path.join(consumerDir, 'package.json'));
 const mainManifest = JSON.parse(readFileSync(
-  requireFromConsumer.resolve('hyalo/package.json'),
+  requireFromConsumer.resolve('@ractive-ch/hyalo/package.json'),
   'utf8'
 ));
-assert.equal(mainManifest.name, 'hyalo');
+assert.equal(mainManifest.name, '@ractive-ch/hyalo');
 assert.equal(mainManifest.version, version);
 
 const scopeDir = path.join(consumerDir, 'node_modules', '@ractive-ch');

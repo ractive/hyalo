@@ -105,7 +105,7 @@ winget install ractive.hyalo
 cargo install hyalo-cli    # installs the `hyalo` binary
 ```
 
-### npm (prepared, not yet published)
+### npm (scoped main package pending publication)
 
 An npm distribution is prepared for Node.js 22.14 or newer and npm 11.5.1
 or newer. It will support macOS arm64, Linux x64/arm64 with glibc or musl,
@@ -113,12 +113,13 @@ and Windows x64/arm64. Once the packages have been published and verified,
 the intended installation will be:
 
 ```sh
-npm install hyalo
+npm install @ractive-ch/hyalo
 npx --no-install hyalo --version
 ```
 
-The packages are not yet available from the public npm registry. Use one of
-the published installation methods above until the owner bootstrap, trusted
+The seven native platform packages are public at version 0.22.0. The scoped
+main package is not yet available from the public npm registry, so use one of
+the published installation methods above until its owner bootstrap, trusted
 publisher configuration, and real-platform registry checks are complete.
 
 ### Manual download

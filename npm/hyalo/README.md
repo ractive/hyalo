@@ -1,17 +1,10 @@
-# hyalo
+# @ractive-ch/hyalo
 
-This package is prepared for publication but is not yet available from the
-public npm registry. Until owner bootstrap, trusted publishing, and registry
-installation checks are complete, install the CLI with:
-
-```sh
-cargo install hyalo-cli
-```
-
-After public acceptance, the intended npm installation will be:
+Hyalo is a command-line toolkit for structured Markdown knowledgebases. Install
+the scoped package and run its `hyalo` executable with:
 
 ```sh
-npm install hyalo
+npm install @ractive-ch/hyalo
 npx --no-install hyalo --version
 ```
 
@@ -61,68 +54,68 @@ publication. A published release remains the broad release path: it validates
 the release tag against the Cargo version, runs the configured reusable release
 publishing, and publishes the npm packages.
 
-For the initial owner upload, enable `prepare_npm_bootstrap` instead and enter
-the same exact `npm_version`. That option and `publish_npm` are mutually
-exclusive. The job builds and packs the same artifacts, then signs each final
-tarball with the workflow's GitHub OIDC identity and uploads
-`npm-bootstrap-<version>`. It does not publish to npm and needs no npm registry
-credential. The default manual dispatch remains the unchanged dry run.
+The original `prepare_npm_bootstrap` mode remains available for a complete new
+eight-package version. For the 0.22.0 scoped-main recovery, enable
+`prepare_npm_main_bootstrap` and enter the same exact `npm_version`. The three
+manual modes are mutually exclusive. Main-only preparation skips the reusable
+native release job and all native artifact handling, verifies the canonical
+metadata, packs `./npm/hyalo`, dry-runs that publication, signs its exact
+tarball with the workflow's GitHub OIDC identity, and uploads
+`npm-bootstrap-<version>`. It does not publish to npm or rebuild any of the
+seven immutable platform packages.
 
 Bootstrap signing deliberately calls the provenance generator and
 `npm-package-arg` bundled inside the workflow's pinned npm 11.19.1. This is an
 internal npm API, so an npm pin update must review the inline signing script
 against that exact release. Signing creates public Sigstore provenance and a
-transparency-log entry even though the npm packages remain unpublished.
+transparency-log entry for the prepared tarball; it does not itself upload that
+tarball to npm.
 
-Both npm publishing paths use the same staged tarballs and publication plan:
-all seven platform packages are handled first, followed by `hyalo`, using npm
-provenance and GitHub OIDC without a repository token fallback.
+Normal npm publishing handles all seven platform packages first, followed by
+`@ractive-ch/hyalo`, using npm provenance and GitHub OIDC without a repository
+token fallback.
 Before an immutable version is published, the workflow compares the local
 tarball integrity with `dist.integrity` from the public npm registry. A retry
 skips an identical existing artifact, publishes an explicitly missing version,
 and stops on mismatched integrity or an inconclusive registry response.
 
-The npm owner must complete these external steps before the first registry
-release:
+For the 0.22.0 scoped-main recovery, the npm owner uses this runbook:
 
-1. Run the bootstrap-preparation dispatch for the real Cargo version and
+1. Run `prepare_npm_main_bootstrap` for the real Cargo version and
    download its `npm-bootstrap-<version>` artifact. Before uploading anything,
-   verify that every `.sigstore.json` bundle still matches the SHA-512 bytes of
-   its adjacent `.tgz`, and verify the Sigstore certificate identity names
+   verify that the main `.sigstore.json` bundle still matches the SHA-512 bytes
+   of `ractive-ch-hyalo-<version>.tgz`, and verify the certificate identity names
    repository `ractive/hyalo`, workflow `.github/workflows/release.yml`, and the
    expected GitHub ref. Keep those reviewed tarball bytes unchanged.
-2. As the npm owner, bootstrap the unscoped `hyalo` package and all seven scoped
-   packages under `@ractive-ch` in platform-first order, followed by `hyalo`:
+2. Confirm the public `dist.integrity` of all seven immutable 0.22.0 platform
+   packages still matches the previously verified artifacts. Do not rebuild or
+   republish them. As the npm owner, bootstrap only the scoped main package:
 
    ```bash
-   (
-     set -eu
-     version=0.22.0 # replace with the confirmed Cargo version
-     for tarball in \
-       ractive-ch-hyalo-{darwin-arm64,linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,win32-x64,win32-arm64}-"$version".tgz \
-       hyalo-"$version".tgz; do
-       npm publish "$tarball" \
-         --provenance-file "${tarball%.tgz}.sigstore.json" \
-         --access public --ignore-scripts --registry https://registry.npmjs.org
-     done
-   )
+   version=0.22.0 # replace with the confirmed Cargo version
+   tarball="ractive-ch-hyalo-$version.tgz"
+   npm publish "$tarball" \
+     --provenance-file "${tarball%.tgz}.sigstore.json" \
+     --access public --ignore-scripts --registry https://registry.npmjs.org
    ```
 
    `--provenance-file` verifies and attaches the prepared bundle. It is
-   mutually exclusive with `--provenance`; do not pass both. All eight packages
-   currently lack public registry metadata. The subshell stops at the first
-   failed upload, so `hyalo` cannot publish after a platform-package failure.
-   Before retrying, inspect the registry's `dist.integrity` for every attempted
-   package and compare it with the preserved tarball. Skip only an immutable
-   version whose integrity matches exactly, then resume in the same order.
+   mutually exclusive with `--provenance`; do not pass both. Before retrying,
+   inspect the scoped main version's `dist.integrity` and compare it with the
+   preserved tarball. Skip only an immutable version whose integrity matches.
    Never try to overwrite a version or continue past a mismatch, missing proof,
    or another inconclusive registry response.
-3. Configure each existing package's trusted publisher for repository
+
+   GitHub OIDC authenticates the bootstrap workflow's Sigstore provenance
+   generation. This attended owner upload authenticates to npm separately and
+   therefore does not exercise npm trusted-publisher OIDC; a later workflow
+   publication must verify that path.
+3. Configure all eight existing packages' trusted publishers for repository
    `ractive/hyalo` and workflow `release.yml`.
 4. Explicitly allow direct publishing for each configuration. New trusted
    publisher configurations may allow staged publishing only by default.
-5. Publish an authorized release through the OIDC workflow, then verify a
-   registry install and `npx --no-install hyalo --version` on macOS arm64,
+5. Verify `npm install @ractive-ch/hyalo` and
+   `npx --no-install hyalo --version` on macOS arm64,
    Linux x64 glibc, Linux x64 musl, and Windows x64.
 
 See npm's official [trusted publishing guide](https://docs.npmjs.com/trusted-publishers/)

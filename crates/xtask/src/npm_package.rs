@@ -107,6 +107,8 @@ const PLATFORMS: [Platform; 7] = [
     },
 ];
 
+const MAIN_PACKAGE_NAME: &str = "@ractive-ch/hyalo";
+
 pub fn run(args: NpmArgs) -> Result<bool> {
     let root = crate::workspace::workspace_root()?;
     let version = workspace_version(&root)?;
@@ -219,7 +221,7 @@ where
     let expected_names = PLATFORMS
         .iter()
         .map(|platform| package_name(*platform))
-        .chain(std::iter::once("hyalo".to_owned()))
+        .chain(std::iter::once(MAIN_PACKAGE_NAME.to_owned()))
         .collect::<Vec<_>>();
     if artifacts.len() != expected_names.len() {
         bail!(
@@ -381,7 +383,7 @@ fn main_manifest(version: &str) -> Value {
         optional.insert(package_name(platform), json!(version));
     }
     json!({
-        "name": "hyalo",
+        "name": MAIN_PACKAGE_NAME,
         "version": version,
         "description": "Hyalo knowledgebase CLI",
         "license": "MIT",
@@ -774,6 +776,10 @@ mod tests {
         assert_eq!(metadata_snapshot(root)?, first);
         assert!(check_metadata(root)?);
 
+        let main: Value = serde_json::from_slice(&fs::read(root.join("npm/hyalo/package.json"))?)?;
+        assert_eq!(main["name"], MAIN_PACKAGE_NAME);
+        assert_eq!(main["bin"]["hyalo"], "bin/hyalo.js");
+
         let manifests = std::iter::once(root.join("npm/hyalo/package.json")).chain(
             PLATFORMS.iter().map(|platform| {
                 root.join("npm/platforms")
@@ -972,9 +978,9 @@ mod tests {
                 integrity: format!("sha512-local-{index}"),
             })
             .chain(std::iter::once(PackArtifact {
-                name: "hyalo".to_owned(),
+                name: MAIN_PACKAGE_NAME.to_owned(),
                 version: VERSION.to_owned(),
-                tarball: PathBuf::from("hyalo.tgz"),
+                tarball: PathBuf::from("ractive-ch-hyalo.tgz"),
                 integrity: "sha512-local-main".to_owned(),
             }))
             .collect()
@@ -983,7 +989,12 @@ mod tests {
     #[test]
     fn registry_response_distinguishes_missing_version_from_missing_integrity() -> Result<()> {
         assert_eq!(
-            classify_registry_output("hyalo@1.2.3", true, br#""sha512-published""#, b"")?,
+            classify_registry_output(
+                "@ractive-ch/hyalo@1.2.3",
+                true,
+                br#""sha512-published""#,
+                b"",
+            )?,
             RegistryState::Published("sha512-published".to_owned())
         );
         let missing_version = br#"{
@@ -999,15 +1010,16 @@ mod tests {
         );
         assert!(
             classify_registry_output(
-                "hyalo@1.2.3",
+                "@ractive-ch/hyalo@1.2.3",
                 false,
                 b"",
                 b"network proxy mentioned E404 without registry JSON"
             )
             .is_err()
         );
-        let missing_integrity = classify_registry_output("hyalo@1.2.3", true, b"null", b"")
-            .expect_err("a successful version lookup without integrity must fail");
+        let missing_integrity =
+            classify_registry_output("@ractive-ch/hyalo@1.2.3", true, b"null", b"")
+                .expect_err("a successful version lookup without integrity must fail");
         assert!(missing_integrity.to_string().contains("dist.integrity"));
         Ok(())
     }
@@ -1019,46 +1031,67 @@ mod tests {
             b"npm error code E403".as_slice(),
             b"npm error code ENETUNREACH".as_slice(),
         ] {
-            assert!(classify_registry_output("hyalo@1.2.3", false, b"", diagnostics).is_err());
+            assert!(
+                classify_registry_output("@ractive-ch/hyalo@1.2.3", false, b"", diagnostics)
+                    .is_err()
+            );
         }
-        assert!(classify_registry_output("hyalo@1.2.3", true, b"not json", b"").is_err());
+        assert!(
+            classify_registry_output("@ractive-ch/hyalo@1.2.3", true, b"not json", b"").is_err()
+        );
     }
 
     #[test]
-    fn publication_plan_resumes_partial_success_in_platforms_first_order() -> Result<()> {
+    fn publication_plan_skips_existing_integrity_and_keeps_order() -> Result<()> {
         let artifacts = publication_artifacts();
-        let mut query_index = 0usize;
-        let plan = build_publication_plan(&artifacts, VERSION, |_, _| {
-            let artifact = &artifacts[query_index];
-            let state = if query_index < 3 {
-                RegistryState::Published(artifact.integrity.clone())
-            } else {
-                RegistryState::MissingVersion
-            };
-            query_index += 1;
-            Ok(state)
-        })?;
-        assert_eq!(
-            plan.iter()
-                .map(|entry| entry.name.as_str())
-                .collect::<Vec<_>>(),
-            artifacts
-                .iter()
-                .map(|entry| entry.name.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert!(
-            plan[..3]
-                .iter()
-                .all(|entry| entry.action == PublicationAction::Skip)
-        );
-        assert!(
-            plan[3..]
-                .iter()
-                .all(|entry| entry.action == PublicationAction::Publish)
-        );
-        assert_eq!(plan.last().map(|entry| entry.name.as_str()), Some("hyalo"));
+        for skip_count in [3, PLATFORMS.len()] {
+            let mut query_index = 0usize;
+            let plan = build_publication_plan(&artifacts, VERSION, |_, _| {
+                let artifact = &artifacts[query_index];
+                let state = if query_index < skip_count {
+                    RegistryState::Published(artifact.integrity.clone())
+                } else {
+                    RegistryState::MissingVersion
+                };
+                query_index += 1;
+                Ok(state)
+            })?;
+            assert_eq!(
+                plan.iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>(),
+                artifacts
+                    .iter()
+                    .map(|entry| entry.name.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                plan[..skip_count]
+                    .iter()
+                    .all(|entry| entry.action == PublicationAction::Skip)
+            );
+            assert!(
+                plan[skip_count..]
+                    .iter()
+                    .all(|entry| entry.action == PublicationAction::Publish)
+            );
+            assert_eq!(
+                plan.last().map(|entry| entry.name.as_str()),
+                Some(MAIN_PACKAGE_NAME)
+            );
+        }
         Ok(())
+    }
+
+    #[test]
+    fn publication_plan_rejects_wrong_main_package_name() {
+        let mut artifacts = publication_artifacts();
+        artifacts.last_mut().expect("main package exists").name = "hyalo".to_owned();
+        let error = build_publication_plan(&artifacts, VERSION, |_, _| {
+            Ok(RegistryState::MissingVersion)
+        })
+        .expect_err("an unscoped main package must fail");
+        assert!(error.to_string().contains(MAIN_PACKAGE_NAME));
     }
 
     #[test]
@@ -1082,7 +1115,7 @@ mod tests {
         )?;
         set_executable(&npm)?;
         assert_eq!(
-            query_npm_registry_with(&npm, "hyalo", VERSION)?,
+            query_npm_registry_with(&npm, MAIN_PACKAGE_NAME, VERSION)?,
             RegistryState::Published("sha512-unix-fixture".to_owned())
         );
         Ok(())
@@ -1098,7 +1131,7 @@ mod tests {
             "@echo off\r\necho \"sha512-windows-cmd-fixture\"\r\nexit /b 0\r\n",
         )?;
         assert_eq!(
-            query_npm_registry_with(&npm, "hyalo", VERSION)?,
+            query_npm_registry_with(&npm, MAIN_PACKAGE_NAME, VERSION)?,
             RegistryState::Published("sha512-windows-cmd-fixture".to_owned())
         );
         Ok(())

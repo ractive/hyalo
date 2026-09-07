@@ -15,6 +15,11 @@ on:
         type: boolean
         required: false
         default: false
+      prepare_npm_main_bootstrap:
+        description: Sign and upload only the scoped main npm package without native builds
+        type: boolean
+        required: false
+        default: false
       npm_version:
         description: Cargo version to confirm for npm publication or bootstrap preparation
         type: string
@@ -27,6 +32,9 @@ permissions:
 
 jobs:
   release:
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      !inputs.prepare_npm_main_bootstrap
     uses: ractive/release-workflows/.github/workflows/release.yml@v0.2.0
     secrets: inherit
     with:
@@ -79,6 +87,17 @@ jobs:
 
   npm:
     needs: release
+    if: >-
+      always() &&
+      !cancelled() &&
+      (
+        needs.release.result == 'success' ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          inputs.prepare_npm_main_bootstrap &&
+          needs.release.result == 'skipped'
+        )
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -99,6 +118,7 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           PUBLISH_NPM: ${{ inputs.publish_npm }}
           PREPARE_NPM_BOOTSTRAP: ${{ inputs.prepare_npm_bootstrap }}
+          PREPARE_NPM_MAIN_BOOTSTRAP: ${{ inputs.prepare_npm_main_bootstrap }}
           REQUESTED_NPM_VERSION: ${{ inputs.npm_version }}
         run: |
           set -euo pipefail
@@ -114,24 +134,32 @@ jobs:
             echo "release tag '$RELEASE_TAG' does not match Cargo version '$version'" >&2
             exit 1
           fi
-          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$PUBLISH_NPM" = true ] && \
-             [ "$PREPARE_NPM_BOOTSTRAP" = true ]; then
-            echo "publish_npm and prepare_npm_bootstrap are mutually exclusive" >&2
+          selected_modes=0
+          for selected in \
+            "$PUBLISH_NPM" "$PREPARE_NPM_BOOTSTRAP" "$PREPARE_NPM_MAIN_BOOTSTRAP"; do
+            if [ "$selected" = true ]; then
+              selected_modes=$((selected_modes + 1))
+            fi
+          done
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$selected_modes" -gt 1 ]; then
+            echo "publish_npm, prepare_npm_bootstrap, and prepare_npm_main_bootstrap are mutually exclusive" >&2
             exit 1
           fi
           if [ "$EVENT_NAME" = workflow_dispatch ] && \
-             { [ "$PUBLISH_NPM" = true ] || [ "$PREPARE_NPM_BOOTSTRAP" = true ]; } && \
+             [ "$selected_modes" -eq 1 ] && \
              [ "$REQUESTED_NPM_VERSION" != "$version" ]; then
             echo "npm_version '$REQUESTED_NPM_VERSION' does not match Cargo version '$version'" >&2
             exit 1
           fi
           echo "CARGO_VERSION=$version" >> "$GITHUB_ENV"
       - name: Download native release archives
+        if: ${{ !inputs.prepare_npm_main_bootstrap }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: hyalo-*
           path: ${{ runner.temp }}/hyalo-release-artifacts
       - name: Extract exact release binaries and stage npm packages
+        if: ${{ !inputs.prepare_npm_main_bootstrap }}
         shell: bash
         env:
           ARTIFACT_DIR: ${{ runner.temp }}/hyalo-release-artifacts
@@ -171,6 +199,7 @@ jobs:
           cargo run -p xtask -- generate-npm-packages \
             --stage "$STAGE_DIR" --binaries "$BINARY_INPUT"
       - name: Pack and dry-run all publications
+        if: ${{ !inputs.prepare_npm_main_bootstrap }}
         shell: bash
         env:
           STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
@@ -202,13 +231,43 @@ jobs:
             "$PACK_DIR/win32-arm64.json" \
             "$PACK_DIR/hyalo.json" \
             > "$PACK_DIR/publication-plan.json"
-      - name: Sign npm bootstrap tarballs with GitHub OIDC
+      - name: Pack and dry-run scoped main bootstrap
         if: >-
           github.event_name == 'workflow_dispatch' &&
-          inputs.prepare_npm_bootstrap
+          inputs.prepare_npm_main_bootstrap
         shell: bash
         env:
           PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+        run: |
+          set -euo pipefail
+          cargo run -q -p xtask -- generate-npm-packages --check
+          mkdir "$PACK_DIR"
+          npm pack ./npm/hyalo \
+            --pack-destination "$PACK_DIR" --json > "$PACK_DIR/hyalo.json"
+          test "$(jq -r 'length' "$PACK_DIR/hyalo.json")" -eq 1
+          test "$(jq -r '.[0].name' "$PACK_DIR/hyalo.json")" = @ractive-ch/hyalo
+          test "$(jq -r '.[0].version' "$PACK_DIR/hyalo.json")" = "$CARGO_VERSION"
+          tarball=$(jq -r '.[0].filename' "$PACK_DIR/hyalo.json")
+          test "$tarball" = "ractive-ch-hyalo-$CARGO_VERSION.tgz"
+          jq -e '
+            ([.[0].files[].path] | sort) as $files |
+            ([
+              "LICENSE", "README.md", "bin/hyalo.js", "lib/resolve-platform.js",
+              "lib/run-child.js", "package.json", "platforms.json"
+            ] | sort) == $files
+          ' "$PACK_DIR/hyalo.json" > /dev/null
+          printf 'hyalo\t%s\n' "$PACK_DIR/$tarball" > "$PACK_DIR/packages.tsv"
+          npm publish "$PACK_DIR/$tarball" \
+            --dry-run --ignore-scripts --access public \
+            --registry https://registry.npmjs.org
+      - name: Sign npm bootstrap tarballs with GitHub OIDC
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.prepare_npm_bootstrap || inputs.prepare_npm_main_bootstrap)
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+          MAIN_ONLY: ${{ inputs.prepare_npm_main_bootstrap }}
         run: |
           set -euo pipefail
           NPM_PACKAGE_DIR="$(npm root --global)/npm"
@@ -234,10 +293,12 @@ jobs:
             'libnpmpublish/lib/provenance.js'
           )
 
-          const packageDirs = [
-            'darwin-arm64', 'linux-x64', 'linux-arm64', 'linux-x64-musl',
-            'linux-arm64-musl', 'win32-x64', 'win32-arm64', 'hyalo',
-          ]
+          const packageDirs = process.env.MAIN_ONLY === 'true'
+            ? ['hyalo']
+            : [
+                'darwin-arm64', 'linux-x64', 'linux-arm64', 'linux-x64-musl',
+                'linux-arm64-musl', 'win32-x64', 'win32-arm64', 'hyalo',
+              ]
           const rows = (await readFile(path.join(packDir, 'packages.tsv'), 'utf8'))
             .trimEnd().split('\n').map((row) => row.split('\t'))
           assert.deepEqual(rows.map(([packageDir]) => packageDir), packageDirs)
@@ -254,6 +315,9 @@ jobs:
             assert.equal(manifest.name, pack.name)
             assert.equal(manifest.version, pack.version)
             assert.equal(manifest.version, process.env.CARGO_VERSION)
+            if (packageDir === 'hyalo') {
+              assert.equal(manifest.name, '@ractive-ch/hyalo')
+            }
 
             const tarballBytes = await readFile(tarball)
             const digest = createHash('sha512').update(tarballBytes).digest()
@@ -272,7 +336,7 @@ jobs:
       - name: Upload signed npm bootstrap packages
         if: >-
           github.event_name == 'workflow_dispatch' &&
-          inputs.prepare_npm_bootstrap
+          (inputs.prepare_npm_bootstrap || inputs.prepare_npm_main_bootstrap)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-bootstrap-${{ env.CARGO_VERSION }}
@@ -311,5 +375,5 @@ jobs:
             jq -r '.[7] | [.action, .name, .tarball] | @tsv' \
               "$PACK_DIR/publication-plan.json"
           )
-          test "$name" = hyalo
+          test "$name" = @ractive-ch/hyalo
           publish_or_skip "$action" "$name" "$tarball"

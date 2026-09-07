@@ -30,7 +30,7 @@ hyalo is the natural replacement. An unindexed `hyalo find` over the 48
 pages takes 37 ms; the snapshot index is irrelevant at that size.
 
 The question is not *whether* to call hyalo from TypeScript but *how* to
-make that a first-class experience: `npm install hyalo`, `import { find }`,
+make that a first-class experience: `npm install @ractive-ch/hyalo`, `import { find }`,
 typed results, no Homebrew step, no Dockerfile download.
 
 ## Proposal
@@ -38,7 +38,7 @@ typed results, no Homebrew step, no Dockerfile download.
 ### 1. Per-platform npm packages (the esbuild / Biome / Turbo pattern)
 
 Standard, not a hack. npm's `os`, `cpu` and `libc` fields plus
-`optionalDependencies` exist for exactly this. One main package `hyalo`
+`optionalDependencies` exist for exactly this. One main package `@ractive-ch/hyalo`
 lists every platform package as an optional dependency; npm installs only
 the one matching the machine. The main package's `bin` is a tiny JS
 launcher that `require.resolve`s the platform package and spawns the
@@ -174,9 +174,11 @@ see "Settled" below). The two options are kept for the record.
   that is not James (his account is `ractive.ch`) and npm does not transfer
   scopes, so it is gone; the user scope `@ractive.ch` would have worked but
   the dot reads like a domain. The `ractive-ch` org was created on 2026-09-06
-  (free plan, owner `ractive.ch`). The unscoped `hyalo` and `ff-rdp` main
-  packages are free and get claimed by the first real publish, no
-  placeholder; `hoppy` is taken, so hoppy's main package is scoped.
+  (free plan, owner `ractive.ch`). The original plan used an unscoped `hyalo`
+  main package, but npm rejected the verified 0.22.0 upload as too similar to
+  `yalc`. On 2026-09-07 the user authorized `@ractive-ch/hyalo` as the settled
+  canonical main name. `ff-rdp` remains planned as unscoped where available;
+  `hoppy` is taken, so hoppy's main package is scoped.
 - **Types: generated with `ts-rs`**, not schemars + JSON Schema + a Node
   converter. One derive per output struct, `cargo test` writes the `.ts`
   files, `serde_json::Value` becomes `unknown`. No `hyalo schema` command.
@@ -226,7 +228,7 @@ Three separate iterations, not one, preceded by the stability retrospective
    `types.ts` committed, `find`/`read`/`summary` wrappers spawning the
    platform binary directly, vitest contract tests against the freshly built
    binary. Port `pi-package/extensions/hyalo.ts` onto it. Then switch
-   `homefinder-eco-mcp` to `npm install hyalo`.
+   `homefinder-eco-mcp` to `npm install @ractive-ch/hyalo`.
 
 ## Added 2026-09-07 — a generic markdown-KB MCP server?
 
@@ -316,3 +318,19 @@ Authoritative references:
 - Reusable release workflow source:
   `ractive/release-workflows/.github/workflows/release.yml@v0.2.0`,
   Git blob `300705e94fa0090441861a653ccd7f05c36a749a`
+
+## Outcome — scoped main recovery (2026-09-07)
+
+All seven `@ractive-ch/hyalo-<platform>` packages at 0.22.0 were published
+from the verified native artifacts before npm rejected the unscoped main name.
+Their versions and bytes are immutable. The canonical main registry package is
+now `@ractive-ch/hyalo`; its executable remains `hyalo`, and its exact platform
+dependency names and 0.22.0 pins are unchanged.
+
+The repository recovery prepares only `ractive-ch-hyalo-0.22.0.tgz` from the
+tracked main-package source, without a native build. Publication, all eight
+GitHub trusted-publisher relationships with direct publishing, and the four
+real-platform registry installs remain external acceptance work. No external
+check was treated as completed by this repository change. Iteration 287 still
+depends on full iteration 286 completion, while Homefinder and iteration 288
+remain deferred.

@@ -66,7 +66,7 @@ jobs:
           cd "$CONSUMER_DIR"
           npm init --yes
           npm install --ignore-scripts --save-exact \
-            --registry https://registry.npmjs.org "hyalo@$VERSION"
+            --registry https://registry.npmjs.org "@ractive-ch/hyalo@$VERSION"
           node "$GITHUB_WORKSPACE/npm/hyalo/test/registry-smoke.cjs"
 
   alpine:
@@ -100,6 +100,6 @@ jobs:
               test "$(npm --version)" = 11.19.1
               npm init --yes
               npm install --ignore-scripts --save-exact \
-                --registry https://registry.npmjs.org "hyalo@$VERSION"
+                --registry https://registry.npmjs.org "@ractive-ch/hyalo@$VERSION"
               node /registry-smoke.cjs
             '
