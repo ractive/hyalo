@@ -207,6 +207,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir "$PACK_DIR"
+          PUBLISH_DRY_RUN_CACHE=$(mktemp -d "$RUNNER_TEMP/hyalo-npm-dry-run.XXXXXX")
           : > "$PACK_DIR/packages.tsv"
           for package_dir in \
             darwin-arm64 linux-x64 linux-arm64 linux-x64-musl \
@@ -217,9 +218,11 @@ jobs:
             test -n "$tarball"
             printf '%s\t%s\n' "$package_dir" "$PACK_DIR/$tarball" \
               >> "$PACK_DIR/packages.tsv"
-            npm publish "$PACK_DIR/$tarball" \
-              --dry-run --ignore-scripts --access public \
-              --registry https://registry.npmjs.org
+            env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              npm publish "$PACK_DIR/$tarball" \
+                --dry-run --offline --cache "$PUBLISH_DRY_RUN_CACHE" \
+                --ignore-scripts --access public \
+                --registry https://registry.npmjs.org
           done
           cargo run -q -p xtask -- plan-npm-publication --pack-json \
             "$PACK_DIR/darwin-arm64.json" \
@@ -242,6 +245,7 @@ jobs:
           set -euo pipefail
           cargo run -q -p xtask -- generate-npm-packages --check
           mkdir "$PACK_DIR"
+          PUBLISH_DRY_RUN_CACHE=$(mktemp -d "$RUNNER_TEMP/hyalo-npm-dry-run.XXXXXX")
           npm pack ./npm/hyalo \
             --pack-destination "$PACK_DIR" --json > "$PACK_DIR/hyalo.json"
           test "$(jq -r 'length' "$PACK_DIR/hyalo.json")" -eq 1
@@ -257,9 +261,11 @@ jobs:
             ] | sort) == $files
           ' "$PACK_DIR/hyalo.json" > /dev/null
           printf 'hyalo\t%s\n' "$PACK_DIR/$tarball" > "$PACK_DIR/packages.tsv"
-          npm publish "$PACK_DIR/$tarball" \
-            --dry-run --ignore-scripts --access public \
-            --registry https://registry.npmjs.org
+          env -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+            npm publish "$PACK_DIR/$tarball" \
+              --dry-run --offline --cache "$PUBLISH_DRY_RUN_CACHE" \
+              --ignore-scripts --access public \
+              --registry https://registry.npmjs.org
       - name: Sign npm bootstrap tarballs with GitHub OIDC
         if: >-
           github.event_name == 'workflow_dispatch' &&

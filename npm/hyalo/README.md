@@ -74,10 +74,13 @@ tarball to npm.
 Normal npm publishing handles all seven platform packages first, followed by
 `@ractive-ch/hyalo`, using npm provenance and GitHub OIDC without a repository
 token fallback.
-Before an immutable version is published, the workflow compares the local
-tarball integrity with `dist.integrity` from the public npm registry. A retry
-skips an identical existing artifact, publishes an explicitly missing version,
-and stops on mismatched integrity or an inconclusive registry response.
+Publication dry runs use a fresh offline npm cache and disable OIDC only for
+that process. They validate each local package contract independently of
+immutable registry history. The real publication planner stays online: before
+an immutable version is published, it compares the local tarball integrity with
+`dist.integrity` from the public npm registry. A retry skips an identical
+existing artifact, publishes an explicitly missing version, and stops on
+mismatched integrity or an inconclusive registry response.
 
 For the 0.22.0 scoped-main recovery, the npm owner uses this runbook:
 
