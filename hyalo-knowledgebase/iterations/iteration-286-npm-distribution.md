@@ -182,6 +182,29 @@ no trusted publisher was configured. Resume with attended npm browser authentica
 using the preserved, verified tarballs; no rebuild or new token is required.
 TASK-4, TASK-6 and the publication/registry acceptance criteria remain unfinished.
 
+## Partial publication and naming blocker — 2026-09-07
+
+Attended owner authentication succeeded on retry. All seven platform packages at
+0.22.0 are now public under `@ractive-ch`, uploaded from the verified build artifacts
+in platform-first order. Their public registry integrity matches the verified
+tarballs and each version exposes provenance attestations. These uploads used owner
+authentication with CI-signed provenance, not OIDC-authenticated publication.
+
+The final `hyalo@0.22.0` upload failed with npm E403: the registry considers `hyalo`
+too similar to the existing package `yalc`. A subsequent public version query still
+returned 404 for `hyalo`. Authentication alone cannot resolve this name rejection.
+No trusted publishers were configured and the four-platform registry installation
+workflow has not run. TASK-4, TASK-6 and both external acceptance criteria stay open.
+
+Resume requires either npm allowing the unscoped name or a user decision to change
+the main package name, for example to the existing organization's `@ractive-ch/hyalo`.
+A 404 for that scoped version is not proof npm will accept publication. A rename
+requires reviewed manifest, generator, workflow, documentation and dependent-plan
+updates plus newly signed main-package bytes. Preserve the seven immutable platform
+versions and their existing artifacts; do not republish rebuilt bytes over them.
+Iteration 287 remains blocked by full iteration 286; Homefinder and iteration 288's
+desktop verification remain deferred. No acceptance requirement is waived.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — proposal, naming table, settled section
