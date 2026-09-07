@@ -61,7 +61,9 @@ Do *not* merge with "--squash".
 - No `.unwrap()` / `.expect()` outside of tests — use `anyhow::Context` with `?`
 - No `clone()` unless the borrow checker demands it — try references first
 - No unnecessary `pub` on struct fields
-- All code stays in Rust — no polyglot tooling (no Bun, Node, Python scripts)
+- General repository tooling stays in Rust. The `npm/` and `pi-package/` trees may contain
+  JavaScript/TypeScript because they are shipped JavaScript deliverables (DEC-332); native
+  tests for those deliverables are part of their package contracts.
 - New crates go in `crates/` with naming convention `hyalo-<domain>`
 
 ## PR Discipline

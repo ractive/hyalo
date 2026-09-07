@@ -61,3 +61,148 @@ jobs:
           {"target": "x86_64-pc-windows-msvc", "os": "windows-latest", "cross": false, "run_tests": true},
           {"target": "aarch64-pc-windows-msvc", "os": "windows-latest", "cross": false, "run_tests": false}
         ]
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Pin npm and resolve Cargo version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.19.1
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          version=$(jq -r '.packages[] | select(.name == "hyalo-cli") | .version' \
+            <<< "$metadata")
+          if [ -z "$version" ] || [ "$version" = null ]; then
+            echo "hyalo-cli version was not found in cargo metadata" >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = release ] && [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "release tag '$RELEASE_TAG' does not match Cargo version '$version'" >&2
+            exit 1
+          fi
+          echo "CARGO_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Download native release archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: hyalo-*
+          path: ${{ runner.temp }}/hyalo-release-artifacts
+      - name: Extract exact release binaries and stage npm packages
+        shell: bash
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/hyalo-release-artifacts
+          BINARY_INPUT: ${{ runner.temp }}/hyalo-npm-binaries
+          STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
+        run: |
+          set -euo pipefail
+          [ ! -e "$BINARY_INPUT" ]
+          [ ! -e "$STAGE_DIR" ]
+          mkdir "$BINARY_INPUT"
+          jq -r '.[] | [.target, .os] | @tsv' npm/hyalo/platforms.json |
+            while IFS=$'\t' read -r target os; do
+              artifact="$ARTIFACT_DIR/hyalo-$target"
+              if [ "$os" = win32 ]; then
+                archive="hyalo-v$CARGO_VERSION-$target.zip"
+                binary="hyalo.exe"
+              else
+                archive="hyalo-v$CARGO_VERSION-$target.tar.gz"
+                binary="hyalo"
+              fi
+              test -d "$artifact"
+              count=$(find "$artifact" -maxdepth 1 -type f -name "$archive" | wc -l)
+              test "$count" -eq 1
+              unpack="$RUNNER_TEMP/hyalo-unpack-$target"
+              mkdir "$unpack"
+              if [ "$os" = win32 ]; then
+                unzip -q "$artifact/$archive" -d "$unpack"
+              else
+                tar -xzf "$artifact/$archive" -C "$unpack"
+              fi
+              test -f "$unpack/$binary"
+              test -f "$unpack/LICENSE"
+              test -f "$unpack/README.md"
+              mkdir "$BINARY_INPUT/$target"
+              install -m 755 "$unpack/$binary" "$BINARY_INPUT/$target/$binary"
+            done
+          cargo run -p xtask -- generate-npm-packages \
+            --stage "$STAGE_DIR" --binaries "$BINARY_INPUT"
+      - name: Pack and dry-run all publications
+        shell: bash
+        env:
+          STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+        run: |
+          set -euo pipefail
+          mkdir "$PACK_DIR"
+          : > "$PACK_DIR/packages.tsv"
+          for package_dir in \
+            darwin-arm64 linux-x64 linux-arm64 linux-x64-musl \
+            linux-arm64-musl win32-x64 win32-arm64 hyalo; do
+            npm pack "$STAGE_DIR/$package_dir" \
+              --pack-destination "$PACK_DIR" --json > "$PACK_DIR/$package_dir.json"
+            tarball=$(jq -r '.[0].filename' "$PACK_DIR/$package_dir.json")
+            test -n "$tarball"
+            printf '%s\t%s\n' "$package_dir" "$PACK_DIR/$tarball" \
+              >> "$PACK_DIR/packages.tsv"
+            npm publish "$PACK_DIR/$tarball" \
+              --dry-run --ignore-scripts --access public \
+              --registry https://registry.npmjs.org
+          done
+          cargo run -q -p xtask -- plan-npm-publication --pack-json \
+            "$PACK_DIR/darwin-arm64.json" \
+            "$PACK_DIR/linux-x64.json" \
+            "$PACK_DIR/linux-arm64.json" \
+            "$PACK_DIR/linux-x64-musl.json" \
+            "$PACK_DIR/linux-arm64-musl.json" \
+            "$PACK_DIR/win32-x64.json" \
+            "$PACK_DIR/win32-arm64.json" \
+            "$PACK_DIR/hyalo.json" \
+            > "$PACK_DIR/publication-plan.json"
+      - name: Publish platform packages, then main package
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          PACK_DIR: ${{ runner.temp }}/hyalo-npm-packs
+        run: |
+          set -euo pipefail
+          publish_or_skip() {
+            local action=$1
+            local name=$2
+            local tarball=$3
+            test -f "$tarball"
+            if [ "$action" = skip ]; then
+              echo "Skipping $name: identical immutable version already published"
+            elif [ "$action" = publish ]; then
+              npm publish "$tarball" \
+                --provenance --access public --ignore-scripts \
+                --registry https://registry.npmjs.org
+            else
+              echo "unexpected publication action '$action' for $name" >&2
+              return 1
+            fi
+          }
+          while IFS=$'\t' read -r action name tarball; do
+            publish_or_skip "$action" "$name" "$tarball"
+          done < <(jq -r '.[0:7][] | [.action, .name, .tarball] | @tsv' \
+            "$PACK_DIR/publication-plan.json")
+          IFS=$'\t' read -r action name tarball < <(
+            jq -r '.[7] | [.action, .name, .tarball] | @tsv' \
+              "$PACK_DIR/publication-plan.json"
+          )
+          test "$name" = hyalo
+          publish_or_skip "$action" "$name" "$tarball"

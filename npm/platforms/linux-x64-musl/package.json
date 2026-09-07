@@ -1,0 +1,28 @@
+{
+  "cpu": [
+    "x64"
+  ],
+  "description": "Hyalo CLI native binary for this platform",
+  "files": [
+    "hyalo",
+    "LICENSE",
+    "README.md"
+  ],
+  "libc": [
+    "musl"
+  ],
+  "license": "MIT",
+  "name": "@ractive-ch/hyalo-linux-x64-musl",
+  "os": [
+    "linux"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "directory": "npm/platforms/linux-x64-musl",
+    "type": "git",
+    "url": "https://github.com/ractive/hyalo.git"
+  },
+  "version": "0.22.0"
+}

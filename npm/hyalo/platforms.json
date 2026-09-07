@@ -1,0 +1,51 @@
+[
+  {
+    "cpu": "arm64",
+    "libc": null,
+    "os": "darwin",
+    "package": "@ractive-ch/hyalo-darwin-arm64",
+    "target": "aarch64-apple-darwin"
+  },
+  {
+    "cpu": "x64",
+    "libc": "glibc",
+    "os": "linux",
+    "package": "@ractive-ch/hyalo-linux-x64",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  {
+    "cpu": "arm64",
+    "libc": "glibc",
+    "os": "linux",
+    "package": "@ractive-ch/hyalo-linux-arm64",
+    "target": "aarch64-unknown-linux-gnu"
+  },
+  {
+    "cpu": "x64",
+    "libc": "musl",
+    "os": "linux",
+    "package": "@ractive-ch/hyalo-linux-x64-musl",
+    "target": "x86_64-unknown-linux-musl"
+  },
+  {
+    "cpu": "arm64",
+    "libc": "musl",
+    "os": "linux",
+    "package": "@ractive-ch/hyalo-linux-arm64-musl",
+    "target": "aarch64-unknown-linux-musl"
+  },
+  {
+    "cpu": "x64",
+    "libc": null,
+    "os": "win32",
+    "package": "@ractive-ch/hyalo-win32-x64",
+    "target": "x86_64-pc-windows-msvc"
+  },
+  {
+    "cpu": "arm64",
+    "libc": null,
+    "os": "win32",
+    "package": "@ractive-ch/hyalo-win32-arm64",
+    "target": "aarch64-pc-windows-msvc"
+  }
+]

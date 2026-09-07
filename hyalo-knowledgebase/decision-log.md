@@ -6375,3 +6375,12 @@ alternating pairs) for the default 50-result query. Supplemental unlimited
 output is 454.57 → 608.28 ms (+33.81%, fifteen pairs). Complete disk/index
 envelopes still agree in both cases; original implementation measurements are
 retained separately from the repair evidence.
+
+## DEC-332: JavaScript is permitted for shipped npm and pi deliverables (2026-09-07)
+
+The repository's Rust-only tooling rule is narrowed to general repository tooling.
+The `npm/` launcher, package metadata and native Node tests, together with the
+existing `pi-package/` TypeScript extension, are shipped JavaScript deliverables
+and may use their native language. Rust remains the implementation language for
+the CLI and xtask generators and gates. This exception keeps package consumers
+testable without introducing a general-purpose polyglot scripting layer.

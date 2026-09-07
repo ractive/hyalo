@@ -1,0 +1,25 @@
+{
+  "cpu": [
+    "arm64"
+  ],
+  "description": "Hyalo CLI native binary for this platform",
+  "files": [
+    "hyalo.exe",
+    "LICENSE",
+    "README.md"
+  ],
+  "license": "MIT",
+  "name": "@ractive-ch/hyalo-win32-arm64",
+  "os": [
+    "win32"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "directory": "npm/platforms/win32-arm64",
+    "type": "git",
+    "url": "https://github.com/ractive/hyalo.git"
+  },
+  "version": "0.22.0"
+}
