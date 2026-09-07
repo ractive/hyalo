@@ -162,6 +162,26 @@ CI and a new same-commit signed build remain required before publication proceed
 This recovery preserves iteration 287's full prerequisite and iteration 288's
 deferred desktop verification. No external acceptance criterion is waived.
 
+## Verified artifacts and authentication blocker — 2026-09-07
+
+PR #339 merged the Windows open retry after fresh review, 4,899 local tests and
+all seven applicable PR checks passed, including native Windows tests. The unchanged
+npm workflow paths correctly did not trigger its four additional checks.
+
+Build `34092918271` at merge `6f6ff85529b64688818a43143e102fcc05f7298e` then passed
+all seven native targets and signed all eight 0.22.0 tarballs. Their SHA-512 digests,
+Sigstore signatures, GitHub workflow identity, exact source commit and run were
+verified. Binary formats match the seven target architectures; the macOS arm64
+binary also ran from a fresh directory and reported the expected version and commit.
+These are build and artifact checks, not public-registry installation acceptance.
+
+The initial owner upload reached npm's browser authentication prompt, then ended
+with an HTTP 404 from its authentication completion endpoint. Subsequent public
+version queries returned 404 for all eight packages. No publication succeeded and
+no trusted publisher was configured. Resume with attended npm browser authentication
+using the preserved, verified tarballs; no rebuild or new token is required.
+TASK-4, TASK-6 and the publication/registry acceptance criteria remain unfinished.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — proposal, naming table, settled section
