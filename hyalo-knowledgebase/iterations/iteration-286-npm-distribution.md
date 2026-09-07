@@ -115,6 +115,20 @@ versions before publishing: npm versions are immutable. Retain this noncompleted
 status until external acceptance is fulfilled. Iteration 287 remains blocked by the
 full iteration-286 prerequisite.
 
+## Hyalo-only publishing preparation — 2026-09-07
+
+PR #336 merged the repository preparation after all eleven runnable GitHub checks
+passed. The ordinary release workflow also publishes to other distribution channels
+and repositories. To preserve the Hyalo-only scope, manual dispatch now has an
+explicit `publish_npm` option, defaulting to false, with `npm_version` required to
+match Cargo before publication. Every manual dispatch keeps the reusable native
+release workflow in dry-run mode; only npm publication can opt in. Default manual
+runs remain unpublished, and normal published-release behavior is unchanged.
+
+This prepares the restricted publishing path; it does not complete owner bootstrap,
+trusted publishing, actual publication or registry platform verification. The user
+explicitly deferred `homefinder-eco-mcp`; iteration 287's consumer task remains open.
+
 ## Links
 
 - [[research/npm-package-and-typed-typescript-api]] — proposal, naming table, settled section

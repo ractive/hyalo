@@ -257,7 +257,8 @@ Iteration 285 completed the typed Rust output models and strengthened
 the Cargo workspace version. Iteration 286 extends that gate through one
 canonical Rust npm platform table: the main manifest, all seven platform
 manifests, exact optional-dependency pins, generated platform map, licenses,
-and target READMEs are checked byte-for-byte. The generator also stages an
+and target READMEs are checked byte-for-byte apart from equivalent LF/CRLF line
+endings. The generator also stages an
 explicit seven-target binary input into a new output tree without deleting or
 overwriting tracked sources.
 
@@ -275,13 +276,18 @@ tarballs with optional registry packages omitted, then
 `hyalo 0.22.0`. Foreign-target files were clearly labeled fixture bytes and
 prove package layout only. The PR workflow repeats launcher tests on GitHub
 Linux, macOS, and Windows runners and performs the packaging smoke with a real
-Linux x64 glibc binary. These workflow jobs have not yet run.
+Linux x64 glibc binary. These jobs passed on PR #336, together with all other
+runnable checks at its reviewed head.
 
 The release workflow is prepared to consume the seven exact archives produced
 by `ractive/release-workflows/.github/workflows/release.yml@v0.2.0`, dry-run
-all eight packages on manual dispatch, and publish platform packages before the
-main package only for a published release. No workflow was dispatched and no
-package was published during this work.
+all eight packages on default manual dispatch, and publish platform packages before
+the main package for a published release. An explicit npm-only manual option uses
+`publish_npm=true` and an `npm_version` matching Cargo. The reusable workflow stays
+in dry-run mode for every manual dispatch, so native archives are built without
+publishing to crates.io, Homebrew, Scoop, winget, AUR or Cloudsmith. Only the npm
+publication step opts in. No workflow was dispatched and no package was published
+during this preparation.
 
 Publication retries are fail-closed: a Rust gate compares each local
 `npm pack` integrity with the exact version's `dist.integrity` at

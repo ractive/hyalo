@@ -57,6 +57,8 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
       `cargo test --workspace -q`, every xtask `check-*`, `npm test`, `hyalo lint --strict`.
 - [ ] TASK-7 (consumer, outside this repo): switch `homefinder-eco-mcp` to `npm install hyalo`
       and the typed `find`; record what the wrapper lacked.
+      Deferred by the user on 2026-09-07 to concentrate on Hyalo; retain this requirement
+      as unfinished and do not modify that repository during the current batch.
 
 ## Acceptance criteria
 
