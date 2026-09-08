@@ -496,6 +496,23 @@ and this project adheres to
 - CommonMark autolinks (`<https://…>`, `<obsidian://…>`) are inventoried in `--fields links` as `external`, so an external-target histogram is complete.
 - `hyalo find <existing-file.md>` with no other filters hints both the `--file` form and `hyalo read` instead of answering "No results".
 
+## [0.23.0] - 2026-09-08
+
+### Added
+
+- The `@ractive-ch/hyalo` npm package now includes a typed TypeScript API for
+  `find`, `read`, `summary`, and `config`, with ESM and CommonJS exports and
+  declarations generated from Rust types. `raw` supports other CLI commands;
+  callers can choose a binary or transport and control cancellation and timeouts.
+
+### Fixed
+
+- Successful API calls forward diagnostics to stderr or an `onDiagnostics`
+  callback. Pi displays those warnings alongside typed tool results.
+- Ranked search checks vault containment before live snippet and fallback reads.
+  Indexed searches verify the stored corpus and language metadata before reusing
+  token data, preserving disk-scan ranking when the index is incompatible.
+
 ## [0.21.0] - 2026-08-28
 
 ### Added
@@ -2668,6 +2685,7 @@ already complied (`total = modified + skipped`) and are unchanged.
   crafted files.
 
 [Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[0.23.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.23.0
 [0.21.0]: TBD
 [0.20.0]: TBD
 [0.19.0]: TBD

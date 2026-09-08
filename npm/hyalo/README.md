@@ -11,10 +11,8 @@ npx --no-install hyalo --version
 npm selects one exact-version native package through `optionalDependencies`.
 The launcher requires Node.js 22.14 or newer and npm 11.5.1 or newer.
 
-The public `0.22.0` package contains the CLI launcher only. The typed API below
-is implemented in this repository for a future, separately authorized release;
-build and test it from this source tree rather than expecting it from public
-`0.22.0`.
+Version `0.23.0` adds the typed API below alongside the CLI launcher.
+The earlier `0.22.0` package contains the CLI launcher only.
 
 | Rust target | npm package | os | cpu | libc |
 | --- | --- | --- | --- | --- |
@@ -28,8 +26,8 @@ build and test it from this source tree rather than expecting it from public
 
 ## Typed API
 
-After `npm ci && npm run build` in this directory, ESM and CommonJS consumers
-can import the same API:
+ESM and CommonJS consumers can import the same API directly from the installed
+package:
 
 ```ts
 import { config, find, read, summary } from "@ractive-ch/hyalo";

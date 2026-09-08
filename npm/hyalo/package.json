@@ -40,13 +40,13 @@
   "module": "./dist/index.mjs",
   "name": "@ractive-ch/hyalo",
   "optionalDependencies": {
-    "@ractive-ch/hyalo-darwin-arm64": "0.22.0",
-    "@ractive-ch/hyalo-linux-arm64": "0.22.0",
-    "@ractive-ch/hyalo-linux-arm64-musl": "0.22.0",
-    "@ractive-ch/hyalo-linux-x64": "0.22.0",
-    "@ractive-ch/hyalo-linux-x64-musl": "0.22.0",
-    "@ractive-ch/hyalo-win32-arm64": "0.22.0",
-    "@ractive-ch/hyalo-win32-x64": "0.22.0"
+    "@ractive-ch/hyalo-darwin-arm64": "0.23.0",
+    "@ractive-ch/hyalo-linux-arm64": "0.23.0",
+    "@ractive-ch/hyalo-linux-arm64-musl": "0.23.0",
+    "@ractive-ch/hyalo-linux-x64": "0.23.0",
+    "@ractive-ch/hyalo-linux-x64-musl": "0.23.0",
+    "@ractive-ch/hyalo-win32-arm64": "0.23.0",
+    "@ractive-ch/hyalo-win32-x64": "0.23.0"
   },
   "publishConfig": {
     "access": "public"
@@ -62,5 +62,5 @@
     "typecheck": "tsc --noEmit && tsc --project tsconfig.test.json"
   },
   "types": "./dist/index.d.ts",
-  "version": "0.22.0"
+  "version": "0.23.0"
 }
