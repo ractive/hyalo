@@ -4,12 +4,11 @@
  * A single tag with its file count.
  */
 export type TagSummaryEntry = {
-  /**
-   * Name of this entry.
-   */
-  name: string;
-  /**
-   * Number of matching occurrences.
-   */
-  count: number;
-};
+/**
+ * Name of this entry.
+ */
+name: string,
+/**
+ * Number of matching occurrences.
+ */
+count: number, };

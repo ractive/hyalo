@@ -19,11 +19,7 @@
  * rendered line instead of the three-to-five it used to wrap to.
  */
 export type InputSelection = {
-  /**
-   * Target file (relative to --dir) — positional form (single file)
-   */
-  file_positional?: string;
-  file: Array<string>;
-  glob: Array<string>;
-  files_from?: string;
-};
+/**
+ * Target file (relative to --dir) — positional form (single file)
+ */
+file_positional?: string, file: Array<string>, glob: Array<string>, files_from?: string, };

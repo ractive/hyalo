@@ -6,32 +6,31 @@ import type { Hint } from "./Hint.js";
  * counters when no file list was supplied; hints are always an array.
  */
 export type Envelope<T> = {
-  /**
-   * Optional vault directory hoisted from the command result.
-   */
-  dir?: string;
-  /**
-   * Missing paths from an explicitly supplied file list, including zero.
-   */
-  files_missing?: number;
-  /**
-   * Non-Markdown paths skipped from the supplied file list.
-   */
-  files_skipped_non_md?: number;
-  /**
-   * Paths outside the vault skipped from the supplied file list.
-   */
-  files_skipped_outside_vault?: number;
-  /**
-   * Read-only suggestions and explicitly marked mutation suggestions.
-   */
-  hints: Array<Hint>;
-  /**
-   * Named command output; arrays contain named result items.
-   */
-  results: T;
-  /**
-   * Total matching items before pagination, omitted for non-list commands.
-   */
-  total?: number;
-};
+/**
+ * Optional vault directory hoisted from the command result.
+ */
+dir?: string,
+/**
+ * Missing paths from an explicitly supplied file list, including zero.
+ */
+files_missing?: number,
+/**
+ * Non-Markdown paths skipped from the supplied file list.
+ */
+files_skipped_non_md?: number,
+/**
+ * Paths outside the vault skipped from the supplied file list.
+ */
+files_skipped_outside_vault?: number,
+/**
+ * Read-only suggestions and explicitly marked mutation suggestions.
+ */
+hints: Array<Hint>,
+/**
+ * Named command output; arrays contain named result items.
+ */
+results: T,
+/**
+ * Total matching items before pagination, omitted for non-list commands.
+ */
+total?: number, };

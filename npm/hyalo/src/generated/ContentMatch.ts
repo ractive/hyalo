@@ -4,16 +4,15 @@
  * A content search match within a file body.
  */
 export type ContentMatch = {
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Containing section heading, including its ATX prefix.
-   */
-  section: string;
-  /**
-   * Matched source line or ranked snippet text.
-   */
-  text: string;
-};
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Containing section heading, including its ATX prefix.
+ */
+section: string,
+/**
+ * Matched source line or ranked snippet text.
+ */
+text: string, };

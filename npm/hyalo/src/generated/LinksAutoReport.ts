@@ -9,21 +9,20 @@
  * from.
  */
 export type LinksAutoReport = {
-  /**
-   * `[links.auto] exclude_titles`.
-   */
-  exclude_titles: Array<string>;
-  /**
-   * `[links.auto] exclude_target_globs`.
-   */
-  exclude_target_globs: Array<string>;
-  /**
-   * `[links.auto] first_only`.
-   */
-  first_only: boolean;
-  /**
-   * `[links.auto] warn_common_titles` — `true` (the default) means `links
-   * auto` may print the advisory noisy-candidate-title note on stderr.
-   */
-  warn_common_titles: boolean;
-};
+/**
+ * `[links.auto] exclude_titles`.
+ */
+exclude_titles: Array<string>,
+/**
+ * `[links.auto] exclude_target_globs`.
+ */
+exclude_target_globs: Array<string>,
+/**
+ * `[links.auto] first_only`.
+ */
+first_only: boolean,
+/**
+ * `[links.auto] warn_common_titles` — `true` (the default) means `links
+ * auto` may print the advisory noisy-candidate-title note on stderr.
+ */
+warn_common_titles: boolean, };

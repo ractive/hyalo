@@ -4,12 +4,11 @@
  * A recently modified file.
  */
 export type RecentFile = {
-  /**
-   * Path associated with this result.
-   */
-  path: string;
-  /**
-   * File modification time.
-   */
-  modified: string;
-};
+/**
+ * Path associated with this result.
+ */
+path: string,
+/**
+ * File modification time.
+ */
+modified: string, };

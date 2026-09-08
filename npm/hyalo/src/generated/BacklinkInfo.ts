@@ -5,16 +5,15 @@
  * Used by `find` (backlinks field).
  */
 export type BacklinkInfo = {
-  /**
-   * Vault-relative file containing the authored link.
-   */
-  source: string;
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Authored link display label, when present.
-   */
-  label?: string;
-};
+/**
+ * Vault-relative file containing the authored link.
+ */
+source: string,
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Authored link display label, when present.
+ */
+label?: string, };

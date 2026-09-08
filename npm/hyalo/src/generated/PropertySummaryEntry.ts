@@ -6,22 +6,21 @@ import type { MixedTypeEntry } from "./MixedTypeEntry.js";
  * Used by `properties` command and `summary`.
  */
 export type PropertySummaryEntry = {
-  /**
-   * Name of this entry.
-   */
-  name: string;
-  /**
-   * Inferred property type name.
-   */
-  type: string;
-  /**
-   * Number of matching occurrences.
-   */
-  count: number;
-  /**
-   * Present only when the property has inconsistent types across files.
-   * Each entry is `(type_name, file_count)` for that type variant.
-   * When `None`, all occurrences share the same type.
-   */
-  mixed_types?: Array<MixedTypeEntry>;
-};
+/**
+ * Name of this entry.
+ */
+name: string,
+/**
+ * Inferred property type name.
+ */
+type: string,
+/**
+ * Number of matching occurrences.
+ */
+count: number,
+/**
+ * Present only when the property has inconsistent types across files.
+ * Each entry is `(type_name, file_count)` for that type variant.
+ * When `None`, all occurrences share the same type.
+ */
+mixed_types?: Array<MixedTypeEntry>, };

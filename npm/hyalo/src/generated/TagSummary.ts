@@ -6,12 +6,11 @@ import type { TagSummaryEntry } from "./TagSummaryEntry.js";
  * Used by `tags` command and `summary`.
  */
 export type TagSummary = {
-  /**
-   * Tag occurrence summary.
-   */
-  tags: Array<TagSummaryEntry>;
-  /**
-   * Total number of considered items.
-   */
-  total: number;
-};
+/**
+ * Tag occurrence summary.
+ */
+tags: Array<TagSummaryEntry>,
+/**
+ * Total number of considered items.
+ */
+total: number, };

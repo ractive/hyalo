@@ -4,8 +4,7 @@
  * Effective pi integration settings.
  */
 export type ConfigPiResult = {
-  /**
-   * Whether session summaries are enabled.
-   */
-  session_summary: boolean;
-};
+/**
+ * Whether session summaries are enabled.
+ */
+session_summary: boolean, };

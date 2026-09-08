@@ -5,24 +5,23 @@
  * Used by `task read`, `task toggle`, `task set`.
  */
 export type TaskReadResult = {
-  /**
-   * Vault-relative Markdown file path.
-   */
-  file: string;
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Task checkbox marker or grouped status value.
-   */
-  status: string;
-  /**
-   * Authored task text without its checkbox marker.
-   */
-  text: string;
-  /**
-   * Whether the task is checked.
-   */
-  done: boolean;
-};
+/**
+ * Vault-relative Markdown file path.
+ */
+file: string,
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Task checkbox marker or grouped status value.
+ */
+status: string,
+/**
+ * Authored task text without its checkbox marker.
+ */
+text: string,
+/**
+ * Whether the task is checked.
+ */
+done: boolean, };

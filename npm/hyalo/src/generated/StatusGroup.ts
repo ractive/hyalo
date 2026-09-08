@@ -4,12 +4,11 @@
  * Files grouped by status property value (count only).
  */
 export type StatusGroup = {
-  /**
-   * Authored status property value.
-   */
-  value: string;
-  /**
-   * Number of matching occurrences.
-   */
-  count: number;
-};
+/**
+ * Authored status property value.
+ */
+value: string,
+/**
+ * Number of matching occurrences.
+ */
+count: number, };
