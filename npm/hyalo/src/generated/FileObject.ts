@@ -11,77 +11,76 @@ import type { PropertyInfo } from "./PropertyInfo.js";
  * Always returned in an array. Optional fields are controlled by `--fields`.
  */
 export type FileObject = {
-  /**
-   * The only unconditional key (iteration 254, DEC-254): it names the
-   * result, so no projection may drop it.
-   */
-  file: string;
-  /**
-   * Last-modified timestamp. In the *default* field set — an agent picks
-   * its next call by recency — but an explicit `--fields` that does not
-   * name `modified` drops it.
-   */
-  modified?: string;
-  /**
-   * File size in bytes (iteration 252), so an agent can budget a `read`
-   * before issuing it. Default field set; droppable via `--fields`.
-   */
-  size?: number;
-  /**
-   * Line count (see [`crate::scanner::ScanStats`]) — the unit
-   * `read --lines A:B` takes. Default field set; droppable via `--fields`.
-   */
-  lines?: number;
-  /**
-   * Title extracted from frontmatter `title` property or first H1 heading.
-   * - `None`: field not requested (omitted from JSON output)
-   * - `Some(Value::String(...))`: title found
-   * - `Some(Value::Null)`: title requested but not found
-   */
-  title?: unknown;
-  /**
-   * Where [`Self::title`] came from: `"property"` (a scalar frontmatter
-   * `title`), `"h1"` (the first H1 heading) or `"filename"` (the filename
-   * stem — Obsidian's own fallback, added in iteration 267 / DEC-283).
-   *
-   * Present exactly when `title` is; `None` when the title field was not
-   * requested, or when even the filename stem was empty.
-   */
-  title_source?: string;
-  /**
-   * User-authored frontmatter properties with genuinely dynamic values.
-   */
-  properties?: Record<string, unknown>;
-  /**
-   * Frontmatter properties paired with their inferred types.
-   */
-  properties_typed?: Array<PropertyInfo>;
-  /**
-   * Tags authored on this file.
-   */
-  tags?: Array<string>;
-  /**
-   * Document outline with section-level metadata.
-   */
-  sections?: Array<OutlineSection>;
-  /**
-   * Tasks in the selected file or sections.
-   */
-  tasks?: Array<FindTaskInfo>;
-  /**
-   * Outbound authored links.
-   */
-  links?: Array<LinkInfo>;
-  /**
-   * Inbound links from other vault files.
-   */
-  backlinks?: Array<BacklinkInfo>;
-  /**
-   * Body matches or ranked snippets; present and empty for title-only ranked hits.
-   */
-  matches?: Array<ContentMatch>;
-  /**
-   * BM25 relevance score for positional ranked searches.
-   */
-  score?: number;
-};
+/**
+ * The only unconditional key (iteration 254, DEC-254): it names the
+ * result, so no projection may drop it.
+ */
+file: string,
+/**
+ * Last-modified timestamp. In the *default* field set — an agent picks
+ * its next call by recency — but an explicit `--fields` that does not
+ * name `modified` drops it.
+ */
+modified?: string,
+/**
+ * File size in bytes (iteration 252), so an agent can budget a `read`
+ * before issuing it. Default field set; droppable via `--fields`.
+ */
+size?: number,
+/**
+ * Line count (see [`crate::scanner::ScanStats`]) — the unit
+ * `read --lines A:B` takes. Default field set; droppable via `--fields`.
+ */
+lines?: number,
+/**
+ * Title extracted from frontmatter `title` property or first H1 heading.
+ * - `None`: field not requested (omitted from JSON output)
+ * - `Some(Value::String(...))`: title found
+ * - `Some(Value::Null)`: title requested but not found
+ */
+title?: unknown,
+/**
+ * Where [`Self::title`] came from: `"property"` (a scalar frontmatter
+ * `title`), `"h1"` (the first H1 heading) or `"filename"` (the filename
+ * stem — Obsidian's own fallback, added in iteration 267 / DEC-283).
+ *
+ * Present exactly when `title` is; `None` when the title field was not
+ * requested, or when even the filename stem was empty.
+ */
+title_source?: string,
+/**
+ * User-authored frontmatter properties with genuinely dynamic values.
+ */
+properties?: Record<string, unknown>,
+/**
+ * Frontmatter properties paired with their inferred types.
+ */
+properties_typed?: Array<PropertyInfo>,
+/**
+ * Tags authored on this file.
+ */
+tags?: Array<string>,
+/**
+ * Document outline with section-level metadata.
+ */
+sections?: Array<OutlineSection>,
+/**
+ * Tasks in the selected file or sections.
+ */
+tasks?: Array<FindTaskInfo>,
+/**
+ * Outbound authored links.
+ */
+links?: Array<LinkInfo>,
+/**
+ * Inbound links from other vault files.
+ */
+backlinks?: Array<BacklinkInfo>,
+/**
+ * Body matches or ranked snippets; present and empty for title-only ranked hits.
+ */
+matches?: Array<ContentMatch>,
+/**
+ * BM25 relevance score for positional ranked searches.
+ */
+score?: number, };

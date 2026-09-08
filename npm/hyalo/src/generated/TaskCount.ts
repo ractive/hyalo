@@ -4,12 +4,11 @@
  * Task checkbox counts within a section.
  */
 export type TaskCount = {
-  /**
-   * Total number of considered items.
-   */
-  total: number;
-  /**
-   * Number of checked tasks.
-   */
-  done: number;
-};
+/**
+ * Total number of considered items.
+ */
+total: number,
+/**
+ * Number of checked tasks.
+ */
+done: number, };

@@ -6,28 +6,27 @@ import type { TaskCount } from "./TaskCount.js";
  * Used by `find` (sections field).
  */
 export type OutlineSection = {
-  /**
-   * ATX heading level (one through six).
-   */
-  level: number;
-  /**
-   * Heading text, or null for the preamble.
-   */
-  heading: string | null;
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Link targets occurring within this section.
-   */
-  links: Array<string>;
-  /**
-   * Task checkbox counts.
-   */
-  tasks?: TaskCount;
-  /**
-   * Languages of fenced code blocks in the section.
-   */
-  code_blocks: Array<string>;
-};
+/**
+ * ATX heading level (one through six).
+ */
+level: number,
+/**
+ * Heading text, or null for the preamble.
+ */
+heading: string | null,
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Link targets occurring within this section.
+ */
+links: Array<string>,
+/**
+ * Task checkbox counts.
+ */
+tasks?: TaskCount,
+/**
+ * Languages of fenced code blocks in the section.
+ */
+code_blocks: Array<string>, };

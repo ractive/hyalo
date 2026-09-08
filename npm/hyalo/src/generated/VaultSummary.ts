@@ -12,57 +12,56 @@ import type { TaskCount } from "./TaskCount.js";
  * High-level vault summary.
  */
 export type VaultSummary = {
-  /**
-   * Resolved vault directory (display string).
-   */
-  dir: string;
-  /**
-   * File counts and directory breakdown.
-   */
-  files: FileCounts;
-  /**
-   * Files with neither inbound nor outbound links.
-   */
-  orphans: number;
-  /**
-   * Files with inbound links and no outbound links.
-   */
-  dead_ends: number;
-  /**
-   * Vault-wide link health counts.
-   */
-  links: LinkHealthSummary;
-  /**
-   * Property usage and value summaries.
-   */
-  properties: Array<PropertySummaryEntry>;
-  /**
-   * Tag occurrence summary.
-   */
-  tags: TagSummary;
-  /**
-   * Task checkbox marker or grouped status value.
-   */
-  status: Array<StatusGroup>;
-  /**
-   * Task checkbox counts.
-   */
-  tasks: TaskCount;
-  /**
-   * Files ordered by modification time.
-   */
-  recent_files: Array<RecentFile>;
-  /**
-   * Schema lint counts — `None` when no `[schema]` block is configured.
-   */
-  schema?: LintSummary;
-  /**
-   * Format version of the snapshot this summary was computed from
-   * (G4 / BUG-12, iter-276), or `None` for a disk scan.
-   *
-   * An agent comparing it against `hyalo config`'s
-   * `snapshot_format_version` can tell an index this binary would refuse
-   * from a fresh one *before* the numbers disagree.
-   */
-  index_format_version?: number;
-};
+/**
+ * Resolved vault directory (display string).
+ */
+dir: string,
+/**
+ * File counts and directory breakdown.
+ */
+files: FileCounts,
+/**
+ * Files with neither inbound nor outbound links.
+ */
+orphans: number,
+/**
+ * Files with inbound links and no outbound links.
+ */
+dead_ends: number,
+/**
+ * Vault-wide link health counts.
+ */
+links: LinkHealthSummary,
+/**
+ * Property usage and value summaries.
+ */
+properties: Array<PropertySummaryEntry>,
+/**
+ * Tag occurrence summary.
+ */
+tags: TagSummary,
+/**
+ * Task checkbox marker or grouped status value.
+ */
+status: Array<StatusGroup>,
+/**
+ * Task checkbox counts.
+ */
+tasks: TaskCount,
+/**
+ * Files ordered by modification time.
+ */
+recent_files: Array<RecentFile>,
+/**
+ * Schema lint counts — `None` when no `[schema]` block is configured.
+ */
+schema?: LintSummary,
+/**
+ * Format version of the snapshot this summary was computed from
+ * (G4 / BUG-12, iter-276), or `None` for a disk scan.
+ *
+ * An agent comparing it against `hyalo config`'s
+ * `snapshot_format_version` can tell an index this binary would refuse
+ * from a fresh one *before* the numbers disagree.
+ */
+index_format_version?: number, };

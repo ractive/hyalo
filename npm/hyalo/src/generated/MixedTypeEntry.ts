@@ -4,12 +4,11 @@
  * One type variant in a mixed-type property summary.
  */
 export type MixedTypeEntry = {
-  /**
-   * Inferred property type name.
-   */
-  type: string;
-  /**
-   * Number of matching occurrences.
-   */
-  count: number;
-};
+/**
+ * Inferred property type name.
+ */
+type: string,
+/**
+ * Number of matching occurrences.
+ */
+count: number, };

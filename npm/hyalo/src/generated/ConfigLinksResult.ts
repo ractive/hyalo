@@ -4,20 +4,19 @@
  * Serialized ConfigLinksResult command contract.
  */
 export type ConfigLinksResult = {
-  /**
-   * Whether all frontmatter values contribute graph edges.
-   */
-  frontmatter: boolean;
-  /**
-   * Explicit property allow-list, or null.
-   */
-  frontmatter_properties: Array<string> | null;
-  /**
-   * Whether authored aliases resolve links.
-   */
-  aliases: boolean;
-  /**
-   * Effective case resolution mode.
-   */
-  case_insensitive: string;
-};
+/**
+ * Whether all frontmatter values contribute graph edges.
+ */
+frontmatter: boolean,
+/**
+ * Explicit property allow-list, or null.
+ */
+frontmatter_properties: Array<string> | null,
+/**
+ * Whether authored aliases resolve links.
+ */
+aliases: boolean,
+/**
+ * Effective case resolution mode.
+ */
+case_insensitive: string, };

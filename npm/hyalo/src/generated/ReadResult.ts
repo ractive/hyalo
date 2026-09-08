@@ -4,28 +4,27 @@
  * Serialized ReadResult command contract.
  */
 export type ReadResult = {
-  /**
-   * Vault-relative file path.
-   */
-  file: string;
-  /**
-   * Size of the whole file in bytes.
-   */
-  size: number;
-  /**
-   * Line count of the whole file, before section selection.
-   */
-  lines: number;
-  /**
-   * Parsed user-authored frontmatter, whose keys and values are genuinely dynamic.
-   */
-  frontmatter?: unknown;
-  /**
-   * Exact frontmatter source; null when requested but no source block exists.
-   */
-  frontmatter_raw?: string | null;
-  /**
-   * Selected body text, omitted for frontmatter-only reads.
-   */
-  content?: string;
-};
+/**
+ * Vault-relative file path.
+ */
+file: string,
+/**
+ * Size of the whole file in bytes.
+ */
+size: number,
+/**
+ * Line count of the whole file, before section selection.
+ */
+lines: number,
+/**
+ * Parsed user-authored frontmatter, whose keys and values are genuinely dynamic.
+ */
+frontmatter?: unknown,
+/**
+ * Exact frontmatter source; null when requested but no source block exists.
+ */
+frontmatter_raw?: string | null,
+/**
+ * Selected body text, omitted for frontmatter-only reads.
+ */
+content?: string, };

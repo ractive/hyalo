@@ -4,20 +4,19 @@
  * Exit-1 error contract; the singular `hint` key is intentional.
  */
 export type ErrorEnvelope = {
-  /**
-   * Underlying diagnostic, omitted when there is no additional cause.
-   */
-  cause?: string;
-  /**
-   * User-facing description of the failure.
-   */
-  error: string;
-  /**
-   * Suggested recovery action, omitted when unavailable.
-   */
-  hint?: string;
-  /**
-   * Relevant path, omitted for failures unrelated to a specific path.
-   */
-  path?: string;
-};
+/**
+ * Underlying diagnostic, omitted when there is no additional cause.
+ */
+cause?: string,
+/**
+ * User-facing description of the failure.
+ */
+error: string,
+/**
+ * Suggested recovery action, omitted when unavailable.
+ */
+hint?: string,
+/**
+ * Relevant path, omitted for failures unrelated to a specific path.
+ */
+path?: string, };

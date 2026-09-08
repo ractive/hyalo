@@ -110,6 +110,21 @@ fn generate_rust_types(root: &Path, output: &Path) -> Result<()> {
             bail!("ts-rs export tests for {package} failed with {status}");
         }
     }
+    // The unformatted ts-rs exporter leaves spaces after field separators.
+    // Normalize only freshly generated files, so the drift check still rejects
+    // edits to committed declarations instead of silently normalizing them.
+    for (path, bytes) in inventory(output)? {
+        let source = String::from_utf8(bytes)
+            .with_context(|| format!("generated {} is not UTF-8", path.display()))?;
+        let mut normalized = String::with_capacity(source.len());
+        for line in source.lines() {
+            normalized.push_str(line.trim_end_matches([' ', '\t']));
+            normalized.push('\n');
+        }
+        let target = output.join(path);
+        fs::write(&target, normalized)
+            .with_context(|| format!("normalizing {}", target.display()))?;
+    }
     Ok(())
 }
 

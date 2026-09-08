@@ -6,92 +6,91 @@ import type { LinkKindLabel } from "./LinkKindLabel.js";
  * Used by `find` (links field).
  */
 export type LinkInfo = {
-  /**
-   * Resolved or authored link target, according to the command.
-   */
-  target: string;
-  /**
-   * Path associated with this result.
-   */
-  path: string | null;
-  /**
-   * Authored link display label, when present.
-   */
-  label: string | null;
-  /**
-   * What this link is: `wikilink` | `embed` | `markdown` | `external` |
-   * `attachment` (iter-261, dogfood UX-6). Always serialized — a link
-   * always has a kind — and defaulted to `wikilink` when reading JSON
-   * written by an older hyalo.
-   */
-  kind: LinkKindLabel;
-  /**
-   * The frontmatter key this link was written under, for a link with
-   * `kind: "frontmatter"` — the dotted key path for a nested map
-   * (`meta.source`), the plain key otherwise (iter-262). Absent for body
-   * links, so the shape of an existing report is unchanged.
-   */
-  property?: string;
-  /**
-   * 1-based source line the link was written on (iter-215, dogfood UX-6).
-   *
-   * `find --broken-links` used to list every link of a matching file with no
-   * location, so finding the reported broken link meant grepping the file.
-   * The line is the same one `hyalo lint` (HYALO006) and `backlinks` report
-   * for the same link, and comes straight from the index
-   * (`IndexEntry::links` / `IndexEntry::self_anchors` already store it), so
-   * no extra file read is involved.
-   *
-   * Named `line` to match every other line-bearing shape in `.results`
-   * (`BacklinkInfo`, `OutlineSection`, `ContentMatch`, `TaskInfo`) — always
-   * a 1-based source line, never an index or an offset. Always serialized:
-   * unlike `fragment` / `broken_anchor` / `out_of_vault` this is not a
-   * verdict that may be absent, it is a location every link has.
-   * `#[serde(default)]` only covers deserializing JSON written by an older
-   * hyalo, where it reads back as `0`.
-   */
-  line: number;
-  /**
-   * The `#fragment` (heading anchor) the link carried, without the leading
-   * `#`. `None` for links with no fragment. Skipped from JSON when absent so
-   * non-anchored links keep today's shape (L-21, iter-190).
-   */
-  fragment?: string;
-  /**
-   * `true` when the link's target file resolved (`path` is `Some`) but the
-   * `#fragment` does not name any heading in that file — a *broken anchor*.
-   * Distinct from a broken target (`path: None`); the two are never both set
-   * on one link. Skipped from JSON when `false` so non-anchored / valid
-   * links keep today's shape.
-   */
-  broken_anchor?: boolean;
-  /**
-   * The full heading text to write instead, when this link's dead fragment
-   * is the prefix of exactly one heading in the target file (iter-261 /
-   * DEC-268): `[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`.
-   *
-   * Only ever set alongside `broken_anchor`, and only when the prefix is
-   * unambiguous — two matching headings yield no suggestion. It is a
-   * suggestion, never an automatic rewrite: a silent prefix match would hide
-   * the typos this rule exists to surface. Skipped from JSON when absent.
-   */
-  suggested_fragment?: string;
-  /**
-   * `true` when the link's target normalizes to a path *above* the vault
-   * root, so it can never resolve to a scanned file. Implies `path: None`,
-   * but is deliberately distinguished from a broken target: the file is out
-   * of scope, not missing (iter-193). Skipped from JSON when `false`.
-   */
-  out_of_vault?: boolean;
-  /**
-   * How the target resolved when a plain path or filename lookup was not
-   * what answered — currently only `"alias"`, for a target matched against
-   * a note's frontmatter `aliases:` (iter-272 Part B, DEC-296).
-   *
-   * Absent for every link that resolves by path or filename, so a report of
-   * an alias-free vault keeps today's shape byte for byte. `kind` stays
-   * `wikilink`: an alias changes *what the target names*, not the syntax it
-   * was written in.
-   */
-  via?: string;
-};
+/**
+ * Resolved or authored link target, according to the command.
+ */
+target: string,
+/**
+ * Path associated with this result.
+ */
+path: string | null,
+/**
+ * Authored link display label, when present.
+ */
+label: string | null,
+/**
+ * What this link is: `wikilink` | `embed` | `markdown` | `external` |
+ * `attachment` (iter-261, dogfood UX-6). Always serialized — a link
+ * always has a kind — and defaulted to `wikilink` when reading JSON
+ * written by an older hyalo.
+ */
+kind: LinkKindLabel,
+/**
+ * The frontmatter key this link was written under, for a link with
+ * `kind: "frontmatter"` — the dotted key path for a nested map
+ * (`meta.source`), the plain key otherwise (iter-262). Absent for body
+ * links, so the shape of an existing report is unchanged.
+ */
+property?: string,
+/**
+ * 1-based source line the link was written on (iter-215, dogfood UX-6).
+ *
+ * `find --broken-links` used to list every link of a matching file with no
+ * location, so finding the reported broken link meant grepping the file.
+ * The line is the same one `hyalo lint` (HYALO006) and `backlinks` report
+ * for the same link, and comes straight from the index
+ * (`IndexEntry::links` / `IndexEntry::self_anchors` already store it), so
+ * no extra file read is involved.
+ *
+ * Named `line` to match every other line-bearing shape in `.results`
+ * (`BacklinkInfo`, `OutlineSection`, `ContentMatch`, `TaskInfo`) — always
+ * a 1-based source line, never an index or an offset. Always serialized:
+ * unlike `fragment` / `broken_anchor` / `out_of_vault` this is not a
+ * verdict that may be absent, it is a location every link has.
+ * `#[serde(default)]` only covers deserializing JSON written by an older
+ * hyalo, where it reads back as `0`.
+ */
+line: number,
+/**
+ * The `#fragment` (heading anchor) the link carried, without the leading
+ * `#`. `None` for links with no fragment. Skipped from JSON when absent so
+ * non-anchored links keep today's shape (L-21, iter-190).
+ */
+fragment?: string,
+/**
+ * `true` when the link's target file resolved (`path` is `Some`) but the
+ * `#fragment` does not name any heading in that file — a *broken anchor*.
+ * Distinct from a broken target (`path: None`); the two are never both set
+ * on one link. Skipped from JSON when `false` so non-anchored / valid
+ * links keep today's shape.
+ */
+broken_anchor?: boolean,
+/**
+ * The full heading text to write instead, when this link's dead fragment
+ * is the prefix of exactly one heading in the target file (iter-261 /
+ * DEC-268): `[[decision-log#DEC-068]]` → `DEC-068: Snapshot index format`.
+ *
+ * Only ever set alongside `broken_anchor`, and only when the prefix is
+ * unambiguous — two matching headings yield no suggestion. It is a
+ * suggestion, never an automatic rewrite: a silent prefix match would hide
+ * the typos this rule exists to surface. Skipped from JSON when absent.
+ */
+suggested_fragment?: string,
+/**
+ * `true` when the link's target normalizes to a path *above* the vault
+ * root, so it can never resolve to a scanned file. Implies `path: None`,
+ * but is deliberately distinguished from a broken target: the file is out
+ * of scope, not missing (iter-193). Skipped from JSON when `false`.
+ */
+out_of_vault?: boolean,
+/**
+ * How the target resolved when a plain path or filename lookup was not
+ * what answered — currently only `"alias"`, for a target matched against
+ * a note's frontmatter `aliases:` (iter-272 Part B, DEC-296).
+ *
+ * Absent for every link that resolves by path or filename, so a report of
+ * an alias-free vault keeps today's shape byte for byte. `kind` stays
+ * `wikilink`: an alias changes *what the target names*, not the syntax it
+ * was written in.
+ */
+via?: string, };

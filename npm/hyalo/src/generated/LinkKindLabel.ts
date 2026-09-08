@@ -14,10 +14,4 @@
  * Precedence when several could apply — `external` beats `attachment` beats
  * `embed` beats the syntax kinds — so exactly one label is reported per link.
  */
-export type LinkKindLabel =
-  | "wikilink"
-  | "embed"
-  | "markdown"
-  | "external"
-  | "attachment"
-  | "frontmatter";
+export type LinkKindLabel = "wikilink" | "embed" | "markdown" | "external" | "attachment" | "frontmatter";

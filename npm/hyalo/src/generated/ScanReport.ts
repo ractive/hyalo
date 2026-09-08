@@ -4,17 +4,16 @@
  * Effective `[scan]` settings, as `hyalo config` reports them (iter-265).
  */
 export type ScanReport = {
-  /**
-   * `[scan] include` — hidden dot-subtrees the walker descends into.
-   */
-  include: Array<string>;
-  /**
-   * `[scan] exclude` — vault-relative globs no command sees.
-   */
-  exclude: Array<string>;
-  /**
-   * `[scan] verbose_skips` — stream per-file skip diagnostics instead of
-   * collapsing them into one end-of-run summary line.
-   */
-  verbose_skips: boolean;
-};
+/**
+ * `[scan] include` — hidden dot-subtrees the walker descends into.
+ */
+include: Array<string>,
+/**
+ * `[scan] exclude` — vault-relative globs no command sees.
+ */
+exclude: Array<string>,
+/**
+ * `[scan] verbose_skips` — stream per-file skip diagnostics instead of
+ * collapsing them into one end-of-run summary line.
+ */
+verbose_skips: boolean, };

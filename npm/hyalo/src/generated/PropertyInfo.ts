@@ -5,16 +5,15 @@
  * Used by `properties` (aggregate summary).
  */
 export type PropertyInfo = {
-  /**
-   * Name of this entry.
-   */
-  name: string;
-  /**
-   * Inferred property type name.
-   */
-  type: string;
-  /**
-   * User-authored property value; the value shape is genuinely dynamic.
-   */
-  value: unknown;
-};
+/**
+ * Name of this entry.
+ */
+name: string,
+/**
+ * Inferred property type name.
+ */
+type: string,
+/**
+ * User-authored property value; the value shape is genuinely dynamic.
+ */
+value: unknown, };

@@ -5,25 +5,24 @@ import type { DirectoryCount } from "./DirectoryCount.js";
  * File counts by directory.
  */
 export type FileCounts = {
-  /**
-   * Total number of considered items.
-   */
-  total: number;
-  /**
-   * Files the scan found but could not use because their frontmatter would
-   * not parse (iter-265). `summary` reported only `total` before, so a vault
-   * of 103 notes with 28 unparsable Templater templates said `Files: 75` and
-   * never accounted for the missing 28. Run `hyalo lint --rule HYALO005` to
-   * see them individually.
-   */
-  skipped: number;
-  /**
-   * Files dropped before the scan by `[scan] exclude` in `.hyalo.toml`.
-   * Zero unless the vault configures exclusions.
-   */
-  excluded: number;
-  /**
-   * File counts grouped by directory.
-   */
-  directories: Array<DirectoryCount>;
-};
+/**
+ * Total number of considered items.
+ */
+total: number,
+/**
+ * Files the scan found but could not use because their frontmatter would
+ * not parse (iter-265). `summary` reported only `total` before, so a vault
+ * of 103 notes with 28 unparsable Templater templates said `Files: 75` and
+ * never accounted for the missing 28. Run `hyalo lint --rule HYALO005` to
+ * see them individually.
+ */
+skipped: number,
+/**
+ * Files dropped before the scan by `[scan] exclude` in `.hyalo.toml`.
+ * Zero unless the vault configures exclusions.
+ */
+excluded: number,
+/**
+ * File counts grouped by directory.
+ */
+directories: Array<DirectoryCount>, };

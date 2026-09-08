@@ -4,235 +4,233 @@
  * All filter arguments for `hyalo find`, extracted so they can be serialized as views.
  */
 export type FindFilters = {
-  /**
-   * Regex body search, case-insensitive (excludes PATTERN)
-   *
-   * Regex body text search (case-insensitive by default; use (?-i) to override).
-   * Mutually exclusive with PATTERN.
-   */
-  regexp?: string;
-  /**
-   * K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/i|K=null; AND; K may be a dot-path
-   *
-   * Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
-   * K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
-   * sequences (contact.email, contacts.0.email, contacts.email = any element).
-   *
-   * Value syntax: K=null matches a property present with a YAML null (`~`, `null`, or an
-   * empty value) and K!=null a present non-null one; K=[] matches an empty list, K!=[] a
-   * non-empty one. A list *containing* a null does not match K=null.
-   * Ordering ops (>, >=, <, <=) compare numerically when both sides are numbers, by date
-   * when both are ISO dates, and as text only when both are plain strings — a value of a
-   * different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
-   * The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
-   * K=V tests the RAW frontmatter value, while type binding normalises: a file whose
-   * `type: ["[[Iteration]]"]` binds to the `Iteration` schema is not matched by
-   * `--property type=Iteration`. Use `--property 'type~=Iteration'` to span every spelling.
-   */
-  properties: Array<string>;
-  /**
-   * Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
-   *
-   * Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
-   * 'projects'). Repeatable (AND).
-   */
-  tag: Array<string>;
-  /**
-   * Task presence: 'todo', 'done', 'any', or a single status character
-   *
-   * A FILE filter, not a task projection: it selects files that contain at least one
-   * matching task, and `--fields tasks` then returns every task in those files, not only
-   * the matching ones.
-   */
-  task?: string;
-  /**
-   * Heading substring, '##' pins the level, or /regex/; repeatable (OR)
-   *
-   * Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
-   * prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
-   * A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
-   */
-  sections: Array<string>;
-  file: Array<string>;
-  /**
-   * Glob patterns relative to `--dir`, repeatable; `!` negates a pattern.
-   *
-   * Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
-   * recursive matches.
-   */
-  glob: Array<string>;
-  /**
-   * Read paths from PATH, one per line ('-' = stdin)
-   *
-   * Read file paths from PATH (one per line); use '-' to read from stdin.
-   * Mutually exclusive with --file and --glob.
-   * Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
-   * Repo-relative paths with the configured vault dir prefix (e.g. files/en-us/x.md with --dir files/en-us)
-   * are resolved by trying vault-relative first, then stripping the full dir prefix and retrying.
-   * Input is deduplicated; results follow first-seen order.
-   * CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
-   * restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
-   * hyalo shells out to nothing and has no VCS-specific flag).
-   * MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from
-   * list keeps batch semantics and merely counts a missing entry under files_missing, exit 0.
-   * An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
-   * does not silence — in a gate, "no input" and "no findings" must not look alike.
-   */
-  files_from?: string;
-  /**
-   * all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
-   *
-   * Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
-   * exactly the named fields plus file (filters add what they need).
-   *
-   * `file` is the only unconditional key — it names the result — so `--fields title` returns
-   * {file, title} and `--fields size,lines` returns {file, size, lines}. `modified`, `size`
-   * and `lines` are ordinary members of the default set: cheap enough to always pay for, and
-   * the inputs an agent uses to choose its next call (`read --lines`, recency), but dropped
-   * when an explicit --fields does not name them. `--fields file` is accepted and means
-   * {file}; `--fields all` selects everything. A saved view's pinned `fields` behaves exactly
-   * like an explicit --fields; a CLI --fields on top replaces the pin rather than adding to it.
-   *
-   * A filter that implies a field still returns it, on top of whatever set is in force:
-   * --section adds sections, --task adds tasks, --broken-links adds links,
-   * --orphan/--dead-end add links and backlinks, and --sort links_count/backlinks_count add
-   * the field they rank on.
-   *
-   * 'properties' is a {key: value} map WITHOUT the promoted 'title' property (which has its
-   * own field whenever 'title' is included, and stays in the map when the frontmatter value
-   * is a list or a map and so cannot be promoted); 'properties-typed' is a
-   * [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the
-   * frontmatter title property — any scalar, stringified as written — or the first H1
-   * heading (null if neither found). 'outline' is an alias for 'sections'. Note: in JSON
-   * output, `properties-typed` is serialized as `properties_typed` (underscore).
-   */
-  fields: Array<string>;
-  /**
-   * file (default)|modified|backlinks_count|links_count|title|date|score|property:K
-   *
-   * Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count',
-   * 'title', 'date', 'score', or 'property:<KEY>' for any frontmatter property.
-   *
-   * DIRECTION: every key sorts ascending and --reverse inverts it, so
-   * `--sort backlinks_count --reverse` is "most linked first" exactly as
-   * `--sort modified --reverse` is "newest first". 'score' is the one exception: it ranks
-   * best-match-first (descending relevance), and --reverse puts the weakest match first.
-   * Files whose sort property is missing or null always sort last, in both directions.
-   *
-   * For 'property:<KEY>',
-   * values of different JSON types (e.g. some files have a string, others a number) compare by
-   * raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a
-   * stderr warning names the property when this happens; use a consistent type in frontmatter
-   * for a meaningful sort.
-   */
-  sort?: string;
-  /**
-   * Reverse the sort order [alias: --desc]
-   *
-   * Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc.
-   */
-  reverse: boolean;
-  /**
-   * Max results, 0 = unlimited (default cap: 50)
-   *
-   * Maximum number of results to return (0 = unlimited).
-   * Default cap is bypassed when --jq or --count is used.
-   */
-  limit?: number;
-  /**
-   * Only files with an unresolved link or dead heading anchor
-   *
-   * Only return files with at least one unresolved link or dead heading anchor
-   * (auto-includes links field).
-   * Targets that resolve above the vault root are out of scope, not broken: they are
-   * flagged `out_of_vault` on the link and do not qualify a file here.
-   * A `#fragment` matches either the raw heading text or the rendered GitHub slug
-   * (`#sub-section` for `### Sub Section`); same-file fragments (`[b](#nope)`) are
-   * checked against the file's own headings and reported with an empty target.
-   * A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`)
-   * renders to an anchor hyalo cannot compute, so anchors into such a file are never
-   * reported broken.
-   * Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
-   * reports, and links are listed in document order.
-   * An external URI (`obsidian://`, `mailto:`, `https:`) and a link that resolves to a
-   * non-`.md` vault file (an image, a `.base`) are never broken — they are reported with
-   * `kind` `external` / `attachment` and never qualify a file here.
-   */
-  broken_links: boolean;
-  /**
-   * Exit 1 if any results, 0 if empty — a CI gate
-   *
-   * A CI gate for any find query, most commonly `find --broken-links --strict` to fail a build
-   * on a dead heading anchor. Before this, `find --broken-links` always exited 0 even when it
-   * reported findings, so a vault whose only defect was a dead anchor passed CI silently.
-   */
-  strict: boolean;
-  /**
-   * Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
-   *
-   * Deciding orphanhood needs both directions of the graph, so both fields come back
-   * whether or not --fields names them.
-   */
-  orphan: boolean;
-  /**
-   * Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
-   *
-   * Deciding dead-endedness needs both directions of the graph, so both fields come back
-   * whether or not --fields names them.
-   */
-  dead_end: boolean;
-  /**
-   * Title substring (case-insensitive) or /regex/[i]
-   *
-   * Filter by title: case-insensitive substring match against the displayed title
-   * (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
-   * (e.g. '/^The/' or '/^The/i').
-   */
-  title?: string;
-  /**
-   * BM25 Snowball stemmer language (default: english) [alias: --stemmer]
-   *
-   * Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
-   * tokenization — NOT markdown code-block language.
-   * Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
-   * Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
-   * german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn),
-   * portuguese (pt), romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta),
-   * turkish (tr).
-   */
-  language?: string;
-  /**
-   * Print matching paths only, one per line — no envelope, no hints
-   *
-   * Print only the file path of each matching entry, one per line — no JSON,
-   * no envelope, no count, no hints. grep `-l` precedent: the agent/
-   * pipeline projection of a find result set, usable in `sort`, `xargs`,
-   * and `while read` loops. Zero results → empty output, exit 0.
-   *
-   * Conflicts with `--jq`, `--count`, and an explicit `--format json`
-   * (mutually exclusive projections — pick one). `--strict` still flips
-   * the exit code (1 when results exist), so `find --property status=planned
-   * --filenames-only --strict` is a CI gate that lists the offenders and
-   * fails. Combines with every other filter (`--property`, `--tag`,
-   * `--glob`, `--broken-links`, …) exactly as `find`
-   * normally does.
-   */
-  filenames_only: boolean;
-  /**
-   * Like --filenames-only but NUL-separated, for `xargs -0`
-   *
-   * NUL-delimited sibling of `--filenames-only` (iter-238): each matching
-   * file path is printed terminated by a NUL byte instead of a newline,
-   * exactly like GNU `find -print0`. Safe for filenames that contain
-   * newlines (which are legal in POSIX filenames, though not on Windows),
-   * and composes
-   * with `xargs -0` / `while IFS= read -r -d ''`. Same semantics as
-   * `--filenames-only` otherwise: no JSON, no envelope, no count, no hints;
-   * zero results → empty output, exit 0; `--strict` still flips the exit
-   * code when results exist.
-   *
-   * Mutually exclusive with `--filenames-only`, `--jq`, `--count`, and an
-   * explicit `--format json` (pick one projection).
-   */
-  filenames0: boolean;
-};
+/**
+ * Regex body search, case-insensitive (excludes PATTERN)
+ *
+ * Regex body text search (case-insensitive by default; use (?-i) to override).
+ * Mutually exclusive with PATTERN.
+ */
+regexp?: string,
+/**
+ * K=V|K!=V|K>V|K>=V|K<V|K<=V|K|!K|K~=/re/i|K=null; AND; K may be a dot-path
+ *
+ * Property filter: K=V (eq), K!=V (neq), K>=V, K<=V, K>V, K<V, K (exists), !K (absent),
+ * K~=pat or K~=/pat/i (regex). Repeatable (AND). K may be a dot-path into nested maps and
+ * sequences (contact.email, contacts.0.email, contacts.email = any element).
+ *
+ * Value syntax: K=null matches a property present with a YAML null (`~`, `null`, or an
+ * empty value) and K!=null a present non-null one; K=[] matches an empty list, K!=[] a
+ * non-empty one. A list *containing* a null does not match K=null.
+ * Ordering ops (>, >=, <, <=) compare numerically when both sides are numbers, by date
+ * when both are ISO dates, and as text only when both are plain strings — a value of a
+ * different kind never matches, so `last>=2023-09-01` skips `last: "[[2022-04]]"`.
+ * The regex operator is ~= (not =~, which is rejected), and its pattern must not be empty.
+ * K=V tests the RAW frontmatter value, while type binding normalises: a file whose
+ * `type: ["[[Iteration]]"]` binds to the `Iteration` schema is not matched by
+ * `--property type=Iteration`. Use `--property 'type~=Iteration'` to span every spelling.
+ */
+properties: Array<string>,
+/**
+ * Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
+ *
+ * Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
+ * 'projects'). Repeatable (AND).
+ */
+tag: Array<string>,
+/**
+ * Task presence: 'todo', 'done', 'any', or a single status character
+ *
+ * A FILE filter, not a task projection: it selects files that contain at least one
+ * matching task, and `--fields tasks` then returns every task in those files, not only
+ * the matching ones.
+ */
+task?: string,
+/**
+ * Heading substring, '##' pins the level, or /regex/; repeatable (OR)
+ *
+ * Section heading filter: case-insensitive substring match (e.g. 'Tasks' matches 'Tasks [4/4]');
+ * prefix '##' to pin heading level; use '/regex/' for regex (e.g. '/DEC-03[12]/'). Repeatable (OR).
+ * A file with more than one matching heading unions all of them (unlike `task --section`, which refuses)
+ */
+sections: Array<string>, file: Array<string>,
+/**
+ * Glob patterns relative to `--dir`, repeatable; `!` negates a pattern.
+ *
+ * Glob pattern(s) to select files, relative to --dir (repeatable); prefix '!' to negate
+ * recursive matches.
+ */
+glob: Array<string>,
+/**
+ * Read paths from PATH, one per line ('-' = stdin)
+ *
+ * Read file paths from PATH (one per line); use '-' to read from stdin.
+ * Mutually exclusive with --file and --glob.
+ * Non-.md paths and paths outside the vault are silently skipped (counters appear in JSON envelope).
+ * Repo-relative paths with the configured vault dir prefix (e.g. files/en-us/x.md with --dir files/en-us)
+ * are resolved by trying vault-relative first, then stripping the full dir prefix and retrying.
+ * Input is deduplicated; results follow first-seen order.
+ * CHANGED-FILES RECIPE: `git diff --name-only origin/main | hyalo <cmd> --files-from -`
+ * restricts a run to what a branch touched (any VCS or `find`/`fd`/`rg -l` works the same way;
+ * hyalo shells out to nothing and has no VCS-specific flag).
+ * MISSING PATHS: a path named with --file or positionally must exist (exit 1); a --files-from
+ * list keeps batch semantics and merely counts a missing entry under files_missing, exit 0.
+ * An EMPTY list examines nothing and still exits 0, so it is reported as a warning that -q
+ * does not silence — in a gate, "no input" and "no findings" must not look alike.
+ */
+files_from?: string,
+/**
+ * all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
+ *
+ * Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
+ * exactly the named fields plus file (filters add what they need).
+ *
+ * `file` is the only unconditional key — it names the result — so `--fields title` returns
+ * {file, title} and `--fields size,lines` returns {file, size, lines}. `modified`, `size`
+ * and `lines` are ordinary members of the default set: cheap enough to always pay for, and
+ * the inputs an agent uses to choose its next call (`read --lines`, recency), but dropped
+ * when an explicit --fields does not name them. `--fields file` is accepted and means
+ * {file}; `--fields all` selects everything. A saved view's pinned `fields` behaves exactly
+ * like an explicit --fields; a CLI --fields on top replaces the pin rather than adding to it.
+ *
+ * A filter that implies a field still returns it, on top of whatever set is in force:
+ * --section adds sections, --task adds tasks, --broken-links adds links,
+ * --orphan/--dead-end add links and backlinks, and --sort links_count/backlinks_count add
+ * the field they rank on.
+ *
+ * 'properties' is a {key: value} map WITHOUT the promoted 'title' property (which has its
+ * own field whenever 'title' is included, and stays in the map when the frontmatter value
+ * is a list or a map and so cannot be promoted); 'properties-typed' is a
+ * [{name, type, value}] array; 'backlinks' requires scanning all files; 'title' is the
+ * frontmatter title property — any scalar, stringified as written — or the first H1
+ * heading (null if neither found). 'outline' is an alias for 'sections'. Note: in JSON
+ * output, `properties-typed` is serialized as `properties_typed` (underscore).
+ */
+fields: Array<string>,
+/**
+ * file (default)|modified|backlinks_count|links_count|title|date|score|property:K
+ *
+ * Sort order: 'file' / 'path' (default), 'modified', 'backlinks_count', 'links_count',
+ * 'title', 'date', 'score', or 'property:<KEY>' for any frontmatter property.
+ *
+ * DIRECTION: every key sorts ascending and --reverse inverts it, so
+ * `--sort backlinks_count --reverse` is "most linked first" exactly as
+ * `--sort modified --reverse` is "newest first". 'score' is the one exception: it ranks
+ * best-match-first (descending relevance), and --reverse puts the weakest match first.
+ * Files whose sort property is missing or null always sort last, in both directions.
+ *
+ * For 'property:<KEY>',
+ * values of different JSON types (e.g. some files have a string, others a number) compare by
+ * raw JSON text -- grouped by type but not sensibly ordered within a numeric group -- and a
+ * stderr warning names the property when this happens; use a consistent type in frontmatter
+ * for a meaningful sort.
+ */
+sort?: string,
+/**
+ * Reverse the sort order [alias: --desc]
+ *
+ * Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc.
+ */
+reverse: boolean,
+/**
+ * Max results, 0 = unlimited (default cap: 50)
+ *
+ * Maximum number of results to return (0 = unlimited).
+ * Default cap is bypassed when --jq or --count is used.
+ */
+limit?: number,
+/**
+ * Only files with an unresolved link or dead heading anchor
+ *
+ * Only return files with at least one unresolved link or dead heading anchor
+ * (auto-includes links field).
+ * Targets that resolve above the vault root are out of scope, not broken: they are
+ * flagged `out_of_vault` on the link and do not qualify a file here.
+ * A `#fragment` matches either the raw heading text or the rendered GitHub slug
+ * (`#sub-section` for `### Sub Section`); same-file fragments (`[b](#nope)`) are
+ * checked against the file's own headings and reported with an empty target.
+ * A heading carrying a template expression (`## {% data variables.x %}`, `{{ y }}`)
+ * renders to an anchor hyalo cannot compute, so anchors into such a file are never
+ * reported broken.
+ * Every listed link carries its 1-based source `line`, the same one `lint` (HYALO006)
+ * reports, and links are listed in document order.
+ * An external URI (`obsidian://`, `mailto:`, `https:`) and a link that resolves to a
+ * non-`.md` vault file (an image, a `.base`) are never broken — they are reported with
+ * `kind` `external` / `attachment` and never qualify a file here.
+ */
+broken_links: boolean,
+/**
+ * Exit 1 if any results, 0 if empty — a CI gate
+ *
+ * A CI gate for any find query, most commonly `find --broken-links --strict` to fail a build
+ * on a dead heading anchor. Before this, `find --broken-links` always exited 0 even when it
+ * reported findings, so a vault whose only defect was a dead anchor passed CI silently.
+ */
+strict: boolean,
+/**
+ * Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
+ *
+ * Deciding orphanhood needs both directions of the graph, so both fields come back
+ * whether or not --fields names them.
+ */
+orphan: boolean,
+/**
+ * Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
+ *
+ * Deciding dead-endedness needs both directions of the graph, so both fields come back
+ * whether or not --fields names them.
+ */
+dead_end: boolean,
+/**
+ * Title substring (case-insensitive) or /regex/[i]
+ *
+ * Filter by title: case-insensitive substring match against the displayed title
+ * (frontmatter 'title' property or first H1 heading). Use /regex/ for regex
+ * (e.g. '/^The/' or '/^The/i').
+ */
+title?: string,
+/**
+ * BM25 Snowball stemmer language (default: english) [alias: --stemmer]
+ *
+ * Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
+ * tokenization — NOT markdown code-block language.
+ * Default: english. Accepts full names (english, german, …) or ISO 639-1 codes (en, de, …).
+ * Supported: arabic (ar), danish (da), dutch (nl), english (en), finnish (fi), french (fr),
+ * german (de), greek (el), hungarian (hu), italian (it), norwegian (no, nb, nn),
+ * portuguese (pt), romanian (ro), russian (ru), spanish (es), swedish (sv), tamil (ta),
+ * turkish (tr).
+ */
+language?: string,
+/**
+ * Print matching paths only, one per line — no envelope, no hints
+ *
+ * Print only the file path of each matching entry, one per line — no JSON,
+ * no envelope, no count, no hints. grep `-l` precedent: the agent/
+ * pipeline projection of a find result set, usable in `sort`, `xargs`,
+ * and `while read` loops. Zero results → empty output, exit 0.
+ *
+ * Conflicts with `--jq`, `--count`, and an explicit `--format json`
+ * (mutually exclusive projections — pick one). `--strict` still flips
+ * the exit code (1 when results exist), so `find --property status=planned
+ * --filenames-only --strict` is a CI gate that lists the offenders and
+ * fails. Combines with every other filter (`--property`, `--tag`,
+ * `--glob`, `--broken-links`, …) exactly as `find`
+ * normally does.
+ */
+filenames_only: boolean,
+/**
+ * Like --filenames-only but NUL-separated, for `xargs -0`
+ *
+ * NUL-delimited sibling of `--filenames-only` (iter-238): each matching
+ * file path is printed terminated by a NUL byte instead of a newline,
+ * exactly like GNU `find -print0`. Safe for filenames that contain
+ * newlines (which are legal in POSIX filenames, though not on Windows),
+ * and composes
+ * with `xargs -0` / `while IFS= read -r -d ''`. Same semantics as
+ * `--filenames-only` otherwise: no JSON, no envelope, no count, no hints;
+ * zero results → empty output, exit 0; `--strict` still flips the exit
+ * code when results exist.
+ *
+ * Mutually exclusive with `--filenames-only`, `--jq`, `--count`, and an
+ * explicit `--format json` (pick one projection).
+ */
+filenames0: boolean, };

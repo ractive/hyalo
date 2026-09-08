@@ -4,21 +4,20 @@
  * Lint violation counts for the vault summary.
  */
 export type LintSummary = {
-  /**
-   * Number of error-severity violations.
-   */
-  errors: number;
-  /**
-   * Number of warning-severity violations.
-   */
-  warnings: number;
-  /**
-   * Number of files with at least one schema violation.
-   *
-   * iter-216 D-5: named `files_with_violations` to match the key `hyalo
-   * lint` emits for the same quantity. `summary` used to call it
-   * `files_with_issues`, so a script comparing the digest against a full
-   * lint run had to know both spellings.
-   */
-  files_with_violations: number;
-};
+/**
+ * Number of error-severity violations.
+ */
+errors: number,
+/**
+ * Number of warning-severity violations.
+ */
+warnings: number,
+/**
+ * Number of files with at least one schema violation.
+ *
+ * iter-216 D-5: named `files_with_violations` to match the key `hyalo
+ * lint` emits for the same quantity. `summary` used to call it
+ * `files_with_issues`, so a script comparing the digest against a full
+ * lint run had to know both spellings.
+ */
+files_with_violations: number, };

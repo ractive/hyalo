@@ -4,18 +4,17 @@
  * Count of files in a directory.
  */
 export type DirectoryCount = {
-  /**
-   * Vault-relative directory path.
-   */
-  directory: string;
-  /**
-   * Number of matching occurrences.
-   */
-  count: number;
-  /**
-   * Files under this directory skipped for unparsable frontmatter.
-   * Omitted from JSON when zero, so an all-clean vault's per-directory rows
-   * stay as compact as they were.
-   */
-  skipped?: number;
-};
+/**
+ * Vault-relative directory path.
+ */
+directory: string,
+/**
+ * Number of matching occurrences.
+ */
+count: number,
+/**
+ * Files under this directory skipped for unparsable frontmatter.
+ * Omitted from JSON when zero, so an all-clean vault's per-directory rows
+ * stay as compact as they were.
+ */
+skipped?: number, };

@@ -3,79 +3,77 @@
 /**
  * Arguments accepted by `hyalo summary`.
  */
-export type SummaryArgs = {
-  glob: Array<string>;
-  /**
-   * Number of recent files to show
-   *
-   * NOTE: on this command -n means --recent, not --limit as on find and backlinks —
-   * it caps only the "recently modified" list, never the summary's stats.
-   */
-  recent: number;
-  /**
-   * Limit directory listing depth (0 = root only; stats are always full)
-   */
-  depth?: number;
-  /**
-   * Use the `.hyalo-index` snapshot in the vault dir
-   *
-   * Read-only commands (find, summary, tags, properties, backlinks) skip
-   * the disk scan entirely when the index is present. On `tags` and
-   * `properties` the flag is accepted on the bare command as well as on
-   * the `summary`/`rename` subcommand (iter-266).
-   *
-   * Mutation commands (set, remove, append, task, mv, tags rename,
-   * properties rename, links fix) still read/write individual files on disk
-   * but also patch the index in-place after each mutation — keeping
-   * the index current for subsequent queries. A file the index has never
-   * seen (created by an editor or Obsidian since the last create-index)
-   * is *upserted*: its full entry and outgoing links are inserted, not
-   * dropped, so indexed reads match a disk scan after the mutation.
-   * `set`/`append`/`remove` go further: every file they read whose
-   * `(mtime, size)` no longer matches the snapshot is rescanned, even when
-   * the mutation itself changes nothing (`0 modified`) — so a body edited
-   * by hand between `create-index` and the mutation cannot leave the entry
-   * describing bytes that are gone. `--dry-run` writes nothing, stale
-   * entry or not.
-   * `links fix`/`links auto` additionally mtime-check every indexed entry
-   * before their discovery pass, rescan files that changed on disk since
-   * create-index, and upsert files the index does not know yet (with a
-   * warning), so an externally edited vault is not silently trusted.
-   *
-   * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
-   * falls back to a full disk scan automatically.
-   *
-   * STALENESS PROBE: on load, hyalo compares directory mtimes in the
-   * vault (the root and every directory up to 3 levels below it — cheap,
-   * directory-only stats, no file reads) against the snapshot's creation
-   * time and warns `index older than vault` when one postdates it. When
-   * that probe finds nothing, a second pass compares each indexed file's
-   * recorded mtime against disk and stops at the first drift, so an
-   * in-place overwrite (which moves no directory mtime) is named in the
-   * warning rather than silently served. Remaining blind spot: **up to
-   * about two seconds** — mtimes are compared as whole seconds and a
-   * one-second tolerance is applied on top, so an edit made within the
-   * snapshot's own second or the one after it is invisible (BUG-30,
-   * iter-276: the old wording said "the same whole second", which
-   * understated it by half). The warning never stops the run: stale
-   * results are still served.
-   */
-  index: boolean;
-  /**
-   * Use the snapshot index at PATH instead of `.hyalo-index`
-   *
-   * Implies `--index`. Relative paths are resolved against the current
-   * working directory (not the vault dir); absolute paths are used as-is.
-   *
-   * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
-   * not: on `create-index` / `drop-index` this flag is an alias for the
-   * output path, and a path outside the vault is refused unless
-   * `--allow-outside-vault` is also passed.
-   *
-   * Read-only commands skip the disk scan entirely. Mutation commands
-   * patch the index in-place after each write — see `--index` for details.
-   *
-   * If the index file is incompatible hyalo falls back to a disk scan.
-   */
-  index_file?: string;
-};
+export type SummaryArgs = { glob: Array<string>,
+/**
+ * Number of recent files to show
+ *
+ * NOTE: on this command -n means --recent, not --limit as on find and backlinks —
+ * it caps only the "recently modified" list, never the summary's stats.
+ */
+recent: number,
+/**
+ * Limit directory listing depth (0 = root only; stats are always full)
+ */
+depth?: number,
+/**
+ * Use the `.hyalo-index` snapshot in the vault dir
+ *
+ * Read-only commands (find, summary, tags, properties, backlinks) skip
+ * the disk scan entirely when the index is present. On `tags` and
+ * `properties` the flag is accepted on the bare command as well as on
+ * the `summary`/`rename` subcommand (iter-266).
+ *
+ * Mutation commands (set, remove, append, task, mv, tags rename,
+ * properties rename, links fix) still read/write individual files on disk
+ * but also patch the index in-place after each mutation — keeping
+ * the index current for subsequent queries. A file the index has never
+ * seen (created by an editor or Obsidian since the last create-index)
+ * is *upserted*: its full entry and outgoing links are inserted, not
+ * dropped, so indexed reads match a disk scan after the mutation.
+ * `set`/`append`/`remove` go further: every file they read whose
+ * `(mtime, size)` no longer matches the snapshot is rescanned, even when
+ * the mutation itself changes nothing (`0 modified`) — so a body edited
+ * by hand between `create-index` and the mutation cannot leave the entry
+ * describing bytes that are gone. `--dry-run` writes nothing, stale
+ * entry or not.
+ * `links fix`/`links auto` additionally mtime-check every indexed entry
+ * before their discovery pass, rescan files that changed on disk since
+ * create-index, and upsert files the index does not know yet (with a
+ * warning), so an externally edited vault is not silently trusted.
+ *
+ * If the index file is incompatible (e.g. after a hyalo upgrade) hyalo
+ * falls back to a full disk scan automatically.
+ *
+ * STALENESS PROBE: on load, hyalo compares directory mtimes in the
+ * vault (the root and every directory up to 3 levels below it — cheap,
+ * directory-only stats, no file reads) against the snapshot's creation
+ * time and warns `index older than vault` when one postdates it. When
+ * that probe finds nothing, a second pass compares each indexed file's
+ * recorded mtime against disk and stops at the first drift, so an
+ * in-place overwrite (which moves no directory mtime) is named in the
+ * warning rather than silently served. Remaining blind spot: **up to
+ * about two seconds** — mtimes are compared as whole seconds and a
+ * one-second tolerance is applied on top, so an edit made within the
+ * snapshot's own second or the one after it is invisible (BUG-30,
+ * iter-276: the old wording said "the same whole second", which
+ * understated it by half). The warning never stops the run: stale
+ * results are still served.
+ */
+index: boolean,
+/**
+ * Use the snapshot index at PATH instead of `.hyalo-index`
+ *
+ * Implies `--index`. Relative paths are resolved against the current
+ * working directory (not the vault dir); absolute paths are used as-is.
+ *
+ * Reading a snapshot from anywhere on disk is allowed. *Writing* one is
+ * not: on `create-index` / `drop-index` this flag is an alias for the
+ * output path, and a path outside the vault is refused unless
+ * `--allow-outside-vault` is also passed.
+ *
+ * Read-only commands skip the disk scan entirely. Mutation commands
+ * patch the index in-place after each write — see `--index` for details.
+ *
+ * If the index file is incompatible hyalo falls back to a disk scan.
+ */
+index_file?: string, };

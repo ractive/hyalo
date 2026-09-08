@@ -5,20 +5,19 @@
  * Used by `task read`, `task toggle`, `task set`.
  */
 export type TaskInfo = {
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Task checkbox marker or grouped status value.
-   */
-  status: string;
-  /**
-   * Authored task text without its checkbox marker.
-   */
-  text: string;
-  /**
-   * Whether the task is checked.
-   */
-  done: boolean;
-};
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Task checkbox marker or grouped status value.
+ */
+status: string,
+/**
+ * Authored task text without its checkbox marker.
+ */
+text: string,
+/**
+ * Whether the task is checked.
+ */
+done: boolean, };

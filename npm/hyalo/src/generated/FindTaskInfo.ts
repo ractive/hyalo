@@ -5,24 +5,23 @@
  * Extends `TaskInfo` with section heading information.
  */
 export type FindTaskInfo = {
-  /**
-   * One-based source line number.
-   */
-  line: number;
-  /**
-   * Containing section heading, including its ATX prefix.
-   */
-  section: string;
-  /**
-   * Task checkbox marker or grouped status value.
-   */
-  status: string;
-  /**
-   * Authored task text without its checkbox marker.
-   */
-  text: string;
-  /**
-   * Whether the task is checked.
-   */
-  done: boolean;
-};
+/**
+ * One-based source line number.
+ */
+line: number,
+/**
+ * Containing section heading, including its ATX prefix.
+ */
+section: string,
+/**
+ * Task checkbox marker or grouped status value.
+ */
+status: string,
+/**
+ * Authored task text without its checkbox marker.
+ */
+text: string,
+/**
+ * Whether the task is checked.
+ */
+done: boolean, };
