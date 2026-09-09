@@ -61,6 +61,39 @@ built from the same commit. Requires both 285 (structs) and 286 (the package to 
       Deferred by the user on 2026-09-07 to concentrate on Hyalo; retain this requirement
       as unfinished and do not modify that repository during the current batch.
 
+## npm publication — 2026-09-08
+
+Published `@ractive-ch/hyalo@0.23.0` and all seven matching platform packages at
+the user's request, before Homefinder acceptance. Release preparation landed in
+[PR #344](https://github.com/ractive/hyalo/pull/344); [PR #345](https://github.com/ractive/hyalo/pull/345)
+removed the optional type formatter's unmaintained dependency without changing
+the generated API types or relaxing security policy. Both PRs passed independent
+review and all eleven CI checks.
+
+[Publication run #34199953078](https://github.com/ractive/hyalo/actions/runs/34199953078)
+succeeded from commit `73769bd76720669ba0688aaeff58b7c00479807e` using the npm-only
+workflow. All eight public tarballs match their registry SHA-512 integrity values
+and expose provenance metadata. A fresh macOS consumer verified the published
+CLI, ESM/CommonJS `find`, `read`, `summary`, and `config`, TypeScript consumption,
+and registry signatures and attestations for its three installed packages.
+
+[Registry smoke run #34201309749](https://github.com/ractive/hyalo/actions/runs/34201309749)
+passed on macOS arm64, Windows x64, Linux x64 glibc, and Linux x64 musl. The glibc
+tarball initially returned 404 after publication; it became available with the
+expected integrity, and the failed smoke job passed on retry without republishing.
+TASK-7 remains open: publication does not establish Homefinder consumer acceptance.
+
+## Remaining work — 2026-09-09
+
+TASK-7 is the only unfinished task in this iteration. The Homefinder migration
+remains deferred; resume it in `homefinder-eco-mcp`, verify the published package's
+typed `find` against that consumer, and record any API gaps here before marking
+this iteration completed. Repository implementation and npm publication are done.
+
+The desktop verification follow-up in
+[[iterations/iteration-288-codex-integration]] is completed on the user's manual
+confirmation, with the evidence limits recorded in that iteration.
+
 ## Acceptance criteria
 
 - [x] `types.ts` is generated, committed, and `check-ts-types` fails on drift.

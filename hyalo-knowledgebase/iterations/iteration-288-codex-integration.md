@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 288 — First-class Codex integration via hyalo init --codex"
 date: 2026-09-06
-status: in-progress
+status: completed
 tags: [iteration, codex, integration, skills, cli]
 branch: iter-288/codex-integration
 related:
@@ -178,10 +178,10 @@ command edits global Codex settings, installs packages, or changes approvals.
       ordinary search from the root and a nested vault directory, explicit tidy
       selection, a requested property change followed by lint, and an audit-only
       request. Inspect executed commands and the resulting diff; record versions.
-- [ ] Repeat the live workflow in the separate Codex desktop app, including fresh
-      launches from the project root and a nested directory. Record the client
-      version, skill discovery, commands, and before/after diffs. Deferred with
-      the user's explicit acceptance of a partial merge on 2026-09-06.
+- [x] Repeat the live workflow in the separate Codex desktop app, including fresh
+      launches from the project root and a nested directory. Deferred at the
+      partial merge on 2026-09-06; closed on the user's successful workflow report
+      on 2026-09-08, with client version and evidence limits recorded below.
 - [x] Run implementation gates: `cargo fmt`,
       `cargo clippy --workspace --all-targets -- -D warnings`,
       `cargo test --workspace -q`, all `xtask check-*`, and `hyalo lint --strict`.
@@ -286,13 +286,22 @@ debug binary. This validates the new guidance with the installed compatible CLI.
   The final Git diff contained only the requested status replacement; the edited
   note's body and the control note were unchanged. `git diff --check` passed.
 
-### Deferred desktop verification
+### Desktop verification — user confirmed (2026-09-08)
 
-The separate Codex desktop-app workflow remains untested. On 2026-09-06 the user
-accepted deferring it and requested merging PR #331. Keep this iteration
-`in-progress`, with the desktop task above unchecked, until that follow-up is
-performed and its evidence recorded. The successful interactive CLI test in cmux
-does not stand in for a desktop-app test. Its temporary pane has been closed.
+On 2026-09-06 the user accepted deferring the desktop workflow and requested
+merging PR #331. The successful interactive CLI test in cmux was recorded
+separately; its temporary pane has been closed.
+
+On 2026-09-08, after receiving the desktop verification steps for fresh root and
+nested-directory chats, ordinary search, a property update followed by lint, and
+an explicitly invoked audit without changes, the user reported: "Everything is
+working perfectly. The skills are discovered." The reported client is
+**ChatGPT Version 26.901.51231**.
+
+This closes the deferred desktop task on the basis of the user's manual workflow
+confirmation. Skill discovery is explicitly confirmed. No desktop command
+transcript or before/after diffs were supplied in this conversation, so this
+record does not claim independent inspection of those artifacts.
 
 ### Reconciliation — iteration 287 companion assets (2026-09-07)
 
