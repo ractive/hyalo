@@ -116,12 +116,13 @@ concern" unless evidence of real need turns up.
       reads be reused for writes (symmetry argument), avoiding any new flag? Investigate
       before proposing a bespoke syntax.
 
-### ITEM-1: decide and (maybe) implement [2/3]
+### ITEM-1: decide and (maybe) implement [2/2]
 
 - [x] Decide: implement a syntax, or close as won't-do. Record the reasoning in the same
       DEC as Part A or its own DEC in [[decision-log]] — there is no "silently dropped"
       outcome.
-- [ ] If implementing: design the syntax, justify it against the no-new-CLI-surface bar,
+- **Not applicable:** If implementing: design the syntax, justify it against the
+      no-new-CLI-surface bar,
       implement in `set.rs` and `append.rs`, validate against
       `required-keys`/`allowed-keys`/`key-patterns` before writing, update `--help`,
       `docs/configuration.md`, [[docs/schema-and-lint]], the skill file, and CHANGELOG.
@@ -136,7 +137,7 @@ concern" unless evidence of real need turns up.
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, all xtask `check-*`
       gates (help drift in particular if any `--help` text changed).
 
-## Acceptance criteria [5/6]
+## Acceptance criteria [5/5]
 
 - [x] A DEC resolves DEC-287's "belongs to its own decision" note: either writes now gate
       on a broken `[schema]`, or the asymmetry is kept but made discoverable in the result
@@ -145,7 +146,8 @@ concern" unless evidence of real need turns up.
       replacement) reflects the new behaviour, not the old vacuous-write pin.
 - [x] A decision is recorded for the object-list item syntax either way — a working
       `set`/`append` syntax with tests, or a DEC explaining why it stays an editor concern.
-- [ ] If a syntax is implemented: `hyalo set f.md --property '<chosen syntax>' --validate`
+- **Not applicable:** If a syntax is implemented:
+      `hyalo set f.md --property '<chosen syntax>' --validate`
       refuses an item missing a `required-keys` key and accepts one that satisfies
       `required-keys`/`allowed-keys`/`key-patterns`.
       N/A — no syntax was implemented (DEC-291, won't-do).

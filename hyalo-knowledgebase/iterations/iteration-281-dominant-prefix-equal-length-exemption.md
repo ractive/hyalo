@@ -66,20 +66,25 @@ that iteration 279 already settled.
 - [x] TASK-4: `cargo test --workspace -q`, every xtask `check-*` gate, `hyalo lint --strict` on
       the knowledgebase.
 
-## Acceptance criteria [3/4]
+## Acceptance criteria and dispositions
 
 - [x] `[[Mathjax]]` no longer fuzzy-matches `mathpad.md` above the apply floor — either it drops
       out of `fuzzy_fixes` entirely or lands below `below_floor`, on the Hub fixture from TASK-1.
 - [x] Every iteration 279/324 `shares_dominant_prefix` / `TOKEN_MATCH_FLOOR` fixture (`get` /
       `getting`, and any other passing prefix-relationship test in
       `crates/hyalo-core/src/link_score.rs`) still passes unchanged.
-- [ ] No previously-correct fuzzy fix across the Hub, MDN, GitHub Docs or the iteration
+- **Not fully met; follow-up completed in iteration 282:** No previously-correct fuzzy
+      fix across the Hub, MDN, GitHub Docs or the iteration
       277/279/280 e2e fixtures changes score or drops below the apply floor as a side effect.
       **Not fully met, deliberately.** MDN is byte-identical and no above-floor proposal
       disappears anywhere, but one correct GitHub Docs relocation crosses the floor:
       `saml-configuration-reference` falls 0.804 → 0.795 because the *directory* feature no
       longer counts `management`/`managing` as one token. It was 0.004 above the floor to begin
       with, it is still reported, and the alternative costs more than it buys — see "Not done".
+      Subsequently addressed in [[iterations/iteration-282-directory-token-dominance-rule]]:
+      the six SAML occurrences recover to 0.8037 (displayed 0.804), with no downward floor
+      crossings in that follow-up's corpus comparison. This does not retroactively satisfy
+      the original requirement that every previously-correct score remain unchanged.
 - [x] Gates green.
 
 ## Outcome

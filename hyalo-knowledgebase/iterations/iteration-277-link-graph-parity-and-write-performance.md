@@ -56,7 +56,7 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       `summary --index` matches the disk scan (Hub 1, kepano 28) and keeps the skipped
       directory row.
 
-## Part C — One graph, one answer (BUG-16, 45, 46; G3) [3/4]
+## Part C — One graph, one answer (BUG-16, 45, 46; G3) [3/3]
 
 - [x] GRAPH-1 (BUG-16): `summary`, `find --orphan` and `find --dead-end` share one edge
       definition. Decide in a DEC whether attachment links are edges (the report's 25 MDN
@@ -68,9 +68,11 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       constant 0.
 - [x] GRAPH-3 (BUG-46): the "stripped 0 of N" and "skipped fuzzy scoring for N" warnings
       count the same set (49767 vs 49776 on MDN).
-- [ ] GRAPH-4 (G3): `--fields links` records carry `ambiguous: true` with `candidates` when a
+- **Deferred to backlog:** GRAPH-4 (G3): `--fields links` records carry `ambiguous: true`
+      with `candidates` when a
       stem or alias collides, so ambiguous and missing can be told apart without `links fix`;
       `mv`, `backlinks` and HYALO006 read the same field.
+      Remains open in [[backlog/link-ambiguity-as-a-first-class-link-field]].
 
 ## Part D — `links fix` reporting (BUG-17, 18; G2) [4/4]
 
@@ -138,18 +140,31 @@ Outcome; WIP commit after each part; leftovers to `backlog/`.
       `cargo test --workspace -q`, `hyalo lint --strict` on the KB, every xtask `check-*`
       gate, plus `bench-scale` run once locally with the numbers in the Outcome.
 
-## Acceptance criteria [3/6]
+## Acceptance criteria and dispositions
 
-- [ ] Hub copy: `lint --fix` applied ≤ 10 s (was 49 s), a 2190-backlink `mv` ≤ 5 s (was
+- **Partially verified:** Hub copy: `lint --fix` applied ≤ 10 s (was 49 s),
+      a 2190-backlink `mv` ≤ 5 s (was
       25 s), results byte-identical to the serial path; a progress line appears past a few
       hundred writes.
-- [ ] MDN with `--site-prefix en-US/docs`: indexed `summary` ≤ 0.8 s, `find --broken-links
+      `lint --fix` measured 2.35 s; the 2190-backlink timing case was not reproduced.
+      [[iterations/iteration-278-site-prefix-resolution-allocation]] subsequently added a
+      repeatable 2000-backlink benchmark (0.52 s), not a verification of the original fixture.
+- **Targets missed here; followed up in iteration 278:** MDN with
+      `--site-prefix en-US/docs`: indexed `summary` ≤ 0.8 s, `find --broken-links
       --count` ≤ 0.6 s, `create-index` ≤ 4 s; disk/index parity still byte-identical.
+      This iteration measured 2.42 s, 1.71 s and 2.59 s respectively, with parity intact.
+      [[iterations/iteration-278-site-prefix-resolution-allocation]] records later indexed
+      measurements (0.26 s summary, 0.30 s find); the find measurement uses `--index`, unlike
+      the original command above.
 - [x] `summary.orphans` equals `find --orphan --count` and `summary.dead_ends` equals
       `find --dead-end --count` on MDN and the Hub; `summary --index` reports `skipped`.
-- [ ] Every fuzzy plan carries `emitted_target`; the Hub's `Cat`, `jamesb`, `paulbricman`
+- **Partially met here; scorer follow-up completed:** Every fuzzy plan carries
+      `emitted_target`; the Hub's `Cat`, `jamesb`, `paulbricman`
       and `obsidian-floating-toc-plugin` proposals fall below the floor; `broken_anchors`
       matches `find`.
+      Reporting and `jamesb` were fixed here. The other three proposals were resolved in
+      [[iterations/iteration-279-fuzzy-scorer-near-neighbor-stems]], whose Outcome records
+      the measured scores; they were not closed by this iteration's runner-up margin.
 - [x] Following the `--index` hint printed by `find --broken-links --site-prefix …` on MDN
       yields the same count as the command that printed it.
 - [x] Gates green; changelog; DECs.
