@@ -117,7 +117,7 @@ fn bounded_worker(request: &[u8], mode: &str) -> Result<String, String> {
                         rlim_cur: 512 * 1024 * 1024,
                         rlim_max: 512 * 1024 * 1024,
                     };
-                    if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                    if libc::setrlimit(libc::RLIMIT_AS, &raw const limit) != 0 {
                         return Err(std::io::Error::last_os_error());
                     }
                 }

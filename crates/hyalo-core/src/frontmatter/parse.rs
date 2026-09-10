@@ -663,6 +663,9 @@ fn write_frontmatter_impl(
     let Some(out) = render_frontmatter_impl(&mut file, path, op)? else {
         return Ok(false);
     };
+    // The compatibility wrapper owns this reader. Close it before publication:
+    // retaining the source handle prevents atomic replacement on Windows.
+    drop(file);
     match vault_root {
         Some(root) => crate::fs_util::atomic_write_within(root, path, &out),
         None => crate::fs_util::atomic_write(path, &out),
