@@ -85,6 +85,7 @@ pub struct CaseInsensitiveIndex {
     /// cost 4.65 s (iter-277, BUG-13). A partial index leaves it `false` and
     /// every probe goes to disk exactly as before.
     complete: bool,
+    aliases_enabled: bool,
 }
 
 /// The map key for `s`, borrowed when `s` is already the key (iter-278).
@@ -118,7 +119,18 @@ impl CaseInsensitiveIndex {
             case_insensitive_paths: false,
             alias_map: HashMap::new(),
             complete: false,
+            aliases_enabled: false,
         }
+    }
+
+    /// Set the invocation's explicit alias resolution policy.
+    pub fn set_aliases_enabled(&mut self, enabled: bool) {
+        self.aliases_enabled = enabled;
+    }
+
+    /// Whether declared aliases participate in resolution.
+    pub fn aliases_enabled(&self) -> bool {
+        self.aliases_enabled
     }
 
     /// Declare that this index holds every file in the vault, so a lookup miss

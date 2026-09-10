@@ -49,8 +49,8 @@ pub enum SkipKind {
 
 /// Files dropped during this process's scans, in the order they were seen.
 ///
-/// Process-global and never cleared outside tests: one `hyalo` process is one
-/// CLI run. A poisoned lock degrades to "not collected" rather than aborting a
+/// Process-global for one CLI run. A successful rescan clears only the
+/// superseded frontmatter skip for its path. A poisoned lock degrades to "not collected" rather than aborting a
 /// walk.
 static SKIPPED: Mutex<Vec<SkippedFile>> = Mutex::new(Vec::new());
 
@@ -131,6 +131,16 @@ pub fn record_skip(path: impl Into<String>, reason: impl Into<String>, kind: Ski
     }
     if let Ok(mut skipped) = SKIPPED.lock() {
         skipped.push(SkippedFile { path, reason, kind });
+    }
+}
+
+/// A successful rescan supersedes this path's earlier frontmatter diagnostic.
+pub(crate) fn clear_frontmatter_skip(path: &str) {
+    if let Ok(mut skipped) = SKIPPED.lock() {
+        skipped.retain(|file| file.path != path || file.kind != SkipKind::Frontmatter);
+    }
+    if let Ok(mut recorded) = RECORDED.lock() {
+        recorded.retain(|seen| seen != path);
     }
 }
 

@@ -396,3 +396,29 @@ corruption. In particular, final-property removal refuses before publication whe
 would become frontmatter. Preserve original bytes on refusal and retain complete effects/index
 disposition after any earlier commit. No exhaustive exotic-YAML or random-gibberish
 compatibility expansion is required.
+
+
+## Iteration 292 reconciliation — 2026-09-10
+
+Iteration 292 supplies `SnapshotIndex::validate_before_changes` before indexed note effects and
+complete `apply_changes(dir, paths)` replacements. Feed actual safe observed paths from
+`ApplyReport`/`finalize_observed`; persistently invalidate unsafe effects without scanning
+them. Exact-path compatibility refreshes belong inside `begin_changes`/`finish_changes`: the
+owner rebuilds graph/search once per dirty batch and re-resolves retained occurrences.
+`get_mut`/`graph_mut` mark pending state; finish explicitly before persistence, and retain
+absent BM25/coherent generation plus refused save while pending. Keep the writer owner
+available for finalization after failed named reads; read-only callers may discard the snapshot
+and fall back to disk.
+
+Capture alias and semantic case policy at invocation boundaries, including
+`ScannedIndex::build_with_case_policy` and `SnapshotIndex::set_resolution_options`; semantic
+catalog identity never authorizes filesystem replacement. `note_paths()` includes discovered
+notes skipped for broken frontmatter, separately from successful metadata entries; only
+successful scan replacement clears that note's current skip diagnostics. Keep conservative move
+refusal for multiple bare stems and preserve stable alias spellings even when reads resolve a
+root-path winner. Extend the existing complete-entry, actual-effect, disk/reloaded-index parity
+and mutable-adapter guards while preserving every original criterion. Normal authored Markdown,
+including broken frontmatter, missing delimiters and incomplete edits, needs useful diagnostics
+and safe refusal without corruption where processing cannot continue; preserve crash, security,
+confinement, resource and partial-write protections without exhaustive random-gibberish/fuzz
+exploration.

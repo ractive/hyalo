@@ -210,6 +210,16 @@ pub(crate) struct OutputPreflight {
     internal_report: bool,
 }
 impl OutputPreflight {
+    /// Policy tests start after jq compilation, whose worker protocol is covered by e2e tests.
+    #[cfg(test)]
+    pub(crate) fn validated_for_test(cli: &Cli) -> Self {
+        Self {
+            jq: cli.jq.clone(),
+            count: cli.count,
+            internal_report: cli.internal_mutation_report,
+        }
+    }
+
     pub(crate) fn new(cli: &Cli) -> Result<Self> {
         let capabilities = Capabilities::of(&cli.command);
         if cli.internal_mutation_report
@@ -728,6 +738,11 @@ impl PreparedInvocation {
         &self,
         ctx: &mut crate::dispatch::CommandContext<'_>,
     ) -> Result<()> {
+        let read_fallback = match &self.command {
+            PreparedCommand::Legacy(command) => !command.writes(),
+            PreparedCommand::TaskMutation { .. } => false,
+            _ => true,
+        };
         let Some(index) = ctx.snapshot_index.as_mut() else {
             return Ok(());
         };
@@ -761,6 +776,11 @@ impl PreparedInvocation {
         let refreshed = selection::refresh_named_selection(&root, &selection, index, insert)?;
         if !refreshed.all_current(&selection) && !repairs {
             warn_stale_index(index, ctx.dir);
+            if read_fallback && (refreshed.failed > 0 || refreshed.missing > 0) {
+                // A failed named scan cannot leave old fields/postings available.
+                // Reads use the bounded disk path and its parse/skip diagnostics.
+                *ctx.snapshot_index = None;
+            }
         }
         Ok(())
     }

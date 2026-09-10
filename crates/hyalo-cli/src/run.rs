@@ -2237,7 +2237,15 @@ fn run_inner() -> Result<(), AppError> {
     // snapshot so that per-file refreshes (`rescan_entry` / `rename_entry`) use
     // the same list as the initial index build.
     if let Some(idx) = snapshot_index.as_mut() {
+        if cli.command.writes() {
+            idx.validate_before_changes()?;
+        }
         idx.set_frontmatter_link_props(frontmatter_link_props_owned.clone());
+        idx.set_resolution_options(
+            config.alias_links_enabled,
+            hyalo_core::links_case_insensitive(config.case_insensitive_mode),
+            config.search_language.clone(),
+        );
     }
     // Resolve --files-from before dispatch. This converts the files_from source
     // into the command's `file` list and returns skip counters for the envelope.

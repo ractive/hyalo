@@ -67,15 +67,16 @@ pub(crate) fn build_case_index_from_dir(dir: &std::path::Path) -> CaseInsensitiv
 /// Build a [`CaseInsensitiveIndex`] from an in-memory snapshot index.
 ///
 /// Equivalent to [`build_case_index_from_dir`] but seeds the stem map from
-/// the snapshot's entries (`rel_path` list) instead of walking the disk.
+/// the snapshot's discovered note identities, including frontmatter skips,
+/// instead of walking the disk.
 /// Cost is a linear scan over `snap.entries()` — about 4 ms for MDN's 14 399
 /// files (iter-256), against seconds for the disk-walk variant. It was 62 ms
 /// until iter-256 removed a quadratic dedupe scan in
 /// [`CaseInsensitiveIndex::insert`]; see FIND-8.
 pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsensitiveIndex {
     let mut idx = CaseInsensitiveIndex::with_capacity(snap.entries().len());
-    for entry in snap.entries() {
-        idx.insert(&entry.rel_path);
+    for path in snap.note_paths() {
+        idx.insert(path);
     }
     // iter-261: attachments recorded by `create-index` (empty for a snapshot
     // written by an older hyalo, which simply degrades to the old behaviour).
@@ -91,8 +92,8 @@ pub(crate) fn build_case_index_from_snapshot(snap: &SnapshotIndex) -> CaseInsens
             idx.insert_aliases(&entry.rel_path, aliases);
         }
     }
-    // iter-277 (BUG-13): a snapshot lists every file `create-index` saw, so
-    // link resolution never has to leave it for the filesystem.
+    // Successful metadata coverage and skipped filename identities jointly
+    // retain every note that create-index discovered.
     idx.set_complete(true);
     idx
 }
@@ -152,6 +153,7 @@ pub(crate) fn maybe_case_index(
     // the vault opts out — not "whatever this filesystem does", so the
     // filesystem probe plays no part here.
     idx.set_case_insensitive_paths(hyalo_core::links_case_insensitive(mode));
+    idx.set_aliases_enabled(hyalo_core::discovery::link_aliases_enabled());
     Some(idx)
 }
 

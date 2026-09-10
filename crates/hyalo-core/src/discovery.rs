@@ -1512,6 +1512,20 @@ pub fn resolve_link_from_source(
     site_prefix: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
+    if let Some(index) = case_index.filter(|index| index.is_complete()) {
+        return crate::catalog::resolve(
+            index,
+            source_rel,
+            kind,
+            target,
+            crate::catalog::ResolutionOptions {
+                aliases: index.aliases_enabled(),
+                site_prefix,
+            },
+        )
+        .path()
+        .map(str::to_owned);
+    }
     let resolved = normalize_link_target(kind, source_rel, target, |src_rel| {
         resolve_target(canonical_dir, src_rel, site_prefix, case_index).is_some()
     });

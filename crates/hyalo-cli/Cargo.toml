@@ -46,6 +46,7 @@ tempfile = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+rmp-serde = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 ts-rs = { workspace = true }

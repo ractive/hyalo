@@ -631,3 +631,25 @@ migrates remaining writers while preserving validation/effects; 294 aligns CLI/P
 diagnostics and guarantees; 295 runs controlled final platform/resource/behavioral gates.
 Review attempt 5 is ready with no findings; the supervisor's final ordered Rust and
 release-safety checks passed.
+
+
+## Iteration 292 handoff — 2026-09-10
+
+The reviewed 292 candidate establishes an immutable semantic catalog with explicit alias/case
+policy, skipped filename identities distinct from successful metadata coverage, complete
+owner-managed snapshot replacements and current skip reconciliation. Writers validate before
+effects, finalize actual safe paths and invalidate unsafe effects; batch begin/finish owns
+graph/search rebuilding, and mutable compatibility adapters remain pending until explicit
+finish. Catalog identity grants no filesystem authority; conservative move ambiguity refusal
+and stable alias spelling remain. Typed `CompiledQuery` supplies eligibility/scoring/snippets,
+and `HintDemand` guards actual body reads. Preserve v2 disk fallback and the measured
+S10/batch/query evidence without universal resource or performance claims.
+
+293 owns remaining writer migration, 294 resolved hints/adapters/docs, and 295 final
+behavioral/resource verification; all original criteria and the 50-row/49-group ledger remain
+authoritative. Carry 291's CI retry observation only as existing A04 diagnostic-ordering
+evidence. Across every future iteration, cover normal authored Markdown, including broken
+frontmatter, missing delimiters and incomplete edits, with useful diagnostics and safe refusal
+without corruption where processing cannot continue. Preserve crash, security, confinement,
+resource and partial-write protections; no exhaustive random-gibberish/fuzz exploration, new
+design, reassignment or external Homefinder work is added.

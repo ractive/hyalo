@@ -178,7 +178,12 @@ pub(crate) fn refresh_named_selection(
     index: &mut SnapshotIndex,
     insert_missing: bool,
 ) -> Result<RefreshSummary> {
-    refresh_named_with(root, selection, index, insert_missing, scan_checked_target)
+    // Whole-set preflight remains ahead of the first scan or state mutation.
+    selection.precheck(root)?;
+    index.begin_changes();
+    let result = refresh_named_with(root, selection, index, insert_missing, scan_checked_target);
+    index.finish_changes();
+    result
 }
 fn refresh_named_with(
     root: &VaultRoot,
