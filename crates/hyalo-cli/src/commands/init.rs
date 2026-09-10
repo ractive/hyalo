@@ -2939,7 +2939,6 @@ mod tests {
         let report =
             run_init_observed(Some("."), true, false, None, root.path(), CodexMode::None).unwrap();
         let effects = report.effects();
-        let canonical_root = dunce::canonicalize(root.path()).unwrap();
         for directory in [
             ".claude",
             ".claude/skills",
@@ -2947,11 +2946,12 @@ mod tests {
             ".claude/skills/hyalo-tidy",
             ".claude/rules",
         ] {
-            let expected = canonical_root.join(directory).display().to_string();
+            let expected = dunce::canonicalize(root.path().join(directory)).unwrap();
             assert!(
                 effects.paths.iter().any(|effect| {
-                    effect.file == expected
-                        && effect.state == crate::commands::apply::EffectState::Committed
+                    effect.state == crate::commands::apply::EffectState::Committed
+                        && dunce::canonicalize(&effect.file).ok().as_deref()
+                            == Some(expected.as_path())
                 }),
                 "missing directory effect for {directory}: {:?}",
                 effects.paths

@@ -621,13 +621,15 @@ title: Good Note
             let tmp = tempfile::tempdir().unwrap();
             let path = tmp.path().join("note.md");
             fs::write(&path, "---\n{old: one, other: aa}\n---\nbody\n").unwrap();
-            let mut source = fs::File::open(&path).unwrap();
-            assert!(
-                frontmatter::render_frontmatter_key_rename(&mut source, &path, "old", "new")
-                    .unwrap()
-                    .is_none(),
-                "flow mapping must force the full-map fallback"
-            );
+            {
+                let mut source = fs::File::open(&path).unwrap();
+                assert!(
+                    frontmatter::render_frontmatter_key_rename(&mut source, &path, "old", "new")
+                        .unwrap()
+                        .is_none(),
+                    "flow mapping must force the full-map fallback"
+                );
+            }
             let modified = fs::metadata(&path).unwrap().modified().unwrap();
             let mut first_index = None;
             let mut first_journal = MutationJournal::new(&mut first_index, None);
@@ -662,7 +664,10 @@ title: Good Note
                                 None,
                                 hyalo_core::CaseInsensitiveMode::Off,
                             )?;
-                            assert!(matches!(second, CommandOutcome::Success { .. }));
+                            assert!(
+                                matches!(&second, CommandOutcome::Success { .. }),
+                                "second Hyalo writer failed: {second:?}"
+                            );
                         }
                     }
                     fs::File::options()

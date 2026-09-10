@@ -384,18 +384,18 @@ mod tests {
         assert!(error.to_string().contains("injected publication failure"));
         assert!(!root.path().join(relative).exists());
         let effects = report.effects();
-        let canonical_root = dunce::canonicalize(root.path()).unwrap();
         for directory in [
             ".agents",
             ".agents/skills",
             ".agents/skills/hyalo",
             ".agents/skills/hyalo/agents",
         ] {
-            let expected = canonical_root.join(directory).display().to_string();
+            let expected = dunce::canonicalize(root.path().join(directory)).unwrap();
             assert!(
                 effects.paths.iter().any(|effect| {
-                    effect.file == expected
-                        && effect.state == crate::commands::apply::EffectState::Committed
+                    effect.state == crate::commands::apply::EffectState::Committed
+                        && dunce::canonicalize(&effect.file).ok().as_deref()
+                            == Some(expected.as_path())
                 }),
                 "missing directory effect for {directory}: {:?}",
                 effects.paths
