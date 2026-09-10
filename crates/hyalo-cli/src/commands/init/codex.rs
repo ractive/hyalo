@@ -1,9 +1,12 @@
 //! Project Codex installation. Plugin and embedded assets are checked for drift by xtask.
-use super::{Report, active_profiles_from_config, relative_within, remove_dir_if_empty};
+use super::{
+    Report, active_profiles_from_config, capture_installation, ensure_installation_dir,
+    publish_captured_installation, relative_within, remove_captured_installation_artifact,
+    remove_dir_if_empty,
+};
 use anyhow::{Context, Result, bail};
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,35 +155,47 @@ pub(super) fn preflight(root: &Path) -> Result<()> {
 
 fn write_asset(root: &Path, relative: &str, text: &str, report: &mut Report) -> Result<()> {
     let path = root.join(relative);
-    let old = read_optional(&path)?;
+    let source = capture_installation(root, &path)?;
+    write_asset_from_capture(root, relative, text, source, report)
+}
+
+fn write_asset_from_capture(
+    root: &Path,
+    relative: &str,
+    text: &str,
+    source: Option<hyalo_core::rooted::CapturedInput>,
+    report: &mut Report,
+) -> Result<()> {
+    write_asset_from_capture_with_before_publish(root, relative, text, source, report, || Ok(()))
+}
+
+fn write_asset_from_capture_with_before_publish(
+    root: &Path,
+    relative: &str,
+    text: &str,
+    source: Option<hyalo_core::rooted::CapturedInput>,
+    report: &mut Report,
+    before_publish: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let path = root.join(relative);
+    let old = source
+        .as_ref()
+        .map(hyalo_core::rooted::CapturedInput::bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .context("installation artifact is not UTF-8")?;
     if old.as_deref() == Some(text) {
         report.push("unchanged", relative);
         return Ok(());
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        ensure_installation_dir(root, parent, report)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let parent = path.parent().context("Codex artifact has no parent")?;
-    let existing_permissions = if old.is_some() {
-        Some(fs::metadata(&path)?.permissions())
-    } else {
-        None
-    };
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)
-        .with_context(|| format!("creating temporary file in {}", parent.display()))?;
-    temporary.write_all(text.as_bytes())?;
-    // Writing can clear set-ID bits. Apply permissions only after all content.
-    if let Some(permissions) = &existing_permissions {
-        temporary.as_file().set_permissions(permissions.clone())?;
-    }
-    temporary.as_file().sync_all()?;
-    let persisted = temporary
-        .persist(&path)
+    before_publish()?;
+    publish_captured_installation(root, &path, source, text.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
-    // Match the core atomic writer: persist can alter platform attributes.
-    if let Some(permissions) = existing_permissions {
-        persisted.set_permissions(permissions)?;
-    }
     report.push(if old.is_some() { "updated" } else { "created" }, relative);
     Ok(())
 }
@@ -250,7 +265,15 @@ pub(super) fn install(root: &Path, mode: CodexMode, report: &mut Report) -> Resu
         }
     }
     writeln!(block, "{END}")?;
-    let old = read_optional(&root.join("AGENTS.md"))?.unwrap_or_default();
+    let agents_source = capture_installation(root, &root.join("AGENTS.md"))?;
+    let old = agents_source
+        .as_ref()
+        .map(hyalo_core::rooted::CapturedInput::bytes)
+        .transpose()?
+        .map(String::from_utf8)
+        .transpose()
+        .context("AGENTS.md is not UTF-8")?
+        .unwrap_or_default();
     let updated = if let Some(range) = managed_range(&old)? {
         format!("{}{}{}", &old[..range.start], block, &old[range.end..])
     } else if old.is_empty() || old.ends_with('\n') {
@@ -259,7 +282,7 @@ pub(super) fn install(root: &Path, mode: CodexMode, report: &mut Report) -> Resu
         // Prepend rather than changing the final newline of user-owned text.
         format!("{block}{old}")
     };
-    write_asset(root, "AGENTS.md", &updated, report)?;
+    write_asset_from_capture(root, "AGENTS.md", &updated, agents_source, report)?;
     if root.join("AGENTS.override.md").exists() {
         report.push_detail("warning", "AGENTS.override.md", "Codex prefers this file over AGENTS.md; merge the Hyalo guidance into it manually if wanted");
     }
@@ -271,9 +294,12 @@ fn remove_skills(root: &Path, report: &mut Report) -> Result<()> {
     for skill in SKILLS {
         for suffix in ["SKILL.md", "agents/openai.yaml"] {
             let relative = format!(".agents/skills/{}/{suffix}", skill.name);
-            if let Some(text) = read_optional(&root.join(&relative))? {
+            let path = root.join(&relative);
+            if let Some(source) = capture_installation(root, &path)? {
+                let text = String::from_utf8(source.bytes()?)
+                    .with_context(|| format!("{relative} is not UTF-8"))?;
                 if owned(&text) {
-                    fs::remove_file(root.join(&relative))
+                    remove_captured_installation_artifact(root, &path, source)
                         .with_context(|| format!("removing {relative}"))?;
                     report.push("removed", &relative);
                 } else {
@@ -295,15 +321,18 @@ fn remove_skills(root: &Path, report: &mut Report) -> Result<()> {
 
 pub(super) fn remove(root: &Path, report: &mut Report) -> Result<()> {
     remove_skills(root, report)?;
-    if let Some(text) = read_optional(&root.join("AGENTS.md"))?
+    let agents_path = root.join("AGENTS.md");
+    if let Some(source) = capture_installation(root, &agents_path)?
+        && let text = String::from_utf8(source.bytes()?).context("AGENTS.md is not UTF-8")?
         && let Some(range) = managed_range(&text)?
     {
         let stripped = format!("{}{}", &text[..range.start], &text[range.end..]);
         if stripped.is_empty() {
-            fs::remove_file(root.join("AGENTS.md")).context("removing empty AGENTS.md")?;
+            remove_captured_installation_artifact(root, &agents_path, source)
+                .context("removing empty AGENTS.md")?;
             report.push("removed", "AGENTS.md");
         } else {
-            write_asset(root, "AGENTS.md", &stripped, report)?;
+            write_asset_from_capture(root, "AGENTS.md", &stripped, Some(source), report)?;
         }
     }
     Ok(())
@@ -334,5 +363,43 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn codex_asset_publication_failure_retains_created_directory_effects() {
+        let root = tempfile::tempdir().unwrap();
+        let scope = super::super::resolve_scope(Some("."), root.path());
+        let mut report = Report::new("init", &scope, Some(".".to_owned()));
+        let relative = ".agents/skills/hyalo/agents/openai.yaml";
+        let error = write_asset_from_capture_with_before_publish(
+            root.path(),
+            relative,
+            "managed",
+            None,
+            &mut report,
+            || anyhow::bail!("injected publication failure"),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("injected publication failure"));
+        assert!(!root.path().join(relative).exists());
+        let effects = report.effects();
+        let canonical_root = dunce::canonicalize(root.path()).unwrap();
+        for directory in [
+            ".agents",
+            ".agents/skills",
+            ".agents/skills/hyalo",
+            ".agents/skills/hyalo/agents",
+        ] {
+            let expected = canonical_root.join(directory).display().to_string();
+            assert!(
+                effects.paths.iter().any(|effect| {
+                    effect.file == expected
+                        && effect.state == crate::commands::apply::EffectState::Committed
+                }),
+                "missing directory effect for {directory}: {:?}",
+                effects.paths
+            );
+        }
     }
 }

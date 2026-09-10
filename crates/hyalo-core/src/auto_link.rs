@@ -1127,7 +1127,7 @@ fn apply_matches(
             // Full-content compare above is the stronger guard; skip the
             // weaker mtime+size check in `write_single_plan`.
             mtime: None,
-            original_content: None,
+            original_content: Some(content.to_owned()),
         });
     }
 

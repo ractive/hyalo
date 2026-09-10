@@ -155,14 +155,14 @@ impl Capabilities {
             }
             Commands::Types { .. }
             | Commands::LintRules { .. }
-            | Commands::Okf { .. }
-            | Commands::Madr { .. }
-            | Commands::Changelog { .. }
             | Commands::Init { .. }
             | Commands::Deinit
             | Commands::Completion { .. }
             | Commands::Help { .. }
             | Commands::Config { .. } => IndexCapability::None,
+            Commands::Okf { .. } | Commands::Madr { .. } | Commands::Changelog { .. } => {
+                IndexCapability::Read
+            }
         };
         let empty_input = match targets {
             Single => EmptyInput::CardinalityError,

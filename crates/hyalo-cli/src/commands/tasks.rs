@@ -387,6 +387,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn task_specific_second_file_conflict_retains_first_effect_and_invalidates_index() {
+        use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex};
+        let dir = tempfile::tempdir().unwrap();
+        let mut pairs = Vec::new();
+        for name in ["a.md", "b.md"] {
+            let path = dir.path().join(name);
+            fs::write(&path, "- [ ] task\n").unwrap();
+            pairs.push((path, name.to_owned()));
+        }
+        let built = ScannedIndex::build(
+            &pairs,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let index_path = dir.path().join(".hyalo-index");
+        SnapshotIndex::save(
+            &built.index,
+            &index_path,
+            dir.path().to_str().unwrap(),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut index = SnapshotIndex::load(&index_path).unwrap();
+        let mut changes = crate::commands::apply::PreparedChangeSet::new(dir.path(), 2).unwrap();
+        for (_, name) in &pairs {
+            let captured = changes.capture(name).unwrap();
+            let bytes = captured.bytes().unwrap();
+            let content = std::str::from_utf8(&bytes).unwrap();
+            let (rendered, _) = hyalo_core::tasks::render_tasks(content, &[1], None).unwrap();
+            changes.push(captured, Some(&rendered)).unwrap();
+        }
+        let mut journal = MutationJournal::new(&mut index, Some(&index_path));
+        let report = changes.apply_with(
+            &mut journal,
+            |position, _| {
+                if position == 1 {
+                    fs::write(dir.path().join("b.md"), "editor change\n")?;
+                }
+                Ok(())
+            },
+            |_| {},
+        );
+        assert_eq!(
+            report.paths[0].state,
+            crate::commands::apply::EffectState::Committed
+        );
+        assert_eq!(
+            report.paths[1].state,
+            crate::commands::apply::EffectState::FailedBeforeCommit
+        );
+        assert_eq!(
+            report.index,
+            crate::commands::apply::IndexDisposition::Invalidated
+        );
+        assert_eq!(fs::read_to_string(&pairs[0].0).unwrap(), "- [x] task\n");
+        assert_eq!(fs::read_to_string(&pairs[1].0).unwrap(), "editor change\n");
+    }
+
     // --- task_read ---
 
     #[test]

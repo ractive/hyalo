@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::commands::lint::SCHEMA_PSEUDO_RULE;
 use crate::output::{CommandOutcome, Format, output_value, user_diagnostic};
@@ -223,11 +223,8 @@ pub(crate) fn set_rule(
     let before_severity = format!("{}", effective_severity(entry, md_lint));
 
     let toml_path = config_dir.join(TOML_FILENAME);
-    let contents = std::fs::read_to_string(&toml_path).unwrap_or_default();
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", toml_path.display()))?;
+    let mut doc = super::config_write::capture(&toml_path)?;
+    let original = doc.original().unwrap_or_default().to_owned();
 
     // Compute the desired post-set state by combining new flags with defaults.
     let target_enabled = enabled.unwrap_or(before_enabled);
@@ -352,7 +349,7 @@ pub(crate) fn set_rule(
         // Mirror the non-dry-run write decision so the text formatter can
         // distinguish a tautological dry-run (no diff) from one that would
         // mutate the file.
-        let would_write = new_contents != contents;
+        let would_write = new_contents != original;
         let val = RuleMutationResult {
             action: "set",
             rule_id,
@@ -373,19 +370,15 @@ pub(crate) fn set_rule(
             removed: None,
             reason: None,
         };
-        return Ok(CommandOutcome::success(output_value(&val)));
+        return Ok(CommandOutcome::success(output_value(&val))
+            .with_apply_report(super::config_write::preview(&toml_path)));
     }
 
     // Skip the write when the on-disk content would not change (BUG-2:
     // setting a property to its current default value should be a true no-op,
     // not "(no change)" + a redundant write).
-    let wrote = if new_contents == contents {
-        false
-    } else {
-        std::fs::write(&toml_path, &new_contents)
-            .with_context(|| format!("writing {}", toml_path.display()))?;
-        true
-    };
+    let wrote = new_contents != original;
+    let effects = super::config_write::publish(&toml_path, &mut doc)?;
 
     let val = RuleMutationResult {
         action: "set",
@@ -407,7 +400,7 @@ pub(crate) fn set_rule(
         removed: None,
         reason: None,
     };
-    Ok(CommandOutcome::success(output_value(&val)))
+    Ok(CommandOutcome::success(output_value(&val)).with_apply_report(effects))
 }
 
 /// Get (creating if absent) the `[lint.rules]` table as a mutable `Item`.
@@ -489,38 +482,31 @@ pub(crate) fn remove_rule(
     let path_str = config_dir.join(TOML_FILENAME).display().to_string();
 
     let toml_path = config_dir.join(TOML_FILENAME);
-    let contents = match std::fs::read_to_string(&toml_path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // No config file — nothing to remove
-            let val = RuleMutationResult {
-                action: "remove",
-                rule_id,
-                dry_run,
-                enabled: None,
-                severity: None,
-                before: RuleStateResult {
-                    enabled: before_enabled,
-                    severity: &before_severity,
-                },
-                after: RuleStateResult {
-                    enabled: before_enabled,
-                    severity: &before_severity,
-                },
-                config_path: &path_str,
-                preview: None,
-                wrote: None,
-                removed: Some(false),
-                reason: Some("no .hyalo.toml found"),
-            };
-            return Ok(CommandOutcome::success(output_value(&val)));
-        }
-        Err(e) => return Err(e).with_context(|| format!("reading {}", toml_path.display())),
-    };
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", toml_path.display()))?;
+    let mut doc = super::config_write::capture(&toml_path)?;
+    if doc.original().is_none() {
+        // No config file — nothing to remove
+        let val = RuleMutationResult {
+            action: "remove",
+            rule_id,
+            dry_run,
+            enabled: None,
+            severity: None,
+            before: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
+            },
+            after: RuleStateResult {
+                enabled: before_enabled,
+                severity: &before_severity,
+            },
+            config_path: &path_str,
+            preview: None,
+            wrote: None,
+            removed: Some(false),
+            reason: Some("no .hyalo.toml found"),
+        };
+        return Ok(CommandOutcome::success(output_value(&val)));
+    }
 
     let removed = remove_rule_from_doc(&mut doc, rule_id);
     // Prune empty `[lint.rules]` and `[lint]` tables that may have been left
@@ -550,10 +536,9 @@ pub(crate) fn remove_rule(
             removed: Some(false),
             reason: Some("no override found"),
         };
-        return Ok(CommandOutcome::success(output_value(&val)));
+        return Ok(CommandOutcome::success(output_value(&val))
+            .with_apply_report(super::config_write::preview(&toml_path)));
     }
-
-    let new_contents = doc.to_string();
 
     // After removing, the effective state reverts to the rule's defaults.
     let after_enabled = entry.default_enabled;
@@ -580,11 +565,11 @@ pub(crate) fn remove_rule(
             removed: Some(true),
             reason: None,
         };
-        return Ok(CommandOutcome::success(output_value(&val)));
+        return Ok(CommandOutcome::success(output_value(&val))
+            .with_apply_report(super::config_write::preview(&toml_path)));
     }
 
-    std::fs::write(&toml_path, &new_contents)
-        .with_context(|| format!("writing {}", toml_path.display()))?;
+    let effects = super::config_write::publish(&toml_path, &mut doc)?;
 
     let val = RuleMutationResult {
         action: "remove",
@@ -606,7 +591,7 @@ pub(crate) fn remove_rule(
         removed: Some(true),
         reason: None,
     };
-    Ok(CommandOutcome::success(output_value(&val)))
+    Ok(CommandOutcome::success(output_value(&val)).with_apply_report(effects))
 }
 
 /// Remove the `[lint.rules.<rule_id>]` entry (or scalar `rule_id = bool` entry)

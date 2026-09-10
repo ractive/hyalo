@@ -55,6 +55,29 @@ pub fn run_toc(
     active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
+    run_toc_with_journal(
+        dir,
+        adr_dir,
+        apply,
+        replace,
+        schema,
+        active_profiles,
+        format,
+        &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_toc_with_journal(
+    dir: &Path,
+    adr_dir: Option<&str>,
+    apply: bool,
+    replace: bool,
+    schema: &hyalo_core::schema::SchemaConfig,
+    active_profiles: &[String],
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<(CommandOutcome, Option<i32>)> {
     let adr_rel_normalized = adr_dir.unwrap_or(DEFAULT_ADR_DIR).replace('\\', "/");
     let adr_rel = adr_rel_normalized.trim_end_matches('/');
     let adr_full = dir.join(adr_rel);
@@ -103,15 +126,20 @@ pub fn run_toc(
     let had_markers = markers.has_markers(&old_content);
     let new_content = markers.splice(&old_content, &body, "# Architecture Decision Records", mode);
 
+    let existed = dir.join(&toc_rel).exists();
     let plan = GeneratePlan {
         rel_path: toc_rel,
         new_content,
         old_content,
+        existed,
     };
 
     let changed = plan.changed();
-    if apply && changed {
-        apply_plan(dir, &plan)?;
+    let mut effects = (apply && changed)
+        .then(|| apply_plan(dir, &plan))
+        .transpose()?;
+    if let Some(report) = &mut effects {
+        crate::commands::managed_region::reconcile_generated_notes(dir, report, journal);
     }
 
     // `adopt` (marker-less body preserved) reports the count of preserved lines,
@@ -143,10 +171,12 @@ pub fn run_toc(
 
     let exit_override = if !apply && changed { Some(1) } else { None };
 
-    Ok((
-        CommandOutcome::success_with_total(payload, u64::from(changed)),
-        exit_override,
-    ))
+    let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
+    let outcome = match effects {
+        Some(effects) => outcome.with_apply_report(effects),
+        None => outcome,
+    };
+    Ok((outcome, exit_override))
 }
 
 /// Read every ADR-typed `.md` file (except the generated `README.md`) directly
@@ -622,7 +652,7 @@ pub(crate) fn run(
             dry_run: _,
             replace,
         } => {
-            let (outcome, exit_override) = crate::commands::madr::run_toc(
+            let (outcome, exit_override) = crate::commands::madr::run_toc_with_journal(
                 ctx.dir,
                 adr_dir.as_deref(),
                 apply,
@@ -630,6 +660,10 @@ pub(crate) fn run(
                 ctx.schema,
                 &ctx.lint_profiles,
                 effective_format,
+                &mut crate::commands::journal::MutationJournal::new(
+                    &mut *ctx.snapshot_index,
+                    ctx.index_path,
+                ),
             )?;
             Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }

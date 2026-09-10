@@ -1848,8 +1848,10 @@ fn mv_case_only_rename_on_case_insensitive_fs() {
     if !fs_is_case_insensitive(tmp.path()) {
         // On a case-sensitive FS this is just an ordinary rename; the specific
         // regression can't be reproduced here, so skip.
+        eprintln!("HYALO_CASE_MATRIX=case_only_insensitive_unsupported");
         return;
     }
+    eprintln!("HYALO_CASE_MATRIX=case_only_insensitive_exercised");
     write_md(
         tmp.path(),
         "a.md",

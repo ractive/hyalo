@@ -68,6 +68,7 @@ pub use case_index::{
 /// Common-word heuristic for `links auto` advisory notes.
 pub use common_words::is_common_word;
 /// Vault-boundary file writing and refusal messaging (was `hyalo_core::fs_util`).
+#[allow(deprecated)]
 pub use fs_util::{
     WritePhase, atomic_write_within, escaping_write_target, outside_vault_hint,
     outside_vault_message, outside_vault_message_with_dir,

@@ -362,3 +362,38 @@ Normal authored Markdown includes broken frontmatter, missing delimiters and inc
 provide useful diagnostics and safe refusal without corruption where processing cannot
 continue; retain crash, security, confinement, resource and partial-write protections without
 exhaustive random-gibberish/fuzz exploration.
+
+## Iteration 293 reconciliation — 2026-09-10
+
+Consume the final 293 observed report through internal `mutationReport()` and
+`HyaloError.effects`/`category`. Public npm `set()`/`task()` retain text
+`ProcessResult` results; the hidden transport remains outside public descriptors
+and argument types. C08/C10 must account for `EffectState::Restored`,
+`RestoreFailed` and `Kept`, partial publication and finalization errors. Follow-up
+checks use actual surviving note effects and paths, never requested targets or
+success-text parsing; retain index outcomes and distinguish installation-directory
+effects from notes. Do not introduce generic retries for toggle/append or partial
+failures.
+
+`MutationJournal::finalize_observed` reconciles actual final paths: missing notes
+are removed before an `Updated` snapshot; unsafe/unreadable paths invalidate, and
+failed invalidation reports `UpdateFailed`. Lint worker errors retain earlier
+publication effects. `run_init_observed`/`run_deinit_observed` retain artifact and
+directory effects through `ReportError`, including created directories before a
+later asset failure. Runtime generator dispatch honors global index inputs;
+source-compatible direct generator wrappers use an explicit no-index journal.
+
+Active documentation must reflect captured transformations and explicit
+`WriteSession` finalization. Public frontmatter/task transformation wrappers keep
+their signatures while sharing one source capture through publication; their
+legacy Result errors state when publication already committed. The low-level
+`atomic_write_within` contract is confined atomic publication of caller-supplied
+final bytes, not stale-transform protection. Preserve ordinary Markdown diagnostics
+for broken frontmatter, missing delimiters and incomplete edits, with safe refusal
+without corruption when processing cannot continue.
+
+All 49 original checkbox texts, finding owners and the 293 dependency remain
+unchanged. Actual live Pi loading and model-backed guardrail evidence remain
+required; host simulations and static checks cannot fulfill them. Use the final
+293 review and native CI evidence recorded by the supervisor, without inferring
+platform execution from cross-compilation or an earlier local run.

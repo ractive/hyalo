@@ -653,3 +653,54 @@ frontmatter, missing delimiters and incomplete edits, with useful diagnostics an
 without corruption where processing cannot continue. Preserve crash, security, confinement,
 resource and partial-write protections; no exhaustive random-gibberish/fuzz exploration, new
 design, reassignment or external Homefinder work is added.
+
+## Iteration 293 handoff — 2026-09-10
+
+The final candidate is bound to base
+`524233bc04ddd12d4e45323f8e06b0b928d2386d` and
+`293-review-attempt-3-manifest.json` (51 paths, 50 product files).
+`293-review-attempt-3.json` has no findings after the two repair passes. The final
+source-interface handoffs and repair dispositions qualify earlier pilot claims;
+this note does not establish native CI completion.
+
+Core rooted capture now copies exact Unix device/inode or Windows volume/file
+identity and stages source bytes without retaining per-note descriptors.
+`PreparedReplacement` checks that same source before publication.
+`OwnedPublication` retains live handles only for compensable moved entries and
+moved self-file rewrites, checking receipt identity and last published bytes before
+restoration. Actual destination-parent probes govern case equivalence; no-replace
+legs preserve competing entries. Independent committed backlinks are `Kept`;
+receipt-bound compensation reports `Restored` or `RestoreFailed`, including
+capture failure after a case-only temporary leg. No kernel compare-and-swap,
+arbitrary directory-swap protection or whole-vault crash transaction is implied.
+Windows directory-sync support remains unavailable.
+
+The CLI coordinator owns complete preparation, explicit `WriteSession` finishing,
+all partial/finalization effects and `MutationJournal::finalize_observed`.
+Missing observed notes are removed in an updated snapshot; unsafe paths invalidate
+and failed invalidation reports `UpdateFailed`. Lint errors retain already
+published effects. Config transforms retain original capture; init/deinit retain
+artifact and directory effects through `ReportError`. Runtime generators honor
+CLI index inputs, while direct compatibility wrappers use explicit no-index
+journals. Published frontmatter/task transforms preserve signatures and now share
+one exact capture/session; legacy Result errors identify prior commits. Deprecated
+`WritePhase` is inert. `atomic_write_within` remains the confined atomic primitive
+for already-final bytes and does not own transformations.
+
+294 owns consumption of actual effects through internal `mutationReport()` and
+`HyaloError`, preserving public npm text results, diagnostics, resolved hints and
+live Pi verification. No inferred-target guard or generic retry is authorized.
+295 owns existing A04/R16 resource and behavioral gates, exact native branch
+verification and the actual held-out model comparison. Carry the real-caller
+forced full-map interleavings and source/receipt regressions; preserve Astra/Sol
+ownership and the existing A04 diagnostic-ordering observation. Supplied local
+evidence is 5,123 passing tests and 35 release-bound npm passes; two ignored tests,
+stubs and the unexercised MADR recipe are not coverage. Native case-sensitive
+existing/missing-destination markers and Windows runtime proof remain required.
+
+All original acceptance texts, the 50-row/49-group finding ledger and serial
+dependencies remain authoritative. Normal authored Markdown includes broken
+frontmatter, missing delimiters and incomplete edits: provide useful diagnostics
+and safe refusal without corruption where processing cannot continue. No
+exhaustive gibberish/fuzz or exotic-file campaign, new design or external
+Homefinder work is added.

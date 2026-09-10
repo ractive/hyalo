@@ -105,7 +105,7 @@ pub(crate) fn set_view(
     }
 
     let toml_path = resolve_toml_path(dir);
-    let mut doc = read_toml_doc(&toml_path)?;
+    let mut doc = super::config_write::capture(&toml_path)?;
 
     // Get or create the [views] table
     if !doc.contains_key("views") {
@@ -128,20 +128,20 @@ pub(crate) fn set_view(
     let edit_item = toml_value_to_edit_item(&filters_value)?;
     views_table.insert(name, edit_item);
 
-    write_toml_doc(&toml_path, &doc)?;
+    let effects = super::config_write::publish(&toml_path, &mut doc)?;
 
     let output = serde_json::to_value(&ViewMutationResult {
         action: "set",
         name,
     })
     .context("failed to serialize result")?;
-    Ok(CommandOutcome::success(output))
+    Ok(CommandOutcome::success(output).with_apply_report(effects))
 }
 
 /// Remove a view from `.hyalo.toml` within `dir`.
 pub(crate) fn remove_view(dir: &Path, name: &str, format: Format) -> Result<CommandOutcome> {
     let toml_path = resolve_toml_path(dir);
-    let mut doc = read_toml_doc(&toml_path)?;
+    let mut doc = super::config_write::capture(&toml_path)?;
 
     let Some(views_table) = doc.get_mut("views").and_then(|v| v.as_table_mut()) else {
         return Ok(CommandOutcome::UserError(user_diagnostic(
@@ -168,30 +168,14 @@ pub(crate) fn remove_view(dir: &Path, name: &str, format: Format) -> Result<Comm
         doc.remove("views");
     }
 
-    write_toml_doc(&toml_path, &doc)?;
+    let effects = super::config_write::publish(&toml_path, &mut doc)?;
 
     let output = serde_json::to_value(&ViewMutationResult {
         action: "removed",
         name,
     })
     .context("failed to serialize result")?;
-    Ok(CommandOutcome::success(output))
-}
-
-/// Read `.hyalo.toml` as a `DocumentMut`, or return an empty doc if not found.
-fn read_toml_doc(toml_path: &Path) -> Result<toml_edit::DocumentMut> {
-    match fs::read_to_string(toml_path) {
-        Ok(contents) => contents
-            .parse::<toml_edit::DocumentMut>()
-            .context("failed to parse .hyalo.toml"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml_edit::DocumentMut::new()),
-        Err(e) => Err(e).context("failed to read .hyalo.toml"),
-    }
-}
-
-/// Write a `DocumentMut` back to `.hyalo.toml`, preserving formatting.
-fn write_toml_doc(toml_path: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
-    fs::write(toml_path, doc.to_string()).context("failed to write .hyalo.toml")
+    Ok(CommandOutcome::success(output).with_apply_report(effects))
 }
 
 /// Convert a `toml::Value` (table) to a `toml_edit::Item` via text round-trip.

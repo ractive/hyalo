@@ -604,21 +604,17 @@ pub fn read_frontmatter(path: &Path) -> Result<IndexMap<String, Value>> {
 /// If `props` is empty (all properties removed), no frontmatter block is written —
 /// the file starts directly with the body.
 ///
-/// Writes via the boundary-unchecked [`crate::fs_util::atomic_write`] — a
-/// symlinked destination is still followed and replaced, but its target is
-/// *not* re-verified against a vault root. Only safe for callers whose path
-/// has already passed `discovery::resolve_file`'s canonicalizing boundary
-/// check (true of every CLI call site) or that have no vault to check against
-/// (e.g. tests). CLI call sites should prefer
-/// [`write_frontmatter_within`] (iter-191 follow-up).
+/// The compatibility adapter roots the resolved existing referent at its
+/// containing directory, captures the exact source bytes and identity used for
+/// rendering, then publishes through an explicit write session. This retains
+/// the legacy no-vault symlink-following contract. Callers with a vault root
+/// should prefer [`write_frontmatter_within`] for confinement.
 pub fn write_frontmatter(path: &Path, props: &IndexMap<String, Value>) -> Result<()> {
     write_frontmatter_impl(None, path, &WriteOp::Props(props)).map(|_| ())
 }
 
-/// Like [`write_frontmatter`], but re-checks the vault boundary against the
-/// *resolved* destination — the same defense-in-depth
-/// [`crate::fs_util::atomic_write_within`] gives every other mutation path.
-/// Use this from any CLI call site that has the vault directory in scope.
+/// Like [`write_frontmatter`], but captures and publishes through the supplied
+/// vault root. Use this from any caller that has the vault directory in scope.
 pub fn write_frontmatter_within(
     vault_root: &Path,
     path: &Path,
@@ -693,18 +689,52 @@ fn write_frontmatter_impl(
     path: &Path,
     op: &WriteOp<'_>,
 ) -> Result<bool> {
-    let mut file = open_frontmatter_file(path)?;
+    write_frontmatter_impl_with_before_commit(vault_root, path, op, || Ok(()))
+}
+
+fn write_frontmatter_impl_with_before_commit(
+    vault_root: Option<&Path>,
+    path: &Path,
+    op: &WriteOp<'_>,
+    before_commit: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    use crate::rooted::{ConfigRoot, Durability, RelativeName, VaultRoot, WriteSession};
+    let captured = if let Some(vault_root) = vault_root {
+        let root = VaultRoot::new(vault_root)?;
+        let relative = path
+            .strip_prefix(vault_root)
+            .or_else(|_| path.strip_prefix(root.path()))
+            .map_or_else(|_| path.to_path_buf(), Path::to_path_buf);
+        root.capture(&RelativeName::new(relative)?)?
+    } else {
+        let referent = dunce::canonicalize(path)
+            .with_context(|| format!("failed to resolve {}", path.display()))?;
+        let parent = referent
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let leaf = referent
+            .file_name()
+            .context("frontmatter path has no file name")?;
+        ConfigRoot::new(parent)?.capture(&RelativeName::new(leaf)?)?
+    };
+    let mut file = captured.reader()?;
     let Some(out) = render_frontmatter_impl(&mut file, path, op)? else {
         return Ok(false);
     };
-    // The compatibility wrapper owns this reader. Close it before publication:
-    // retaining the source handle prevents atomic replacement on Windows.
     drop(file);
-    match vault_root {
-        Some(root) => crate::fs_util::atomic_write_within(root, path, &out),
-        None => crate::fs_util::atomic_write(path, &out),
+    before_commit()?;
+    let mut session = WriteSession::new(Durability::PerFile);
+    let effect = captured.prepare(&out, &session)?.commit(&mut session)?;
+    if let Some(error) = effect.finalization_error() {
+        anyhow::bail!("frontmatter committed but finalization failed: {error}");
     }
-    .with_context(|| format!("failed to write {}", path.display()))?;
+    session.finish().with_context(|| {
+        format!(
+            "frontmatter committed but finalization failed for {}",
+            path.display()
+        )
+    })?;
     Ok(true)
 }
 
@@ -717,6 +747,18 @@ pub fn render_frontmatter(
 ) -> Result<Vec<u8>> {
     render_frontmatter_impl(file, path, &WriteOp::Props(props))?
         .context("property rendering produced no output")
+}
+
+/// Render a top-level key rename from an already captured source without
+/// publishing it. `None` means the byte-preserving splicer cannot model the
+/// source and the caller should render the validated property map instead.
+pub fn render_frontmatter_key_rename(
+    file: &mut File,
+    path: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Option<Vec<u8>>> {
+    render_frontmatter_impl(file, path, &WriteOp::RenameKey { from, to })
 }
 
 fn render_frontmatter_impl(
@@ -1148,9 +1190,42 @@ fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
 
 #[cfg(test)]
 mod open_tests {
-    use super::{WINDOWS_OPEN_ATTEMPTS, WINDOWS_OPEN_RETRY_DELAY, open_with_windows_retry};
+    use super::{
+        WINDOWS_OPEN_ATTEMPTS, WINDOWS_OPEN_RETRY_DELAY, WriteOp, open_with_windows_retry,
+        write_frontmatter_impl_with_before_commit,
+    };
     use std::cell::{Cell, RefCell};
     use std::io;
+
+    #[test]
+    fn public_frontmatter_adapter_refuses_same_length_lost_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, "---\ntitle: old\nother: aa\n---\nbody\n").unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut props = super::read_frontmatter(&path).unwrap();
+        props.insert("title".to_owned(), serde_json::json!("new"));
+        let result =
+            write_frontmatter_impl_with_before_commit(None, &path, &WriteOp::Props(&props), || {
+                std::fs::write(&path, "---\ntitle: old\nother: bb\n---\nbody\n")?;
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)?
+                    .set_times(std::fs::FileTimes::new().set_modified(modified))?;
+                Ok(())
+            });
+        let error = result.expect_err("stale compatibility write must fail");
+        assert!(
+            error
+                .downcast_ref::<crate::rooted::SourceConflict>()
+                .is_some(),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "---\ntitle: old\nother: bb\n---\nbody\n"
+        );
+    }
 
     #[test]
     fn windows_open_retries_access_denied_and_sharing_violation_then_succeeds() {

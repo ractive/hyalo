@@ -8,7 +8,6 @@ use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::frontmatter;
 use crate::heading::parse_atx_heading;
 use crate::scanner::{self, FileVisitor, ScanAction};
 use crate::types::{TaskCount, TaskInfo};
@@ -335,22 +334,6 @@ fn mutate_task_line(line: &str, line_num: usize, new_status: char) -> Option<(St
     Some((modified, info))
 }
 
-/// Bail with a consistent "file too large" error for mutation entry points.
-/// Mutation commands target one explicit file, so — unlike the read-only
-/// scanner, which silently skips oversized files across a whole vault — an
-/// oversized target here must be a hard error, not a silent no-op.
-fn bail_if_too_large(path: &Path, file_size: u64) -> Result<()> {
-    if file_size > scanner::MAX_FILE_SIZE {
-        bail!(
-            "file too large to modify ({} MiB exceeds {} MiB limit): {}",
-            file_size / (1024 * 1024),
-            scanner::MAX_FILE_SIZE / (1024 * 1024),
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 /// Compute the set of 1-based line numbers that are valid task checkboxes,
 /// i.e. the same lines `read_task` and `find_task_lines` would recognize.
 /// Skips frontmatter, fenced code blocks, and `%%` comment blocks so that
@@ -433,99 +416,67 @@ pub fn render_tasks(
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Errors if any line is not a task checkbox.
 ///
-/// `vault_root` is passed through to [`crate::fs_util::atomic_write_within`] so
-/// a symlinked destination that resolves outside the vault is refused at write
-/// time, not just at `discovery::resolve_file` resolution time (iter-191).
+/// `vault_root` owns capture, exact source verification and publication through
+/// an explicit write session. A symlink resolving outside the vault is refused.
 pub fn toggle_tasks(vault_root: &Path, path: &Path, lines: &[usize]) -> Result<Vec<TaskInfo>> {
-    let mtime = frontmatter::read_mtime(path)?;
-    bail_if_too_large(path, mtime.1)?;
-
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let file_lines: Vec<&str> = content.split('\n').collect();
-    let line_count = if file_lines.last() == Some(&"") {
-        file_lines.len() - 1
-    } else {
-        file_lines.len()
-    };
-    let valid_lines = valid_task_line_set(content.as_bytes())?;
-
-    let mut deduped = lines.to_vec();
-    deduped.sort_unstable();
-    deduped.dedup();
-
-    let mut results = Vec::with_capacity(deduped.len());
-    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
-
-    for &line in &deduped {
-        let target = validate_task_line(&file_lines, line_count, &valid_lines, line)?;
-        let (current_status, _done) = detect_task_checkbox(target)
-            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task"))?;
-        let new_status = if current_status == 'x' || current_status == 'X' {
-            ' '
-        } else {
-            'x'
-        };
-        let (modified_line, info) = mutate_task_line(target, line, new_status)
-            .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
-        replacements.push((line, modified_line));
-        results.push(info);
-    }
-
-    let new_content = build_new_content(&content, &file_lines, &replacements);
-    frontmatter::check_mtime(path, mtime)?;
-    crate::fs_util::atomic_write_within(vault_root, path, new_content.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
-    Ok(results)
+    publish_prepared_tasks(vault_root, path, lines, None)
 }
 
 /// Set a custom status character on multiple tasks in one atomic read-modify-write pass.
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Lines are 1-based. Errors if any line is not a task checkbox.
 ///
-/// `vault_root` is passed through to [`crate::fs_util::atomic_write_within`] so
-/// a symlinked destination that resolves outside the vault is refused at write
-/// time, not just at `discovery::resolve_file` resolution time (iter-191).
+/// `vault_root` owns capture, exact source verification and publication through
+/// an explicit write session. A symlink resolving outside the vault is refused.
 pub fn set_tasks_status(
     vault_root: &Path,
     path: &Path,
     lines: &[usize],
     status: char,
 ) -> Result<Vec<TaskInfo>> {
-    let mtime = frontmatter::read_mtime(path)?;
-    bail_if_too_large(path, mtime.1)?;
+    publish_prepared_tasks(vault_root, path, lines, Some(status))
+}
 
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
-    let file_lines: Vec<&str> = content.split('\n').collect();
-    let line_count = if file_lines.last() == Some(&"") {
-        file_lines.len() - 1
-    } else {
-        file_lines.len()
-    };
-    let valid_lines = valid_task_line_set(content.as_bytes())?;
+fn publish_prepared_tasks(
+    vault_root: &Path,
+    path: &Path,
+    lines: &[usize],
+    status: Option<char>,
+) -> Result<Vec<TaskInfo>> {
+    publish_prepared_tasks_with_before_commit(vault_root, path, lines, status, || Ok(()))
+}
 
-    let mut deduped = lines.to_vec();
-    deduped.sort_unstable();
-    deduped.dedup();
-
-    let mut results = Vec::with_capacity(deduped.len());
-    let mut replacements: Vec<(usize, String)> = Vec::with_capacity(deduped.len());
-
-    for &line in &deduped {
-        let target = validate_task_line(&file_lines, line_count, &valid_lines, line)?;
-        let (modified_line, info) = mutate_task_line(target, line, status)
-            .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
-        replacements.push((line, modified_line));
-        results.push(info);
+fn publish_prepared_tasks_with_before_commit(
+    vault_root: &Path,
+    path: &Path,
+    lines: &[usize],
+    status: Option<char>,
+    before_commit: impl FnOnce() -> Result<()>,
+) -> Result<Vec<TaskInfo>> {
+    use crate::rooted::{Durability, RelativeName, VaultRoot, WriteSession};
+    let root = VaultRoot::new(vault_root)?;
+    let relative = path
+        .strip_prefix(vault_root)
+        .or_else(|_| path.strip_prefix(root.path()))
+        .map_or_else(|_| path.to_path_buf(), Path::to_path_buf);
+    let captured = root.capture(&RelativeName::new(relative)?)?;
+    let content = String::from_utf8(captured.bytes()?)
+        .with_context(|| format!("failed to decode {} as UTF-8", path.display()))?;
+    let (replacement, results) = render_tasks(&content, lines, status)?;
+    before_commit()?;
+    let mut session = WriteSession::new(Durability::PerFile);
+    let effect = captured
+        .prepare(&replacement, &session)?
+        .commit(&mut session)?;
+    if let Some(error) = effect.finalization_error() {
+        anyhow::bail!("task update committed but finalization failed: {error}");
     }
-
-    let new_content = build_new_content(&content, &file_lines, &replacements);
-    frontmatter::check_mtime(path, mtime)?;
-    crate::fs_util::atomic_write_within(vault_root, path, new_content.as_bytes())
-        .with_context(|| format!("failed to write {}", path.display()))?;
-
+    session.finish().with_context(|| {
+        format!(
+            "task update committed but finalization failed for {}",
+            path.display()
+        )
+    })?;
     Ok(results)
 }
 
@@ -557,6 +508,31 @@ fn build_new_content(original: &str, lines: &[&str], replacements: &[(usize, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_task_adapter_refuses_same_length_lost_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.md");
+        fs::write(&path, "- [ ] task\nother aa\n").unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let result =
+            publish_prepared_tasks_with_before_commit(dir.path(), &path, &[1], None, || {
+                fs::write(&path, "- [ ] task\nother bb\n")?;
+                fs::File::options()
+                    .write(true)
+                    .open(&path)?
+                    .set_times(fs::FileTimes::new().set_modified(modified))?;
+                Ok(())
+            });
+        let error = result.expect_err("stale compatibility write must fail");
+        assert!(
+            error
+                .downcast_ref::<crate::rooted::SourceConflict>()
+                .is_some(),
+            "{error:#}"
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "- [ ] task\nother bb\n");
+    }
 
     // --- BUG-40 (iter-276): list markers hyalo used to miss
 

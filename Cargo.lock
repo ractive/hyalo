@@ -726,6 +726,7 @@ dependencies = [
  "rayon",
  "regex",
  "rmp-serde",
+ "same-file",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -761,6 +762,7 @@ dependencies = [
  "tempfile",
  "toml 1.1.2+spec-1.1.0",
  "ts-rs",
+ "winapi-util",
 ]
 
 [[package]]

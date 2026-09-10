@@ -199,24 +199,50 @@ pub struct CapturedInput {
     root: Root,
     entry: RelativeName,
     referent: PathBuf,
+    exact_identity: ExactIdentity,
     identity: u64,
     original: TempPath,
     permissions: std::fs::Permissions,
     size: u64,
 }
 
-fn file_identity(file: File) -> Result<(File, u64)> {
-    let handle = same_file::Handle::from_file(file)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ExactIdentity {
+    volume: u64,
+    file: u64,
+}
+
+#[cfg(unix)]
+fn exact_identity(file: &File) -> Result<ExactIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata()?;
+    Ok(ExactIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn exact_identity(file: &File) -> Result<ExactIdentity> {
+    let information = winapi_util::file::information(file)?;
+    Ok(ExactIdentity {
+        volume: information.volume_serial_number(),
+        file: information.file_index(),
+    })
+}
+
+fn file_identity(file: File) -> Result<(File, ExactIdentity, u64)> {
+    let exact = exact_identity(&file)?;
     let mut hasher = DefaultHasher::new();
-    handle.hash(&mut hasher);
+    exact.hash(&mut hasher);
     // The hash is only a conservative duplicate/conflict guard. A collision
     // refuses a batch; it never grants permission or establishes byte equality.
-    Ok((handle.as_file().try_clone()?, hasher.finish()))
+    Ok((file, exact, hasher.finish()))
 }
 
 impl CapturedInput {
     fn capture(root: Root, opened: OpenedTarget) -> Result<Self> {
-        let (mut file, identity) = file_identity(opened.file)?;
+        let (mut file, exact_identity, identity) = file_identity(opened.file)?;
         let metadata = file.metadata()?;
         let oversized = || {
             crate::user_error(format!(
@@ -240,6 +266,7 @@ impl CapturedInput {
             root,
             entry: opened.entry,
             referent: opened.referent,
+            exact_identity,
             identity,
             original: original.into_temp_path(),
             permissions: metadata.permissions(),
@@ -280,8 +307,8 @@ impl CapturedInput {
         if opened.referent != self.referent {
             bail!(SourceConflict("target referent changed"));
         }
-        let (mut current, identity) = file_identity(opened.file)?;
-        if identity != self.identity {
+        let (mut current, exact_identity, identity) = file_identity(opened.file)?;
+        if exact_identity != self.exact_identity || identity != self.identity {
             bail!(SourceConflict("target file identity changed"));
         }
         let mut original = self.reader()?;
@@ -317,6 +344,17 @@ impl CapturedInput {
             data: data.into_temp_path(),
         })
     }
+
+    /// Remove the exact captured entry after rechecking identity and bytes.
+    /// A replacement or edit after capture is a source conflict, not removal
+    /// authority.
+    pub fn remove(self, session: &mut WriteSession) -> Result<CommitEffect> {
+        self.verify()?;
+        let path = self.root.check(&self.entry, false)?;
+        session.fault(FaultPoint::Remove)?;
+        std::fs::remove_file(&path)?;
+        Ok(session.record(&path, Operation::Removed))
+    }
 }
 
 /// A new name is rechecked during exclusive publication.
@@ -345,12 +383,54 @@ pub struct PreparedReplacement {
     data: TempPath,
 }
 
+/// Exact ownership receipt for bytes published by this operation.
+///
+/// The live entry must retain both the original filesystem object identity and
+/// the exact last-published bytes before it can authorize compensation.
+pub struct OwnedPublication {
+    root: Root,
+    entry: RelativeName,
+    handle: same_file::Handle,
+    expected: TempPath,
+}
+
+impl OwnedPublication {
+    #[must_use]
+    pub fn name(&self) -> &RelativeName {
+        &self.entry
+    }
+
+    pub fn capture_verified(&self) -> Result<CapturedInput> {
+        let path = self.root.check(&self.entry, false)?;
+        if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            bail!(SourceConflict(
+                "published entry kind changed before compensation"
+            ));
+        }
+        let captured = CapturedInput::capture(self.root.clone(), self.root.open(&self.entry)?)?;
+        let current_handle = same_file::Handle::from_path(&path)?;
+        if current_handle != self.handle || captured.bytes()? != std::fs::read(&self.expected)? {
+            bail!(SourceConflict(
+                "published entry identity or bytes changed before compensation"
+            ));
+        }
+        Ok(captured)
+    }
+}
+
 impl PreparedReplacement {
     #[must_use]
     pub fn name(&self) -> &RelativeName {
         self.source.name()
     }
     pub fn commit(self, session: &mut WriteSession) -> Result<CommitEffect> {
+        self.commit_with_receipt(session).map(|(effect, _)| effect)
+    }
+
+    pub fn commit_with_receipt(
+        self,
+        session: &mut WriteSession,
+    ) -> Result<(CommitEffect, OwnedPublication)> {
         self.source.verify()?;
         let path = self.source.root.check(&self.source.entry, true)?;
         let parent = path.parent().context("target has no parent")?;
@@ -360,10 +440,17 @@ impl PreparedReplacement {
         temp.as_file()
             .set_permissions(self.source.permissions.clone())?;
         temp.as_file().sync_all()?;
+        let handle = same_file::Handle::from_file(temp.as_file().try_clone()?)?;
+        let receipt = OwnedPublication {
+            root: self.source.root.clone(),
+            entry: self.source.entry.clone(),
+            handle,
+            expected: self.data,
+        };
         session.fault(FaultPoint::Persist)?;
         self.source.verify()?;
         temp.persist(&path).map_err(|e| e.error)?;
-        Ok(session.record(&path, Operation::Replaced))
+        Ok((session.record(&path, Operation::Replaced), receipt))
     }
 }
 
@@ -376,12 +463,33 @@ pub fn move_no_replace(
     destination: NewEntry,
     session: &mut WriteSession,
 ) -> Result<CommitEffect> {
+    move_no_replace_with_receipt(source, destination, session).map(|(effect, _)| effect)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub fn move_no_replace_with_receipt(
+    source: CapturedInput,
+    destination: NewEntry,
+    session: &mut WriteSession,
+) -> Result<(CommitEffect, OwnedPublication)> {
     source.verify()?;
     let from = source.root.check(&source.entry, false)?;
     if std::fs::symlink_metadata(&from)?.file_type().is_symlink() {
         bail!("unsupported: no-replace move of a symlink entry");
     }
     let to = destination.root.check(&destination.name, false)?;
+    let opened = source.root.open(&source.entry)?;
+    if opened.referent != source.referent || exact_identity(&opened.file)? != source.exact_identity
+    {
+        bail!(SourceConflict("target file identity changed"));
+    }
+    let handle = same_file::Handle::from_file(opened.file)?;
+    let receipt = OwnedPublication {
+        root: destination.root.clone(),
+        entry: destination.name.clone(),
+        handle,
+        expected: source.original,
+    };
     session.fault(FaultPoint::Persist)?;
     std::fs::hard_link(&from, &to)
         .context("exclusive no-replace move is unavailable or destination exists")?;
@@ -400,7 +508,7 @@ pub fn move_no_replace(
             effect.finalization_error = removed.finalization_error;
         }
     }
-    Ok(effect)
+    Ok((effect, receipt))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -56,24 +56,15 @@ pub struct RewritePlan {
     pub replacements: Vec<Replacement>,
     /// Full file content with all replacements already applied.
     pub rewritten_content: String,
-    /// Fingerprint (mtime, file size) of the file when the plan was built, used
-    /// to detect concurrent modifications before writing. `None` for the moved
-    /// file's outbound plan (which is written to a new path after `fs::rename`
-    /// and needs no check).
+    /// Compatibility fingerprint retained for callers that inspect plans.
+    /// Publication uses the exact captured bytes below.
     pub mtime: Option<(std::time::SystemTime, u64)>,
     /// The file's content *before* this plan's replacements were applied.
     ///
-    /// Only populated by [`plan_batch_mv`] for "self-rewrite" plans — plans
-    /// whose `path` coincides with one of the batch's own rename
-    /// destinations (i.e. the plan rewrites content belonging to a file that
-    /// is itself being moved). Callers that roll back renames on a
-    /// mid-batch failure (DEC-056) need this to restore the file to its
-    /// exact pre-batch state (old path *and* old content) rather than
-    /// leaving stale content — that references the post-rename layout —
-    /// stranded at the rolled-back old path. `None` for plans on files that
-    /// are not themselves being renamed, and for all plans built by
-    /// [`plan_mv`] (the single-file path applies all-or-nothing via
-    /// [`execute_plans`] and never rolls back).
+    /// Prepared plans populate this for every file. It is both the optimistic
+    /// content version checked before publication and the rollback pre-image
+    /// for moved-file rewrites. Legacy plans without it are refused by the
+    /// checked executor rather than trusted from mtime alone.
     pub original_content: Option<String>,
 }
 
@@ -293,7 +284,7 @@ pub fn plan_mv(
                     replacements,
                     rewritten_content,
                     mtime: file_mtime,
-                    original_content: None,
+                    original_content: Some(content.clone()),
                 },
             );
         }
@@ -393,9 +384,7 @@ pub fn plan_mv(
                     // Preserve mtime — fs::rename keeps mtime, so execute_plans
                     // can detect concurrent edits before writing.
                     mtime: Some(old_file_mtime),
-                    // Single-file mv applies all-or-nothing via `execute_plans`
-                    // and never rolls back — no restore content needed.
-                    original_content: None,
+                    original_content: Some(content.clone()),
                 },
             );
         }
@@ -567,7 +556,9 @@ impl PartialExecuteReport {
     /// `true` when at least one plan failed to write.
     #[must_use]
     pub fn has_failures(&self) -> bool {
-        self.outcomes.iter().any(|o| !o.applied)
+        self.outcomes
+            .iter()
+            .any(|o| !o.applied || o.error.is_some())
     }
 
     /// Vault-relative paths of the plans that were durably written.
@@ -587,23 +578,23 @@ impl PartialExecuteReport {
 /// within the vault before writing, which guards against future refactors
 /// accidentally constructing paths that escape the vault.
 ///
-/// This is the **all-or-nothing** variant: it aborts the whole batch at the
-/// first failure. Callers that must report partial progress on a mid-batch
-/// failure should use [`execute_plans_partial`] instead.
+/// Compatibility adapter over the effect-retaining executor. Every plan is
+/// attempted; the returned error summarizes failures after all outcomes have
+/// been collected.
 pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
-    // Canonicalize once up front; all plan paths are resolved against this.
-    let canonical_vault = canonicalize_vault_dir(vault_dir)
-        .context("failed to canonicalize vault directory for write safety check")?;
-    validate_rewrite_plans(plans)?;
-
-    // iter-277 (BUG-14): one shared write phase — every plan keeps its own
-    // atomic temp+rename, and the durability fsyncs are paid once per
-    // directory when the guard drops (DEC-317).
-    let phase = crate::fs_util::WritePhase::begin(plans.len(), "rewriting links");
-    let results = write_plans_in_parallel(&canonical_vault, plans);
-    drop(phase);
-    for result in results {
-        result?;
+    let report = execute_plans_partial(vault_dir, plans)?;
+    let failures: Vec<_> = report
+        .outcomes
+        .iter()
+        .filter_map(|outcome| {
+            outcome
+                .error
+                .as_ref()
+                .map(|error| format!("{}: {error}", outcome.rel_path))
+        })
+        .collect();
+    if !failures.is_empty() {
+        anyhow::bail!("link rewrite failed: {}", failures.join("; "));
     }
     Ok(())
 }
@@ -612,22 +603,44 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
 /// returned results.
 ///
 /// The writes are independent — one plan per file, paths already validated —
-/// so the only shared state is the [`BatchWriter`]'s directory set, which is
-/// behind its own mutex.
-fn write_plans_in_parallel(canonical_vault: &Path, plans: &[RewritePlan]) -> Vec<Result<()>> {
+/// and each worker owns its captured source, replacement and explicit write
+/// session. No process-global write phase is shared across workers.
+struct PlanWriteResult {
+    applied: bool,
+    error: Option<anyhow::Error>,
+    receipt: Option<crate::rooted::OwnedPublication>,
+}
+
+fn write_plans_in_parallel(
+    canonical_vault: &Path,
+    plans: &[RewritePlan],
+    receipt_paths: &[String],
+) -> Vec<PlanWriteResult> {
     #[cfg(not(miri))]
     {
         use rayon::prelude::*;
         plans
             .par_iter()
-            .map(|plan| write_single_plan(canonical_vault, plan))
+            .map(|plan| {
+                write_single_plan(
+                    canonical_vault,
+                    plan,
+                    receipt_paths.contains(&plan.rel_path),
+                )
+            })
             .collect()
     }
     #[cfg(miri)]
     {
         plans
             .iter()
-            .map(|plan| write_single_plan(canonical_vault, plan))
+            .map(|plan| {
+                write_single_plan(
+                    canonical_vault,
+                    plan,
+                    receipt_paths.contains(&plan.rel_path),
+                )
+            })
             .collect()
     }
 }
@@ -647,69 +660,112 @@ pub fn execute_plans_partial(
     vault_dir: &Path,
     plans: &[RewritePlan],
 ) -> Result<PartialExecuteReport> {
+    Ok(execute_plans_partial_with_receipts(vault_dir, plans, &[])?.report)
+}
+
+/// Internal ownership-carrying form used by move compensation. Public DTO
+/// callers continue to use [`execute_plans_partial`].
+pub struct PartialExecuteWithReceipts {
+    pub report: PartialExecuteReport,
+    pub receipts: std::collections::HashMap<String, crate::rooted::OwnedPublication>,
+}
+
+pub fn execute_plans_partial_with_receipts(
+    vault_dir: &Path,
+    plans: &[RewritePlan],
+    receipt_paths: &[String],
+) -> Result<PartialExecuteWithReceipts> {
     let canonical_vault = canonicalize_vault_dir(vault_dir)
         .context("failed to canonicalize vault directory for write safety check")?;
 
-    let phase = crate::fs_util::WritePhase::begin(plans.len(), "rewriting links");
-    let results = write_plans_in_parallel(&canonical_vault, plans);
-    drop(phase);
+    let results = write_plans_in_parallel(&canonical_vault, plans, receipt_paths);
 
     let mut outcomes = Vec::with_capacity(plans.len());
+    let mut receipts = std::collections::HashMap::new();
     for (plan, result) in plans.iter().zip(results) {
-        match result {
-            Ok(()) => outcomes.push(PlanOutcome {
+        if let Some(receipt) = result.receipt {
+            receipts.insert(plan.rel_path.clone(), receipt);
+        }
+        match result.error {
+            None => outcomes.push(PlanOutcome {
                 rel_path: plan.rel_path.clone(),
                 applied: true,
                 error: None,
             }),
-            Err(err) => {
+            Some(err) => {
                 let reason = format!("{err:#}");
                 eprintln!("warning: failed to rewrite {}: {reason}", plan.rel_path);
                 outcomes.push(PlanOutcome {
                     rel_path: plan.rel_path.clone(),
-                    applied: false,
+                    applied: result.applied,
                     error: Some(reason),
                 });
             }
         }
     }
-    Ok(PartialExecuteReport { outcomes })
+    Ok(PartialExecuteWithReceipts {
+        report: PartialExecuteReport { outcomes },
+        receipts,
+    })
 }
 
 /// Write a single plan to disk after verifying it is inside the vault and the
 /// file has not changed since the plan was built. Shared by [`execute_plans`]
 /// and [`execute_plans_partial`].
-fn write_single_plan(canonical_vault: &Path, plan: &RewritePlan) -> Result<()> {
-    // Safety assertion: verify the target is inside the vault before
-    // writing.  Plans are generated by `plan_mv` which constrains paths to
-    // the vault, but this check makes the invariant explicit and
-    // survives future refactors.
-    let within = ensure_within_vault(canonical_vault, &plan.path)
-        .with_context(|| format!("could not verify {} is within vault", plan.path.display()))?;
-    anyhow::ensure!(
-        within,
-        "refusing to write outside vault: {}",
-        plan.path.display()
-    );
+fn write_single_plan(
+    canonical_vault: &Path,
+    plan: &RewritePlan,
+    retain_receipt: bool,
+) -> PlanWriteResult {
+    let before_commit = (|| -> Result<_> {
+        // Safety assertion: verify the target is inside the vault before
+        // writing.  Plans are generated by `plan_mv` which constrains paths to
+        // the vault, but this check makes the invariant explicit and
+        // survives future refactors.
+        let within = ensure_within_vault(canonical_vault, &plan.path)
+            .with_context(|| format!("could not verify {} is within vault", plan.path.display()))?;
+        anyhow::ensure!(
+            within,
+            "refusing to write outside vault: {}",
+            plan.path.display()
+        );
 
-    // Detect concurrent modification: if the file was changed between
-    // plan and execute, abort to avoid silently clobbering the new content.
-    if let Some(expected_mtime) = plan.mtime {
-        crate::frontmatter::check_mtime(&plan.path, expected_mtime)?;
+        validate_rewritten_document(plan)?;
+
+        let expected = plan.original_content.as_ref().context(
+            "rewrite plan has no captured source bytes; rebuild the plan before applying",
+        )?;
+        let root = crate::rooted::VaultRoot::new(canonical_vault)?;
+        let name = crate::rooted::RelativeName::new(&plan.rel_path)?;
+        let captured = root.capture(&name)?;
+        if captured.bytes()? != expected.as_bytes() {
+            anyhow::bail!(crate::rooted::SourceConflict("source bytes changed"));
+        }
+        let mut session = crate::rooted::WriteSession::new(crate::rooted::Durability::PerFile);
+        let (effect, receipt) = captured
+            .prepare(plan.rewritten_content.as_bytes(), &session)?
+            .commit_with_receipt(&mut session)
+            .with_context(|| format!("writing {}", plan.path.display()))?;
+        Ok((effect, receipt, session))
+    })();
+    match before_commit {
+        Ok((effect, receipt, session)) => {
+            let error = effect
+                .finalization_error()
+                .map(|error| anyhow::Error::msg(error.to_owned()))
+                .or_else(|| session.finish().err());
+            PlanWriteResult {
+                applied: true,
+                error,
+                receipt: retain_receipt.then_some(receipt),
+            }
+        }
+        Err(error) => PlanWriteResult {
+            applied: false,
+            error: Some(error),
+            receipt: None,
+        },
     }
-
-    validate_rewritten_document(plan)?;
-
-    // `atomic_write_within` re-applies the boundary check to the *resolved*
-    // destination, so a symlinked plan target that points out of the vault is
-    // refused rather than followed (DEC-062).
-    crate::fs_util::atomic_write_within(
-        canonical_vault,
-        &plan.path,
-        plan.rewritten_content.as_bytes(),
-    )
-    .with_context(|| format!("writing {}", plan.path.display()))?;
-    Ok(())
 }
 
 fn validate_rewritten_document(plan: &RewritePlan) -> Result<()> {
@@ -1388,7 +1444,6 @@ pub fn plan_batch_mv(
         // "self-rewrite" — its `path` coincides with a rename destination —
         // so it carries `original_content` for DEC-056 rollback (see
         // `RewritePlan::original_content` doc).
-        let is_self_rewrite = rename_map.contains_key(source_rel.as_str());
         let plan_key = if let Some(new_source) = rename_map.get(source_rel.as_str()) {
             dir.join(new_source)
         } else {
@@ -1408,7 +1463,7 @@ pub fn plan_batch_mv(
                 replacements: all_replacements,
                 rewritten_content,
                 mtime: Some(file_mtime),
-                original_content: is_self_rewrite.then(|| content.clone()),
+                original_content: Some(content.clone()),
             },
         );
     }
@@ -3370,7 +3425,7 @@ mod tests {
             replacements: vec![],
             rewritten_content: new_content.to_string(),
             mtime: None,
-            original_content: None,
+            original_content: Some(fs::read_to_string(dir.join(rel)).unwrap()),
         }
     }
 

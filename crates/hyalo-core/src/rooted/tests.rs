@@ -153,6 +153,75 @@ fn move_report_distinguishes_retained_source_from_completed_move() {
 }
 
 #[test]
+fn move_receipt_refuses_same_bytes_from_a_replacement_object() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"owned bytes").unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let source = root.capture(&RelativeName::new("a").unwrap()).unwrap();
+    let destination = root.destination(RelativeName::new("b").unwrap()).unwrap();
+    let mut session = WriteSession::new(Durability::PerFile);
+    let (_, receipt) = move_no_replace_with_receipt(source, destination, &mut session).unwrap();
+
+    std::fs::remove_file(dir.path().join("b")).unwrap();
+    std::fs::write(dir.path().join("b"), b"owned bytes").unwrap();
+
+    let Err(error) = receipt.capture_verified() else {
+        panic!("replacement object must not satisfy the move receipt")
+    };
+    assert!(error.to_string().contains("identity or bytes changed"));
+    assert!(!dir.path().join("a").exists());
+    assert_eq!(std::fs::read(dir.path().join("b")).unwrap(), b"owned bytes");
+}
+
+#[test]
+fn replacement_receipt_refuses_same_bytes_from_a_replacement_object() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"before").unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let captured = root.capture(&RelativeName::new("a").unwrap()).unwrap();
+    let mut session = WriteSession::new(Durability::PerFile);
+    let (_, receipt) = captured
+        .prepare(b"published", &session)
+        .unwrap()
+        .commit_with_receipt(&mut session)
+        .unwrap();
+
+    std::fs::remove_file(dir.path().join("a")).unwrap();
+    std::fs::write(dir.path().join("a"), b"published").unwrap();
+
+    let Err(error) = receipt.capture_verified() else {
+        panic!("replacement object must not satisfy the rewrite receipt")
+    };
+    assert!(error.to_string().contains("identity or bytes changed"));
+    assert_eq!(std::fs::read(dir.path().join("a")).unwrap(), b"published");
+}
+
+#[cfg(unix)]
+#[test]
+fn publication_receipt_refuses_a_symlink_to_the_original_object() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"before").unwrap();
+    std::fs::hard_link(dir.path().join("a"), dir.path().join("alias")).unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let source = root.capture(&RelativeName::new("a").unwrap()).unwrap();
+    let destination = root.destination(RelativeName::new("b").unwrap()).unwrap();
+    let mut session = WriteSession::new(Durability::PerFile);
+    let (_, receipt) = move_no_replace_with_receipt(source, destination, &mut session).unwrap();
+    std::fs::remove_file(dir.path().join("b")).unwrap();
+    symlink("alias", dir.path().join("b")).unwrap();
+
+    assert!(receipt.capture_verified().is_err());
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("b"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
 fn directory_sync_capability_matches_platform_and_publication_still_finishes() {
     assert_eq!(directory_sync_supported(), cfg!(unix));
     let dir = tempfile::tempdir().unwrap();

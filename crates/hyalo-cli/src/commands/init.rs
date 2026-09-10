@@ -146,6 +146,11 @@ pub struct Report {
     /// summary can never be misread as one about CWD (DEC-261).
     #[serde(skip_serializing)]
     external_root: bool,
+    /// Effects discovered after publication but before a caller could append
+    /// its normal action, including durability failures and partial directory
+    /// preparation.
+    #[serde(skip_serializing)]
+    observed_failures: Vec<crate::commands::apply::PathEffect>,
 }
 
 impl Report {
@@ -157,6 +162,7 @@ impl Report {
             actions: Vec::new(),
             notes: Vec::new(),
             external_root: scope.external,
+            observed_failures: Vec::new(),
         }
     }
 
@@ -211,27 +217,27 @@ impl Report {
 
     pub(crate) fn effects(&self) -> crate::commands::apply::ApplyReport {
         use crate::commands::apply::{ApplyReport, EffectState, IndexDisposition, PathEffect};
+        let mut paths: Vec<_> = self
+            .actions
+            .iter()
+            .filter(|step| matches!(step.action, "created" | "updated" | "removed" | "unchanged"))
+            .map(|step| PathEffect {
+                file: Path::new(&self.root)
+                    .join(&step.target)
+                    .display()
+                    .to_string(),
+                state: if step.action == "unchanged" {
+                    EffectState::Unchanged
+                } else {
+                    EffectState::Committed
+                },
+                error: None,
+                category: None,
+            })
+            .collect();
+        paths.extend(self.observed_failures.clone());
         ApplyReport {
-            paths: self
-                .actions
-                .iter()
-                .filter(|step| {
-                    matches!(step.action, "created" | "updated" | "removed" | "unchanged")
-                })
-                .map(|step| PathEffect {
-                    file: Path::new(&self.root)
-                        .join(&step.target)
-                        .display()
-                        .to_string(),
-                    state: if step.action == "unchanged" {
-                        EffectState::Unchanged
-                    } else {
-                        EffectState::Committed
-                    },
-                    error: None,
-                    category: None,
-                })
-                .collect(),
+            paths,
             index: IndexDisposition::NotUsed,
             index_error: None,
         }
@@ -402,7 +408,44 @@ pub fn run_init(
     codex: CodexMode,
 ) -> Result<Report> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    initialize_in(dir, claude, pi, profile, &cwd, codex)
+    run_init_observed(dir, claude, pi, profile, &cwd, codex).map_err(|failure| failure.error)
+}
+
+#[derive(Debug)]
+pub(crate) struct ReportError {
+    pub(crate) report: Box<Report>,
+    pub(crate) error: anyhow::Error,
+}
+
+#[derive(Debug)]
+struct ObservedInstallationError {
+    detail: String,
+    effects: Vec<crate::commands::apply::PathEffect>,
+}
+
+impl std::fmt::Display for ObservedInstallationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for ObservedInstallationError {}
+
+fn retain_observed_installation_error(report: &mut Report, error: &anyhow::Error) {
+    if let Some(observed) = error.downcast_ref::<ObservedInstallationError>() {
+        report.observed_failures.extend(observed.effects.clone());
+    }
+}
+
+pub(crate) fn run_init_observed(
+    dir: Option<&str>,
+    claude: bool,
+    pi: bool,
+    profile: Option<&str>,
+    cwd: &Path,
+    codex: CodexMode,
+) -> std::result::Result<Report, ReportError> {
+    initialize_observed(dir, claude, pi, profile, cwd, codex)
 }
 
 #[cfg(test)]
@@ -413,24 +456,18 @@ fn run_init_in(
     profile: Option<&str>,
     cwd: &Path,
 ) -> Result<Report> {
-    initialize_in(dir, claude, pi, profile, cwd, CodexMode::None)
+    initialize_observed(dir, claude, pi, profile, cwd, CodexMode::None)
+        .map_err(|failure| failure.error)
 }
 
-fn initialize_in(
+fn initialize_observed(
     dir: Option<&str>,
     claude: bool,
     pi: bool,
     profile: Option<&str>,
     cwd: &Path,
     codex: CodexMode,
-) -> Result<Report> {
-    // Resolve the profile up front so an unknown name errors before any files
-    // are written.
-    let profile = match profile {
-        Some(name) => Some(crate::commands::profiles::lookup(name)?),
-        None => None,
-    };
-
+) -> std::result::Result<Report, ReportError> {
     // Resolve, once, both the value written as `dir` and the root everything
     // else is written under (DEC-261). `dir_value` is always root-relative, so
     // the config this run writes is one the next run can actually read.
@@ -440,411 +477,733 @@ fn initialize_in(
     let mut report = Report::new("init", &scope, Some(dir_value.clone()));
     let root = scope.root.as_path();
 
-    if codex != CodexMode::None {
-        codex::preflight(root)?;
-    }
-
-    if root.is_file() {
-        anyhow::bail!("--dir path '{}' is a file, not a directory", root.display());
-    }
-    // A vault outside CWD becomes its own project root, so create the tree
-    // itself before writing `.hyalo.toml` into it.
-    if scope.external && !root.exists() {
-        fs::create_dir_all(root)
-            .with_context(|| format!("failed to create directory {}", root.display()))?;
-        report.push("created", format!("{}/", root.display()));
-    }
-
-    // Create the vault directory if it doesn't exist and --dir was explicit.
-    // Skip "." since the root directory always exists by now.
-    if dir_explicit && dir_value != "." {
-        let target = root.join(&dir_value);
-        if target.is_file() {
-            anyhow::bail!(
-                "--dir path '{}' is a file, not a directory",
-                target.display()
-            );
-        }
-        if !target.exists() {
-            fs::create_dir_all(&target)
-                .with_context(|| format!("failed to create directory {}", target.display()))?;
-            report.push("created", format!("{dir_value}/"));
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Step 1: create or update .hyalo.toml
-    // ------------------------------------------------------------------
-    let toml_path = root.join(".hyalo.toml");
-    let toml_existed = toml_path.exists();
-    if toml_existed && !dir_explicit {
-        report.push_detail("skipped", ".hyalo.toml", "already exists");
-    } else {
-        let toml_content = if toml_existed {
-            // Read and parse the existing file; update only the `dir` key so
-            // that other user config (format, hints, site_prefix …) — and any
-            // hand-written comments / key order — are preserved. Editing via
-            // `toml_edit::DocumentMut` keeps decor intact, which matters for
-            // idempotency when a profile merge (also comment-preserving) runs
-            // next. If the file is malformed, fall back to overwriting with
-            // just `dir`.
-            let existing_raw = fs::read_to_string(&toml_path)
-                .with_context(|| format!("failed to read {}", toml_path.display()))?;
-            if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
-                doc["dir"] = toml_edit::value(dir_value.clone());
-                doc.to_string()
-            } else {
-                // Malformed existing file — overwrite with just dir and note it.
-                report.push_detail(
-                    "warning",
-                    ".hyalo.toml",
-                    "was malformed; existing content replaced",
-                );
-                minimal_toml_dir(&dir_value)
-            }
-        } else {
-            minimal_toml_dir(&dir_value)
+    let result = (|| -> Result<()> {
+        // Resolve the profile up front so an unknown name errors before any files
+        // are written.
+        let profile = match profile {
+            Some(name) => Some(crate::commands::profiles::lookup(name)?),
+            None => None,
         };
-        fs::write(&toml_path, &toml_content)
-            .with_context(|| format!("failed to write {}", toml_path.display()))?;
-        if toml_existed {
-            report.push_detail("updated", ".hyalo.toml", format!("dir = \"{dir_value}\""));
-        } else {
-            report.push_detail("created", ".hyalo.toml", format!("dir = \"{dir_value}\""));
-        }
-    }
 
-    // ------------------------------------------------------------------
-    // Profile: deep-merge the embedded config fragment into .hyalo.toml.
-    // Upsert semantics — composable with other profiles, idempotent on re-run.
-    // ------------------------------------------------------------------
-    if let Some(profile) = profile {
-        let existing_raw = fs::read_to_string(&toml_path)
-            .with_context(|| format!("failed to read {}", toml_path.display()))?;
-        let (merged, conflicts) = crate::commands::profiles::merge_into_config_with_conflicts(
-            &existing_raw,
-            profile.toml_fragment,
-        )
-        .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
-        // Re-running `init --profile <p>` on an already-merged config is a no-op:
-        // report "unchanged" rather than "updated" so the summary doesn't imply
-        // a write that never happened (idempotent-init polish).
-        let profile_unchanged = merged == existing_raw;
-        if !profile_unchanged {
-            fs::write(&toml_path, &merged)
-                .with_context(|| format!("failed to write {}", toml_path.display()))?;
-        }
-        // Surface any scalar value the profile overwrote so nothing changes
-        // silently. Arrays never shrink (they union), so only scalars conflict.
-        for conflict in &conflicts {
-            crate::warn::warn(conflict.line(profile.name));
-        }
-        if profile_unchanged {
-            report.push_detail(
-                "unchanged",
-                ".hyalo.toml",
-                format!("'{}' profile already applied", profile.name),
-            );
-        } else {
-            report.push_detail(
-                "updated",
-                ".hyalo.toml",
-                format!("merged '{}' profile", profile.name),
-            );
+        if codex != CodexMode::None {
+            codex::preflight(root)?;
         }
 
-        // Changelog profile: when the vault dir is a subdirectory and the repo
-        // root holds the `CHANGELOG.md` (the common layout that hit
-        // user-event-service), point `[changelog] path` at it so
-        // `changelog add`/`release` and `lint --profile changelog` reach the
-        // root file without `--dir .` gymnastics. Only write the key when it is
-        // not already set (idempotent, never clobbers a user override) and the
-        // root file actually exists but the vault-local one does not.
-        if profile.name == "changelog" && dir_value != "." {
-            let root_changelog = root.join("CHANGELOG.md");
-            let vault_changelog = root.join(&dir_value).join("CHANGELOG.md");
-            if root_changelog.is_file() && !vault_changelog.is_file() {
-                let existing_raw = fs::read_to_string(&toml_path)
-                    .with_context(|| format!("failed to read {}", toml_path.display()))?;
+        if root.is_file() {
+            anyhow::bail!("--dir path '{}' is a file, not a directory", root.display());
+        }
+        if root.exists() {
+            preflight_installation_manifest(root, claude, pi, profile, codex)?;
+        }
+        // A vault outside CWD becomes its own project root, so create the tree
+        // itself before writing `.hyalo.toml` into it.
+        if scope.external && !root.exists() {
+            fs::create_dir_all(root)
+                .with_context(|| format!("failed to create directory {}", root.display()))?;
+            report.push("created", format!("{}/", root.display()));
+        }
+
+        // Create the vault directory if it doesn't exist and --dir was explicit.
+        // Skip "." since the root directory always exists by now.
+        if dir_explicit && dir_value != "." {
+            let target = root.join(&dir_value);
+            if target.is_file() {
+                anyhow::bail!(
+                    "--dir path '{}' is a file, not a directory",
+                    target.display()
+                );
+            }
+            if !target.exists() {
+                ensure_installation_dir(root, &target, &mut report)
+                    .with_context(|| format!("failed to create directory {}", target.display()))?;
+                report.push("created", format!("{dir_value}/"));
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Step 1: create or update .hyalo.toml
+        // ------------------------------------------------------------------
+        let toml_path = root.join(".hyalo.toml");
+        let toml_source = capture_installation(root, &toml_path)?;
+        let toml_existed = toml_source.is_some();
+        if toml_existed && !dir_explicit {
+            report.push_detail("skipped", ".hyalo.toml", "already exists");
+        } else {
+            let toml_content = if toml_existed {
+                // Read and parse the existing file; update only the `dir` key so
+                // that other user config (format, hints, site_prefix …) — and any
+                // hand-written comments / key order — are preserved. Editing via
+                // `toml_edit::DocumentMut` keeps decor intact, which matters for
+                // idempotency when a profile merge (also comment-preserving) runs
+                // next. If the file is malformed, fall back to overwriting with
+                // just `dir`.
+                let existing_raw = String::from_utf8(
+                    toml_source
+                        .as_ref()
+                        .context("captured config source missing")?
+                        .bytes()?,
+                )
+                .with_context(|| format!("failed to read {}", toml_path.display()))?;
                 if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
-                    let already_set = doc.get("changelog").and_then(|c| c.get("path")).is_some();
-                    if !already_set {
-                        // `[changelog] path` is resolved relative to the config
-                        // file's directory (where `.hyalo.toml` lives — the repo
-                        // root here), NOT the vault `dir`. The root `CHANGELOG.md`
-                        // sits right beside `.hyalo.toml`, so the config-dir-
-                        // relative path is simply `CHANGELOG.md` (which differs
-                        // from the default `dir/CHANGELOG.md` and thus points at
-                        // the root file).
-                        let changelog_tbl = doc["changelog"].or_insert(toml_edit::table());
-                        if let Some(tbl) = changelog_tbl.as_table_mut() {
-                            tbl.set_implicit(false);
-                            tbl["path"] = toml_edit::value("CHANGELOG.md");
-                        }
-                        fs::write(&toml_path, doc.to_string())
+                    doc["dir"] = toml_edit::value(dir_value.clone());
+                    doc.to_string()
+                } else {
+                    // Malformed existing file — overwrite with just dir and note it.
+                    report.push_detail(
+                        "warning",
+                        ".hyalo.toml",
+                        "was malformed; existing content replaced",
+                    );
+                    minimal_toml_dir(&dir_value)
+                }
+            } else {
+                minimal_toml_dir(&dir_value)
+            };
+            publish_captured_installation(root, &toml_path, toml_source, toml_content.as_bytes())
+                .with_context(|| format!("failed to write {}", toml_path.display()))?;
+            if toml_existed {
+                report.push_detail("updated", ".hyalo.toml", format!("dir = \"{dir_value}\""));
+            } else {
+                report.push_detail("created", ".hyalo.toml", format!("dir = \"{dir_value}\""));
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Profile: deep-merge the embedded config fragment into .hyalo.toml.
+        // Upsert semantics — composable with other profiles, idempotent on re-run.
+        // ------------------------------------------------------------------
+        if let Some(profile) = profile {
+            let profile_source = capture_installation(root, &toml_path)?
+                .context("profile config disappeared before transformation")?;
+            let existing_raw = String::from_utf8(profile_source.bytes()?)
+                .with_context(|| format!("failed to read {}", toml_path.display()))?;
+            let (merged, conflicts) = crate::commands::profiles::merge_into_config_with_conflicts(
+                &existing_raw,
+                profile.toml_fragment,
+            )
+            .with_context(|| format!("failed to apply profile '{}'", profile.name))?;
+            // Re-running `init --profile <p>` on an already-merged config is a no-op:
+            // report "unchanged" rather than "updated" so the summary doesn't imply
+            // a write that never happened (idempotent-init polish).
+            let profile_unchanged = merged == existing_raw;
+            if !profile_unchanged {
+                publish_captured_installation(
+                    root,
+                    &toml_path,
+                    Some(profile_source),
+                    merged.as_bytes(),
+                )
+                .with_context(|| format!("failed to write {}", toml_path.display()))?;
+            }
+            // Surface any scalar value the profile overwrote so nothing changes
+            // silently. Arrays never shrink (they union), so only scalars conflict.
+            for conflict in &conflicts {
+                crate::warn::warn(conflict.line(profile.name));
+            }
+            if profile_unchanged {
+                report.push_detail(
+                    "unchanged",
+                    ".hyalo.toml",
+                    format!("'{}' profile already applied", profile.name),
+                );
+            } else {
+                report.push_detail(
+                    "updated",
+                    ".hyalo.toml",
+                    format!("merged '{}' profile", profile.name),
+                );
+            }
+
+            // Changelog profile: when the vault dir is a subdirectory and the repo
+            // root holds the `CHANGELOG.md` (the common layout that hit
+            // user-event-service), point `[changelog] path` at it so
+            // `changelog add`/`release` and `lint --profile changelog` reach the
+            // root file without `--dir .` gymnastics. Only write the key when it is
+            // not already set (idempotent, never clobbers a user override) and the
+            // root file actually exists but the vault-local one does not.
+            if profile.name == "changelog" && dir_value != "." {
+                let root_changelog = root.join("CHANGELOG.md");
+                let vault_changelog = root.join(&dir_value).join("CHANGELOG.md");
+                if root_changelog.is_file() && !vault_changelog.is_file() {
+                    let changelog_source = capture_installation(root, &toml_path)?
+                        .context("profile config disappeared before changelog transformation")?;
+                    let existing_raw = String::from_utf8(changelog_source.bytes()?)
+                        .with_context(|| format!("failed to read {}", toml_path.display()))?;
+                    if let Ok(mut doc) = existing_raw.parse::<toml_edit::DocumentMut>() {
+                        let already_set =
+                            doc.get("changelog").and_then(|c| c.get("path")).is_some();
+                        if !already_set {
+                            // `[changelog] path` is resolved relative to the config
+                            // file's directory (where `.hyalo.toml` lives — the repo
+                            // root here), NOT the vault `dir`. The root `CHANGELOG.md`
+                            // sits right beside `.hyalo.toml`, so the config-dir-
+                            // relative path is simply `CHANGELOG.md` (which differs
+                            // from the default `dir/CHANGELOG.md` and thus points at
+                            // the root file).
+                            let changelog_tbl = doc["changelog"].or_insert(toml_edit::table());
+                            if let Some(tbl) = changelog_tbl.as_table_mut() {
+                                tbl.set_implicit(false);
+                                tbl["path"] = toml_edit::value("CHANGELOG.md");
+                            }
+                            publish_captured_installation(
+                                root,
+                                &toml_path,
+                                Some(changelog_source),
+                                doc.to_string().as_bytes(),
+                            )
                             .with_context(|| format!("failed to write {}", toml_path.display()))?;
-                        report.push_detail(
-                            "updated",
-                            ".hyalo.toml",
-                            "[changelog] path = \"CHANGELOG.md\"",
-                        );
+                            report.push_detail(
+                                "updated",
+                                ".hyalo.toml",
+                                "[changelog] path = \"CHANGELOG.md\"",
+                            );
+                        }
                     }
                 }
             }
         }
-    }
 
-    if codex != CodexMode::None {
-        codex::install(root, codex, &mut report)?;
-    }
-
-    if !claude && !pi {
-        return Ok(report);
-    }
-
-    // ------------------------------------------------------------------
-    // Claude Code integration steps
-    // ------------------------------------------------------------------
-    if claude {
-        // Step 2: write (overwrite) .claude/skills/hyalo/SKILL.md
-        let skill_path = root
-            .join(".claude")
-            .join("skills")
-            .join("hyalo")
-            .join("SKILL.md");
-        let skill_existed = skill_path.exists();
-        let skill_dir = skill_path
-            .parent()
-            .context("skill path has no parent directory")?;
-        fs::create_dir_all(skill_dir)
-            .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
-        fs::write(
-            &skill_path,
-            parameterize_template(SKILL_CONTENT, &dir_value),
-        )
-        .with_context(|| format!("failed to write {}", skill_path.display()))?;
-        if skill_existed {
-            report.push("updated", ".claude/skills/hyalo/SKILL.md");
-        } else {
-            report.push("created", ".claude/skills/hyalo/SKILL.md");
+        if codex != CodexMode::None {
+            codex::install(root, codex, &mut report)?;
         }
 
-        // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
-        let tidy_skill_path = root
-            .join(".claude")
-            .join("skills")
-            .join("hyalo-tidy")
-            .join("SKILL.md");
-        let tidy_skill_existed = tidy_skill_path.exists();
-        let tidy_skill_dir = tidy_skill_path
-            .parent()
-            .context("tidy skill path has no parent directory")?;
-        fs::create_dir_all(tidy_skill_dir)
-            .with_context(|| format!("failed to create directory {}", tidy_skill_dir.display()))?;
-        fs::write(
-            &tidy_skill_path,
-            parameterize_template(TIDY_SKILL_CONTENT, &dir_value),
-        )
-        .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
-        if tidy_skill_existed {
-            report.push("updated", ".claude/skills/hyalo-tidy/SKILL.md");
-        } else {
-            report.push("created", ".claude/skills/hyalo-tidy/SKILL.md");
+        if !claude && !pi {
+            return Ok(());
         }
 
-        // Step 4: write (overwrite) .claude/rules/knowledgebase.md
-        let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
-        let rules_existed = rules_path.exists();
-        let rules_dir = rules_path
-            .parent()
-            .context("rules path has no parent directory")?;
-        fs::create_dir_all(rules_dir)
-            .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
-        let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
-        fs::write(&rules_path, &rule_content)
-            .with_context(|| format!("failed to write {}", rules_path.display()))?;
-        if rules_existed {
-            report.push("updated", ".claude/rules/knowledgebase.md");
-        } else {
-            report.push("created", ".claude/rules/knowledgebase.md");
-        }
-
-        // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md.
-        // Append one profile-specific pointer line per *active* profile (read
-        // from the merged `[lint] profiles` in `.hyalo.toml`), so a vault with
-        // several profiles carries a drift-check reminder for each — and the
-        // lines survive across `init --profile` runs because they are rebuilt
-        // from the config each time, not just from the current `--profile`.
-        let claude_md_path = root.join(".claude").join("CLAUDE.md");
-        let managed_section = {
-            let active = active_profiles_from_config(&toml_path);
-            let mut body = String::from(CLAUDE_MD_HINT);
-            for pointer in active.iter().filter_map(|p| profile_pointer_line(p)) {
-                body.push('\n');
-                body.push_str(pointer);
-            }
-            format!("{SECTION_START}\n{body}\n{SECTION_END}")
-        };
-        if claude_md_path.exists() {
-            let existing = fs::read_to_string(&claude_md_path)
-                .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
-            let (new_content, action) = upsert_managed_section(&existing, &managed_section);
-            fs::write(&claude_md_path, &new_content)
-                .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            report.push_detail("updated", ".claude/CLAUDE.md", action);
-        } else {
-            // Create the file and any parent directories.
-            let claude_dir = claude_md_path
+        // ------------------------------------------------------------------
+        // Claude Code integration steps
+        // ------------------------------------------------------------------
+        if claude {
+            // Step 2: write (overwrite) .claude/skills/hyalo/SKILL.md
+            let skill_path = root
+                .join(".claude")
+                .join("skills")
+                .join("hyalo")
+                .join("SKILL.md");
+            let skill_existed = skill_path.exists();
+            let skill_dir = skill_path
                 .parent()
-                .context("CLAUDE.md path has no parent directory")?;
-            fs::create_dir_all(claude_dir)
-                .with_context(|| format!("failed to create directory {}", claude_dir.display()))?;
-            let content = format!("{managed_section}\n");
-            fs::write(&claude_md_path, content)
+                .context("skill path has no parent directory")?;
+            ensure_installation_dir(root, skill_dir, &mut report)
+                .with_context(|| format!("failed to create directory {}", skill_dir.display()))?;
+            publish_installation(
+                root,
+                &skill_path,
+                parameterize_template(SKILL_CONTENT, &dir_value).as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", skill_path.display()))?;
+            if skill_existed {
+                report.push("updated", ".claude/skills/hyalo/SKILL.md");
+            } else {
+                report.push("created", ".claude/skills/hyalo/SKILL.md");
+            }
+
+            // Step 3: write (overwrite) .claude/skills/hyalo-tidy/SKILL.md
+            let tidy_skill_path = root
+                .join(".claude")
+                .join("skills")
+                .join("hyalo-tidy")
+                .join("SKILL.md");
+            let tidy_skill_existed = tidy_skill_path.exists();
+            let tidy_skill_dir = tidy_skill_path
+                .parent()
+                .context("tidy skill path has no parent directory")?;
+            ensure_installation_dir(root, tidy_skill_dir, &mut report).with_context(|| {
+                format!("failed to create directory {}", tidy_skill_dir.display())
+            })?;
+            publish_installation(
+                root,
+                &tidy_skill_path,
+                parameterize_template(TIDY_SKILL_CONTENT, &dir_value).as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", tidy_skill_path.display()))?;
+            if tidy_skill_existed {
+                report.push("updated", ".claude/skills/hyalo-tidy/SKILL.md");
+            } else {
+                report.push("created", ".claude/skills/hyalo-tidy/SKILL.md");
+            }
+
+            // Step 4: write (overwrite) .claude/rules/knowledgebase.md
+            let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
+            let rules_existed = rules_path.exists();
+            let rules_dir = rules_path
+                .parent()
+                .context("rules path has no parent directory")?;
+            ensure_installation_dir(root, rules_dir, &mut report)
+                .with_context(|| format!("failed to create directory {}", rules_dir.display()))?;
+            let rule_content = parameterize_rule(RULE_TEMPLATE, &dir_value);
+            publish_installation(root, &rules_path, rule_content.as_bytes())
+                .with_context(|| format!("failed to write {}", rules_path.display()))?;
+            if rules_existed {
+                report.push("updated", ".claude/rules/knowledgebase.md");
+            } else {
+                report.push("created", ".claude/rules/knowledgebase.md");
+            }
+
+            // Step 5: upsert the hyalo managed section in .claude/CLAUDE.md.
+            // Append one profile-specific pointer line per *active* profile (read
+            // from the merged `[lint] profiles` in `.hyalo.toml`), so a vault with
+            // several profiles carries a drift-check reminder for each — and the
+            // lines survive across `init --profile` runs because they are rebuilt
+            // from the config each time, not just from the current `--profile`.
+            let claude_md_path = root.join(".claude").join("CLAUDE.md");
+            let managed_section = {
+                let active = active_profiles_from_config(&toml_path);
+                let mut body = String::from(CLAUDE_MD_HINT);
+                for pointer in active.iter().filter_map(|p| profile_pointer_line(p)) {
+                    body.push('\n');
+                    body.push_str(pointer);
+                }
+                format!("{SECTION_START}\n{body}\n{SECTION_END}")
+            };
+            let claude_source = capture_installation(root, &claude_md_path)?;
+            if let Some(claude_source) = claude_source {
+                let existing = String::from_utf8(claude_source.bytes()?)
+                    .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
+                let (new_content, action) = upsert_managed_section(&existing, &managed_section);
+                publish_captured_installation(
+                    root,
+                    &claude_md_path,
+                    Some(claude_source),
+                    new_content.as_bytes(),
+                )
                 .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-            report.push_detail("created", ".claude/CLAUDE.md", "with managed section");
+                report.push_detail("updated", ".claude/CLAUDE.md", action);
+            } else {
+                // Create the file and any parent directories.
+                let claude_dir = claude_md_path
+                    .parent()
+                    .context("CLAUDE.md path has no parent directory")?;
+                ensure_installation_dir(root, claude_dir, &mut report).with_context(|| {
+                    format!("failed to create directory {}", claude_dir.display())
+                })?;
+                let content = format!("{managed_section}\n");
+                publish_installation(root, &claude_md_path, content.as_bytes())
+                    .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
+                report.push_detail("created", ".claude/CLAUDE.md", "with managed section");
+            }
+
+            // Step 6: install any profile-specific skills (e.g. `okf`).
+            if let Some(profile) = profile {
+                for (skill_dir, skill_body) in profile.skills {
+                    let profile_skill_path = root
+                        .join(".claude")
+                        .join("skills")
+                        .join(skill_dir)
+                        .join("SKILL.md");
+                    let existed = profile_skill_path.exists();
+                    let parent = profile_skill_path
+                        .parent()
+                        .context("profile skill path has no parent directory")?;
+                    ensure_installation_dir(root, parent, &mut report).with_context(|| {
+                        format!("failed to create directory {}", parent.display())
+                    })?;
+                    publish_installation(root, &profile_skill_path, skill_body.as_bytes())
+                        .with_context(|| {
+                            format!("failed to write {}", profile_skill_path.display())
+                        })?;
+                    let verb = if existed { "updated" } else { "created" };
+                    report.push(verb, format!(".claude/skills/{skill_dir}/SKILL.md"));
+                }
+            }
         }
 
-        // Step 6: install any profile-specific skills (e.g. `okf`).
+        // ------------------------------------------------------------------
+        // pi integration steps
+        // ------------------------------------------------------------------
+        if pi {
+            // Step 6: write (overwrite) .pi/skills/hyalo/SKILL.md
+            let pi_skill_path = root
+                .join(".pi")
+                .join("skills")
+                .join("hyalo")
+                .join("SKILL.md");
+            let pi_skill_existed = pi_skill_path.exists();
+            let pi_skill_dir = pi_skill_path
+                .parent()
+                .context("pi skill path has no parent directory")?;
+            ensure_installation_dir(root, pi_skill_dir, &mut report).with_context(|| {
+                format!("failed to create directory {}", pi_skill_dir.display())
+            })?;
+            publish_installation(
+                root,
+                &pi_skill_path,
+                parameterize_template(PI_SKILL_CONTENT, &dir_value).as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
+            if pi_skill_existed {
+                report.push("updated", ".pi/skills/hyalo/SKILL.md");
+            } else {
+                report.push("created", ".pi/skills/hyalo/SKILL.md");
+            }
+
+            // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
+            let pi_tidy_skill_path = root
+                .join(".pi")
+                .join("skills")
+                .join("hyalo-tidy")
+                .join("SKILL.md");
+            let pi_tidy_skill_existed = pi_tidy_skill_path.exists();
+            let pi_tidy_skill_dir = pi_tidy_skill_path
+                .parent()
+                .context("pi tidy skill path has no parent directory")?;
+            ensure_installation_dir(root, pi_tidy_skill_dir, &mut report).with_context(|| {
+                format!("failed to create directory {}", pi_tidy_skill_dir.display())
+            })?;
+            publish_installation(
+                root,
+                &pi_tidy_skill_path,
+                parameterize_template(PI_TIDY_SKILL_CONTENT, &dir_value).as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
+            if pi_tidy_skill_existed {
+                report.push("updated", ".pi/skills/hyalo-tidy/SKILL.md");
+            } else {
+                report.push("created", ".pi/skills/hyalo-tidy/SKILL.md");
+            }
+
+            // Step 8: write (overwrite) .pi/extensions/hyalo.ts
+            let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
+            let pi_extension_existed = pi_extension_path.exists();
+            let pi_extension_dir = pi_extension_path
+                .parent()
+                .context("pi extension path has no parent directory")?;
+            ensure_installation_dir(root, pi_extension_dir, &mut report).with_context(|| {
+                format!("failed to create directory {}", pi_extension_dir.display())
+            })?;
+            publish_installation(root, &pi_extension_path, PI_EXTENSION_CONTENT.as_bytes())
+                .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
+            if pi_extension_existed {
+                report.push("updated", ".pi/extensions/hyalo.ts");
+            } else {
+                report.push("created", ".pi/extensions/hyalo.ts");
+            }
+
+            // Step 9: write (overwrite) the self-contained API runtime used by the extension.
+            let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
+            let pi_api_runtime_existed = pi_api_runtime_path.exists();
+            let pi_api_runtime_dir = pi_api_runtime_path
+                .parent()
+                .context("pi API runtime path has no parent directory")?;
+            ensure_installation_dir(root, pi_api_runtime_dir, &mut report).with_context(|| {
+                format!(
+                    "failed to create directory {}",
+                    pi_api_runtime_dir.display()
+                )
+            })?;
+            publish_installation(
+                root,
+                &pi_api_runtime_path,
+                PI_API_RUNTIME_CONTENT.as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", pi_api_runtime_path.display()))?;
+            if pi_api_runtime_existed {
+                report.push("updated", ".pi/lib/hyalo-api.js");
+            } else {
+                report.push("created", ".pi/lib/hyalo-api.js");
+            }
+            let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
+            let pi_api_declaration_existed = pi_api_declaration_path.exists();
+            publish_installation(
+                root,
+                &pi_api_declaration_path,
+                PI_API_DECLARATION_CONTENT.as_bytes(),
+            )
+            .with_context(|| format!("failed to write {}", pi_api_declaration_path.display()))?;
+            if pi_api_declaration_existed {
+                report.push("updated", ".pi/lib/hyalo-api.d.ts");
+            } else {
+                report.push("created", ".pi/lib/hyalo-api.d.ts");
+            }
+
+            // Step 10: write (overwrite) .pi/package.json
+            let pi_package_path = root.join(".pi").join("package.json");
+            let pi_package_existed = pi_package_path.exists();
+            let pi_package_dir = pi_package_path
+                .parent()
+                .context("pi package.json path has no parent directory")?;
+            ensure_installation_dir(root, pi_package_dir, &mut report).with_context(|| {
+                format!("failed to create directory {}", pi_package_dir.display())
+            })?;
+            publish_installation(root, &pi_package_path, PI_PACKAGE_JSON_CONTENT.as_bytes())
+                .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
+            if pi_package_existed {
+                report.push("updated", ".pi/package.json");
+            } else {
+                report.push("created", ".pi/package.json");
+                // One-time hint: the vendored copy never updates itself. Suggest
+                // the git package source so `pi update` delivers fixes.
+                report.notes.push(PI_INSTALL_HINT.to_owned());
+            }
+        }
+
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(report),
+        Err(error) => {
+            retain_observed_installation_error(&mut report, &error);
+            Err(ReportError {
+                report: Box::new(report),
+                error,
+            })
+        }
+    }
+}
+
+/// Validate every selected integration artifact before the first write. A
+/// symlink at the artifact or any existing parent is never followed.
+fn preflight_installation_manifest(
+    root: &Path,
+    claude: bool,
+    pi: bool,
+    profile: Option<&crate::commands::profiles::Profile>,
+    codex: CodexMode,
+) -> Result<()> {
+    let mut artifacts = vec![PathBuf::from(".hyalo.toml")];
+    if claude {
+        artifacts.extend([
+            PathBuf::from(".claude/skills/hyalo/SKILL.md"),
+            PathBuf::from(".claude/skills/hyalo-tidy/SKILL.md"),
+            PathBuf::from(".claude/rules/knowledgebase.md"),
+            PathBuf::from(".claude/CLAUDE.md"),
+        ]);
         if let Some(profile) = profile {
-            for (skill_dir, skill_body) in profile.skills {
-                let profile_skill_path = root
-                    .join(".claude")
-                    .join("skills")
-                    .join(skill_dir)
-                    .join("SKILL.md");
-                let existed = profile_skill_path.exists();
-                let parent = profile_skill_path
-                    .parent()
-                    .context("profile skill path has no parent directory")?;
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("failed to create directory {}", parent.display()))?;
-                fs::write(&profile_skill_path, skill_body)
-                    .with_context(|| format!("failed to write {}", profile_skill_path.display()))?;
-                let verb = if existed { "updated" } else { "created" };
-                report.push(verb, format!(".claude/skills/{skill_dir}/SKILL.md"));
+            artifacts.extend(
+                profile
+                    .skills
+                    .iter()
+                    .map(|(name, _)| PathBuf::from(".claude/skills").join(name).join("SKILL.md")),
+            );
+        }
+    }
+    if pi {
+        artifacts.extend([
+            PathBuf::from(".pi/skills/hyalo/SKILL.md"),
+            PathBuf::from(".pi/skills/hyalo-tidy/SKILL.md"),
+            PathBuf::from(".pi/extensions/hyalo.ts"),
+            PathBuf::from(".pi/lib/hyalo-api.js"),
+            PathBuf::from(".pi/lib/hyalo-api.d.ts"),
+            PathBuf::from(".pi/package.json"),
+        ]);
+    }
+    for artifact in artifacts {
+        let mut cursor = root.to_path_buf();
+        for component in artifact.components() {
+            cursor.push(component.as_os_str());
+            match fs::symlink_metadata(&cursor) {
+                Ok(metadata) if metadata.file_type().is_symlink() => anyhow::bail!(
+                    "refusing installation artifact through symlink: {}",
+                    cursor.display()
+                ),
+                Ok(metadata) if cursor != root.join(&artifact) && !metadata.is_dir() => {
+                    anyhow::bail!(
+                        "installation artifact parent is not a directory: {}",
+                        cursor.display()
+                    )
+                }
+                Ok(metadata) if cursor == root.join(&artifact) && !metadata.is_file() => {
+                    anyhow::bail!(
+                        "installation artifact is not a regular file: {}",
+                        cursor.display()
+                    )
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(error.into()),
             }
         }
     }
+    if codex != CodexMode::None {
+        codex::preflight(root)?;
+    }
+    Ok(())
+}
 
-    // ------------------------------------------------------------------
-    // pi integration steps
-    // ------------------------------------------------------------------
-    if pi {
-        // Step 6: write (overwrite) .pi/skills/hyalo/SKILL.md
-        let pi_skill_path = root
-            .join(".pi")
-            .join("skills")
-            .join("hyalo")
-            .join("SKILL.md");
-        let pi_skill_existed = pi_skill_path.exists();
-        let pi_skill_dir = pi_skill_path
-            .parent()
-            .context("pi skill path has no parent directory")?;
-        fs::create_dir_all(pi_skill_dir)
-            .with_context(|| format!("failed to create directory {}", pi_skill_dir.display()))?;
-        fs::write(
-            &pi_skill_path,
-            parameterize_template(PI_SKILL_CONTENT, &dir_value),
+pub(super) fn capture_installation(
+    root: &Path,
+    path: &Path,
+) -> Result<Option<hyalo_core::rooted::CapturedInput>> {
+    use hyalo_core::rooted::{InstallationRoot, RelativeName};
+    let installation = InstallationRoot::new(root)?;
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("artifact is outside installation root: {}", path.display()))?;
+    let name = RelativeName::new(relative)?;
+    match installation.capture(&name) {
+        Ok(captured) => Ok(Some(captured)),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn committed_installation_effects(
+    effect: &hyalo_core::rooted::CommitEffect,
+    error: Option<&str>,
+) -> Vec<crate::commands::apply::PathEffect> {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    effect
+        .entries()
+        .iter()
+        .map(|entry| PathEffect {
+            file: entry.path().display().to_string(),
+            state: if error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            error: error.map(str::to_owned),
+            category: error.as_ref().map(|_| EffectFailure::Finalization),
+        })
+        .collect()
+}
+
+fn publish_installation(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    let source = capture_installation(root, path)?;
+    publish_captured_installation(root, path, source, bytes)
+}
+
+pub(super) fn publish_captured_installation(
+    root: &Path,
+    path: &Path,
+    source: Option<hyalo_core::rooted::CapturedInput>,
+    bytes: &[u8],
+) -> Result<()> {
+    publish_captured_installation_with_session(
+        root,
+        path,
+        source,
+        bytes,
+        hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile),
+    )
+}
+
+fn publish_captured_installation_with_session(
+    root: &Path,
+    path: &Path,
+    source: Option<hyalo_core::rooted::CapturedInput>,
+    bytes: &[u8],
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<()> {
+    use hyalo_core::rooted::{InstallationRoot, RelativeName};
+    let installation = InstallationRoot::new(root)?;
+    let relative = path
+        .strip_prefix(root)
+        .with_context(|| format!("artifact is outside installation root: {}", path.display()))?;
+    let name = RelativeName::new(relative)?;
+    let effect = match source {
+        Some(captured) => captured.prepare(bytes, &session)?.commit(&mut session)?,
+        None => installation
+            .destination(name)?
+            .create(bytes, &mut session)?,
+    };
+    if let Some(error) = effect.finalization_error() {
+        return Err(ObservedInstallationError {
+            detail: format!("artifact committed but finalization failed: {error}"),
+            effects: committed_installation_effects(&effect, Some(error)),
+        }
+        .into());
+    }
+    if let Err(error) = session.finish() {
+        let error_text = error.to_string();
+        return Err(ObservedInstallationError {
+            detail: format!("artifact committed but finalization failed: {error}"),
+            effects: committed_installation_effects(&effect, Some(&error_text)),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+fn ensure_installation_dir(root: &Path, target: &Path, report: &mut Report) -> Result<()> {
+    use hyalo_core::rooted::{Durability, InstallationRoot, RelativeName, WriteSession};
+    let installation = InstallationRoot::new(root)?;
+    let relative = target.strip_prefix(root).with_context(|| {
+        format!(
+            "directory is outside installation root: {}",
+            target.display()
         )
-        .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
-        if pi_skill_existed {
-            report.push("updated", ".pi/skills/hyalo/SKILL.md");
-        } else {
-            report.push("created", ".pi/skills/hyalo/SKILL.md");
-        }
-
-        // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
-        let pi_tidy_skill_path = root
-            .join(".pi")
-            .join("skills")
-            .join("hyalo-tidy")
-            .join("SKILL.md");
-        let pi_tidy_skill_existed = pi_tidy_skill_path.exists();
-        let pi_tidy_skill_dir = pi_tidy_skill_path
-            .parent()
-            .context("pi tidy skill path has no parent directory")?;
-        fs::create_dir_all(pi_tidy_skill_dir).with_context(|| {
-            format!("failed to create directory {}", pi_tidy_skill_dir.display())
-        })?;
-        fs::write(
-            &pi_tidy_skill_path,
-            parameterize_template(PI_TIDY_SKILL_CONTENT, &dir_value),
-        )
-        .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
-        if pi_tidy_skill_existed {
-            report.push("updated", ".pi/skills/hyalo-tidy/SKILL.md");
-        } else {
-            report.push("created", ".pi/skills/hyalo-tidy/SKILL.md");
-        }
-
-        // Step 8: write (overwrite) .pi/extensions/hyalo.ts
-        let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
-        let pi_extension_existed = pi_extension_path.exists();
-        let pi_extension_dir = pi_extension_path
-            .parent()
-            .context("pi extension path has no parent directory")?;
-        fs::create_dir_all(pi_extension_dir).with_context(|| {
-            format!("failed to create directory {}", pi_extension_dir.display())
-        })?;
-        fs::write(&pi_extension_path, PI_EXTENSION_CONTENT)
-            .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
-        if pi_extension_existed {
-            report.push("updated", ".pi/extensions/hyalo.ts");
-        } else {
-            report.push("created", ".pi/extensions/hyalo.ts");
-        }
-
-        // Step 9: write (overwrite) the self-contained API runtime used by the extension.
-        let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
-        let pi_api_runtime_existed = pi_api_runtime_path.exists();
-        let pi_api_runtime_dir = pi_api_runtime_path
-            .parent()
-            .context("pi API runtime path has no parent directory")?;
-        fs::create_dir_all(pi_api_runtime_dir).with_context(|| {
-            format!(
-                "failed to create directory {}",
-                pi_api_runtime_dir.display()
-            )
-        })?;
-        fs::write(&pi_api_runtime_path, PI_API_RUNTIME_CONTENT)
-            .with_context(|| format!("failed to write {}", pi_api_runtime_path.display()))?;
-        if pi_api_runtime_existed {
-            report.push("updated", ".pi/lib/hyalo-api.js");
-        } else {
-            report.push("created", ".pi/lib/hyalo-api.js");
-        }
-        let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
-        let pi_api_declaration_existed = pi_api_declaration_path.exists();
-        fs::write(&pi_api_declaration_path, PI_API_DECLARATION_CONTENT)
-            .with_context(|| format!("failed to write {}", pi_api_declaration_path.display()))?;
-        if pi_api_declaration_existed {
-            report.push("updated", ".pi/lib/hyalo-api.d.ts");
-        } else {
-            report.push("created", ".pi/lib/hyalo-api.d.ts");
-        }
-
-        // Step 10: write (overwrite) .pi/package.json
-        let pi_package_path = root.join(".pi").join("package.json");
-        let pi_package_existed = pi_package_path.exists();
-        let pi_package_dir = pi_package_path
-            .parent()
-            .context("pi package.json path has no parent directory")?;
-        fs::create_dir_all(pi_package_dir)
-            .with_context(|| format!("failed to create directory {}", pi_package_dir.display()))?;
-        fs::write(&pi_package_path, PI_PACKAGE_JSON_CONTENT)
-            .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
-        if pi_package_existed {
-            report.push("updated", ".pi/package.json");
-        } else {
-            report.push("created", ".pi/package.json");
-            // One-time hint: the vendored copy never updates itself. Suggest
-            // the git package source so `pi update` delivers fixes.
-            report.notes.push(PI_INSTALL_HINT.to_owned());
+    })?;
+    let mut current = PathBuf::new();
+    let mut session = WriteSession::new(Durability::PerDirectory);
+    let mut committed = Vec::new();
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(root.join(&current)) {
+            Ok(metadata) => anyhow::ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "installation parent is not a regular directory: {}",
+                current.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = match RelativeName::new(&current) {
+                    Ok(name) => name,
+                    Err(error) => {
+                        return Err(ObservedInstallationError {
+                            detail: error.to_string(),
+                            effects: committed,
+                        }
+                        .into());
+                    }
+                };
+                let effect = match installation.create_directory(&name, &mut session) {
+                    Ok(effect) => effect,
+                    Err(error) => {
+                        return Err(ObservedInstallationError {
+                            detail: error.to_string(),
+                            effects: committed,
+                        }
+                        .into());
+                    }
+                };
+                committed.extend(committed_installation_effects(&effect, None));
+                if let Some(error) = effect.finalization_error() {
+                    for item in &mut committed {
+                        if item.file == root.join(&current).display().to_string() {
+                            item.state =
+                                crate::commands::apply::EffectState::CommittedWithFinalizationError;
+                            item.error = Some(error.to_owned());
+                            item.category =
+                                Some(crate::commands::apply::EffectFailure::Finalization);
+                        }
+                    }
+                    return Err(ObservedInstallationError {
+                        detail: format!("directory created but finalization failed: {error}"),
+                        effects: committed,
+                    }
+                    .into());
+                }
+            }
+            Err(error) => {
+                return Err(ObservedInstallationError {
+                    detail: error.to_string(),
+                    effects: committed,
+                }
+                .into());
+            }
         }
     }
-
-    Ok(report)
+    if let Err(error) = session.finish() {
+        for item in &mut committed {
+            item.state = crate::commands::apply::EffectState::CommittedWithFinalizationError;
+            item.error = Some(error.to_string());
+            item.category = Some(crate::commands::apply::EffectFailure::Finalization);
+        }
+        return Err(ObservedInstallationError {
+            detail: format!("directory finalization failed: {error}"),
+            effects: committed,
+        }
+        .into());
+    }
+    report.observed_failures.extend(committed);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -860,29 +1219,48 @@ fn initialize_in(
 /// `.hyalo.toml` and `.claude` integration files instead — DEC-261.
 pub fn run_deinit(dir: Option<&str>) -> Result<Report> {
     let cwd = std::env::current_dir().context("failed to determine current working directory")?;
-    run_deinit_in(dir, &cwd)
+    run_deinit_observed(dir, &cwd).map_err(|failure| failure.error)
 }
 
+pub(crate) fn run_deinit_observed(
+    dir: Option<&str>,
+    cwd: &Path,
+) -> std::result::Result<Report, ReportError> {
+    deinitialize_observed(dir, cwd)
+}
+
+#[cfg(test)]
 fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
-    // `deinit` removes integration files, never the vault itself, so the vault
-    // value resolved here only decides *which tree* is the target.
-    // iter-274 (UX-18): a `--dir` naming a directory that does not exist used
-    // to report a tidy list of "skipped (not found)" lines and exit 0 — which
-    // reads as "already clean" for a path that was simply mistyped. Checked on
-    // the *named* directory rather than on the resolved scope root, because a
-    // relative `--dir sub/nope` keeps the project root at CWD (which does
-    // exist) and would otherwise slip through.
-    if let Some(raw) = dir {
-        let named = {
-            let p = Path::new(raw);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                cwd.join(p)
-            }
-        };
-        if !named.is_dir() {
-            return Err(hyalo_core::user_error_with(
+    deinitialize_observed(dir, cwd).map_err(|failure| failure.error)
+}
+
+fn deinitialize_observed(
+    dir: Option<&str>,
+    cwd: &Path,
+) -> std::result::Result<Report, ReportError> {
+    let scope = resolve_scope(dir, cwd);
+    let mut report = Report::new("deinit", &scope, None);
+    let root = scope.root.as_path();
+    let result = (|| -> Result<()> {
+        // `deinit` removes integration files, never the vault itself, so the vault
+        // value resolved here only decides *which tree* is the target.
+        // iter-274 (UX-18): a `--dir` naming a directory that does not exist used
+        // to report a tidy list of "skipped (not found)" lines and exit 0 — which
+        // reads as "already clean" for a path that was simply mistyped. Checked on
+        // the *named* directory rather than on the resolved scope root, because a
+        // relative `--dir sub/nope` keeps the project root at CWD (which does
+        // exist) and would otherwise slip through.
+        if let Some(raw) = dir {
+            let named = {
+                let p = Path::new(raw);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    cwd.join(p)
+                }
+            };
+            if !named.is_dir() {
+                return Err(hyalo_core::user_error_with(
                 format!("target directory does not exist: {raw}"),
                 Some(
                     "pass --dir with a path that exists, or omit it to clean the current directory"
@@ -890,184 +1268,265 @@ fn run_deinit_in(dir: Option<&str>, cwd: &Path) -> Result<Report> {
                 ),
                 None,
             ));
-        }
-    }
-    let scope = resolve_scope(dir, cwd);
-    let mut report = Report::new("deinit", &scope, None);
-    let root = scope.root.as_path();
-
-    codex::preflight_removal(root)?;
-    codex::remove(root, &mut report)?;
-
-    // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
-    let skill_path = root
-        .join(".claude")
-        .join("skills")
-        .join("hyalo")
-        .join("SKILL.md");
-    remove_artifact(&skill_path, ".claude/skills/hyalo/SKILL.md", &mut report)?;
-    let skill_dir = skill_path
-        .parent()
-        .context("skill path has no parent directory")?;
-    remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut report)?;
-
-    // Step 2: Remove .claude/skills/hyalo-tidy/SKILL.md and parent dir if empty.
-    let tidy_skill_path = root
-        .join(".claude")
-        .join("skills")
-        .join("hyalo-tidy")
-        .join("SKILL.md");
-    remove_artifact(
-        &tidy_skill_path,
-        ".claude/skills/hyalo-tidy/SKILL.md",
-        &mut report,
-    )?;
-    let tidy_skill_dir = tidy_skill_path
-        .parent()
-        .context("tidy skill path has no parent directory")?;
-    remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut report)?;
-
-    // Step 2b: Remove profile skills (e.g. `okf`) and their parent dirs if empty.
-    for profile in crate::commands::profiles::PROFILES {
-        for (skill_dir, _body) in profile.skills {
-            let profile_skill_path = root
-                .join(".claude")
-                .join("skills")
-                .join(skill_dir)
-                .join("SKILL.md");
-            let label = format!(".claude/skills/{skill_dir}/SKILL.md");
-            remove_artifact(&profile_skill_path, &label, &mut report)?;
-            if let Some(parent) = profile_skill_path.parent() {
-                remove_dir_if_empty(parent, &format!(".claude/skills/{skill_dir}/"), &mut report)?;
             }
         }
-    }
+        preflight_installation_manifest(root, true, true, None, CodexMode::None)?;
+        for profile in crate::commands::profiles::PROFILES {
+            preflight_installation_manifest(root, true, false, Some(profile), CodexMode::None)?;
+        }
+        codex::preflight_removal(root)?;
+        codex::remove(root, &mut report)?;
 
-    // Step 3: Remove .claude/rules/knowledgebase.md and parent dir if empty.
-    let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
-    remove_artifact(&rules_path, ".claude/rules/knowledgebase.md", &mut report)?;
-    let rules_dir = rules_path
-        .parent()
-        .context("rules path has no parent directory")?;
-    remove_dir_if_empty(rules_dir, ".claude/rules/", &mut report)?;
+        // Step 1: Remove .claude/skills/hyalo/SKILL.md and parent dir if empty.
+        let skill_path = root
+            .join(".claude")
+            .join("skills")
+            .join("hyalo")
+            .join("SKILL.md");
+        remove_artifact(
+            root,
+            &skill_path,
+            ".claude/skills/hyalo/SKILL.md",
+            &mut report,
+        )?;
+        let skill_dir = skill_path
+            .parent()
+            .context("skill path has no parent directory")?;
+        remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut report)?;
 
-    // Step 4: Remove .claude/skills/ if empty.
-    let all_skills_dir = root.join(".claude").join("skills");
-    remove_dir_if_empty(&all_skills_dir, ".claude/skills/", &mut report)?;
+        // Step 2: Remove .claude/skills/hyalo-tidy/SKILL.md and parent dir if empty.
+        let tidy_skill_path = root
+            .join(".claude")
+            .join("skills")
+            .join("hyalo-tidy")
+            .join("SKILL.md");
+        remove_artifact(
+            root,
+            &tidy_skill_path,
+            ".claude/skills/hyalo-tidy/SKILL.md",
+            &mut report,
+        )?;
+        let tidy_skill_dir = tidy_skill_path
+            .parent()
+            .context("tidy skill path has no parent directory")?;
+        remove_dir_if_empty(tidy_skill_dir, ".claude/skills/hyalo-tidy/", &mut report)?;
 
-    // Step 5: Strip the managed section from .claude/CLAUDE.md.
-    let claude_md_path = root.join(".claude").join("CLAUDE.md");
-    if claude_md_path.exists() {
-        let content = fs::read_to_string(&claude_md_path)
-            .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
-        let (stripped, was_stripped) = strip_managed_section(&content);
-        if was_stripped {
-            if stripped.is_empty() {
-                fs::remove_file(&claude_md_path)
-                    .with_context(|| format!("failed to remove {}", claude_md_path.display()))?;
-                report.push_detail("removed", ".claude/CLAUDE.md", "empty after stripping");
-            } else {
-                fs::write(&claude_md_path, &stripped)
+        // Step 2b: Remove profile skills (e.g. `okf`) and their parent dirs if empty.
+        for profile in crate::commands::profiles::PROFILES {
+            for (skill_dir, _body) in profile.skills {
+                let profile_skill_path = root
+                    .join(".claude")
+                    .join("skills")
+                    .join(skill_dir)
+                    .join("SKILL.md");
+                let label = format!(".claude/skills/{skill_dir}/SKILL.md");
+                remove_artifact(root, &profile_skill_path, &label, &mut report)?;
+                if let Some(parent) = profile_skill_path.parent() {
+                    remove_dir_if_empty(
+                        parent,
+                        &format!(".claude/skills/{skill_dir}/"),
+                        &mut report,
+                    )?;
+                }
+            }
+        }
+
+        // Step 3: Remove .claude/rules/knowledgebase.md and parent dir if empty.
+        let rules_path = root.join(".claude").join("rules").join("knowledgebase.md");
+        remove_artifact(
+            root,
+            &rules_path,
+            ".claude/rules/knowledgebase.md",
+            &mut report,
+        )?;
+        let rules_dir = rules_path
+            .parent()
+            .context("rules path has no parent directory")?;
+        remove_dir_if_empty(rules_dir, ".claude/rules/", &mut report)?;
+
+        // Step 4: Remove .claude/skills/ if empty.
+        let all_skills_dir = root.join(".claude").join("skills");
+        remove_dir_if_empty(&all_skills_dir, ".claude/skills/", &mut report)?;
+
+        // Step 5: Strip the managed section from .claude/CLAUDE.md.
+        let claude_md_path = root.join(".claude").join("CLAUDE.md");
+        if let Some(claude_source) = capture_installation(root, &claude_md_path)? {
+            let content = String::from_utf8(claude_source.bytes()?)
+                .with_context(|| format!("failed to read {}", claude_md_path.display()))?;
+            let (stripped, was_stripped) = strip_managed_section(&content);
+            if was_stripped {
+                if stripped.is_empty() {
+                    remove_captured_installation_artifact(root, &claude_md_path, claude_source)?;
+                    report.push_detail("removed", ".claude/CLAUDE.md", "empty after stripping");
+                } else {
+                    publish_captured_installation(
+                        root,
+                        &claude_md_path,
+                        Some(claude_source),
+                        stripped.as_bytes(),
+                    )
                     .with_context(|| format!("failed to write {}", claude_md_path.display()))?;
-                report.push_detail("updated", ".claude/CLAUDE.md", "stripped managed section");
+                    report.push_detail("updated", ".claude/CLAUDE.md", "stripped managed section");
+                }
+            } else {
+                report.push_detail("skipped", ".claude/CLAUDE.md", "no managed section");
             }
         } else {
-            report.push_detail("skipped", ".claude/CLAUDE.md", "no managed section");
+            report.push_detail("skipped", ".claude/CLAUDE.md", "not found");
         }
-    } else {
-        report.push_detail("skipped", ".claude/CLAUDE.md", "not found");
+
+        // Clean up .claude/ itself if now empty.
+        let claude_dir = root.join(".claude");
+        remove_dir_if_empty(&claude_dir, ".claude/", &mut report)?;
+
+        // Step 6: Remove pi artifacts
+        // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
+        let pi_skill_path = root
+            .join(".pi")
+            .join("skills")
+            .join("hyalo")
+            .join("SKILL.md");
+        remove_artifact(
+            root,
+            &pi_skill_path,
+            ".pi/skills/hyalo/SKILL.md",
+            &mut report,
+        )?;
+        let pi_skill_dir = pi_skill_path
+            .parent()
+            .context("pi skill path has no parent directory")?;
+        remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut report)?;
+
+        // Remove .pi/skills/hyalo-tidy/SKILL.md and parent dir if empty.
+        let pi_tidy_skill_path = root
+            .join(".pi")
+            .join("skills")
+            .join("hyalo-tidy")
+            .join("SKILL.md");
+        remove_artifact(
+            root,
+            &pi_tidy_skill_path,
+            ".pi/skills/hyalo-tidy/SKILL.md",
+            &mut report,
+        )?;
+        let pi_tidy_skill_dir = pi_tidy_skill_path
+            .parent()
+            .context("pi tidy skill path has no parent directory")?;
+        remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut report)?;
+
+        // Remove .pi/skills/ if empty (after removing hyalo and hyalo-tidy subdirectories)
+        let pi_skills_parent_dir = root.join(".pi").join("skills");
+        remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut report)?;
+
+        // Remove the Pi extension and its generated API runtime.
+        let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
+        remove_artifact(
+            root,
+            &pi_extension_path,
+            ".pi/extensions/hyalo.ts",
+            &mut report,
+        )?;
+        let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
+        remove_artifact(
+            root,
+            &pi_api_runtime_path,
+            ".pi/lib/hyalo-api.js",
+            &mut report,
+        )?;
+        let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
+        remove_artifact(
+            root,
+            &pi_api_declaration_path,
+            ".pi/lib/hyalo-api.d.ts",
+            &mut report,
+        )?;
+        let pi_api_runtime_dir = pi_api_runtime_path
+            .parent()
+            .context("pi API runtime path has no parent directory")?;
+        remove_dir_if_empty(pi_api_runtime_dir, ".pi/lib/", &mut report)?;
+        let pi_extension_dir = pi_extension_path
+            .parent()
+            .context("pi extension path has no parent directory")?;
+        remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut report)?;
+
+        // Remove .pi/package.json
+        let pi_package_path = root.join(".pi").join("package.json");
+        remove_artifact(root, &pi_package_path, ".pi/package.json", &mut report)?;
+        let pi_package_dir = pi_package_path
+            .parent()
+            .context("pi package.json path has no parent directory")?;
+        remove_dir_if_empty(pi_package_dir, ".pi/", &mut report)?;
+
+        // Remove .pi/ if empty.
+        let pi_dir = root.join(".pi");
+        remove_dir_if_empty(&pi_dir, ".pi/", &mut report)?;
+
+        // Step 7: Remove .hyalo.toml.
+        let toml_path = root.join(".hyalo.toml");
+        remove_artifact(root, &toml_path, ".hyalo.toml", &mut report)?;
+
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(report),
+        Err(error) => {
+            retain_observed_installation_error(&mut report, &error);
+            Err(ReportError {
+                report: Box::new(report),
+                error,
+            })
+        }
     }
-
-    // Clean up .claude/ itself if now empty.
-    let claude_dir = root.join(".claude");
-    remove_dir_if_empty(&claude_dir, ".claude/", &mut report)?;
-
-    // Step 6: Remove pi artifacts
-    // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
-    let pi_skill_path = root
-        .join(".pi")
-        .join("skills")
-        .join("hyalo")
-        .join("SKILL.md");
-    remove_artifact(&pi_skill_path, ".pi/skills/hyalo/SKILL.md", &mut report)?;
-    let pi_skill_dir = pi_skill_path
-        .parent()
-        .context("pi skill path has no parent directory")?;
-    remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut report)?;
-
-    // Remove .pi/skills/hyalo-tidy/SKILL.md and parent dir if empty.
-    let pi_tidy_skill_path = root
-        .join(".pi")
-        .join("skills")
-        .join("hyalo-tidy")
-        .join("SKILL.md");
-    remove_artifact(
-        &pi_tidy_skill_path,
-        ".pi/skills/hyalo-tidy/SKILL.md",
-        &mut report,
-    )?;
-    let pi_tidy_skill_dir = pi_tidy_skill_path
-        .parent()
-        .context("pi tidy skill path has no parent directory")?;
-    remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut report)?;
-
-    // Remove .pi/skills/ if empty (after removing hyalo and hyalo-tidy subdirectories)
-    let pi_skills_parent_dir = root.join(".pi").join("skills");
-    remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut report)?;
-
-    // Remove the Pi extension and its generated API runtime.
-    let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
-    remove_artifact(&pi_extension_path, ".pi/extensions/hyalo.ts", &mut report)?;
-    let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
-    remove_artifact(&pi_api_runtime_path, ".pi/lib/hyalo-api.js", &mut report)?;
-    let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
-    remove_artifact(
-        &pi_api_declaration_path,
-        ".pi/lib/hyalo-api.d.ts",
-        &mut report,
-    )?;
-    let pi_api_runtime_dir = pi_api_runtime_path
-        .parent()
-        .context("pi API runtime path has no parent directory")?;
-    remove_dir_if_empty(pi_api_runtime_dir, ".pi/lib/", &mut report)?;
-    let pi_extension_dir = pi_extension_path
-        .parent()
-        .context("pi extension path has no parent directory")?;
-    remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut report)?;
-
-    // Remove .pi/package.json
-    let pi_package_path = root.join(".pi").join("package.json");
-    remove_artifact(&pi_package_path, ".pi/package.json", &mut report)?;
-    let pi_package_dir = pi_package_path
-        .parent()
-        .context("pi package.json path has no parent directory")?;
-    remove_dir_if_empty(pi_package_dir, ".pi/", &mut report)?;
-
-    // Remove .pi/ if empty.
-    let pi_dir = root.join(".pi");
-    remove_dir_if_empty(&pi_dir, ".pi/", &mut report)?;
-
-    // Step 7: Remove .hyalo.toml.
-    let toml_path = root.join(".hyalo.toml");
-    remove_artifact(&toml_path, ".hyalo.toml", &mut report)?;
-
-    Ok(report)
 }
 
 /// Remove `path` if it exists and record the outcome on `report`.
 /// Returns `Ok(true)` if the file was actually removed.
-fn remove_artifact(path: &Path, label: &str, report: &mut Report) -> Result<bool> {
-    match fs::remove_file(path) {
-        Ok(()) => {
-            report.push("removed", label);
-            Ok(true)
-        }
+fn remove_artifact(root: &Path, path: &Path, label: &str, report: &mut Report) -> Result<bool> {
+    match fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             report.push_detail("skipped", label, "not found");
             Ok(false)
         }
-        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+        Err(e) => Err(e).with_context(|| format!("failed to inspect {}", path.display())),
+        Ok(_) => {
+            remove_installation_artifact(root, path)
+                .with_context(|| format!("failed to remove {}", path.display()))?;
+            report.push("removed", label);
+            Ok(true)
+        }
     }
+}
+
+fn remove_installation_artifact(root: &Path, path: &Path) -> Result<()> {
+    let source = capture_installation(root, path)?
+        .with_context(|| format!("installation artifact disappeared: {}", path.display()))?;
+    remove_captured_installation_artifact(root, path, source)
+}
+
+pub(super) fn remove_captured_installation_artifact(
+    _root: &Path,
+    _path: &Path,
+    source: hyalo_core::rooted::CapturedInput,
+) -> Result<()> {
+    use hyalo_core::rooted::{Durability, WriteSession};
+    let mut session = WriteSession::new(Durability::PerFile);
+    let effect = source.remove(&mut session)?;
+    if let Some(error) = effect.finalization_error() {
+        return Err(ObservedInstallationError {
+            detail: format!("artifact removed but finalization failed: {error}"),
+            effects: committed_installation_effects(&effect, Some(error)),
+        }
+        .into());
+    }
+    if let Err(error) = session.finish() {
+        let error_text = error.to_string();
+        return Err(ObservedInstallationError {
+            detail: format!("artifact removed but finalization failed: {error}"),
+            effects: committed_installation_effects(&effect, Some(&error_text)),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// Remove `dir` if it exists and is empty. Records an action only if removed.
@@ -2472,5 +2931,146 @@ mod tests {
                 .any(|a| a["action"] == "created" && a["target"] == ".hyalo.toml"),
             "json: {json}"
         );
+    }
+
+    #[test]
+    fn successful_claude_init_reports_created_installation_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let report =
+            run_init_observed(Some("."), true, false, None, root.path(), CodexMode::None).unwrap();
+        let effects = report.effects();
+        let canonical_root = dunce::canonicalize(root.path()).unwrap();
+        for directory in [
+            ".claude",
+            ".claude/skills",
+            ".claude/skills/hyalo",
+            ".claude/skills/hyalo-tidy",
+            ".claude/rules",
+        ] {
+            let expected = canonical_root.join(directory).display().to_string();
+            assert!(
+                effects.paths.iter().any(|effect| {
+                    effect.file == expected
+                        && effect.state == crate::commands::apply::EffectState::Committed
+                }),
+                "missing directory effect for {directory}: {:?}",
+                effects.paths
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_and_pi_symlink_manifests_refuse_before_any_artifact_change() {
+        use std::os::unix::fs::symlink;
+        for escaping_name in [".claude", ".pi"] {
+            let root = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let config = root.path().join(".hyalo.toml");
+            let original = b"# preserve\ndir = \".\"\n";
+            fs::write(&config, original).unwrap();
+            fs::write(outside.path().join("sentinel"), b"external").unwrap();
+            symlink(outside.path(), root.path().join(escaping_name)).unwrap();
+
+            let error = run_init_in(Some("."), true, true, None, root.path()).unwrap_err();
+            assert!(error.to_string().contains("symlink"));
+            assert_eq!(fs::read(&config).unwrap(), original);
+            assert_eq!(
+                fs::read(outside.path().join("sentinel")).unwrap(),
+                b"external"
+            );
+            assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_runtime_failure_returns_every_prior_artifact_effect() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join(".pi/lib");
+        fs::create_dir_all(&blocked).unwrap();
+        let original_mode = fs::metadata(&blocked).unwrap().permissions().mode();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o555)).unwrap();
+        let result = run_init_observed(Some("."), false, true, None, root.path(), CodexMode::None);
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(original_mode)).unwrap();
+        let failure = result.expect_err("read-only late manifest parent must fail");
+        assert!(failure.report.effects().paths.len() >= 3);
+        assert!(failure.report.effects().paths.iter().all(|effect| matches!(
+            effect.state,
+            crate::commands::apply::EffectState::Committed
+                | crate::commands::apply::EffectState::Unchanged
+        )));
+        assert!(root.path().join(".hyalo.toml").exists());
+    }
+
+    #[test]
+    fn init_manifest_rejects_nonregular_leaf_before_any_effect() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".pi/package.json")).unwrap();
+        let failure = run_init_observed(Some("."), false, true, None, root.path(), CodexMode::None)
+            .unwrap_err();
+        assert!(failure.error.to_string().contains("not a regular file"));
+        assert!(!root.path().join(".hyalo.toml").exists());
+        assert!(failure.report.effects().paths.is_empty());
+    }
+
+    #[test]
+    fn deinit_manifest_rejects_nonregular_leaf_before_removing_anything() {
+        let root = tempfile::tempdir().unwrap();
+        run_init_observed(Some("."), false, true, None, root.path(), CodexMode::None).unwrap();
+        fs::remove_file(root.path().join(".pi/package.json")).unwrap();
+        fs::create_dir(root.path().join(".pi/package.json")).unwrap();
+        let preserved = root.path().join(".pi/skills/hyalo/SKILL.md");
+        let before = fs::read(&preserved).unwrap();
+        let failure = run_deinit_observed(Some("."), root.path()).unwrap_err();
+        assert!(failure.error.to_string().contains("not a regular file"));
+        assert_eq!(fs::read(&preserved).unwrap(), before);
+        assert!(failure.report.effects().paths.is_empty());
+    }
+
+    #[test]
+    fn installation_finalization_failure_retains_committed_artifact_effect() {
+        use hyalo_core::rooted::{Durability, FaultPoint, WriteSession};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("artifact.txt");
+        let error = publish_captured_installation_with_session(
+            root.path(),
+            &path,
+            None,
+            b"committed",
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap_err();
+        assert_eq!(fs::read(&path).unwrap(), b"committed");
+        let observed = error.downcast_ref::<ObservedInstallationError>().unwrap();
+        assert_eq!(observed.effects.len(), 1);
+        assert_eq!(
+            observed.effects[0].state,
+            crate::commands::apply::EffectState::CommittedWithFinalizationError
+        );
+    }
+
+    #[test]
+    fn captured_installation_transform_refuses_intervening_editor_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("AGENTS.md");
+        fs::write(&path, b"user before\nmanaged\n").unwrap();
+        let source = capture_installation(root.path(), &path).unwrap().unwrap();
+        fs::write(&path, b"user EDITED\nmanaged\n").unwrap();
+        let error = publish_captured_installation(
+            root.path(),
+            &path,
+            Some(source),
+            b"user before\nreplacement\n",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<hyalo_core::rooted::SourceConflict>()
+                .is_some(),
+            "{error:#}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"user EDITED\nmanaged\n");
     }
 }

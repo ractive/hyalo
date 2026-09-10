@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 293 — Mutation migration and data safety
 date: 2026-09-10
-status: planned
+status: in-progress
 tags:
   - iteration
   - rust
@@ -50,36 +50,36 @@ consolidation changes execution granularity, not scope.
 
 ### Stage 1: Migrate remaining note writers
 
-- [ ] Inventory remaining note-write entrypoints, including command aliases, lint profiles and
+- [x] Inventory remaining note-write entrypoints, including command aliases, lint profiles and
   direct link-rewrite helpers; migrate selection, exact transformations, source versions and
   schema/budget validation to prepared operations.
 
-- [ ] Preserve exclusive creation for new, idempotence/no-op behavior for property/tag
+- [x] Preserve exclusive creation for new, idempotence/no-op behavior for property/tag
   operations and byte-preserving lint/link edits. Full-map tag/property fallback requires
   content-sensitive captured-input conflict detection.
 
-- [ ] Make execute_plans_partial (or its compatible consolidated replacement) the single link
+- [x] Make execute_plans_partial (or its compatible consolidated replacement) the single link
   executor. Parallel jobs may already have committed; retain every outcome, including successes
   after another job failed, instead of collecting with early result?.
 
-- [ ] Route every committed/created note to mandatory index reconciliation and report
+- [x] Route every committed/created note to mandatory index reconciliation and report
   refresh/invalidation failures. Delete direct note writes and command-owned journal flushes for
   migrated consumers.
 
-- [ ] Replace misleading all-or-nothing and abort-first-failure comments with actual
+- [x] Replace misleading all-or-nothing and abort-first-failure comments with actual
   planning/commit guarantees; keep only compatibility wrappers that delegate safely.
 
 Acceptance for this stage (focused checks):
 
-- [ ] Each migrated note family has deterministic-preflight byte-identity tests and injected
+- [x] Each migrated note family has deterministic-preflight byte-identity tests and injected
   partial-failure effect tests.
 
-- [ ] A newly occupied create destination is preserved; content conflicts in tag/property rename
+- [x] A newly occupied create destination is preserved; content conflicts in tag/property rename
   do not overwrite unrelated edits.
 
-- [ ] Parallel link failures retain all committed paths and truthful index disposition.
+- [x] Parallel link failures retain all committed paths and truthful index disposition.
 
-- [ ] No migrated note entrypoint bypasses the coordinator; ordinary output/no-op behavior
+- [x] No migrated note entrypoint bypasses the coordinator; ordinary output/no-op behavior
   retains parity.
 
 Scope: Use the established prepared-operation/report APIs; no new execution framework or product
@@ -88,36 +88,36 @@ inside their declared root and report actual effects rather than intended work.
 
 ### Stage 2: Unify single and batch move execution
 
-- [ ] Represent source entries, destination reservations, captured backlinks/self-links and
+- [x] Represent source entries, destination reservations, captured backlinks/self-links and
   exact rewrites in a prepared move plan. Preflight every deterministic collision/transformation
   before changing a note.
 
-- [ ] Use explicit no-replace move operations and distinguish entry versus referent identity;
+- [x] Use explicit no-replace move operations and distinguish entry versus referent identity;
   preserve tested regular-file case-only behavior and reject unsafe symlink/hard-link
   collisions.
 
-- [ ] Unify single/batch execution with per-operation committed/not-attempted/failure reporting.
+- [x] Unify single/batch execution with per-operation committed/not-attempted/failure reporting.
   Include created directories, renamed entries, rewritten backlinks and finalization failures.
 
-- [ ] Compensate only owned operations whose entry identity and content version still match,
+- [x] Compensate only owned operations whose entry identity and content version still match,
   using no-replace renames in reverse dependency order. An intervening source/destination entry
   must never be overwritten during rollback.
 
-- [ ] Retain restored/restore-failed/kept effects and reconcile the index to the actual final
+- [x] Retain restored/restore-failed/kept effects and reconcile the index to the actual final
   state on every exit. Remove separate single-file bare Result<()> and batch stringified-error
   paths.
 
 Acceptance for this stage (focused checks):
 
-- [ ] A backlink-write failure after rename returns complete move/rewrite/restore effects and
+- [x] A backlink-write failure after rename returns complete move/rewrite/restore effects and
   accurate index state.
 
-- [ ] An injected competing source entry survives compensation; restore failure is explicit.
+- [x] An injected competing source entry survives compensation; restore failure is explicit.
 
-- [ ] Single and batch paths share tested collision/no-clobber semantics, including case-only
+- [x] Single and batch paths share tested collision/no-clobber semantics, including case-only
   and alias/referent cases.
 
-- [ ] Dry-run creates no destination directory and describes the same prepared operations; no
+- [x] Dry-run creates no destination directory and describes the same prepared operations; no
   all-or-nothing claim exceeds implemented recovery.
 
 Scope: Use the established prepared-operation/report APIs; no new execution framework or product
@@ -126,37 +126,37 @@ inside their declared root and report actual effects rather than intended work.
 
 ### Stage 3: Prepare config and integration artifact writes
 
-- [ ] Plan all types/views/lint-rules configuration changes as TOML-preserving replacements
+- [x] Plan all types/views/lint-rules configuration changes as TOML-preserving replacements
   through ConfigRoot, retaining unrelated settings and comments with captured-source conflict
   checks.
 
-- [ ] Build one complete init/deinit artifact manifest for every selected integration before the
+- [x] Build one complete init/deinit artifact manifest for every selected integration before the
   first effect; preflight every artifact and parent, required directory and deterministic
   mode/config conflict.
 
-- [ ] Use installation-root confined exclusive creation/replacement/removal rather than
+- [x] Use installation-root confined exclusive creation/replacement/removal rather than
   vault-relative note paths. Preserve existing tracked/untracked artifact and user-content
   policies; no external symlink target may be touched.
 
-- [ ] Replace truncating fs::write call sites with the rooted session and report all
+- [x] Replace truncating fs::write call sites with the rooted session and report all
   creation/removal/replacement/finalization effects. Configuration failure must not be
   mislabeled as a note index update.
 
-- [ ] Preserve valid explicit external config/index destinations through separate authority
+- [x] Preserve valid explicit external config/index destinations through separate authority
   scopes and define multi-root ordering; never broaden root authority from an untrusted artifact
   path.
 
 Acceptance for this stage (focused checks):
 
-- [ ] A late manifest preflight refusal leaves all earlier integration artifacts unchanged.
+- [x] A late manifest preflight refusal leaves all earlier integration artifacts unchanged.
 
-- [ ] Claude/Pi/Codex escaping symlink fixtures are rejected before external I/O, while valid
+- [x] Claude/Pi/Codex escaping symlink fixtures are rejected before external I/O, while valid
   installation layouts remain compatible.
 
-- [ ] Injected pre-persist TOML failure preserves the original; post-persist failure reports
+- [x] Injected pre-persist TOML failure preserves the original; post-persist failure reports
   committed state.
 
-- [ ] All config/integration writers use explicit sessions and expose complete per-artifact
+- [x] All config/integration writers use explicit sessions and expose complete per-artifact
   effects.
 
 Scope: Use the established prepared-operation/report APIs; no new execution framework or product
@@ -165,38 +165,38 @@ inside their declared root and report actual effects rather than intended work.
 
 ### Stage 4: Migrate generators and remove write bypasses
 
-- [ ] Inventory and migrate generator create/update/delete paths, reserved-marker policies and
+- [x] Inventory and migrate generator create/update/delete paths, reserved-marker policies and
   explicitly configured changelog locations to prepared operations under the correct root.
 
-- [ ] Keep generator dry-run/drift/status behavior and unmanaged-region preservation explicit.
+- [x] Keep generator dry-run/drift/status behavior and unmanaged-region preservation explicit.
   Compute all deterministic marker/config errors before publishing any generated file.
 
-- [ ] Route index creation/removal through the normalized IndexIntent and rooted destination
+- [x] Route index creation/removal through the normalized IndexIntent and rooted destination
   operations without recursively invoking note index maintenance.
 
-- [ ] Produce a complete write-entrypoint inventory across CLI and public core wrappers; remove
+- [x] Produce a complete write-entrypoint inventory across CLI and public core wrappers; remove
   ambient WritePhase/PHASE and remaining direct application write/flush bypasses once every
   caller has an explicit session.
 
-- [ ] Restrict low-level runtime mutation interfaces and keep safe compatibility adapters for
+- [x] Restrict low-level runtime mutation interfaces and keep safe compatibility adapters for
   published APIs. Replace token-presence ownership claims with runtime failure tests and
   meaningful narrow visibility/architecture checks.
 
-- [ ] Verify no new helper permits direct unreported publication; document the final
+- [x] Verify no new helper permits direct unreported publication; document the final
   root/effect/index owner for every command leaf.
 
 Acceptance for this stage (focused checks):
 
-- [ ] Generator preflight errors leave files unchanged and partial I/O errors retain every
+- [x] Generator preflight errors leave files unchanged and partial I/O errors retain every
   observed effect.
 
-- [ ] Reserved/user-authored regions and external explicit destination semantics retain their
+- [x] Reserved/user-authored regions and external explicit destination semantics retain their
   contract.
 
-- [ ] No process-global write phase remains and every runtime writer is assigned an explicit
+- [x] No process-global write phase remains and every runtime writer is assigned an explicit
   owner.
 
-- [ ] Existing journal source lint is retained only as a labelled narrow check or replaced;
+- [x] Existing journal source lint is retained only as a labelled narrow check or replaced;
   helper-name presence is never counted as transaction proof.
 
 Scope: Use the established prepared-operation/report APIs; no new execution framework or product
@@ -205,7 +205,7 @@ inside their declared root and report actual effects rather than intended work.
 
 ### Stage 5: Close confinement, move and index-destination defects
 
-- [ ] S01: build one complete init/deinit artifact manifest for Claude, Pi and Codex before any
+- [x] S01: build one complete init/deinit artifact manifest for Claude, Pi and Codex before any
   mutation; validate every artifact parent under the installation root. Test .claude and .pi
   file/directory symlink escapes, partial installations and removal failures; no external
   fixture artifact may change.
@@ -215,31 +215,31 @@ inside their declared root and report actual effects rather than intended work.
   one directory on an actually case-insensitive volume, plus a case-sensitive counterpart and a
   destination created during execution.
 
-- [ ] S04: index note.md, replace the file or its parent with an external symlink, then indexed
+- [x] S04: index note.md, replace the file or its parent with an external symlink, then indexed
   regex-search an external marker. Refuse before opening external content; also cover ranked
   snippets and fallback reads to prove the shared path stayed intact.
 
-- [ ] S06: inject config replacement prepare/persist/finalize failures for types, views,
+- [x] S06: inject config replacement prepare/persist/finalize failures for types, views,
   lint-rules and init. Original TOML survives pre-persist failure; post-persist effects are
   accurately reported with unrelated comments/settings preserved.
 
-- [ ] S08: force a backlink replacement failure after a single-file move. Restore only verified
+- [x] S08: force a backlink replacement failure after a single-file move. Restore only verified
   owned changes where safe; otherwise emit all kept/restored/failed effects and a truthful index
   disposition. Cover batch and parallel backlink cases too.
 
-- [ ] C05: with custom.idx and default .hyalo-index present, drop-index --index-file custom.idx
+- [x] C05: with custom.idx and default .hyalo-index present, drop-index --index-file custom.idx
   removes only custom.idx. Test command-local/global aliases, conflicts, relative/CWD semantics,
   missing paths and no unnecessary snapshot load.
 
 Acceptance for this stage (focused checks):
 
-- [ ] Each listed ID has a regression that failed at the reviewed baseline and now passes or has
+- [x] Each listed ID has a regression that failed at the reviewed baseline and now passes or has
   an explicitly explained already-fixed migration test.
 
-- [ ] No external fixture bytes are read or changed; no destination clobber occurs; collisions
+- [x] No external fixture bytes are read or changed; no destination clobber occurs; collisions
   detectable in preflight leave all notes unchanged.
 
-- [ ] I/O failures never discard committed move/config effects; index reads cannot silently
+- [x] I/O failures never discard committed move/config effects; index reads cannot silently
   serve a snapshot known invalid after failure.
 
 - [ ] Platform-specific tests run on appropriate CI workers; an unsupported
@@ -250,43 +250,43 @@ case policy. Do not claim arbitrary directory-swap race protection.
 
 ### Stage 6: Close partial mutation and lost-update findings
 
-- [ ] C01: task toggle --all --count and append with --count or invalid jq must fail before
+- [x] C01: task toggle --all --count and append with --count or invalid jq must fail before
   changing bytes. Test unsupported options on all write leaf families, including early
   init/config/index paths. Valid runtime jq errors after a write must retain effects.
 
-- [ ] S07: a.md has x: []; b.md has x: {k: v}. Appending x=one to both preflights the mapping
+- [x] S07: a.md has x: []; b.md has x: {k: v}. Appending x=one to both preflights the mapping
   incompatibility and changes neither. Separately inject unavoidable second-file failure and
   verify first-file effect/index reporting.
 
-- [ ] A01: a.md has a task on line 6; b.md has ordinary text there. Batch toggle --line 6
+- [x] A01: a.md has a task on line 6; b.md has ordinary text there. Batch toggle --line 6
   refuses before changing a. A failure injected after the first commit must expose that effect
   so a retry is not blind.
 
-- [ ] S12: pause tag rename and properties-rename full-map fallback after captured input; change
+- [x] S12: pause tag rename and properties-rename full-map fallback after captured input; change
   an unrelated field, including same-length content with controlled timestamps. Resume and
   require conflict/preservation rather than stale full-map overwrite. Test two Hyalo writers and
   an editor independently.
 
-- [ ] A05: select a.md and in-vault alias.md -> a.md explicitly, then toggle all. Reject or
+- [x] A05: select a.md and in-vault alias.md -> a.md explicitly, then toggle all. Reject or
   deduplicate before apply so one physical task is not toggled twice. Add duplicate path
   spellings and hard-link identity where supported.
 
-- [ ] Exercise append/task no-op, idempotent set, skipped malformed notes, quiet mode,
+- [x] Exercise append/task no-op, idempotent set, skipped malformed notes, quiet mode,
   structured error results and index invalidation failure. Document exact safe retry decisions
   from effect status.
 
 Acceptance for this stage (focused checks):
 
-- [ ] All deterministic transformation/selector/output errors leave notes/config/index
+- [x] All deterministic transformation/selector/output errors leave notes/config/index
   unchanged.
 
-- [ ] Injected partial execution has complete committed/failed/not-attempted accounting,
+- [x] Injected partial execution has complete committed/failed/not-attempted accounting,
   including failures during index reconciliation.
 
-- [ ] Unrelated concurrent edits remain intact or produce explicit conflict; no automatic retry
+- [x] Unrelated concurrent edits remain intact or produce explicit conflict; no automatic retry
   replays a non-idempotent operation.
 
-- [ ] Tests demonstrate conflict semantics rather than only atomic old-or-new byte visibility.
+- [x] Tests demonstrate conflict semantics rather than only atomic old-or-new byte visibility.
 
 Scope: Do not promise kernel compare-and-swap against arbitrary external editors. If cooperative
 locks are added, define their root scope, ordering and lifecycle separately from optimistic
@@ -327,16 +327,16 @@ version checks.
   edits; public API/format changes must be explicit and tested. No whole-vault crash-transaction
   or concurrent-adversary guarantee is implied by the new types.
 
-- [ ] Obtain one fresh independent read-only review of the integrated block. Resolve actionable
+- [x] Obtain one fresh independent read-only review of the integrated block. Resolve actionable
   findings; re-review repaired behavior where necessary. Review stages as one final change
   rather than automatically launching a reviewer for every checklist item.
 
-- [ ] Before the final implementation commit/PR run, in order: cargo fmt; cargo clippy
+- [x] Before the final implementation commit/PR run, in order: cargo fmt; cargo clippy
   --workspace --all-targets -- -D warnings; cargo test --workspace -q. Run affected implemented
   xtask and package gates once for the integrated candidate, using actual dependencies and final
   generated assets.
 
-- [ ] For npm/Pi/assets changes run their typecheck/build/tests and TS/Pi/Codex freshness checks
+- [x] For npm/Pi/assets changes run their typecheck/build/tests and TS/Pi/Codex freshness checks
   against the same final binary. Build cargo build --release once after final asset generation,
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
@@ -346,7 +346,7 @@ version checks.
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
 
-- [ ] Reconcile the remaining five-or-fewer block plans once after final review/verification,
+- [x] Reconcile the remaining five-or-fewer block plans once after final review/verification,
   preserving scope and dependencies. Record exact revision, commands, review/CI evidence and
   limits; mark only fulfilled tasks complete. Keep iteration 287 external consumer work
   deferred.
@@ -422,3 +422,36 @@ including broken frontmatter, missing delimiters and incomplete edits, needs use
 and safe refusal without corruption where processing cannot continue; preserve crash, security,
 confinement, resource and partial-write protections without exhaustive random-gibberish/fuzz
 exploration.
+
+## Verified implementation and retry contract — 2026-09-10
+
+The final integrated candidate, including two repair passes, passed fresh
+independent review. Local verification reports 5,123 workspace tests passed, two ignored,
+strict Clippy, a release build and 35 npm tests against that exact release.
+Affected implemented xtask checks passed; unchanged package/freshness inputs were
+verified by hash. Stub gates, ignored tests and the fixture-inapplicable MADR
+recipe are not coverage. Native platform CI and remote completion remain pending
+in this implementation checkpoint; completed task state follows actual evidence.
+
+Inspect each path effect and index disposition before retrying. Do not blindly
+replay `committed`, `committed_with_finalization_error` or `kept` changes. Re-plan
+`not_attempted`/`failed_before_commit` paths against current files. `restored`
+entries do not imply the whole batch was rolled back, and `restore_failed`
+requires inspecting the retained path. `unchanged` paths need no retry. Index
+`update_failed` is not an instruction to repeat the mutation; resolve or rebuild
+the index separately after inspecting reported effects.
+
+Compatibility transformation helpers preserve public signatures and now share
+one exact source capture through publication. Their legacy Result errors identify
+post-commit finalization failures. Low-level atomic-write helpers accept already
+final bytes and do not infer a prior source version. Windows directory sync is
+unavailable; no whole-vault transaction, kernel compare-and-swap or arbitrary
+directory-swap protection is claimed. Ordinary Markdown mistakes retain useful
+diagnostics and safe refusal without an exhaustive gibberish/fuzz campaign.
+
+The final review is `293-review-attempt-3.json`, bound to 50 product files and
+release SHA-256
+`c095500b3230791202c838cc79f45256cc26220c912092a528999b9aa59b903a`.
+The supervisor reconciled 294, 295 and the architecture handoff; iteration 287's
+external consumer task remains deferred. Original criteria and finding ownership
+are unchanged.

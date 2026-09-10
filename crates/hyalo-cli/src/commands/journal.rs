@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn finalization_only_claims_invalidation_after_persistent_removal() {
+    fn finalization_removes_missing_entries_and_reports_failed_invalidation() {
         for blocked in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             std::fs::write(dir.path().join("a.md"), "---\ntitle: A\n---\n").unwrap();
@@ -429,14 +429,29 @@ mod tests {
             let mut journal = MutationJournal::new(&mut index, Some(&path));
             let (disposition, error) =
                 journal.finalize_observed(dir.path(), &["missing.md".into()], &[]);
-            assert!(error.is_some());
-            assert!(matches!(
-                (blocked, disposition),
-                (false, super::super::apply::IndexDisposition::Invalidated)
-                    | (true, super::super::apply::IndexDisposition::UpdateFailed)
-            ));
-            assert_eq!(path.exists(), blocked);
-            assert!(index.is_none());
+            if blocked {
+                assert!(error.is_some());
+                assert_eq!(
+                    disposition,
+                    super::super::apply::IndexDisposition::UpdateFailed
+                );
+                assert!(path.is_dir());
+                assert!(index.is_none());
+            } else {
+                assert!(error.is_none());
+                assert_eq!(disposition, super::super::apply::IndexDisposition::Updated);
+                assert!(path.is_file());
+                assert!(
+                    index
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.get("a.md").is_some())
+                );
+                assert!(
+                    index
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.get("missing.md").is_none())
+                );
+            }
         }
     }
 
