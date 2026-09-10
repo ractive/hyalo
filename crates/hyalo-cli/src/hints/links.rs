@@ -9,6 +9,26 @@ use super::{
     format_confidence, shell_quote,
 };
 
+fn links_fix_apply_hint(
+    ctx: &HintContext,
+    description: impl Into<String>,
+    fuzzy_floor: Option<&str>,
+) -> Hint {
+    let description = description.into();
+    if let Some(super::spec::ResolvedHintSpec::LinksFix(spec)) = &ctx.resolved {
+        return Hint::from_builder(description, spec.apply(ctx, fuzzy_floor));
+    }
+    let mut args = vec!["links", "fix", "--apply"];
+    if fuzzy_floor.is_some() {
+        args.push("--apply-fuzzy");
+    }
+    if let Some(floor) = fuzzy_floor {
+        args.push("--min-confidence");
+        args.push(floor);
+    }
+    Hint::new(description, build_command_with_glob(ctx, &args))
+}
+
 pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -> Vec<Hint> {
     let mut hints = Vec::new();
 
@@ -34,9 +54,10 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
     let applicable = fixable.saturating_sub(unapplied);
 
     if is_dry_run && applicable > 0 {
-        hints.push(Hint::new(
+        hints.push(links_fix_apply_hint(
+            ctx,
             format!("Apply {applicable} fixes"),
-            build_command_with_glob(ctx, &["links", "fix", "--apply"]),
+            None,
         ));
     }
 
@@ -77,16 +98,11 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
             .get("fuzzy_min_confidence")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE);
-        let mut cmd_parts = vec!["links", "fix", "--apply", "--apply-fuzzy"];
-        let floor_arg;
-        if (floor - hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE).abs() > f64::EPSILON {
-            floor_arg = format_confidence(floor);
-            cmd_parts.push("--min-confidence");
-            cmd_parts.push(&floor_arg);
-        }
-        hints.push(Hint::new(
+        let floor_arg = format_confidence(floor);
+        hints.push(links_fix_apply_hint(
+            ctx,
             format!("Review then apply {applicable_fuzzy} lower-confidence fuzzy fixes"),
-            build_command_with_glob(ctx, &cmd_parts),
+            Some(&floor_arg),
         ));
     } else if fuzzy > 0 && !fuzzy_applied {
         // Every candidate is below the floor — `--apply-fuzzy` would apply 0
@@ -96,13 +112,21 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
             .get("fuzzy_min_confidence")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0);
-        hints.push(Hint::new(
-            format!(
-                "{fuzzy} fuzzy candidates found, all below the confidence floor \
-                 {floor} — review with a lower --min-confidence before applying"
-            ),
-            build_command_with_glob(ctx, &["links", "fix", "--min-confidence", "0"]),
-        ));
+        let description = format!(
+            "{fuzzy} fuzzy candidates found, all below the confidence floor \
+             {floor} — review with a lower --min-confidence before applying"
+        );
+        if let Some(super::spec::ResolvedHintSpec::LinksFix(spec)) = &ctx.resolved {
+            hints.push(Hint::from_builder(
+                description,
+                spec.review_at_floor(ctx, "0"),
+            ));
+        } else {
+            hints.push(Hint::new(
+                description,
+                build_command_with_glob(ctx, &["links", "fix", "--min-confidence", "0"]),
+            ));
+        }
     }
 
     if unfixable > 0 {
@@ -149,10 +173,7 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
         } else {
             format!("Apply {case_mismatches} case-mismatch fixes")
         };
-        hints.push(Hint::new(
-            label,
-            build_command_with_glob(ctx, &["links", "fix", "--apply"]),
-        ));
+        hints.push(links_fix_apply_hint(ctx, label, None));
     }
 
     // A vault with nothing broken used to emit no hints whatsoever, making
@@ -194,31 +215,36 @@ pub(super) fn hints_for_links_auto(ctx: &HintContext, data: &serde_json::Value) 
         .unwrap_or(0);
 
     if is_dry_run && total > 0 {
-        // Rebuild the exact command from the preview, preserving all
-        // scope-narrowing flags so the apply doesn't widen the mutation set.
-        let mut args: Vec<&str> = vec!["links", "auto", "--apply"];
-        let min_str;
-        if let Some(ml) = ctx.auto_link_min_length
-            && ml != 3
-        {
-            args.push("--min-length");
-            min_str = ml.to_string();
-            args.push(&min_str);
+        if let Some(super::spec::ResolvedHintSpec::LinksAuto(spec)) = &ctx.resolved {
+            hints.push(Hint::from_builder(
+                format!("Apply {total} auto-links"),
+                spec.apply(ctx),
+            ));
+        } else {
+            // Legacy unit contexts without a resolved spec retain their old
+            // shape; production always takes the resolved branch.
+            let mut args: Vec<&str> = vec!["links", "auto", "--apply"];
+            let min_str;
+            if let Some(ml) = ctx.auto_link_min_length
+                && ml != 3
+            {
+                args.push("--min-length");
+                min_str = ml.to_string();
+                args.push(&min_str);
+            }
+            let cmd = build_command_with_glob(ctx, &args);
+            let mut parts = vec![cmd];
+            if let Some(ref f) = ctx.auto_link_file {
+                parts.push(format!("--file={}", shell_quote(f)));
+            }
+            for et in &ctx.auto_link_exclude_titles {
+                parts.push(format!("--exclude-title {}", shell_quote(et)));
+            }
+            hints.push(Hint::new(
+                format!("Apply {total} auto-links"),
+                parts.join(" "),
+            ));
         }
-        let cmd = build_command_with_glob(ctx, &args);
-        // Append --file and --exclude-title after the builder (they are not
-        // glob-related and aren't handled by build_command_with_glob).
-        let mut parts = vec![cmd];
-        if let Some(ref f) = ctx.auto_link_file {
-            parts.push(format!("--file {}", shell_quote(f)));
-        }
-        for et in &ctx.auto_link_exclude_titles {
-            parts.push(format!("--exclude-title {}", shell_quote(et)));
-        }
-        hints.push(Hint::new(
-            format!("Apply {total} auto-links"),
-            parts.join(" "),
-        ));
     }
 
     // L-11: a non-zero `files_failed` count means some files produced a

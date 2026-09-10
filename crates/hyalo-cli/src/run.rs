@@ -1891,69 +1891,10 @@ fn run_inner() -> Result<(), AppError> {
                 None | Some(crate::cli::args::ViewsAction::List) => {
                     Some(HintContext::from_common(HintSource::ViewsList, &common))
                 }
-                // `views run <name>` is `find --view <name>` under another
-                // name — dispatch.rs merges the saved view with this same
-                // CLI overlay and calls the identical `find_commands::find`.
-                // Reproduce that merge here too (read-only — dispatch.rs's
-                // own resolution is untouched, so there is no risk of
-                // double-merging list filters): otherwise the hint context
-                // would only ever see the overlay, not the view's own saved
-                // filters, and every derived hint would silently drop them
-                // (NEW-18, dogfood pre3; mirrors the `Commands::Find { view:
-                // Some(_), .. }` early-merge above, lines ~976-987).
-                Some(crate::cli::args::ViewsAction::Run {
-                    name,
-                    pattern,
-                    filters: overlay,
-                    ..
-                }) => {
-                    let views = crate::commands::views::load_views(&config_dir);
-                    let mut merged = views.get(name).cloned().unwrap_or_default();
-                    let mut overlay = overlay.clone();
-                    overlay.pattern.clone_from(pattern);
-                    merged.merge_from(&overlay);
-                    let FindFilters {
-                        glob,
-                        regexp,
-                        properties,
-                        tag,
-                        task,
-                        file,
-                        fields,
-                        sort,
-                        reverse,
-                        limit,
-                        sections,
-                        broken_links,
-                        orphan,
-                        dead_end,
-                        title,
-                        pattern: merged_pattern,
-                        ..
-                    } = merged;
-                    let mut ctx = HintContext::from_common(HintSource::Find, &common);
-                    ctx.glob = glob;
-                    ctx.fields = fields;
-                    ctx.sort = sort;
-                    ctx.reverse = reverse;
-                    ctx.has_limit = limit.is_some();
-                    ctx.has_body_search = merged_pattern.is_some();
-                    ctx.body_pattern = merged_pattern;
-                    ctx.has_regex_search = regexp.is_some();
-                    ctx.property_filters = properties;
-                    ctx.tag_filters = tag;
-                    ctx.task_filter = task;
-                    ctx.file_targets = file;
-                    ctx.section_filters = sections;
-                    ctx.broken_links_filter = broken_links;
-                    ctx.orphan_filter = orphan;
-                    ctx.dead_end_filter = dead_end;
-                    ctx.title_filter = title;
-                    ctx.view_name = Some(name.clone());
-                    Some(ctx)
-                }
                 Some(
-                    crate::cli::args::ViewsAction::Set { .. }
+                    // Run is normalized to Commands::Find before config/view resolution.
+                    crate::cli::args::ViewsAction::Run { .. }
+                    | crate::cli::args::ViewsAction::Set { .. }
                     | crate::cli::args::ViewsAction::Remove { .. },
                 ) => None,
             },
@@ -2313,6 +2254,47 @@ fn run_inner() -> Result<(), AppError> {
             return Err(AppError::Internal(e));
         }
     };
+
+    // Build family-specific replay specs only after saved views, config
+    // defaults and --files-from have been resolved. This is the same command
+    // state dispatch consumes; continuation hints no longer reconstruct scope
+    // from the earlier presentation-only HintContext fields.
+    if let Some(ref mut hint) = hint_ctx {
+        hint.resolved = crate::hints::spec::resolve_hint_spec(
+            &cli.command,
+            crate::hints::spec::HintResolutionConfig {
+                language: config_language_owned.as_deref(),
+                lint_strict: lint_strict_from_config,
+                auto_exclude_titles: &auto_link_exclude_titles,
+                auto_exclude_titles_set: auto_link_exclude_titles_set,
+                auto_exclude_target_globs: &auto_link_exclude_target_globs,
+                auto_first_only: auto_link_first_only,
+                auto_warn_common_titles: auto_link_warn_common_titles,
+            },
+        );
+        // Legacy non-continuation hints still read these presentation fields.
+        // Keep them aligned with the resolved selection instead of the raw
+        // --files-from source captured before resolution.
+        match &cli.command {
+            Commands::Find(FindArgs {
+                filters: FindFilters { file, .. },
+                file_positional,
+                ..
+            })
+            | Commands::Lint {
+                file,
+                file_positional,
+                ..
+            } => {
+                hint.file_targets = if file_positional.is_empty() {
+                    file.clone()
+                } else {
+                    file_positional.clone()
+                };
+            }
+            _ => {}
+        }
+    }
 
     let query_reports_counters = matches!(cli.command, Commands::Find(_));
     output_plan.set_counters(

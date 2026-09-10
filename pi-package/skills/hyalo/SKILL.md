@@ -277,9 +277,9 @@ is required.
 
 ### Bulk Status Updates
 ```bash
-# Update all planned iterations older than 30 days to deferred
-hyalo find --property status=planned --property type=iteration --jq '.results | map(select(.properties.date < "2026-06-01")) | map(.file)' \
-  | xargs -I {} hyalo set {} --property status=deferred --format text
+# Preview a native filtered update; rerun without --dry-run after review
+hyalo set --glob 'iterations/*.md' --where-property status=planned \
+  --property status=deferred --dry-run --format text
 ```
 
 ### Health Dashboard

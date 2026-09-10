@@ -4,7 +4,7 @@
 //! hotspot). This is a file split only: the items keep the visibility they had
 //! inside the one module, so `hints::...` paths and behaviour are unchanged.
 
-use super::{FindIndexHint, HintContext};
+use super::{FindIndexHint, Hint, HintContext};
 
 // ---------------------------------------------------------------------------
 // Command builder
@@ -20,11 +20,11 @@ use super::{FindIndexHint, HintContext};
 pub(super) fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
     if let Some(dir) = &ctx.dir {
         parts.push("--dir".to_owned());
-        parts.push(shell_quote(dir));
+        parts.push(dir.clone());
     }
     if let Some(fmt) = &ctx.format {
         parts.push("--format".to_owned());
-        parts.push(shell_quote(fmt));
+        parts.push(fmt.clone());
     }
     if ctx.hints {
         parts.push("--hints".to_owned());
@@ -37,7 +37,7 @@ pub(super) fn push_global_flags(parts: &mut Vec<String>, ctx: &HintContext) {
         && site_prefix_is_global()
     {
         parts.push("--site-prefix".to_owned());
-        parts.push(shell_quote(prefix));
+        parts.push(prefix.clone());
     }
     // iter-274 (UX-2): an indexed run's hints must stay indexed. `--index` /
     // `--index-file` is threaded exactly like `--dir` and `--format` — a hint
@@ -112,7 +112,7 @@ pub(super) fn push_find_graph_filters(parts: &mut Vec<String>, ctx: &HintContext
     }
     if let Some(title) = &ctx.title_filter {
         parts.push("--title".to_owned());
-        parts.push(shell_quote(title));
+        parts.push(title.clone());
     }
 }
 
@@ -124,7 +124,7 @@ pub(super) fn push_find_graph_filters(parts: &mut Vec<String>, ctx: &HintContext
 pub(super) fn push_find_sort(parts: &mut Vec<String>, ctx: &HintContext) {
     if let Some(sort) = &ctx.sort {
         parts.push("--sort".to_owned());
-        parts.push(shell_quote(sort));
+        parts.push(sort.clone());
         if ctx.reverse {
             parts.push("--reverse".to_owned());
         }
@@ -141,8 +141,8 @@ pub(super) fn push_find_sort(parts: &mut Vec<String>, ctx: &HintContext) {
 /// copies of the CLI surface that could (and once did) reference flags the
 /// real command does not accept (`tags --limit 0`), which is exactly why
 /// `tests/e2e/hint_execution.rs` exists. `HintBuilder` is the single path
-/// forward: the command is assembled as an *argv vector* and serialized
-/// through [`shell_quote`], and [`HintBuilder::argv`] exposes that vector so
+/// forward: the command is assembled as a raw *argv vector*, serialized
+/// through [`shell_quote`] only for display, and [`HintBuilder::argv`] exposes that vector so
 /// tests can feed it straight back into the real clap parser
 /// (`crate::cli::args::Cli::try_parse_from`) — a hinted command that would
 /// not run is now a unit-test failure, not an e2e-spawn discovery.
@@ -165,10 +165,10 @@ impl HintBuilder {
         Self { parts }
     }
 
-    /// Append one shell-quoted argument (paths, patterns, values).
+    /// Append one raw argument (paths, patterns, values).
     #[must_use]
     pub fn arg(mut self, arg: &str) -> Self {
-        self.parts.push(shell_quote(arg));
+        self.parts.push(arg.to_owned());
         self
     }
 
@@ -176,8 +176,8 @@ impl HintBuilder {
     /// validated enum values). Use sparingly — prefer [`Self::flag`] and
     /// [`Self::flag_value`].
     #[must_use]
-    pub fn raw(mut self, token: &str) -> Self {
-        self.parts.push(token.to_owned());
+    pub fn raw(mut self, token: impl Into<String>) -> Self {
+        self.parts.push(token.into());
         self
     }
 
@@ -201,7 +201,7 @@ impl HintBuilder {
         S: AsRef<str>,
     {
         for a in args {
-            self.parts.push(shell_quote(a.as_ref()));
+            self.parts.push(a.as_ref().to_owned());
         }
         self
     }
@@ -213,11 +213,25 @@ impl HintBuilder {
         &self.parts
     }
 
-    /// Serialize to the display string: space-joined, each value already
-    /// shell-quoted by [`shell_quote`].
+    /// Serialize to a POSIX-compatible display string. Raw argv is retained
+    /// unchanged for direct execution and every token is quoted only here.
     #[must_use]
     pub fn build(&self) -> String {
-        self.parts.join(" ")
+        self.parts
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Serialize and consume the builder after callers have inspected argv.
+    #[must_use]
+    pub(crate) fn into_command(self) -> String {
+        self.parts
+            .into_iter()
+            .map(|part| shell_quote(&part))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     // --- crate-internal plumbing used by the `build_command_*` family ---
@@ -237,15 +251,22 @@ impl HintBuilder {
         self.parts.push(token.to_owned());
     }
 
-    /// Append one shell-quoted token in place.
+    /// Append one raw value token in place. The historical name remains while
+    /// callers migrate; quoting happens only in [`Self::build`].
     pub(crate) fn push_quoted(&mut self, token: &str) {
-        self.parts.push(shell_quote(token));
+        self.parts.push(token.to_owned());
+    }
+
+    /// Append the context's global flags while retaining raw argv.
+    pub(crate) fn with_globals(mut self, ctx: &HintContext) -> Self {
+        push_global_flags(&mut self.parts, ctx);
+        self
     }
 
     /// Append the context's global flags (`--dir`, `--format`, `--hints`) and
     /// serialize. The last thing every derived hint does (iter-213, UX-5).
     pub(crate) fn finish(mut self, ctx: &HintContext) -> String {
-        push_global_flags(&mut self.parts, ctx);
+        self = self.with_globals(ctx);
         self.build()
     }
 }
@@ -318,6 +339,12 @@ pub(super) fn build_find_command_preserving_filters(
     ctx: &HintContext,
     extra_args: &[&str],
 ) -> String {
+    if let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved {
+        return spec
+            .continuation(ctx, extra_args)
+            .map(|builder| builder.build())
+            .unwrap_or_default();
+    }
     let mut b = HintBuilder::cmd("find");
     for pf in &ctx.property_filters {
         b.push_raw("--property");
@@ -345,6 +372,27 @@ pub(super) fn build_find_command_preserving_filters(
         b.push_quoted(glob);
     }
     b.finish(ctx)
+}
+
+/// Build a scope-preserving find hint from the resolved operation. An input
+/// list that cannot fit safely becomes explicit advice instead of a broader
+/// executable command.
+pub(super) fn find_continuation_hint(
+    ctx: &HintContext,
+    description: impl Into<String>,
+    extra_args: &[&str],
+) -> Hint {
+    let description = description.into();
+    if let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved {
+        return match spec.continuation(ctx, extra_args) {
+            Ok(builder) => Hint::from_builder(description, builder),
+            Err(reason) => Hint::without_cmd(format!("{description} — {reason}")),
+        };
+    }
+    Hint::new(
+        description,
+        build_find_command_preserving_filters(ctx, extra_args),
+    )
 }
 
 /// Render a snapshot-index path for a hint command, preferring the shortest
@@ -386,7 +434,7 @@ pub(super) fn push_find_index_file(parts: &mut Vec<String>, ctx: &HintContext) {
         FindIndexHint::Default => parts.push("--index".to_owned()),
         FindIndexHint::File(path) => {
             parts.push("--index-file".to_owned());
-            parts.push(shell_quote(path));
+            parts.push(path.clone());
         }
     }
 }
@@ -397,6 +445,12 @@ pub(super) fn push_find_index_file(parts: &mut Vec<String>, ctx: &HintContext) {
 /// derived hints (narrow-by-tag / filter-by-status) that must compose with the
 /// current query rather than replace it.
 pub(super) fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str]) -> String {
+    if let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved {
+        return spec
+            .continuation(ctx, extra_args)
+            .map(|builder| builder.build())
+            .unwrap_or_default();
+    }
     let mut b = HintBuilder::cmd("find");
     if let Some(pat) = &ctx.body_pattern {
         b.push_quoted(pat);
@@ -464,10 +518,9 @@ pub(super) fn build_find_command_with_pattern(ctx: &HintContext, new_pattern: &s
 /// In that case, emit `--file <path>` (flag form) instead of the bare positional.
 pub(super) fn push_file_positional(parts: &mut Vec<String>, file: &str) {
     if file.starts_with('-') {
-        parts.push("--file".to_owned());
-        parts.push(shell_quote(file));
+        parts.push(format!("--file={file}"));
     } else {
-        parts.push(shell_quote(file));
+        parts.push(file.to_owned());
     }
 }
 

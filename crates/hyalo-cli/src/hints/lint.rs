@@ -4,10 +4,7 @@
 //! hotspot). This is a file split only: the items keep the visibility they had
 //! inside the one module, so `hints::...` paths and behaviour are unchanged.
 
-use super::{
-    Hint, HintBuilder, HintContext, MAX_HINTS, PARSE_ERROR_PREFIX, build_command_no_glob,
-    build_command_with_glob_and_files,
-};
+use super::{Hint, HintBuilder, HintContext, MAX_HINTS, PARSE_ERROR_PREFIX, build_command_no_glob};
 
 /// Ratio threshold for rule dominance (UX-2).
 pub(super) const RULE_DOMINANCE_RATIO: f64 = 0.5;
@@ -21,9 +18,10 @@ pub(super) fn per_rule_hint(
     worst_file: Option<&str>,
 ) -> Option<Hint> {
     match rule_id {
-        "HYALO001" => Some(Hint::new(
+        "HYALO001" => Some(lint_continuation_hint(
+            ctx,
             "Auto-fix HYALO001 violations",
-            build_lint_with_filter_flags(ctx, &["lint", "--rule", "HYALO001", "--fix"]),
+            &["lint", "--rule", "HYALO001", "--fix"],
         )),
         "HYALO002" => worst_file.map(|file| {
             // Use `--file <path>` rather than a positional, since `find`'s
@@ -40,6 +38,12 @@ pub(super) fn per_rule_hint(
 /// Build a lint command that preserves `--rule`, `--rule-prefix`, `--fix-rule`, glob, and
 /// file targets from the current context, then appends `args`.
 pub(super) fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> String {
+    if let Some(super::spec::ResolvedHintSpec::Lint(spec)) = &ctx.resolved {
+        return spec
+            .continuation(ctx, args)
+            .map(|builder| builder.build())
+            .unwrap_or_default();
+    }
     let mut b = HintBuilder::empty();
     for arg in args {
         b.push_quoted(arg);
@@ -67,6 +71,21 @@ pub(super) fn build_lint_with_filter_flags(ctx: &HintContext, args: &[&str]) -> 
         b.push_quoted(ft);
     }
     b.finish(ctx)
+}
+
+fn lint_continuation_hint(
+    ctx: &HintContext,
+    description: impl Into<String>,
+    args: &[&str],
+) -> Hint {
+    let description = description.into();
+    if let Some(super::spec::ResolvedHintSpec::Lint(spec)) = &ctx.resolved {
+        return match spec.continuation(ctx, args) {
+            Ok(builder) => Hint::from_builder(description, builder),
+            Err(reason) => Hint::without_cmd(format!("{description} — {reason}")),
+        };
+    }
+    Hint::new(description, build_lint_with_filter_flags(ctx, args))
 }
 
 /// Accumulate rule violation counts from a named array field in a file JSON object.
@@ -197,9 +216,10 @@ pub(super) fn hints_for_lint(
         } else {
             format!("Show all {total_violations} files with issues (no limit)")
         };
-        hints.push(Hint::new(
+        hints.push(lint_continuation_hint(
+            ctx,
             description,
-            build_command_with_glob_and_files(ctx, &["lint", "--limit", "0"]),
+            &["lint", "--limit", "0"],
         ));
     }
 
@@ -231,9 +251,10 @@ pub(super) fn hints_for_lint(
         if has_violations && hints.len() < MAX_HINTS {
             // Preserve --rule / --rule-prefix / --fix-rule from the current
             // invocation so the suggested preview doesn't widen scope.
-            hints.push(Hint::new(
+            hints.push(lint_continuation_hint(
+                ctx,
                 "Preview auto-fixes",
-                build_lint_with_filter_flags(ctx, &["lint", "--fix", "--dry-run"]),
+                &["lint", "--fix", "--dry-run"],
             ));
         }
     } else if is_dry_run {
@@ -251,9 +272,10 @@ pub(super) fn hints_for_lint(
         if has_fixes && hints.len() < MAX_HINTS {
             // Apply hint mirrors the previewed scope — preserve --rule,
             // --rule-prefix, and --fix-rule via the lint-aware builder.
-            hints.push(Hint::new(
+            hints.push(lint_continuation_hint(
+                ctx,
                 "Apply auto-fixes",
-                build_lint_with_filter_flags(ctx, &["lint", "--fix"]),
+                &["lint", "--fix"],
             ));
         }
     }
@@ -353,9 +375,10 @@ pub(super) fn hints_for_lint(
             })
         });
     if has_parse_errors && hints.len() < MAX_HINTS {
-        hints.push(Hint::new(
+        hints.push(lint_continuation_hint(
+            ctx,
             "Show all files with unfixable frontmatter errors",
-            build_command_with_glob_and_files(ctx, &["lint", "--limit", "0"]),
+            &["lint", "--limit", "0"],
         ));
     }
 

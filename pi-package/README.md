@@ -22,7 +22,8 @@ pi install git:github.com/ractive/hyalo@v0.21.0
 (The tag form needs ≥ v0.21.0; earlier release tags predate the root package
 manifest that git installs require.) This registers the `hyalo` extension
 (generic + typed tools: `hyalo_find`,
-`hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus
+`hyalo_read`, `hyalo_set`, and `hyalo_task`) plus a post-write lint guardrail for
+typed set/task effects and Pi host write/edit events, plus
 the `hyalo` and `hyalo-tidy` skills. A main-HEAD install updates with
 `pi update --extensions`; a pinned-tag install moves only when you re-pin
 with a new `pi install git:…@vX.Y.Z` (pi reconciles pinned refs but never

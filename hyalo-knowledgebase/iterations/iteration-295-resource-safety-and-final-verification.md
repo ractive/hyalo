@@ -293,3 +293,46 @@ the 50-row/49-group ledger remain unchanged. Live model unavailability leaves it
 acceptance pending. Cover normal authored Markdown mistakes with useful
 diagnostics and safe refusal; no exhaustive gibberish/fuzz or exotic-file campaign
 is added. Iteration 287's external consumer task remains deferred.
+
+
+## Iteration 294 reconciliation — 2026-09-10
+
+Carry the reviewed family-specific hint specs from `hints/spec.rs` into final
+behavioral gates. They are built after selection/view/config resolution; raw
+`HintBuilder` argv is quoted only for display and classified for writes by the
+real Clap tree. Replay is bounded to 64 targets/8192 bytes and becomes advice on
+overflow. Preserve the resolved candidate threshold in lower-confidence link
+review and zero hint-only body reads when demand is suppressed.
+
+Pi typed set/task checks consume internal `mutationReport()` or `HyaloError`
+effects and lint actual surviving note paths. Generic/typed successful diagnostics
+appear exactly once; public npm text `ProcessResult` contracts are unchanged.
+Successful config lookups are cached; failures report lint unavailable and permit
+a later lookup retry, never a mutation retry. Generic mutation automatic lint
+remains unsupported. Preserve partial/finalization effects and existing guardrail
+exclusions instead of inferring writes from requested targets.
+
+Retain the executable bulk filter/empty/whitespace/sentinel regressions and direct
+execution of the documented OKF Bash/jq block, including numeric `changed` and
+`skipped_markers`, all four scenario statuses and the executed `set +e` negative
+control. Include the new `jq_recipes.rs` binary lookup in existing R16 artifact
+ownership alongside the scale runner: honor Cargo paths, executable suffix,
+`CARGO_TARGET_DIR` and explicit targets with actual native runtime evidence.
+Bash/jq availability is the documented ubuntu-latest recipe contract.
+
+Final review3 is clean. Supplied local evidence records 5,135 Rust passes, two
+ignored tests, 38 npm passes and live Pi 0.84.4 with Sol/high against release SHA-256
+`5c00c61d65688c20fae1e925a50e4b895b679e585eda3ca7b3ab40d971ed1f73`.
+The 41 executed jq recipes exclude MADR. Help-only feature fanout, both
+success-returning stubs and ignored tests remain outside behavioral proof.
+This is not native CI, publication or iteration-295 completion evidence.
+
+Astra retains A04 jq/resource implementation; after its writer freezes, fresh Sol
+owns remaining gates, documentation and the actual held-out model comparison.
+Keep all 26 original checkbox texts, A04/R16 ownership, the 294 dependency and the
+50-row/49-group ledger; R05 is the single S13 duplicate. Update resource promises
+only after supported platform tests pass. Preserve normal authored Markdown,
+broken frontmatter and common-mistake diagnostics with safe refusal without
+corruption; no exhaustive fuzz/gibberish or exotic-file campaign is added.
+Iteration 287's external consumer task stays deferred. Native CI and publication
+remain supervisor-owned and pending at this handoff.

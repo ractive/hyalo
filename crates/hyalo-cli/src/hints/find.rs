@@ -7,7 +7,7 @@
 use super::{
     Hint, HintBuilder, HintContext, MAX_HINTS, build_command_no_glob, build_command_with_file,
     build_command_with_glob, build_find_command_composing, build_find_command_preserving_filters,
-    build_find_command_with_pattern, status_priority,
+    build_find_command_with_pattern, find_continuation_hint, status_priority,
 };
 
 /// Largest untruncated result set for which `find` still offers
@@ -313,9 +313,10 @@ pub(super) fn hints_for_find(
     {
         let remaining = MAX_HINTS.saturating_sub(hints.len());
         if remaining > 0 {
-            hints.push(Hint::new(
+            hints.push(find_continuation_hint(
+                ctx,
                 format!("Show all {t} results (no limit)"),
-                build_find_command_preserving_filters(ctx, &["--limit", "0"]),
+                &["--limit", "0"],
             ));
         }
     }

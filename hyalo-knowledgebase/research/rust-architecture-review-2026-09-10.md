@@ -704,3 +704,43 @@ frontmatter, missing delimiters and incomplete edits: provide useful diagnostics
 and safe refusal without corruption where processing cannot continue. No
 exhaustive gibberish/fuzz or exotic-file campaign, new design or external
 Homefinder work is added.
+
+
+## Iteration 294 handoff — 2026-09-10
+
+The final candidate is bound to `294-review-attempt-3-manifest.json` and its clean
+independent review. Final repairs preserve the candidate threshold during
+lower-confidence hint review, distinguish unavailable configuration from cached
+success, and execute the actual documented OKF shell block with an executed
+`set +e` negative control. The earlier source-interface handoff is qualified by
+both repair dispositions and `294-repair2-supervisor-binding.json`.
+
+CLI family specs own post-selection/view/config resolved continuation scope.
+`HintBuilder` owns raw argv; display owns quoting and real Clap command intent
+owns writes classification. Explicit replay is bounded to 64 targets/8192 bytes;
+overflow yields advice. Pi typed set/task uses internal observed reports and
+surviving note paths while preserving public npm text returns. Generic/typed
+success stderr is rendered once. Config successes cache; failure is explicitly
+unavailable and retryable on later lookup, with no mutation replay. Generic
+mutation automatic lint remains unsupported.
+
+The final release SHA-256 is
+`5c00c61d65688c20fae1e925a50e4b895b679e585eda3ca7b3ab40d971ed1f73`.
+Supplied local evidence records 5,135 Rust passes, 38 npm passes and actual Pi
+0.84.4 Sol/high loading and guardrails. The recipe gate executes bulk selection,
+empty/whitespace/sentinel cases and the documented Bash/jq numeric OKF checks;
+41 executed recipes exclude MADR. Two ignored tests, help-token feature fanout
+and both success-returning stubs are not behavioral coverage. Native CI and
+publication remain pending; this note does not claim a merged 294 checkpoint.
+
+295 retains A04/R16 and all original acceptance texts: Astra implements
+jq/resource work, then fresh Sol owns remaining gates, docs and the actual
+held-out model comparison. Existing R16 artifact ownership includes the new
+`jq_recipes.rs` binary lookup as well as scale, preserving Cargo target-dir,
+explicit-target and executable-suffix behavior with native runtime proof.
+Retain parent-owned effects, tested resource limits and honest unsupported cases;
+update active guarantees only after those tests pass. The 50-row/49-group ledger,
+single R05/S13 duplicate and serial dependencies are unchanged. Normal authored
+Markdown, broken frontmatter and common mistakes require useful diagnostics and
+safe refusal without corruption; no exhaustive fuzz/gibberish or exotic-file
+campaign or external Homefinder work is added. Iteration 287 stays deferred.

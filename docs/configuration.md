@@ -13,7 +13,7 @@ default_limit = 100       # max results for list commands (default: 50; 0 = unli
 [links]
 frontmatter_properties = ["related", "depends-on"]   # list properties that contribute to the link graph
 case_insensitive = "auto"                             # "auto", "true", or "false"
-aliases = true                                        # frontmatter `aliases:` resolve wikilinks (default: true)
+aliases = false                                       # opt in to resolving frontmatter `aliases:` as link targets
 fuzzy_min_confidence = 0.8                            # confidence floor for links fix --apply-fuzzy (default: 0.8)
 
 [links.auto]
@@ -147,7 +147,7 @@ aliases:
 ---
 ```
 
-`[[Leah]]` written anywhere in the vault then resolves to that note. The rules
+With `[links] aliases = true`, `[[Leah]]` written anywhere in the vault resolves to that note. The rules
 (DEC-296):
 
 - Only the `aliases` property is read, in either shape Obsidian writes — a list
@@ -167,7 +167,7 @@ aliases:
   fuzzy-matches one; `mv` leaves alias-written links alone, because the alias
   travels with the note.
 
-Set `aliases = false` to restore filename-only resolution.
+The default is `aliases = false`: alias-written links remain unresolved and link repair can propose an explicit filename/title target without silently repointing them. Set `aliases = true` only for a workflow whose link resolver treats frontmatter aliases as targets.
 `hyalo config --jq '.results.links.aliases'` reports the effective value.
 
 Under `"auto"`, hyalo detects case behaviour with **stat calls only**: it looks

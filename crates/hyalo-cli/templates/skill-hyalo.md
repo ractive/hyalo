@@ -419,10 +419,12 @@ Use `hyalo read` to extract file content without opening the full file:
 hyalo read my-note.md                              # full body (no frontmatter)
 hyalo read my-note.md --section "Tasks"            # extract one section
 hyalo read my-note.md --lines 1:20                 # line range (1-based)
-hyalo read my-note.md --frontmatter                # include YAML frontmatter (verbatim)
+hyalo read my-note.md --frontmatter                # frontmatter only (verbatim)
+hyalo read my-note.md --frontmatter --lines 1:     # frontmatter plus the full body
 ```
 
-`--frontmatter` echoes the block's **own bytes** between its `---` fences — indentation,
+Standalone `--frontmatter` omits the body. Combine it with `--lines` or `--section` to
+request both. It echoes the block's **own bytes** between its `---` fences — indentation,
 quote style and comments exactly as on disk. Nothing is re-serialized on a read path. In JSON
 the parsed map stays under `.results.frontmatter` and the raw text sits beside it as
 `.results.frontmatter_raw` (`null` for a file with no frontmatter block).

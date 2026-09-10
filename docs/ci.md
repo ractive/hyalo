@@ -49,10 +49,13 @@ Three-dot `origin/<base>...HEAD` diffs against the *merge-base* of the PR base a
 
 ## OKF reserved-file drift check
 
-For **OKF** vaults, add a reserved-file drift check — `hyalo okf index` is dry-run by default and exits non-zero when any `index.md` is stale:
+For **OKF** vaults, add a reserved-file drift check. `hyalo okf index` is dry-run by default and reports drift in `results.changed`; marker problems are reported in `results.skipped_markers`. The dry run itself exits 0 for both clean and drift states, while an actual command failure remains non-zero. This GitHub Actions example requires Bash and `jq` (both are available on `ubuntu-latest`); keep the block under the runner's default fail-fast Bash settings:
 
 ```yaml
-      - run: hyalo okf index   # dry-run; non-zero exit on drift
+      - run: |
+          report="$(hyalo okf index --format json --no-hints)"
+          test "$(jq '.results.changed' <<<"$report")" -eq 0
+          test "$(jq '.results.skipped_markers' <<<"$report")" -eq 0
 ```
 
 ## `@claude` agent on GitHub (claude-code-action)

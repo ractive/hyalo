@@ -4,6 +4,8 @@
 //! commands. All hints are concrete, executable strings — no templates or
 //! placeholders.
 
+pub(crate) mod spec;
+
 /// Maximum number of hints to return from any generator.
 const MAX_HINTS: usize = 5;
 
@@ -76,6 +78,17 @@ impl Hint {
         Self {
             description: description.into(),
             cmd,
+            writes,
+        }
+    }
+
+    /// Build a hint from raw argv and classify its effects through Clap's
+    /// normalized command intent before rendering shell text.
+    pub(crate) fn from_builder(description: impl Into<String>, builder: HintBuilder) -> Self {
+        let writes = crate::mutation::command_argv_writes(builder.argv());
+        Self {
+            description: description.into(),
+            cmd: builder.into_command(),
             writes,
         }
     }
@@ -300,6 +313,10 @@ pub struct HintContext {
     /// guessed; `None` on every non-empty result and whenever the probe found
     /// nothing within its budget.
     pub body_search_suggestion: Option<BodySearchSuggestion>,
+    /// Complete family-specific operation after config/view/files-from
+    /// resolution. Scope-preserving continuations consume this instead of
+    /// reconstructing requests from the partial presentation fields above.
+    pub(crate) resolved: Option<spec::ResolvedHintSpec>,
 }
 
 /// Common global flags captured once per command dispatch and threaded into
@@ -371,6 +388,7 @@ impl HintContext {
             okf_profile_active: false,
             observed_property_values: std::collections::BTreeMap::new(),
             body_search_suggestion: None,
+            resolved: None,
         }
     }
 
@@ -611,7 +629,7 @@ pub use command::{HintBuilder, shell_quote, shorten_index_path_for_hint};
 use command::{
     build_command_no_glob, build_command_with_file, build_command_with_glob,
     build_command_with_glob_and_files, build_find_command_composing,
-    build_find_command_preserving_filters, build_find_command_with_pattern,
+    build_find_command_preserving_filters, build_find_command_with_pattern, find_continuation_hint,
 };
 use config::{
     hints_for_lint_rules_list, hints_for_lint_rules_show, hints_for_new, hints_for_types,
