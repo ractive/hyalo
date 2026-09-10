@@ -189,11 +189,29 @@ pub(super) fn hyalo_serializer_options_for<'a>(
     compact_list_indent: bool,
     values: impl IntoIterator<Item = &'a Value>,
 ) -> SerializerOptions {
-    let safe = !values.into_iter().any(has_document_marker_line);
+    let mut safe = true;
+    let mut quote_all = false;
+    for value in values {
+        safe &= !has_document_marker_line(value) && !has_trailing_line_whitespace(value);
+        quote_all |= has_trailing_line_whitespace(value);
+    }
     SerializerOptions {
         compact_list_indent,
         prefer_block_scalars: safe,
+        quote_all,
         ..SerializerOptions::default()
+    }
+}
+
+/// Block-scalar rendering can discard spaces or tabs at physical line ends.
+/// Keep such strings quoted so the value requested by a writer survives the
+/// normal reader exactly.
+fn has_trailing_line_whitespace(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.split('\n').any(|line| line.ends_with([' ', '\t'])),
+        Value::Array(items) => items.iter().any(has_trailing_line_whitespace),
+        Value::Object(map) => map.values().any(has_trailing_line_whitespace),
+        _ => false,
     }
 }
 
@@ -490,8 +508,8 @@ impl Document {
 /// is returned unchanged. If frontmatter is present but malformed (no closing `---`), the
 /// full content string is returned as a fallback so that the caller can still index the file.
 pub fn body_only(content: &str) -> &str {
-    match extract_frontmatter(content) {
-        Ok((_, body)) => body,
+    match super::DocumentFrame::parse(content) {
+        Ok(frame) => &content[frame.body_offset()..],
         Err(_) => content, // malformed frontmatter: fall back to full content
     }
 }
@@ -513,12 +531,38 @@ const WINDOWS_OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_
 /// pay no retry or sleep cost.
 #[cfg(windows)]
 fn open_frontmatter_file(path: &Path) -> std::io::Result<File> {
-    open_with_windows_retry(|| File::open(path), std::thread::sleep)
+    reject_non_regular(path)?;
+    let file = open_with_windows_retry(|| File::open(path), std::thread::sleep)?;
+    validate_opened_regular(file, path)
 }
 
 #[cfg(not(windows))]
 fn open_frontmatter_file(path: &Path) -> std::io::Result<File> {
-    File::open(path)
+    reject_non_regular(path)?;
+    let file = File::open(path)?;
+    validate_opened_regular(file, path)
+}
+
+fn reject_non_regular(path: &Path) -> std::io::Result<()> {
+    if std::fs::metadata(path)?.is_file() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing to read non-regular file {}", path.display()),
+        ))
+    }
+}
+
+fn validate_opened_regular(file: File, path: &Path) -> std::io::Result<File> {
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("refusing opened non-regular file {}", path.display()),
+        ))
+    }
 }
 
 /// Run the Windows open policy with injected operations so its attempt and
@@ -603,28 +647,18 @@ pub fn read_frontmatter_raw(path: &Path) -> Result<Option<String>> {
     if span.body_offset == 0 {
         return Ok(None);
     }
-    file.seek(SeekFrom::Start(0))
+    file.seek(SeekFrom::Start(span.content_start))
         .with_context(|| format!("failed to seek in {}", path.display()))?;
     // `find_body_offset` enforces MAX_FRONTMATTER_BYTES/LINES before returning
     // an offset, so this allocation is bounded.
     #[allow(clippy::cast_possible_truncation)]
-    let mut fm_bytes = vec![0u8; span.body_offset as usize];
+    let mut fm_bytes = vec![0u8; (span.content_end - span.content_start) as usize];
     file.read_exact(&mut fm_bytes)
         .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
-    let Ok(fm_str) = std::str::from_utf8(&fm_bytes) else {
+    let Ok(yaml) = std::str::from_utf8(&fm_bytes) else {
         return Ok(None);
     };
-    let opening_prefix = format!(
-        "{}---{}",
-        if span.has_bom { BOM } else { "" },
-        span.line_ending.as_str()
-    );
-    let after_open = fm_str
-        .strip_prefix(opening_prefix.as_str())
-        .unwrap_or(fm_str);
-    Ok(strip_closing_delimiter(after_open)
-        .filter(|yaml| !yaml.is_empty())
-        .map(ToOwned::to_owned))
+    Ok((!yaml.is_empty()).then(|| yaml.to_owned()))
 }
 
 /// Rename one top-level frontmatter key **in place**, preserving its position
@@ -719,29 +753,19 @@ fn render_frontmatter_impl(
     let mut splice_blocked: Option<FallbackReason> = None;
 
     if span.body_offset > 0 {
-        file.seek(SeekFrom::Start(0))
+        file.seek(SeekFrom::Start(span.content_start))
             .with_context(|| format!("failed to seek in {}", path.display()))?;
         // body_offset is the byte position within the file; on 32-bit targets a
         // frontmatter section larger than 4 GiB would truncate here, but that is
         // unreachable in practice.
         #[allow(clippy::cast_possible_truncation)]
-        let mut fm_bytes = vec![0u8; span.body_offset as usize];
+        let mut fm_bytes = vec![0u8; (span.content_end - span.content_start) as usize];
         file.read_exact(&mut fm_bytes)
             .with_context(|| format!("failed to read frontmatter of {}", path.display()))?;
         let is_utf8 = std::str::from_utf8(&fm_bytes).is_ok();
         let fm_str = String::from_utf8_lossy(&fm_bytes);
-        // Extract just the YAML content between the --- delimiters, using the
-        // exact opening prefix `find_body_offset` recognized (BOM + line ending).
-        let opening_prefix = format!(
-            "{}---{}",
-            if span.has_bom { BOM } else { "" },
-            span.line_ending.as_str()
-        );
-        let after_open = fm_str
-            .strip_prefix(opening_prefix.as_str())
-            .unwrap_or(&fm_str);
-        let yaml_content = strip_closing_delimiter(after_open);
-        compact_list_indent = detect_list_indent_style(yaml_content.unwrap_or(after_open));
+        let yaml_content = Some(fm_str.as_ref());
+        compact_list_indent = detect_list_indent_style(fm_str.as_ref());
 
         match yaml_content {
             // Invalid UTF-8 in the frontmatter: `fm_str` is lossy, so splicing
@@ -783,6 +807,7 @@ fn render_frontmatter_impl(
     }
     // The YAML block to write, or `None` when the file must end up with no
     // frontmatter at all (an empty property map).
+    let mut fallback_warning = None;
     let yaml_out: Option<String> = match op {
         WriteOp::Props(props) if props.is_empty() => None,
         WriteOp::Props(props) => {
@@ -796,12 +821,12 @@ fn render_frontmatter_impl(
             {
                 Some(SpliceOutcome::Spliced(yaml)) => Some(yaml),
                 Some(SpliceOutcome::Fallback(reason)) => {
-                    warn_full_frontmatter_rewrite(path, reason);
+                    fallback_warning = Some(reason);
                     None
                 }
                 None => {
                     if let Some(reason) = splice_blocked {
-                        warn_full_frontmatter_rewrite(path, reason);
+                        fallback_warning = Some(reason);
                     }
                     None
                 }
@@ -830,6 +855,24 @@ fn render_frontmatter_impl(
         }
     };
 
+    // Removing the original frame exposes its authored body at byte zero. If
+    // that body itself begins with a complete frontmatter-shaped block, a
+    // successful write would silently promote ordinary prose between two
+    // horizontal rules into metadata. Refuse the ambiguous transformation;
+    // the caller retains the original bytes and can edit the separators
+    // explicitly if that reinterpretation was intended.
+    if yaml_out.is_none() && span.body_offset > 0 {
+        let mut body_reader = BufReader::new(std::io::Cursor::new(&body_bytes));
+        if super::read_frame(&mut body_reader)
+            .is_ok_and(|framed| framed.frame().frontmatter().is_some())
+        {
+            parse_bail!(
+                "refusing to remove the final frontmatter property from {}: the body would be reinterpreted as frontmatter",
+                path.display()
+            );
+        }
+    }
+
     if let Some(mut yaml) = yaml_out {
         if !yaml.ends_with('\n') {
             yaml.push('\n');
@@ -846,13 +889,6 @@ fn render_frontmatter_impl(
 
         // Pre-flight budget check: reject before touching the file.
         check_frontmatter_size_budget(&yaml, path).map_err(anyhow::Error::new)?;
-        serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options())
-            .map_err(|e| {
-                anyhow::Error::new(FrontmatterError(friendly_parse_error(
-                    &e,
-                    MAX_FRONTMATTER_BYTES,
-                )))
-            })?;
 
         out.extend_from_slice(b"---");
         out.extend_from_slice(span.opening_trailing_ws.as_bytes());
@@ -870,6 +906,16 @@ fn render_frontmatter_impl(
         }
     }
     out.extend_from_slice(&body_bytes);
+
+    // Validate the complete final document, including the body bytes. This is
+    // required even when the last property was removed: an authored body that
+    // begins with `---` can otherwise become an unclosed or differently
+    // framed frontmatter block after the old block disappears.
+    read_frontmatter_from_reader(BufReader::new(std::io::Cursor::new(&out)))
+        .with_context(|| format!("rendered document {} is invalid", path.display()))?;
+    if let Some(reason) = fallback_warning {
+        warn_full_frontmatter_rewrite(path, reason);
+    }
 
     Ok(Some(out))
 }
@@ -941,21 +987,6 @@ pub fn check_frontmatter_size_budget(
     Ok(())
 }
 
-/// Strip the trailing closing `---` line from a frontmatter block's text.
-///
-/// `s` is everything after the opening delimiter line up to (and including)
-/// the closing delimiter line, i.e. exactly what [`find_body_offset`] framed.
-/// Returns the YAML content between the delimiters, or `None` when the last
-/// line is not a closing delimiter (which means our framing assumption is
-/// wrong and the block must not be spliced).
-fn strip_closing_delimiter(s: &str) -> Option<&str> {
-    let without_eol = s
-        .strip_suffix('\n')
-        .map_or(s, |t| t.strip_suffix('\r').unwrap_or(t));
-    let last_start = without_eol.rfind('\n').map_or(0, |i| i + 1);
-    is_closing_delimiter(&without_eol[last_start..]).then(|| &s[..last_start])
-}
-
 /// Warn that a frontmatter write could not be limited to the changed keys.
 ///
 /// iter-214 DEC-081: a full-block rewrite is allowed as a fallback, but never
@@ -973,6 +1004,8 @@ struct FrontmatterSpan {
     /// Byte offset where the body starts. `0` means the file has no
     /// frontmatter — the entire file is body.
     body_offset: u64,
+    content_start: u64,
+    content_end: u64,
     /// Whether the file began with a UTF-8 BOM (only meaningful when
     /// `body_offset > 0`; preserved verbatim on rewrite).
     has_bom: bool,
@@ -999,21 +1032,6 @@ struct FrontmatterSpan {
     closing_trailing_ws: String,
 }
 
-/// `true` when `raw_line` (a line as returned by `BufRead::read_line`,
-/// terminator included) ends with the same line-ending style as `expected`.
-/// A line with no terminator at all (only possible at EOF) is never a
-/// mismatch here — that is a distinct, separately handled concern
-/// ([`FrontmatterSpan::closing_has_trailing_newline`]), not a mixed-ending one.
-fn line_ending_matches(raw_line: &str, expected: LineEnding) -> bool {
-    if !raw_line.ends_with('\n') {
-        return true;
-    }
-    match expected {
-        LineEnding::CrLf => raw_line.ends_with("\r\n"),
-        LineEnding::Lf => !raw_line.ends_with("\r\n"),
-    }
-}
-
 /// Find the byte offset in `file` where the body starts (i.e. the byte immediately
 /// after the closing `---` line of the frontmatter block), along with the BOM
 /// and line-ending style the block was written with.
@@ -1024,11 +1042,10 @@ fn line_ending_matches(raw_line: &str, expected: LineEnding) -> bool {
 /// the read and write paths can never disagree about whether a file has
 /// frontmatter.
 fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
-    let mut reader = BufReader::new(&mut *file);
-    let mut line = String::new();
-
     let no_frontmatter = FrontmatterSpan {
         body_offset: 0,
+        content_start: 0,
+        content_end: 0,
         has_bom: false,
         line_ending: LineEnding::Lf,
         mixed_line_endings: false,
@@ -1037,115 +1054,55 @@ fn find_body_offset(file: &mut File) -> Result<FrontmatterSpan> {
         closing_trailing_ws: String::new(),
     };
 
-    // Peek at the first line.
-    let n = reader.read_line(&mut line).context("failed to read line")?;
-    if n == 0 {
-        return Ok(no_frontmatter);
-    }
-    let Some(opening) =
-        opening_delimiter(&line).map(|o| (o.has_bom, o.line_ending, o.trailing_ws.to_owned()))
-    else {
-        // No frontmatter — body starts at offset 0
+    file.seek(SeekFrom::Start(0))
+        .context("failed to seek in file")?;
+    let mut reader = BufReader::new(&mut *file);
+    let framed = super::read_frame(&mut reader)?;
+    let frame = framed.frame();
+    let Some(fm) = frame.frontmatter() else {
         return Ok(no_frontmatter);
     };
-    let (opening_has_bom, opening_line_ending, opening_trailing_ws) = opening;
-
-    let mut content_bytes: usize = 0;
-    let mut line_count: usize = 0;
-    let mut mixed_line_endings = false;
-    let closing_has_trailing_newline;
-    let closing_trailing_ws;
-
-    loop {
-        line.clear();
-        let n = reader.read_line(&mut line).context("failed to read line")?;
-        if n == 0 {
-            if line_count == 0 {
-                // The opening `---` was the only line in the file (e.g. a
-                // file that is exactly `---` or `---\n`) — no content and no
-                // closing delimiter follow, so treat this as "no
-                // frontmatter" rather than an error. This matches
-                // `read_frontmatter_from_reader`'s bare-dash handling; if the
-                // two disagreed here, `set`/`remove`/`append` would fail on
-                // a file that `read_frontmatter` reports as having no
-                // properties at all.
-                return Ok(no_frontmatter);
-            }
-            parse_bail!(
-                "unclosed frontmatter: file starts with `---` but no closing `---` was found"
-            );
-        }
-        if !line_ending_matches(&line, opening_line_ending) {
-            mixed_line_endings = true;
-        }
-        let trimmed = line.trim_end_matches(['\n', '\r']);
-        if is_closing_delimiter(trimmed) {
-            // Consumed up to and including the closing `---\n`
-            closing_has_trailing_newline = line.ends_with('\n');
-            // BUG-33 (iter-276): the closer's own trailing spaces are bytes
-            // the caller did not address, so a `set` must not drop them.
-            closing_trailing_ws = trimmed.strip_prefix("---").unwrap_or("").to_owned();
-            break;
-        }
-        line_count += 1;
-        content_bytes += n;
-        if line_count > MAX_FRONTMATTER_LINES || content_bytes > MAX_FRONTMATTER_BYTES {
-            parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-            );
-        }
-    }
-
-    // The body offset is whatever position the BufReader is now at
-    let pos = reader
-        .stream_position()
-        .context("failed to get stream position")?;
+    let bytes = framed.bytes();
+    let opening_trailing_ws = std::str::from_utf8(&bytes[fm.opening_trailing_ws_span()])
+        .context("frontmatter opening delimiter is not UTF-8")?
+        .to_owned();
+    let closing_trailing_ws = std::str::from_utf8(&bytes[fm.closing_trailing_ws_span()])
+        .context("frontmatter closing delimiter is not UTF-8")?
+        .to_owned();
+    let line_ending = match frame.newline_style() {
+        super::NewlineStyle::Lf => LineEnding::Lf,
+        super::NewlineStyle::CrLf => LineEnding::CrLf,
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let pos = frame.body_offset() as u64;
+    let content = fm.content_span();
     Ok(FrontmatterSpan {
         body_offset: pos,
-        has_bom: opening_has_bom,
-        line_ending: opening_line_ending,
-        mixed_line_endings,
-        closing_has_trailing_newline,
+        content_start: content.start as u64,
+        content_end: content.end as u64,
+        has_bom: frame.has_bom(),
+        line_ending,
+        mixed_line_endings: frame
+            .diagnostics()
+            .contains(&super::FramingDiagnostic::MixedNewlines),
+        closing_has_trailing_newline: fm.closing_has_newline(),
         opening_trailing_ws,
         closing_trailing_ws,
     })
 }
 
-/// Skip past frontmatter in a buffered reader. Returns the number of lines consumed
-/// (including the opening and closing `---` delimiters). Returns 0 if no frontmatter is present.
-/// The reader is left positioned at the first line after the closing `---`.
+/// Skip past frontmatter after the caller has consumed its complete first line.
+/// `first_line` must contain the authored line ending when one was present.
+/// Returns the number of lines consumed (including the opening and closing
+/// `---` delimiters), or 0 when no frontmatter is present. The reader is left
+/// positioned at the first line after the closing delimiter.
 pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<usize> {
-    if opening_delimiter(first_line).is_none() {
+    let framed = super::frame::read_frame_after_first_line(reader, first_line)?;
+    if framed.frame().frontmatter().is_none() {
         return Ok(0);
     }
-
-    let mut line_count = 1; // count the opening `---`
-    let mut total_bytes = 0;
-    let mut buf = String::new();
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
-        if n == 0 {
-            parse_bail!(
-                "unclosed frontmatter: file starts with `---` but no closing `---` was found"
-            );
-        }
-        line_count += 1;
-        let trimmed = buf.trim_end_matches(['\n', '\r']);
-        if is_closing_delimiter(trimmed) {
-            break;
-        }
-        // Match the scanner's normalized YAML buffer: CRLF and LF each
-        // contribute one newline byte, not the transport's raw byte count.
-        total_bytes += trimmed.len() + 1;
-        if line_count - 1 > MAX_FRONTMATTER_LINES || total_bytes > MAX_FRONTMATTER_BYTES {
-            parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-            );
-        }
-    }
-
-    Ok(line_count)
+    let bytes = framed.bytes();
+    Ok(memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n")))
 }
 
 /// Parse frontmatter from any buffered reader. Stops reading after the closing `---`.
@@ -1156,53 +1113,17 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 /// `Budget` now enforces its own limits. The pre-read cap stops reading early for
 /// files with a missing closing `---`, which the parser budget cannot detect (it
 /// only sees the YAML string that was already read).
-pub fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<IndexMap<String, Value>> {
-    let mut lines = reader.lines();
-
-    // First line must open a frontmatter block (see `opening_delimiter`).
-    match lines.next() {
-        Some(Ok(line)) if opening_delimiter(&line).is_some() => {}
-        _ => return Ok(IndexMap::new()),
-    }
-
-    let mut yaml = String::new();
-    let mut line_count = 0;
-    let mut closed = false;
-    let mut has_content_lines = false;
-    for line in lines {
-        has_content_lines = true;
-        let line = line.context("failed to read line")?;
-        if is_closing_delimiter(&line) {
-            closed = true;
-            break;
-        }
-        line_count += 1;
-        if line_count > MAX_FRONTMATTER_LINES || yaml.len() + line.len() > MAX_FRONTMATTER_BYTES {
-            parse_bail!(
-                "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-            );
-        }
-        yaml.push_str(&line);
-        yaml.push('\n');
-    }
-
-    if !closed {
-        // A file whose entire content is exactly `---` (with or without a trailing
-        // newline) has no lines after the opening delimiter.  Both `"---"` and `"---\n"`
-        // produce zero iterations in the `lines()` loop because the line iterator
-        // consumes the terminator but yields nothing more.  This mirrors
-        // `extract_frontmatter`'s treatment of those inputs as "no frontmatter".
-        if !has_content_lines {
-            return Ok(IndexMap::new());
-        }
-        parse_bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found");
-    }
-
+pub fn read_frontmatter_from_reader<R: BufRead>(mut reader: R) -> Result<IndexMap<String, Value>> {
+    let framed = super::read_frame(&mut reader)?;
+    let Some(yaml_bytes) = framed.frame().yaml(framed.bytes()) else {
+        return Ok(IndexMap::new());
+    };
+    let yaml = std::str::from_utf8(yaml_bytes).context("frontmatter is not valid UTF-8")?;
     if yaml.trim().is_empty() {
         return Ok(IndexMap::new());
     }
 
-    serde_saphyr::from_str_with_options(&yaml, hyalo_options()).map_err(|e| {
+    serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
         anyhow::Error::new(FrontmatterError(format!(
             "failed to parse YAML frontmatter: {}",
             friendly_parse_error(&e, MAX_FRONTMATTER_BYTES)
@@ -1218,75 +1139,11 @@ pub fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<IndexMap<St
 /// Used by both `Document::parse` (tests only) and the public `body_only`.
 #[allow(dead_code)] // Also called by body_only; extract_frontmatter itself is exercised via tests.
 fn extract_frontmatter(content: &str) -> Result<(Option<&str>, &str)> {
-    // Recognize the opening delimiter on the first line — same predicate as
-    // `read_frontmatter_from_reader` and `find_body_offset` (see
-    // `opening_delimiter`), so this never disagrees with them about whether
-    // `content` has frontmatter.
-    let first_line_end = content.find('\n').map_or(content.len(), |i| i + 1);
-    let first_line = &content[..first_line_end];
-    if opening_delimiter(first_line).is_none() {
-        return Ok((None, content));
-    }
-
-    let after_opening = &content[first_line_end..];
-    if after_opening.is_empty() {
-        // The opening `---` (optionally BOM-prefixed) was the only line in
-        // the document — no content and no closing delimiter follow, so
-        // treat as "no frontmatter" (consistent with the streaming reader
-        // path's bare-dash handling).
-        return Ok((None, content));
-    }
-
-    // Find the closing `---` line. `pos` is the byte offset of the start of
-    // the delimiter line, which under the strict column-0 policy
-    // (`is_closing_delimiter`, DEC-293) always begins with `---`.
-    if let Some(pos) = find_closing_delimiter(after_opening) {
-        let yaml = &after_opening[..pos];
-        // The body starts just after the delimiter line's terminator. Find the
-        // end of the delimiter line rather than assuming it is exactly `---`
-        // at `pos`, so a trailing-space `--- ` does not leave delimiter bytes
-        // in the returned body.
-        let delim_line = &after_opening[pos..];
-        let body = match delim_line.find('\n') {
-            Some(nl) => &delim_line[nl + 1..],
-            None => "", // delimiter is the last line; no body follows
-        };
-        Ok((Some(yaml), body))
-    } else {
-        // Opening `---` found but no closing delimiter — this is malformed frontmatter.
-        // Returning an error prevents mutation commands from corrupting the file by
-        // writing a new frontmatter block on top of the unclosed one.
-        parse_bail!("unclosed frontmatter: file starts with `---` but no closing `---` was found")
-    }
-}
-
-/// Find the byte offset of the closing `---` line in the given string.
-///
-/// Shares the closing-delimiter policy with the streaming readers via
-/// [`is_closing_delimiter`] (iter-183 L-4, DEC-293): a line is a closing
-/// delimiter when it is exactly `---` at column 0 (trailing whitespace
-/// allowed), so an indented `  ---` inside a block scalar closes nothing here,
-/// just as in `read_frontmatter_from_reader` / `skip_frontmatter` / the
-/// scanner. The returned offset points at the first byte of that line, and
-/// `extract_frontmatter` slices the YAML up to it.
-#[allow(dead_code)] // Called by extract_frontmatter, which is used in tests only
-fn find_closing_delimiter(s: &str) -> Option<usize> {
-    // Walk each line, tracking its start offset, and return the first that is
-    // a column-0 `---`.
-    let mut line_start = 0usize;
-    loop {
-        let line_end = s[line_start..]
-            .find('\n')
-            .map_or(s.len(), |i| line_start + i);
-        let line = &s[line_start..line_end];
-        if is_closing_delimiter(line) {
-            return Some(line_start);
-        }
-        if line_end >= s.len() {
-            return None;
-        }
-        line_start = line_end + 1;
-    }
+    let frame = super::DocumentFrame::parse(content)?;
+    let yaml = frame
+        .frontmatter()
+        .and_then(|fm| content.get(fm.content_span()));
+    Ok((yaml, &content[frame.body_offset()..]))
 }
 
 #[cfg(test)]

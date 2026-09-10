@@ -78,17 +78,16 @@ impl Rule for Hyalo001 {
             // whitespace, so its byte length doubles as a scalar count, but go
             // through the checked upstream conversion anyway.
             let indent = line.len() - trimmed.len();
-            let col = indent + 1;
-            let replacement = build_replacement(trimmed);
+            let (edit_start, edit_end, replacement) = checkbox_edit(trimmed);
+            let col = indent + edit_start + 1;
 
-            let start =
-                Position::from_byte_offset_in_line(line_no, line, indent).unwrap_or(Position {
+            let start = Position::from_byte_offset_in_line(line_no, line, indent + edit_start)
+                .unwrap_or(Position {
                     line: line_no,
                     column: col,
                 });
-            // The replacement rewrites the whole trimmed remainder of the
-            // line, so the half-open range ends just before the terminator.
-            let end = Position::line_end(line_no, line);
+            let end = Position::from_byte_offset_in_line(line_no, line, indent + edit_end)
+                .unwrap_or_else(|| Position::line_end(line_no, line));
 
             let fix = Fix {
                 description: "Replace bare `[]` with `- [ ]`".to_owned(),
@@ -172,7 +171,7 @@ fn is_bare_checkbox(trimmed: &str) -> bool {
 ///
 /// For prefix-less bare brackets (`[] task`, `[ ] task`, `[x] task`):
 /// prepend `- ` so the line becomes a proper list item.
-fn build_replacement(trimmed: &str) -> String {
+fn checkbox_edit(trimmed: &str) -> (usize, usize, String) {
     // Family 1: prefixed-bullet bare `[]`.
     // e.g. `- [] task` → `- [ ] task`
     for bullet in ['-', '*', '+'] {
@@ -181,10 +180,11 @@ fn build_replacement(trimmed: &str) -> String {
             _ => continue,
         };
         let after_spaces = rest.trim_start_matches(' ');
-        if let Some(after_bracket) = after_spaces.strip_prefix("[]") {
+        if after_spaces.starts_with("[]") {
             // Preserve any spaces between bullet and bracket.
             let spaces = &rest[..rest.len() - after_spaces.len()];
-            return format!("{bullet}{spaces}[ ]{after_bracket}");
+            let start = bullet.len_utf8() + spaces.len();
+            return (start, start + 2, "[ ]".to_owned());
         }
     }
 
@@ -197,13 +197,8 @@ fn build_replacement(trimmed: &str) -> String {
         (3, true)
     };
 
-    let rest = &trimmed[prefix_len..];
     let task_marker = if checked { "- [x]" } else { "- [ ]" };
-    if rest.is_empty() {
-        task_marker.to_owned()
-    } else {
-        format!("{task_marker}{rest}")
-    }
+    (0, prefix_len, task_marker.to_owned())
 }
 
 #[cfg(test)]
@@ -240,7 +235,7 @@ mod tests {
         let violations = check("[] Task one\n");
         assert_eq!(violations.len(), 1);
         let fix = violations[0].fix.as_ref().expect("fix should be present");
-        assert_eq!(fix.replacement.as_deref(), Some("- [ ] Task one"));
+        assert_eq!(fix.replacement.as_deref(), Some("- [ ]"));
     }
 
     #[test]
@@ -249,9 +244,7 @@ mod tests {
         let content = "[] Task one\n";
         let violations = check(content);
         assert_eq!(violations.len(), 1);
-        let fix = violations[0].fix.as_ref().unwrap();
-        let fixed = fix.replacement.as_deref().unwrap_or("");
-        let v2 = check(fixed);
+        let v2 = check("- [ ] Task one\n");
         assert!(v2.is_empty(), "fix should be idempotent");
     }
 
@@ -329,7 +322,7 @@ mod tests {
         let fix = violations[0].fix.as_ref().expect("fix should be present");
         assert_eq!(
             fix.replacement.as_deref(),
-            Some("- [ ] Task one"),
+            Some("[ ]"),
             "fix should insert space inside brackets"
         );
     }
@@ -339,16 +332,14 @@ mod tests {
         let violations = check("* [] Task two\n");
         assert_eq!(violations.len(), 1);
         let fix = violations[0].fix.as_ref().unwrap();
-        assert_eq!(fix.replacement.as_deref(), Some("* [ ] Task two"));
+        assert_eq!(fix.replacement.as_deref(), Some("[ ]"));
     }
 
     #[test]
     fn autofix_dash_bare_bracket_idempotent() {
         let content = "- [] Task one\n";
-        let violations = check(content);
-        let fix = violations[0].fix.as_ref().unwrap();
-        let fixed = fix.replacement.as_deref().unwrap_or("");
-        let v2 = check(fixed);
+        let _violations = check(content);
+        let v2 = check("- [ ] Task one\n");
         assert!(v2.is_empty(), "- [] fix should be idempotent");
     }
 
@@ -420,10 +411,10 @@ mod tests {
         let violations = check("  - [] indented task\n");
         assert_eq!(violations.len(), 1, "indented - [] should fire HYALO001");
         let fix = violations[0].fix.as_ref().unwrap();
-        // The replacement covers the trimmed portion: `- [] indented task` → `- [ ] indented task`
+        // Only the malformed marker is replaced; authored suffix bytes remain.
         assert_eq!(
             fix.replacement.as_deref(),
-            Some("- [ ] indented task"),
+            Some("[ ]"),
             "fix should insert space inside brackets"
         );
     }

@@ -15,7 +15,9 @@ pub use visitor::FileVisitor;
 
 pub(crate) use fence::{detect_opening_fence, is_closing_fence};
 pub(crate) use frontmatter::FrontmatterCollector;
-pub(crate) use strip::{is_atx_heading, is_block_boundary, is_comment_fence};
+pub(crate) use strip::{
+    block_lookahead, code_run_exists, is_atx_heading, is_block_boundary, is_comment_fence,
+};
 
 #[cfg(test)]
 pub(crate) use visitor::{scan_file, scan_reader};
@@ -147,9 +149,12 @@ pub fn scan_file_multi_stats(
     visitors: &mut [&mut dyn FileVisitor],
     count_lines_exact: bool,
 ) -> Result<ScanStats> {
-    let file_size = std::fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .len();
+    let pre_meta =
+        std::fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if !pre_meta.is_file() {
+        anyhow::bail!("refusing to scan non-regular file {}", path.display());
+    }
+    let file_size = pre_meta.len();
     if file_size > MAX_FILE_SIZE {
         eprintln!(
             "warning: skipping {} ({} MiB exceeds {} MiB limit)",
@@ -167,9 +172,20 @@ pub fn scan_file_multi_stats(
     }
 
     let any_needs_body = visitors.iter().any(|v| v.needs_body());
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    if !file
+        .metadata()
+        .with_context(|| format!("failed to validate opened {}", path.display()))?
+        .is_file()
+    {
+        anyhow::bail!("refusing to scan non-regular file {}", path.display());
+    }
     if any_needs_body {
-        let data =
-            std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+        use std::io::Read as _;
+        let mut data = Vec::with_capacity(usize::try_from(file_size).unwrap_or(0));
+        file.read_to_end(&mut data)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let lines = count_lines(&data);
         let valid_utf8 = scan_slice_multi_utf8(&data, visitors)?;
         Ok(ScanStats {
@@ -178,25 +194,23 @@ pub fn scan_file_multi_stats(
             valid_utf8,
         })
     } else {
-        // Frontmatter-only: read a limited prefix to avoid loading the full file.
+        // Frontmatter-only: the shared bounded framer consumes exactly through
+        // the closing delimiter. It replaces the old fixed 16-KiB prefix,
+        // which truncated otherwise-valid metadata.
         use std::io::Read;
-        const FM_READ_CAP: usize = 16 * 1024;
-        let mut file = std::fs::File::open(path)
-            .with_context(|| format!("failed to open {}", path.display()))?;
-        let mut buf = vec![0u8; FM_READ_CAP];
-        let n = file
-            .read(&mut buf)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        buf.truncate(n);
+        let mut reader = std::io::BufReader::new(file);
+        let framed = crate::frontmatter::read_frame(&mut reader)?;
+        let buf = framed.bytes();
+        let n = buf.len();
         // Count over the prefix first; the tail (if any) is streamed below so
         // the frontmatter fast path still never holds the whole file at once.
-        let mut newlines = memchr::memchr_iter(b'\n', &buf).count();
+        let mut newlines = memchr::memchr_iter(b'\n', buf).count();
         let mut last_byte = buf.last().copied();
         if count_lines_exact && (n as u64) < file_size {
             const TAIL_CHUNK: usize = 64 * 1024;
             let mut chunk = vec![0u8; TAIL_CHUNK];
             loop {
-                let m = file
+                let m = reader
                     .read(&mut chunk)
                     .with_context(|| format!("failed to read {}", path.display()))?;
                 if m == 0 {
@@ -206,7 +220,7 @@ pub fn scan_file_multi_stats(
                 last_byte = chunk[..m].last().copied();
             }
         }
-        scan_slice_multi(&buf, visitors)?;
+        scan_slice_multi(buf, visitors)?;
         let lines = match last_byte {
             None => 0,
             Some(b'\n') => newlines,
@@ -333,74 +347,38 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
 
     let any_needs_fm = visitors.iter().any(|v| v.needs_frontmatter());
 
-    let (mut fm_props, fm_lines, fm_text) = if crate::frontmatter::is_opening_delimiter(first_line)
-    {
-        use crate::frontmatter::{MAX_FRONTMATTER_BYTES, MAX_FRONTMATTER_LINES};
-
-        let mut yaml = if any_needs_fm {
-            Some(String::new())
-        } else {
-            None
-        };
-        let mut fm_line_count: usize = 1; // the opening `---`
-        let mut found_close = false;
-
-        while line_idx < line_count {
-            let trimmed = get_line(line_idx);
-            line_idx += 1;
-            fm_line_count += 1;
-
-            if crate::frontmatter::is_closing_delimiter(trimmed) {
-                found_close = true;
-                break;
-            }
-
-            // Content line count is fm_line_count - 1 (excludes the opening `---`).
-            if fm_line_count - 1 > MAX_FRONTMATTER_LINES {
-                return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                    format!(
-                        "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-                    ),
-                )));
-            }
-            if let Some(ref mut y) = yaml {
-                // +1 accounts for the trailing '\n' appended below.
-                if y.len() + trimmed.len() + 1 > MAX_FRONTMATTER_BYTES {
-                    return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                        format!(
-                            "frontmatter too large (no closing `---` found within {MAX_FRONTMATTER_LINES} lines / {MAX_FRONTMATTER_BYTES} bytes); run `hyalo lint <file>` for details"
-                        ),
-                    )));
-                }
-                y.push_str(trimmed);
-                y.push('\n');
-            }
+    let frame = crate::frontmatter::DocumentFrame::parse(text)?;
+    let fm_text = frame
+        .yaml(text.as_bytes())
+        .and_then(|yaml| std::str::from_utf8(yaml).ok())
+        .filter(|_| any_needs_fm)
+        .map(str::to_owned);
+    let mut fm_props: IndexMap<String, Value> = match fm_text.as_deref() {
+        Some(yaml) if !yaml.trim().is_empty() => {
+            serde_saphyr::from_str_with_options(yaml, hyalo_options()).map_err(|e| {
+                anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
+                    "failed to parse YAML frontmatter: {}",
+                    crate::frontmatter::friendly_parse_error(
+                        &e,
+                        crate::frontmatter::MAX_FRONTMATTER_BYTES
+                    )
+                )))
+            })?
         }
-
-        if !found_close {
-            return Err(anyhow::Error::new(crate::frontmatter::FrontmatterError(
-                "unclosed frontmatter (no closing `---` found)".to_string(),
-            )));
-        }
-
-        let props: IndexMap<String, Value> = match yaml {
-            Some(ref y) if !y.trim().is_empty() => {
-                serde_saphyr::from_str_with_options(y, hyalo_options()).map_err(|e| {
-                    anyhow::Error::new(crate::frontmatter::FrontmatterError(format!(
-                        "failed to parse YAML frontmatter: {}",
-                        crate::frontmatter::friendly_parse_error(
-                            &e,
-                            crate::frontmatter::MAX_FRONTMATTER_BYTES
-                        )
-                    )))
-                })?
-            }
-            _ => IndexMap::new(),
-        };
-        (props, fm_line_count, yaml)
-    } else {
-        (IndexMap::new(), 0usize, None)
+        _ => IndexMap::new(),
     };
+    let fm_lines = if frame.frontmatter().is_some() {
+        text[..frame.body_offset()]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count()
+            + usize::from(frame.body_offset() > 0 && !text[..frame.body_offset()].ends_with('\n'))
+    } else {
+        0
+    };
+    if fm_lines > 0 {
+        line_idx = line_starts.partition_point(|start| *start < frame.body_offset());
+    }
 
     deliver_frontmatter_text(fm_text.as_deref(), visitors);
 
@@ -435,6 +413,7 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
         }
     };
 
+    let body_syntax = crate::body_syntax::BodySyntax::new(&text[frame.body_offset()..]);
     if fm_lines > 0 {
         line_num = fm_lines;
     } else {
@@ -446,6 +425,7 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
             visitors,
             &mut active,
             &mut body,
+            Some((&body_syntax, 1)),
         );
         if !active.iter().any(|&a| a) {
             return Ok(is_valid_utf8);
@@ -476,6 +456,7 @@ pub fn scan_slice_multi_utf8(data: &[u8], visitors: &mut [&mut dyn FileVisitor])
             visitors,
             &mut active,
             &mut body,
+            Some((&body_syntax, line_num.saturating_sub(fm_lines))),
         );
         if !active.iter().any(|&a| a) {
             break;
@@ -638,6 +619,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
             visitors,
             &mut active,
             &mut body,
+            None,
         );
         if !active.iter().any(|&a| a) {
             return Ok(());
@@ -663,7 +645,7 @@ pub(crate) fn scan_reader_multi<R: BufRead>(
         }
         let line = buf.trim_end_matches(['\n', '\r']);
 
-        dispatch_body_line(line, "", line_num, visitors, &mut active, &mut body);
+        dispatch_body_line(line, "", line_num, visitors, &mut active, &mut body, None);
         if !active.iter().any(|&a| a) {
             break;
         }
@@ -827,6 +809,7 @@ fn dispatch_body_line(
     visitors: &mut [&mut dyn FileVisitor],
     active: &mut [bool],
     state: &mut BodyState,
+    syntax_line: Option<(&crate::body_syntax::BodySyntax, usize)>,
 ) {
     // BUG-4 (iter-243): every body-region line — including fence delimiters
     // and `%%` comment fences — is announced raw first, so a raw-body
@@ -835,6 +818,50 @@ fn dispatch_body_line(
         if active[i] && v.on_raw_body_line(line, line_num) == ScanAction::Stop {
             active[i] = false;
         }
+    }
+
+    if let Some((syntax, syntax_line_number)) = syntax_line {
+        if syntax.line_is_percent_comment(syntax_line_number) {
+            return;
+        }
+        if syntax.line_is_fence_delimiter(syntax_line_number) {
+            if syntax.line_is_fence_close(syntax_line_number) {
+                debug_assert!(state.fence.is_some());
+                state.fence = None;
+                for (i, visitor) in visitors.iter_mut().enumerate() {
+                    if active[i] && visitor.on_code_fence_close(line_num) == ScanAction::Stop {
+                        active[i] = false;
+                    }
+                }
+            } else if let Some((fence_char, fence_count, language)) =
+                syntax.fence_open(syntax_line_number)
+            {
+                state.fence = Some((fence_char, fence_count));
+                for (i, visitor) in visitors.iter_mut().enumerate() {
+                    if active[i]
+                        && visitor.on_code_fence_open(line, language, line_num) == ScanAction::Stop
+                    {
+                        active[i] = false;
+                    }
+                }
+            }
+            return;
+        }
+        if syntax.line_is_code(syntax_line_number) {
+            for (i, visitor) in visitors.iter_mut().enumerate() {
+                if active[i] && visitor.on_code_block_line(line, line_num) == ScanAction::Stop {
+                    active[i] = false;
+                }
+            }
+            return;
+        }
+        let cleaned = syntax.visible_line(syntax_line_number).unwrap_or(line);
+        for (i, visitor) in visitors.iter_mut().enumerate() {
+            if active[i] && visitor.on_body_line(line, cleaned, line_num) == ScanAction::Stop {
+                active[i] = false;
+            }
+        }
+        return;
     }
 
     // Code fences take highest priority — %% inside a code block is literal.
@@ -1331,6 +1358,18 @@ Line 5
 
         assert_eq!(fences.closes.len(), 1);
         assert_eq!(fences.closes[0], 4);
+    }
+
+    #[test]
+    fn slice_scanner_uses_shared_container_fence_events() {
+        let input = "> ```rust\n> code\n> ```\n# Visible\n";
+        let mut body = BodyCollector::new();
+        let mut fences = FenceCounter::new();
+        scan_slice_multi(input.as_bytes(), &mut [&mut body, &mut fences]).unwrap();
+
+        assert_eq!(fences.opens, vec![("rust".to_owned(), 1)]);
+        assert_eq!(fences.closes, vec![3]);
+        assert_eq!(body.lines, vec![("# Visible".to_owned(), 4)]);
     }
 
     #[test]
@@ -2135,9 +2174,8 @@ code only
 
     #[test]
     fn scan_file_multi_stats_counts_the_whole_file_on_the_frontmatter_path() {
-        // The frontmatter-only fast path reads a 16 KiB prefix; with exact
-        // counting requested it must still report the file's real line count,
-        // not the prefix's.
+        // With exact counting requested the metadata-only path must still
+        // report the file's real line count, not merely the framed prefix.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("big.md");
         let body: String = repeated_lines(5_000);
@@ -2156,5 +2194,26 @@ code only
         let prefix_only = scan_file_multi_stats(&path, &mut [&mut fm], false).unwrap();
         assert_eq!(prefix_only.size, text.len() as u64);
         assert!(prefix_only.lines < stats.lines);
+    }
+
+    #[test]
+    fn metadata_and_full_scans_agree_past_the_old_16k_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, padding) in [("utf8-split.md", 16_377), ("closing-split.md", 16_369)] {
+            let path = dir.path().join(name);
+            let text = format!(
+                "---\ntitle: Boundary\npad: \"{}é\"\n---\n{}",
+                "x".repeat(padding),
+                "body sentinel\n".repeat(10_000)
+            );
+            assert!(text.find("---\nbody").is_some_and(|at| at > 16_384));
+            std::fs::write(&path, text).unwrap();
+
+            let mut metadata = FrontmatterCollector::new(false);
+            scan_file_multi_stats(&path, &mut [&mut metadata], false).unwrap();
+            let mut full = FrontmatterCollector::new(true);
+            scan_file_multi_stats(&path, &mut [&mut full], false).unwrap();
+            assert_eq!(metadata.into_props(), full.into_props(), "{name}");
+        }
     }
 }

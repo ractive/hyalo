@@ -216,3 +216,16 @@ Astra owns jq/resource design and implementation; after its writer freezes, Sol 
 gates, documentation and the held-out model comparison. The 50-row/49-group ledger and every
 original acceptance criterion remain authoritative; no stub, static proxy or unavailable
 platform/model run counts as passing evidence.
+
+
+## Iteration 291 reconciliation — 2026-09-10
+
+Carry DocumentFrame/read_frame_for_body, BodySyntax, heading parsing, exact filename matching
+and complete render validation into the final reader/writer behavioral gates. Use deterministic
+broken-frontmatter, missing-delimiter, incomplete-edit and common-mistake fixtures to prove
+clear diagnostics, safe refusal and unchanged bytes.
+
+Do not reopen exhaustive random-gibberish/fuzz syntax exploration. Controlled negative fixtures
+remain required for crashes, data loss, security, confinement, resource bounds and unsafe
+partial writes. A04, R16, the 50-row/49-group ledger and all original acceptance rows remain
+unchanged.

@@ -1,11 +1,16 @@
 #![allow(clippy::missing_errors_doc)]
 
+mod frame;
 mod parse;
 mod splice;
 mod types;
 
 use anyhow::Context as _;
 
+pub use frame::{
+    DocumentFrame, FramingDiagnostic, FrontmatterFrame, NewlineStyle, ReadFrame, read_frame,
+    read_frame_for_body,
+};
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
     read_frontmatter, read_frontmatter_from_reader, read_frontmatter_raw,
@@ -469,8 +474,7 @@ Body.
         // Read and discard the opening "---\n" line, then call skip_frontmatter
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
-        let first = first_line.trim_end_matches(['\n', '\r']);
-        let result = skip_frontmatter(&mut reader, first);
+        let result = skip_frontmatter(&mut reader, &first_line);
         assert!(
             result.is_ok(),
             "{MAX_FRONTMATTER_LINES} content lines should succeed: {result:?}"
@@ -485,8 +489,7 @@ Body.
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
-        let first = first_line.trim_end_matches(['\n', '\r']);
-        let result = skip_frontmatter(&mut reader, first);
+        let result = skip_frontmatter(&mut reader, &first_line);
         assert!(
             result.is_err(),
             "{} content lines should fail",
@@ -511,8 +514,7 @@ Body.
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
-        let first = first_line.trim_end_matches(['\n', '\r']);
-        let result = skip_frontmatter(&mut reader, first);
+        let result = skip_frontmatter(&mut reader, &first_line);
         assert!(
             result.is_ok(),
             "{MAX_FRONTMATTER_BYTES}-byte content should succeed: {result:?}"
@@ -528,8 +530,7 @@ Body.
         let mut reader = input.as_bytes();
         let mut first_line = String::new();
         std::io::BufRead::read_line(&mut reader, &mut first_line).unwrap();
-        let first = first_line.trim_end_matches(['\n', '\r']);
-        let result = skip_frontmatter(&mut reader, first);
+        let result = skip_frontmatter(&mut reader, &first_line);
         assert!(
             result.is_err(),
             "{} byte content should fail",
@@ -544,22 +545,27 @@ Body.
     }
 
     #[test]
-    fn skip_frontmatter_crlf_uses_scanner_normalized_byte_budget() {
-        // Many CRLF comment lines fit in the scanner's normalized 64 KiB
-        // budget even though their on-disk representation exceeds 64 KiB.
-        let line = format!("#{}", "a".repeat(63));
-        let comments = format!("{line}\n").repeat(1000);
-        let title = "title: Boundary\n";
-        let remaining = MAX_FRONTMATTER_BYTES - comments.len() - title.len();
-        for extra in [0, 1] {
-            let tail = format!("#{}\n", "b".repeat(remaining - 2 + extra));
-            let lf = format!("---\n{title}{comments}{tail}---\nbody\n");
-            let crlf = lf.replace('\n', "\r\n");
-            for text in [&lf, &crlf] {
+    fn scanner_and_reader_share_exact_authored_byte_budget() {
+        for eol in ["\n", "\r\n"] {
+            let title = format!("title: Boundary{eol}");
+            for extra in [0, 1] {
+                let tail = format!(
+                    "x: {}{eol}",
+                    "b".repeat(MAX_FRONTMATTER_BYTES - title.len() - eol.len() - 3 + extra)
+                );
+                let text = format!("---{eol}{title}{tail}---{eol}body{eol}");
                 let mut reader = std::io::BufReader::with_capacity(3, text.as_bytes());
-                let mut first = String::new();
-                std::io::BufRead::read_line(&mut reader, &mut first).unwrap();
-                assert_eq!(skip_frontmatter(&mut reader, &first).is_ok(), extra == 0);
+                let result = read_frontmatter_from_reader(&mut reader);
+                assert_eq!(result.is_ok(), extra == 0, "{eol:?} {extra}: {result:?}");
+                let mut skip_reader = std::io::BufReader::with_capacity(3, text.as_bytes());
+                let mut opening = String::new();
+                std::io::BufRead::read_line(&mut skip_reader, &mut opening).unwrap();
+                let skipped = skip_frontmatter(&mut skip_reader, &opening);
+                assert_eq!(
+                    skipped.is_ok(),
+                    extra == 0,
+                    "skip {eol:?} {extra}: {skipped:?}"
+                );
                 let mut visitor = crate::scanner::FrontmatterCollector::new(false);
                 assert_eq!(
                     crate::scanner::scan_slice_multi(text.as_bytes(), &mut [&mut visitor]).is_ok(),
@@ -567,6 +573,39 @@ Body.
                 );
             }
         }
+    }
+
+    #[test]
+    fn skip_frontmatter_treats_opening_only_as_body_and_bounds_long_yaml_line() {
+        let mut empty_tail = std::io::BufReader::new("".as_bytes());
+        assert_eq!(skip_frontmatter(&mut empty_tail, "---").unwrap(), 0);
+
+        let input = format!("{}\n---\nbody\n", "x".repeat(MAX_FRONTMATTER_BYTES + 64));
+        let mut reader = std::io::BufReader::with_capacity(17, input.as_bytes());
+        assert!(skip_frontmatter(&mut reader, "---\n").is_err());
+    }
+
+    #[test]
+    fn skip_frontmatter_delegates_shared_delimiter_and_eof_policy() {
+        for (opening, tail, expected_lines) in [
+            ("--- \t\r\n", "title: Note\r\n---  \t\r\nbody\r\n", 3),
+            ("\u{feff}---\n", "title: Note\n---\nbody\n", 3),
+            (" ---\n", "title: Note\n---\nbody\n", 0),
+            ("---\r", "", 0),
+        ] {
+            let source = format!("{opening}{tail}");
+            let parsed = DocumentFrame::parse(&source).unwrap();
+            let mut reader = std::io::BufReader::with_capacity(2, tail.as_bytes());
+            let skipped = skip_frontmatter(&mut reader, opening).unwrap();
+            assert_eq!(skipped, expected_lines, "{opening:?}");
+            assert_eq!(skipped > 0, parsed.frontmatter().is_some(), "{opening:?}");
+        }
+
+        let huge_open = format!("---{}\n", " ".repeat(MAX_FRONTMATTER_BYTES + 8));
+        let source = format!("{huge_open}---\nbody\n");
+        assert!(DocumentFrame::parse(&source).is_err());
+        let mut reader = std::io::BufReader::new("---\nbody\n".as_bytes());
+        assert!(skip_frontmatter(&mut reader, &huge_open).is_err());
     }
 
     #[test]
@@ -985,6 +1024,77 @@ Body.
         assert!(
             content.contains("title: Hello"),
             "file must not be modified after rejected write: {content}"
+        );
+    }
+
+    #[test]
+    fn writer_refuses_edit_that_crosses_normal_yaml_node_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("near-node-limit.md");
+        let values = std::iter::repeat_n("x", 4_997)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let original = format!("---\nvalues: [{values}]\n---\nbody\n");
+        std::fs::write(&path, original.as_bytes()).unwrap();
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("title".to_owned(), Value::String("x".to_owned()));
+        let error = write_frontmatter(&path, &props).unwrap_err();
+        assert!(
+            is_parse_error(&error)
+                || error
+                    .chain()
+                    .any(|cause| cause.downcast_ref::<FrontmatterBudgetError>().is_some()),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+    }
+
+    #[test]
+    fn writer_final_output_budget_covers_block_and_nested_collections() {
+        let dir = tempfile::tempdir().unwrap();
+        let block_path = dir.path().join("block.md");
+        let block_items = std::iter::repeat_n("  - x\n", 1_999).collect::<String>();
+        let block_original = format!("---\nvalues:\n{block_items}---\nbody\n");
+        std::fs::write(&block_path, block_original.as_bytes()).unwrap();
+        let mut block_props = read_frontmatter(&block_path).unwrap();
+        block_props.insert("title".to_owned(), Value::String("x".to_owned()));
+        assert!(write_frontmatter(&block_path, &block_props).is_err());
+        assert_eq!(
+            std::fs::read(&block_path).unwrap(),
+            block_original.as_bytes()
+        );
+
+        let nested_path = dir.path().join("nested.md");
+        let nested = "---\nouter:\n  inner: [a, b, c]\n---\nbody\n";
+        std::fs::write(&nested_path, nested).unwrap();
+        let mut nested_props = read_frontmatter(&nested_path).unwrap();
+        nested_props.insert("title".to_owned(), Value::String("readable".to_owned()));
+        write_frontmatter(&nested_path, &nested_props).unwrap();
+        assert_eq!(read_frontmatter(&nested_path).unwrap(), nested_props);
+        assert!(
+            std::fs::read_to_string(&nested_path)
+                .unwrap()
+                .ends_with("body\n")
+        );
+    }
+
+    #[test]
+    fn exact_content_span_preserves_opening_whitespace_bom_crlf_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exact-frame.md");
+        let original =
+            "\u{feff}--- \t\r\ntitle: old\r\nkeep: val # keep-comment\r\n---  \r\nbody\r\n";
+        std::fs::write(&path, original.as_bytes()).unwrap();
+        assert_eq!(
+            read_frontmatter_raw(&path).unwrap().as_deref(),
+            Some("title: old\r\nkeep: val # keep-comment\r\n")
+        );
+        let mut props = read_frontmatter(&path).unwrap();
+        props.insert("title".to_owned(), Value::String("new".to_owned()));
+        write_frontmatter(&path, &props).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "\u{feff}--- \t\r\ntitle: new\r\nkeep: val # keep-comment\r\n---  \r\nbody\r\n"
         );
     }
 
@@ -1629,5 +1739,18 @@ Body.
             out.contains("k: |"),
             "an ordinary multi-line value keeps its block scalar:\n{out}"
         );
+    }
+
+    #[test]
+    fn trailing_scalar_whitespace_round_trips_exactly() {
+        let mut doc = Document::parse("---\ntitle: old\n---\nbody\n").unwrap();
+        doc.set_property("tail".into(), Value::String("kept \t".into()));
+        let out = doc.serialize().unwrap();
+        let reparsed = Document::parse(&out).unwrap();
+        assert_eq!(
+            reparsed.get_property("tail"),
+            Some(&Value::String("kept \t".into()))
+        );
+        assert_eq!(reparsed.body(), "body\n");
     }
 }

@@ -77,10 +77,12 @@ impl ContentSearchVisitor {
 }
 
 impl FileVisitor for ContentSearchVisitor {
-    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Use raw text for heading detection so that code spans in headings
         // (e.g. `## The \`versions\` field`) are preserved in section context.
-        if let Some((level, heading_text)) = parse_atx_heading(raw) {
+        if parse_atx_heading(cleaned).is_some()
+            && let Some((level, heading_text)) = parse_atx_heading(raw)
+        {
             self.current_section = format!("{} {}", "#".repeat(level as usize), heading_text);
         }
 

@@ -62,6 +62,7 @@ mod iteration279_fuzzy_near_neighbours;
 mod iteration280_fuzzy_candidacy_gate;
 mod iteration281_dominant_prefix_exemption;
 mod iteration282_directory_token_dominance;
+mod iteration291_document_consistency;
 mod iteration_ergonomics;
 mod jq;
 mod json_errors;

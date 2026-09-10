@@ -12,7 +12,9 @@ fn ranked_snippets_streaming_unicode_and_crlf_boundaries() {
         "unicode.md",
         &format!("{prefix}{unicode_line}\n"),
     );
-    let comments = format!("#{}\r\n", "a".repeat(63)).repeat(1000);
+    // Keep the authored CRLF bytes within the shared 64-KiB frontmatter
+    // budget while still crossing many streaming buffer boundaries.
+    let comments = format!("#{}\r\n", "a".repeat(63)).repeat(990);
     write_md(
         tmp.path(),
         "crlf.md",
@@ -27,7 +29,7 @@ fn ranked_snippets_streaming_unicode_and_crlf_boundaries() {
     assert!(index.status.success(), "{index:?}");
     for (query, file, line, expected) in [
         ("日本語", "unicode.md", 4, unicode_line.as_str()),
-        ("rust", "crlf.md", 1004, "rust"),
+        ("rust", "crlf.md", 994, "rust"),
     ] {
         let mut previous = None;
         for indexed in [false, true] {

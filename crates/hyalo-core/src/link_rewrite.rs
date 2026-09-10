@@ -20,6 +20,7 @@ use serde::Serialize;
 
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
+use crate::frontmatter_links::FrontmatterValueLines;
 use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
 use crate::link_resolve::LinkResolver;
 use crate::link_write::{LinkWriter, SpanReplacement, TargetStyle};
@@ -593,6 +594,7 @@ pub fn execute_plans(vault_dir: &Path, plans: &[RewritePlan]) -> Result<()> {
     // Canonicalize once up front; all plan paths are resolved against this.
     let canonical_vault = canonicalize_vault_dir(vault_dir)
         .context("failed to canonicalize vault directory for write safety check")?;
+    validate_rewrite_plans(plans)?;
 
     // iter-277 (BUG-14): one shared write phase — every plan keeps its own
     // atomic temp+rename, and the durability fsyncs are paid once per
@@ -696,6 +698,8 @@ fn write_single_plan(canonical_vault: &Path, plan: &RewritePlan) -> Result<()> {
         crate::frontmatter::check_mtime(&plan.path, expected_mtime)?;
     }
 
+    validate_rewritten_document(plan)?;
+
     // `atomic_write_within` re-applies the boundary check to the *resolved*
     // destination, so a symlinked plan target that points out of the vault is
     // refused rather than followed (DEC-062).
@@ -706,6 +710,22 @@ fn write_single_plan(canonical_vault: &Path, plan: &RewritePlan) -> Result<()> {
     )
     .with_context(|| format!("writing {}", plan.path.display()))?;
     Ok(())
+}
+
+fn validate_rewritten_document(plan: &RewritePlan) -> Result<()> {
+    let reader = std::io::BufReader::new(std::io::Cursor::new(plan.rewritten_content.as_bytes()));
+    crate::frontmatter::read_frontmatter_from_reader(reader)
+        .with_context(|| format!("rewritten frontmatter in {} is invalid", plan.rel_path))?;
+    Ok(())
+}
+
+/// Validate every rewritten document before a caller performs related
+/// filesystem mutations such as renaming the source file.
+///
+/// The write functions repeat this check immediately before publication as a
+/// defense against future call sites that omit the command-level preflight.
+pub fn validate_rewrite_plans(plans: &[RewritePlan]) -> Result<()> {
+    plans.iter().try_for_each(validate_rewritten_document)
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +768,7 @@ fn plan_inbound_rewrites(
     let mut skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
     let mut scanner = LineScanner::new();
+    let mut frontmatter_lines = FrontmatterValueLines::new();
     // Nearest preceding frontmatter key, so a skipped ambiguous list item is
     // attributed to the property that owns it (iter-271 Part G).
     let mut current_fm_property: Option<String> = None;
@@ -756,6 +777,7 @@ fn plan_inbound_rewrites(
         let body = match scanner.classify(line, rest) {
             LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
             LineClass::Frontmatter => {
+                let visible_line = frontmatter_lines.visible(line);
                 if let Some(key) = frontmatter_key_on_line(line) {
                     current_fm_property = Some(key.to_owned());
                 }
@@ -768,7 +790,7 @@ fn plan_inbound_rewrites(
                     skipped: &mut skipped_ambiguous,
                 });
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line,
+                    &visible_line,
                     scanner.line_num(),
                     old_rel,
                     old_stem,
@@ -782,7 +804,7 @@ fn plan_inbound_rewrites(
                 // break cannot be rewritten in place — report it rather than
                 // leaving a silently dangling reference.
                 if let Some(target) =
-                    split_frontmatter_wikilink(line, rest, old_rel, old_stem, case_index)
+                    split_frontmatter_wikilink(&visible_line, rest, old_rel, old_stem, case_index)
                 {
                     skipped_frontmatter.push(SkippedFrontmatterLink {
                         source: source_rel.to_owned(),
@@ -957,17 +979,19 @@ fn plan_outbound_rewrites(
     let mut skipped_ambiguous: Vec<SkippedAmbiguous> = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
     let mut scanner = LineScanner::new();
+    let mut frontmatter_lines = FrontmatterValueLines::new();
 
     for (line, rest) in lines_with_rest(content) {
         let body = match scanner.classify(line, rest) {
             LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
             LineClass::Frontmatter => {
+                let visible_line = frontmatter_lines.visible(line);
                 // L-1: the moved file's OWN frontmatter self-links (e.g.
                 // `related: - "[[old]]"` or `"[[old#anchor]]"`) must be rewritten
                 // to the new path — otherwise a plain rename leaves a dangling
                 // self-reference. Only `plan_inbound_rewrites` did this before.
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line,
+                    &visible_line,
                     scanner.line_num(),
                     old_rel,
                     old_stem,
@@ -1940,11 +1964,13 @@ fn plan_outbound_rewrites_batch(
     let mut replacements = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
     let mut scanner = LineScanner::new();
+    let mut frontmatter_lines = FrontmatterValueLines::new();
 
     for (line, rest) in lines_with_rest(content) {
         let body = match scanner.classify(line, rest) {
             LineClass::FrontmatterOpen | LineClass::FrontmatterClose | LineClass::Skip => continue,
             LineClass::Frontmatter => {
+                let visible_line = frontmatter_lines.visible(line);
                 // L-1 (batch): rewrite the moved file's OWN frontmatter
                 // self-links so a batch rename doesn't leave a dangling
                 // self-reference in frontmatter.
@@ -1955,7 +1981,7 @@ fn plan_outbound_rewrites_batch(
                 // frontmatter names itself the way Obsidian resolves it —
                 // same folder first. Nothing is being guessed.
                 let fm_repls = plan_frontmatter_wikilink_rewrites(
-                    line,
+                    &visible_line,
                     scanner.line_num(),
                     old_rel,
                     old_stem,
@@ -2284,6 +2310,62 @@ mod tests {
             "target reconstructed across the break: {:?}",
             skipped.target
         );
+    }
+
+    #[test]
+    fn plan_mv_rewrites_block_scalar_source_span_but_not_yaml_comment() {
+        let vault = create_vault(&[
+            ("old.md", "# Old\n"),
+            (
+                "source.md",
+                "---\nsummary: |-\n  see [[old]]\n# historical [[old]]\n---\nBody\n",
+            ),
+        ]);
+        let result = plan_mv(vault.path(), "old.md", "new.md", None, false).unwrap();
+        let source = result
+            .plans
+            .iter()
+            .find(|plan| plan.rel_path == "source.md")
+            .expect("scalar link must produce a source rewrite");
+        assert_eq!(source.replacements.len(), 1);
+        assert_eq!(source.replacements[0].line, 3);
+        assert_eq!(source.replacements[0].old_text, "[[old]]");
+        assert_eq!(source.replacements[0].new_text, "[[new]]");
+    }
+
+    #[test]
+    fn percent_comment_fence_does_not_poison_later_visible_rewrite() {
+        let vault = create_vault(&[
+            ("old.md", "# Old\n"),
+            ("source.md", "%%\n```\n%%\n[[old]]\n"),
+        ]);
+        let result = plan_mv(vault.path(), "old.md", "new.md", None, false).unwrap();
+        let source = result
+            .plans
+            .iter()
+            .find(|plan| plan.rel_path == "source.md")
+            .expect("visible link after percent comment must be rewritten");
+        assert_eq!(source.replacements.len(), 1);
+        assert_eq!(source.replacements[0].line, 4);
+    }
+
+    #[test]
+    fn plan_mv_rewrites_sequence_block_scalar_but_not_yaml_comment() {
+        let vault = create_vault(&[
+            ("old.md", "# Old\n"),
+            (
+                "source.md",
+                "---\ndescription:\n  - |-\n    # [[old]]\n# [[old]]\n---\nbody\n",
+            ),
+        ]);
+        let result = plan_mv(vault.path(), "old.md", "new.md", None, false).unwrap();
+        let source = result
+            .plans
+            .iter()
+            .find(|plan| plan.rel_path == "source.md")
+            .expect("sequence scalar must produce rewrite");
+        assert_eq!(source.replacements.len(), 1);
+        assert_eq!(source.replacements[0].line, 4);
     }
 
     /// The same shape must not be reported twice when the file *also* carries
@@ -3309,6 +3391,30 @@ mod tests {
         assert_eq!(
             fs::read_to_string(vault.path().join("b.md")).unwrap(),
             "new-b\n"
+        );
+    }
+
+    #[test]
+    fn execute_plans_partial_rejects_over_budget_frontmatter_without_writing() {
+        let original = "unchanged\n";
+        let vault = create_vault(&[("a.md", original)]);
+        let link = "ref: \"[[a]]\"\n";
+        let padding = "x".repeat(crate::frontmatter::MAX_FRONTMATTER_BYTES - link.len() - 1);
+        let rewritten = format!("---\n{link}#{padding}\n---\nbody\n");
+        let plans = vec![simple_plan(vault.path(), "a.md", &rewritten)];
+
+        let report = execute_plans_partial(vault.path(), &plans).unwrap();
+        assert!(report.has_failures());
+        assert!(!report.outcomes[0].applied);
+        assert!(
+            report.outcomes[0]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("frontmatter too large"))
+        );
+        assert_eq!(
+            fs::read_to_string(vault.path().join("a.md")).unwrap(),
+            original
         );
     }
 

@@ -326,3 +326,17 @@ The first independent review found that trailing warning summaries could hide st
 effects from npm. The repaired output boundary drains summaries before the final envelope;
 retain the real malformed-note plus post-write failure regression when unifying diagnostics.
 Sanitize the completed text effect diagnostic while keeping exact filenames in JSON.
+
+
+## Iteration 291 reconciliation — 2026-09-10
+
+Iteration 291 supplies the exact contract for active docs and adapters: standalone read
+--frontmatter is frontmatter-only; combining it with a body selector requests both; bounded
+framing and body capture share DocumentFrame/read_frame_for_body. BodySyntax supplies
+structural visibility for code/comments without claiming a full Markdown AST.
+
+C08 diagnostics must surface malformed authored frontmatter and safe refusals once without
+corrupting structured stdout. A06/help/README/skills should state that broken frontmatter,
+missing delimiters and incomplete edits receive useful diagnostics and no mutation when
+processing cannot continue; do not promise compatibility with arbitrary fuzzed/gibberish
+syntax.

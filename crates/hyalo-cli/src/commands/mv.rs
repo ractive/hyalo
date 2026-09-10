@@ -254,6 +254,12 @@ pub fn mv(
 
     // 6. If not dry-run, execute the move and rewrites, then update the index.
     if !dry_run {
+        if let Err(err) = link_rewrite::validate_rewrite_plans(&mv_plan.plans) {
+            if let Some(outcome) = super::frontmatter_write_error_outcome(&err, format, &old_rel) {
+                return Ok(outcome);
+            }
+            return Err(err);
+        }
         execute_mv(dir, &old_rel, &new_rel, &mv_plan.plans, src_mtime)?;
 
         // Patch index: rename the entry, re-scan files with rewritten links,
@@ -396,6 +402,12 @@ pub fn mv_batch(
 
     // 7. Apply if requested.
     if apply && !renames.is_empty() {
+        if let Err(err) = link_rewrite::validate_rewrite_plans(&plans) {
+            if let Some(outcome) = super::frontmatter_write_error_outcome(&err, format, to_arg) {
+                return Ok(outcome);
+            }
+            return Err(err);
+        }
         execute_batch_mv(dir, &renames, &plans)?;
         // Update index if present.
         if journal.has_index() {
@@ -730,6 +742,11 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
         ensure_dest_within_vault(&canonical_vault, dir, new_rel)
             .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
     }
+
+    // Link rewrites and moves form one user operation. Reject an output that
+    // exceeds the normal frontmatter budgets before creating directories or
+    // renaming any source.
+    link_rewrite::validate_rewrite_plans(plans)?;
 
     // Capture source mtimes upfront to detect concurrent modifications.
     let mut src_mtimes: Vec<(String, String, (std::time::SystemTime, u64))> = Vec::new();
@@ -1318,6 +1335,9 @@ fn execute_mv(
         .context("failed to canonicalize vault directory for write safety check")?;
     ensure_dest_within_vault(&canonical_vault, dir, new_rel)
         .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
+
+    // Validate every rewritten document before the first filesystem effect.
+    link_rewrite::validate_rewrite_plans(plans)?;
 
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)

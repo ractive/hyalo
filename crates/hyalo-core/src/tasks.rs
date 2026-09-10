@@ -6,8 +6,6 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::frontmatter;
@@ -142,8 +140,8 @@ impl TaskCollector {
 
 #[cfg(test)]
 impl FileVisitor for TaskCollector {
-    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
-        if let Some((status_char, done)) = detect_task_checkbox(raw) {
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+        if let Some((status_char, done)) = detect_task_checkbox(cleaned) {
             self.tasks.push(TaskInfo {
                 line: line_num,
                 status: status_char,
@@ -184,8 +182,8 @@ impl TaskCounter {
 }
 
 impl FileVisitor for TaskCounter {
-    fn on_body_line(&mut self, raw: &str, _cleaned: &str, _line_num: usize) -> ScanAction {
-        if let Some((_status, is_done)) = detect_task_checkbox(raw) {
+    fn on_body_line(&mut self, _raw: &str, cleaned: &str, _line_num: usize) -> ScanAction {
+        if let Some((_status, is_done)) = detect_task_checkbox(cleaned) {
             self.total += 1;
             if is_done {
                 self.done += 1;
@@ -225,15 +223,15 @@ impl TaskExtractor {
 }
 
 impl FileVisitor for TaskExtractor {
-    fn on_body_line(&mut self, raw: &str, _cleaned: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Track current heading
-        if raw.starts_with('#')
+        if parse_atx_heading(cleaned).is_some()
             && let Some((level, text)) = parse_atx_heading(raw)
         {
             self.current_section = format!("{} {}", "#".repeat(level as usize), text);
         }
 
-        if let Some((status_char, done)) = detect_task_checkbox(raw) {
+        if let Some((status_char, done)) = detect_task_checkbox(cleaned) {
             self.tasks.push(crate::types::FindTaskInfo {
                 line: line_num,
                 section: self.current_section.clone(),
@@ -271,133 +269,15 @@ pub(crate) fn count_tasks(path: &Path) -> Result<TaskCount> {
 /// Read a single task at a specific 1-based line number.
 /// Returns `None` if the line is not a task (or out of range).
 pub fn read_task(path: &Path, line: usize) -> Result<Option<TaskInfo>> {
-    // Do a raw scan, stop early once we pass the target line
-    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-
-    let mut line_num: usize = 0;
-    let mut buf = String::new();
-
-    // First line: check for frontmatter
-    buf.clear();
-    let n = reader
-        .read_line(&mut buf)
-        .context("failed to read first line")?;
-    if n == 0 {
-        return Ok(None);
-    }
-    line_num += 1;
-
-    let first_trimmed = buf.trim_end_matches(['\n', '\r']).to_owned();
-    let fm_lines = frontmatter::skip_frontmatter(&mut reader, &first_trimmed)?;
-    if fm_lines > 0 {
-        line_num = fm_lines;
-        // If the target line is inside the frontmatter, it can't be a task
-        if line <= fm_lines {
-            return Ok(None);
-        }
-    }
-
-    let mut fence = scanner::FenceTracker::new();
-    let mut in_comment = false;
-
-    // Process first line if not frontmatter
-    if fm_lines == 0 {
-        if line_num == line {
-            if fence.process_line(&first_trimmed) {
-                // A fence opener is never a task
-            } else if scanner::is_comment_fence(&first_trimmed) {
-                in_comment = true;
-                // A comment fence is never a task
-            } else {
-                let info =
-                    detect_task_checkbox(&first_trimmed).map(|(status_char, done)| TaskInfo {
-                        line: line_num,
-                        status: status_char,
-                        text: extract_task_text(&first_trimmed).to_owned(),
-                        done,
-                    });
-                return Ok(info);
-            }
-        } else if fence.process_line(&first_trimmed) {
-            // fence state updated
-        } else if scanner::is_comment_fence(&first_trimmed) {
-            in_comment = true;
-        }
-    }
-
-    loop {
-        buf.clear();
-        let n = reader.read_line(&mut buf).context("failed to read line")?;
-        if n == 0 {
-            break;
-        }
-        line_num += 1;
-        let line_str = buf.trim_end_matches(['\n', '\r']);
-
-        // Handle fenced code block (highest priority)
-        if fence.in_fence() {
-            fence.process_line(line_str);
-            if line_num == line {
-                return Ok(None); // inside code block
-            }
-            if line_num > line {
-                break;
-            }
-            continue;
-        }
-
-        // Handle comment block
-        if in_comment {
-            if scanner::is_comment_fence(line_str) {
-                in_comment = false;
-            }
-            if line_num == line {
-                return Ok(None); // inside comment block
-            }
-            if line_num > line {
-                break;
-            }
-            continue;
-        }
-
-        if fence.process_line(line_str) {
-            if line_num == line {
-                return Ok(None); // fence opener is not a task
-            }
-            if line_num > line {
-                break;
-            }
-            continue;
-        }
-
-        if scanner::is_comment_fence(line_str) {
-            if line_num == line {
-                return Ok(None); // comment fence is not a task
-            }
-            in_comment = true;
-            if line_num > line {
-                break;
-            }
-            continue;
-        }
-
-        if line_num == line {
-            let info = detect_task_checkbox(line_str).map(|(status_char, done)| TaskInfo {
-                line: line_num,
-                status: status_char,
-                text: extract_task_text(line_str).to_owned(),
-                done,
-            });
-            return Ok(info);
-        }
-
-        if line_num > line {
-            break;
-        }
-    }
-
-    Ok(None)
+    Ok(find_task_lines(path)?
+        .into_iter()
+        .find(|task| task.line == line)
+        .map(|task| TaskInfo {
+            line: task.line,
+            status: task.status,
+            text: task.text,
+            done: task.done,
+        }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,6 +1074,22 @@ Regular text.
         let task = read_task(&path, 4).unwrap();
         assert!(task.is_some());
         assert_eq!(task.unwrap().text, "Real task");
+    }
+
+    #[test]
+    fn html_comment_headings_and_tasks_are_structurally_hidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hidden.md");
+        std::fs::write(
+            &path,
+            "<!--\n# Hidden\n- [ ] example\n-->\n# Visible\n- [ ] real\n",
+        )
+        .unwrap();
+        assert!(read_task(&path, 3).unwrap().is_none());
+        let tasks = find_task_lines(&path).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].line, 6);
+        assert_eq!(tasks[0].section, "# Visible");
     }
 
     #[test]

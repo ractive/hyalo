@@ -338,12 +338,14 @@ pub fn remove(
             frontmatter::check_mtime(full_path, mtime)?;
             match frontmatter::write_frontmatter_within(dir, full_path, &props) {
                 Ok(()) => {}
-                Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
-                    let budget_err = frontmatter::as_budget_error(e).unwrap();
-                    let out = crate::output::budget_diagnostic(format, budget_err);
-                    return Ok(CommandOutcome::UserError(out));
+                Err(e) => {
+                    if let Some(outcome) =
+                        super::frontmatter_write_error_outcome(&e, format, rel_path)
+                    {
+                        return Ok(outcome);
+                    }
+                    return Err(e);
                 }
-                Err(e) => return Err(e),
             }
             journal.update_entry(rel_path, props, full_path)?;
         }

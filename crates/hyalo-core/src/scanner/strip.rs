@@ -91,7 +91,7 @@ pub fn strip_inline_code(line: &str) -> Cow<'_, str> {
 ///
 /// Truncating conservatively can only *shorten* the lookahead, which makes an
 /// unmatched run stay literal — exactly what CommonMark prescribes.
-fn block_lookahead(rest: &str) -> &str {
+pub(crate) fn block_lookahead(rest: &str) -> &str {
     let mut offset = 0usize;
     for line in rest.split('\n') {
         if is_block_boundary(line) {
@@ -152,7 +152,7 @@ pub(crate) fn is_atx_heading(body: &str) -> bool {
 /// a cross-line code span when a matching closer of the same length exists
 /// later in the document. A shorter or longer adjacent run does not close a
 /// span, so only exact-length runs count.
-fn code_run_exists(text: &str, n: usize) -> bool {
+pub(crate) fn code_run_exists(text: &str, n: usize) -> bool {
     if n == 0 {
         return false;
     }
