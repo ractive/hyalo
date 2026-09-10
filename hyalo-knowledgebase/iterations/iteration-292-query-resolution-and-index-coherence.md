@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 292 — Query, resolution and index coherence
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -315,7 +315,7 @@ ambiguous links. Do not conflate graph identity with filesystem move identity.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -402,3 +402,7 @@ measured about 246 KiB allocated against a 4 MiB test budget before rejecting ex
 256 MiB. These observations do not imply universal process-memory isolation, filesystem race
 immunity or a whole-vault crash transaction. Exact interfaces and successor ownership are
 recorded in the architecture handoff and the complete original acceptance/finding ledgers.
+
+PR #348 passed all eleven required checks at implementation head
+8fbe74f3ad140cc003c2db7481612fad4e6297e4, including native platform tests and all npm
+launchers. The completed metadata head must pass its own checks before GitHub merge.
