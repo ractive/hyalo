@@ -15,7 +15,7 @@ use crate::dispatch::{CommandContext, dispatch};
 use crate::error::AppError;
 use crate::hints::{CommonHintFlags, HintContext, HintSource};
 use crate::output::{CommandOutcome, Format};
-use crate::output_pipeline::{OutputPipeline, count_unsupported_error};
+use crate::output_pipeline::OutputPipeline;
 use hyalo_core::index::SnapshotIndex;
 
 /// The explicit `--profile <name>` from a command, if any. Only `hyalo lint`
@@ -75,52 +75,22 @@ fn emit_init_report(
     format: Option<Format>,
     jq: Option<&str>,
 ) -> Result<(), AppError> {
-    let json = match format {
-        Some(f) => f == Format::Json,
-        None => jq.is_some(),
+    let format = format.unwrap_or(if jq.is_some() {
+        Format::Json
+    } else {
+        Format::Text
+    });
+    let outcome = if format == Format::Text {
+        CommandOutcome::RawOutput(report.to_text())
+    } else {
+        CommandOutcome::success(report.to_json())
     };
-    if !json {
-        // Sanitized because the summary can echo vault-derived strings (a `dir`
-        // value, a profile skill directory) that never pass through the JSON
-        // pipeline's own sanitization.
-        println!(
-            "{}",
-            crate::output::sanitize_control_chars(&report.to_text())
-        );
-        return Ok(());
+    let code = OutputPipeline::plain(format, jq).finalize_with_effects(outcome, report.effects());
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(AppError::Exit(code))
     }
-    let envelope = crate::output::output_value(&crate::output::Envelope::from_result(
-        &report.to_json(),
-        None,
-        &[],
-        None,
-    ));
-    if let Some(filter) = jq {
-        return match crate::output::apply_jq_filter_result(filter, &envelope) {
-            Ok(filtered) => {
-                println!("{}", crate::output::sanitize_control_chars(&filtered));
-                Ok(())
-            }
-            Err(e) => Err(AppError::User(crate::output::format_error(
-                Format::Json,
-                "jq filter failed",
-                None,
-                None,
-                Some(&e),
-            ))),
-        };
-    }
-    println!(
-        "{}",
-        crate::output::sanitize_control_chars(&crate::output::format_prebuilt_envelope(
-            Format::Json,
-            &envelope,
-            None,
-            &[],
-            &envelope,
-        ))
-    );
-    Ok(())
 }
 
 /// Express the resolved vault `dir` as a path relative to `cwd`, using
@@ -232,8 +202,8 @@ fn effective_index_path_for(
         // CreateIndex never *reads* an index — the global --index-file is an
         // output-path synonym there (merged into --output in run_inner). Return
         // early so we don't attempt to load a non-existent target as an input.
-        Commands::CreateIndex { .. } => return None,
-        Commands::DropIndex { .. }
+        Commands::CreateIndex { .. }
+        | Commands::DropIndex { .. }
         | Commands::Init { .. }
         | Commands::Deinit
         | Commands::Completion { .. }
@@ -243,10 +213,10 @@ fn effective_index_path_for(
         | Commands::Okf { .. }
         | Commands::Madr { .. }
         | Commands::Changelog { .. }
-        | Commands::LintRules { .. } => None,
+        | Commands::LintRules { .. } => return None,
         Commands::Views { action } => match action {
             Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
-            _ => None,
+            _ => return None,
         },
     };
 
@@ -318,9 +288,6 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
     // For lint: empty lint output.
     // For mutation commands (set/remove/append/mv): empty array.
     match cmd {
-        Commands::Find(_) => {
-            CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0)
-        }
         Commands::Lint { fix, dry_run, .. } if *fix => {
             // Fix-mode shape: `total_fixed`/`total_remaining`/`total_conflicts`
             // plus `remaining_errors`/`remaining_warnings` (iter-218 NEW-6b) —
@@ -344,7 +311,7 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
             // outside tests" rule rather than assuming infallibility.
             let payload = serde_json::to_value(&empty)
                 .unwrap_or_else(|_| serde_json::json!({"files": [], "dry_run": *dry_run}));
-            CommandOutcome::success_with_total(payload.to_string(), 0)
+            CommandOutcome::success_with_total(payload, 0)
         }
         Commands::Lint { dry_run, .. } => {
             // Read-only shape: serialize `ExtLintOutput::default()` (with
@@ -365,10 +332,10 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
             // rule rather than assuming infallibility.
             let payload = serde_json::to_value(&empty)
                 .unwrap_or_else(|_| serde_json::json!({"files": [], "dry_run": *dry_run}));
-            CommandOutcome::success_with_total(payload.to_string(), 0)
+            CommandOutcome::success_with_total(payload, 0)
         }
         // Mutation commands: empty array
-        _ => CommandOutcome::success_with_total(serde_json::json!([]).to_string(), 0),
+        _ => CommandOutcome::success_with_total(serde_json::json!([]), 0),
     }
 }
 
@@ -518,6 +485,9 @@ const fn return_code_1() -> i32 {
 }
 
 pub fn run() {
+    if let Some(code) = crate::output::compile_worker() {
+        process::exit(code);
+    }
     crate::broken_pipe::install();
     match run_inner() {
         Ok(()) => {
@@ -538,7 +508,10 @@ pub fn run() {
                     // renders through the same envelope every other user error
                     // uses and exits 1, so `--format json` stays parseable and
                     // exit 2 keeps meaning "usage or internal".
-                    if let Some(user) = err.downcast_ref::<crate::error::UserFacing>() {
+                    if let Some(diagnostic) = err.downcast_ref::<crate::output::UserDiagnostic>() {
+                        eprintln!("{}", diagnostic.render(crate::error::error_format()));
+                        1
+                    } else if let Some(user) = err.downcast_ref::<crate::error::UserFacing>() {
                         let msg = crate::output::format_error(
                             crate::error::error_format(),
                             &user.message,
@@ -1005,46 +978,31 @@ fn run_inner() -> Result<(), AppError> {
         resolve_format_by_tty(std::io::stdout().is_terminal())
     });
 
+    let output_preflight = crate::prepared::OutputPreflight::new(&cli)?;
+    let single_selection = match &cli.command {
+        Commands::Read(ReadArgs { selection, .. })
+        | Commands::Backlinks { selection, .. }
+        | Commands::Task {
+            action: crate::cli::args::TaskAction::Read { selection, .. },
+        } => Some(selection),
+        _ => None,
+    };
+    if single_selection.is_some_and(|selection| {
+        selection.file.is_empty()
+            && selection.file_positional.is_none()
+            && selection.files_from.is_none()
+            && selection.glob.is_empty()
+    }) {
+        return Err(AppError::Clap(Cli::command().error(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "required argument missing: provide <FILE>, --file <FILE>, or --files-from <PATH>",
+        )));
+    }
+
     // `init` operates on CWD directly and needs no config or format resolution.
     // Dispatch it before the rest of the setup.
     // The global --dir flag is used as the dir value for .hyalo.toml.
     // Reject --count early — init is not a list command.
-    if cli.count
-        && matches!(
-            &cli.command,
-            Commands::Init { .. }
-                | Commands::Deinit
-                | Commands::Completion { .. }
-                | Commands::Config { .. }
-        )
-    {
-        let fmt = early_format(cli.format, cli.jq.is_some(), config.format.as_deref());
-        eprintln!(
-            "{}",
-            crate::output::format_error(fmt, count_unsupported_error(), None, None, None)
-        );
-        // User error (unsupported flag for this command) → exit 1, not 2
-        // (2 is reserved for internal errors — iter-181 task 2).
-        return Err(AppError::Exit(1));
-    }
-    // `--format github` is lint-only everywhere else (see the rejection further
-    // down, which `init`/`deinit` never reach because they dispatch here first).
-    // Reject it with the identical message rather than silently printing text.
-    if cli.format == Some(Format::Github)
-        && matches!(&cli.command, Commands::Init { .. } | Commands::Deinit)
-    {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                Format::Text,
-                "--format github is only supported by `hyalo lint`",
-                None,
-                Some("valid formats for this command are: json, text"),
-                None,
-            )
-        );
-        return Err(AppError::Exit(1));
-    }
     if let Commands::Init {
         claude,
         pi,
@@ -1073,8 +1031,15 @@ fn run_inner() -> Result<(), AppError> {
     }
     if let Commands::Completion { shell } = &mut cli.command {
         let mut cmd = Cli::command();
-        clap_complete::generate(*shell, &mut cmd, "hyalo", &mut std::io::stdout());
-        return Ok(());
+        let mut bytes = Vec::new();
+        clap_complete::generate(*shell, &mut cmd, "hyalo", &mut bytes);
+        let code =
+            OutputPipeline::plain(Format::Text, None).finalize(Ok(CommandOutcome::RawBytes(bytes)));
+        return if code == 0 {
+            Ok(())
+        } else {
+            Err(AppError::Exit(code))
+        };
     }
     // `config` inspects CWD directly and does not need normal pipeline setup.
     // Dispatch before config validation (dir-doesn't-exist check) so it always works.
@@ -1138,44 +1103,16 @@ fn run_inner() -> Result<(), AppError> {
         )
         .map_err(AppError::Internal)?;
 
-        // `--jq` operates on the full envelope, exactly as it does for pipeline
-        // commands. Before iter-192 the filter was accepted and silently
-        // ignored, printing the unfiltered object.
-        if let Some(filter) = cli.jq.as_deref() {
-            let envelope = crate::commands::config::config_envelope(&report);
-            return match crate::output::apply_jq_filter_result(filter, &envelope) {
-                Ok(filtered) => {
-                    println!("{}", crate::output::sanitize_control_chars(&filtered));
-                    Ok(())
-                }
-                Err(e) => Err(AppError::User(crate::output::format_error(
-                    format,
-                    "jq filter failed",
-                    None,
-                    None,
-                    Some(&e),
-                ))),
-            };
-        }
-
-        // Hints follow the same precedence as every other command: on by
-        // default, `--no-hints` (or `hints = false` in .hyalo.toml) turns them
-        // off, an explicit `--hints` turns them back on.
         let show_hints = cli.hints || (!cli.no_hints && config.hints);
-        match crate::commands::config::run_config(&report, format, show_hints) {
-            CommandOutcome::RawBytes(_) => {
-                unreachable!("config does not emit RawBytes")
-            }
-            CommandOutcome::Success { output, .. } | CommandOutcome::RawOutput(output) => {
-                // Sanitized because the text-mode RawOutput branch echoes the raw
-                // .hyalo.toml contents (`report.raw_contents`), which never passes
-                // through the JSON pipeline's own sanitization.
-                print!("{}", crate::output::sanitize_control_chars(&output));
-                return Ok(());
-            }
-            CommandOutcome::UserError(output) => return Err(AppError::User(output)),
-        }
+        let outcome = crate::commands::config::run_config(&report, format, show_hints);
+        let code = OutputPipeline::plain(format, cli.jq.as_deref()).finalize_config(outcome);
+        return if code == 0 {
+            Ok(())
+        } else {
+            Err(AppError::Exit(code))
+        };
     }
+
     // Merge: CLI args override config, config overrides hardcoded defaults.
     // Track whether --dir was explicitly passed (not from config) so hints
     // can omit it when the user relies on .hyalo.toml.
@@ -1437,6 +1374,27 @@ fn run_inner() -> Result<(), AppError> {
         config.hints
     };
 
+    // Both view spellings enter the same effective-query preparation before
+    // output validation, hints, index loading, or filesystem effects.
+    if let Commands::Views {
+        action:
+            Some(crate::cli::args::ViewsAction::Run {
+                name,
+                pattern,
+                filters,
+                index_flags,
+            }),
+    } = &mut cli.command
+    {
+        cli.command = Commands::Find(FindArgs {
+            pattern: pattern.take(),
+            file_positional: Vec::new(),
+            view: Some(std::mem::take(name)),
+            filters: std::mem::take(filters),
+            index_flags: std::mem::take(index_flags),
+        });
+    }
+
     // Resolve --view: load the named view from .hyalo.toml and merge CLI overrides.
     if let Commands::Find(FindArgs {
         view: Some(view_name),
@@ -1495,7 +1453,7 @@ fn run_inner() -> Result<(), AppError> {
     // ambient format (explicit `--format`, else json when stdout is a pipe)
     // still governs error envelopes, so a scripted `hyalo read` failure parses
     // like every other command's.
-    let error_format = format;
+    let error_format = crate::error::transport_error_format(format);
     // Publish it for the top-level handler, which renders `UserFacing` errors
     // (iter-274, BUG-25) long after this scope has gone.
     crate::error::set_error_format(error_format);
@@ -1507,112 +1465,14 @@ fn run_inner() -> Result<(), AppError> {
         } else {
             format
         };
-    // --count replaces the entire output pipeline, so check its conflicts first.
-    if cli.count && jq_filter.is_some() {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                format,
-                "--count cannot be combined with --jq",
-                None,
-                Some(
-                    "--count prints the bare total; --jq applies a custom filter — use one or the other"
-                ),
-                None,
-            )
-        );
-        // Conflicting user flags → exit 1 (iter-181 task 2).
-        return Err(AppError::Exit(1));
-    }
-    if jq_filter.is_some() && format != Format::Json {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                format,
-                &format!("--jq cannot be combined with --format {format}"),
-                None,
-                Some("--jq always operates on JSON output; drop --format or use --format json"),
-                None,
-            )
-        );
-        // --jq + --format text is a user error → exit 1, not 2 (iter-181 task 2).
-        return Err(AppError::Exit(1));
-    }
-    // iter-235/238: `--filenames-only` / `--filenames0` are find-local
-    // projections that bypass the JSON envelope entirely (raw paths). clap
-    // already rejects them alongside `--jq` and `--count` (which likewise
-    // replace the whole pipeline); here we cover an explicit `--format json`,
-    // which is a contradictory projection (JSON envelope vs. raw paths). The
-    // default JSON-when-piped format does NOT conflict — the projection
-    // overrides the format so a piped `find --filenames-only | sort` works
-    // without a `--format text` chore, which is the whole point of the flags.
-    let filename_projection = match &cli.command {
-        Commands::Find(FindArgs {
-            filters:
-                FindFilters {
-                    filenames_only,
-                    filenames0,
-                    ..
-                },
-            ..
-        }) if *filenames_only || *filenames0 => {
-            if *filenames_only {
-                "--filenames-only"
-            } else {
-                "--filenames0"
-            }
-        }
-        _ => "",
-    };
-    if format_from_cli && format == Format::Json && !filename_projection.is_empty() {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                format,
-                &format!("{filename_projection} cannot be combined with --format json"),
-                None,
-                Some(
-                    "--filenames-only/--filenames0 print raw paths; drop --format (or use --format text)"
-                ),
-                None,
-            )
-        );
-        return Err(AppError::Exit(1));
-    }
-    // `--format github` is lint-only: it emits GitHub Actions workflow commands
-    // for lint violations. Reject it for every other subcommand with a clear
-    // message listing the valid formats, so `hyalo find --format github` fails
-    // fast instead of producing meaningless output.
-    if format == Format::Github && !matches!(cli.command, Commands::Lint { .. }) {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                Format::Text,
-                "--format github is only supported by `hyalo lint`",
-                None,
-                Some("valid formats for this command are: json, text"),
-                None,
-            )
-        );
-        // Unsupported format for this command is a user error → exit 1 (iter-181 task 2).
-        return Err(AppError::Exit(1));
-    }
-    // `--count` prints a bare integer; it is meaningless alongside the
-    // annotation stream `--format github` produces. Reject the combination.
-    if format == Format::Github && cli.count {
-        eprintln!(
-            "{}",
-            crate::output::format_error(
-                Format::Text,
-                "--count cannot be combined with --format github",
-                None,
-                Some("--format github emits inline annotations; drop --count to see them"),
-                None,
-            )
-        );
-        // Conflicting user flags → exit 1 (iter-181 task 2).
-        return Err(AppError::Exit(1));
-    }
+    let mut output_plan = crate::prepared::OutputPlan::new(
+        output_preflight,
+        &cli.command,
+        format,
+        error_format,
+        format_from_cli,
+        hints_flag,
+    )?;
 
     // Compute the annotation path prefix for `--format github`: the vault dir
     // expressed relative to CWD. GitHub resolves annotation `file=` paths
@@ -2104,11 +1964,19 @@ fn run_inner() -> Result<(), AppError> {
     // Extract the effective index path from the subcommand's IndexFlags.
     // --index-file PATH wins; bare --index resolves to vault_dir/.hyalo-index.
     // Relative --index-file paths are resolved against CWD (caller convention).
-    let (index_path_buf, index_path_named): (Option<std::path::PathBuf>, bool) =
-        match effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref()) {
-            Some((p, named)) => (Some(p), named),
-            None => (None, false),
-        };
+    let index_intent =
+        crate::prepared::normalize_index_alias(&mut cli.command, cli.index_file.as_deref(), &dir)?
+            .unwrap_or_else(|| {
+                match effective_index_path_for(&cli.command, &dir, cli.index_file.as_deref()) {
+                    Some((path, explicit)) => crate::prepared::IndexIntent::Read { path, explicit },
+                    None => crate::prepared::IndexIntent::None,
+                }
+            });
+    let (index_path_buf, index_path_named) = index_intent
+        .read_target()
+        .map_or((None, false), |(path, explicit)| {
+            (Some(path.to_path_buf()), explicit)
+        });
 
     // Propagate --quiet and has-index into hint context now that we know both.
     // `quiet` suppresses the slow-query hint; `has_index` suppresses all
@@ -2190,84 +2058,8 @@ fn run_inner() -> Result<(), AppError> {
                     ));
                     None
                 } else if idx.validate(&vault_dir_str, site_prefix) {
-                    // M-6: a snapshot is a point-in-time copy — edits made
-                    // outside it (by hand, by another tool, or by hyalo itself
-                    // without `--index`) are simply invisible, and the run
-                    // still exits 0. Probe the vault's directory mtimes
-                    // (bounded-depth walk, iter-249 UX-1) and warn when they
-                    // postdate the snapshot, so a stale index is at least
-                    // noisy instead of silently wrong.
-                    // iter-247 (deep-review S-2): warn-but-serve stays the
-                    // default — the probe is a heuristic, and turning a
-                    // heuristic into a hard refusal would make every indexed
-                    // query hostage to filesystem mtime granularity.
-                    //
-                    // UX-7 (iter-265, DEC-280): when the run *named* its files,
-                    // do better than the heuristic. One `stat` per named target
-                    // is cheap and exact, so refresh those entries in memory and
-                    // stay quiet — `find --index --file just-appended.md` now
-                    // reports the file's current size and line count instead of
-                    // a snapshot from before the append. The warning survives
-                    // for whole-vault queries, where refreshing everything would
-                    // re-introduce the cost iteration 260 removed.
-                    let mut idx = idx;
-                    let targets = cli.command.explicit_file_targets();
-                    let refreshed_all_targets = if targets.is_empty() {
-                        false
-                    } else {
-                        targets.iter().all(|rel| {
-                            // UX-13 (iter-277): a named target that is not on
-                            // disk at all is not evidence of a stale index —
-                            // the command is about to report `file not found`
-                            // for it, and prefixing that with "index older
-                            // than vault; results may be stale" sends the
-                            // reader off to rebuild a snapshot that was never
-                            // the problem. Nothing to refresh is not a failure
-                            // to refresh.
-                            !dir.join(rel).exists()
-                                || hyalo_core::index::refresh_if_changed_on_disk(
-                                    &mut idx, &dir, rel,
-                                )
-                        })
-                    };
-                    if !refreshed_all_targets && !cli.command.write_repairs_named_targets() {
-                        let (_, _, created_at, _) = idx.header_info();
-                        let dirs_moved =
-                            hyalo_core::index::newest_dir_mtime(&dir).is_some_and(|newest| {
-                                newest
-                                    > created_at
-                                        .saturating_add(hyalo_core::index::STALENESS_TOLERANCE_SECS)
-                            });
-                        if dirs_moved {
-                            // UX-8 (iter-277): name the probe that fired. Two
-                            // different checks produce this warning and only
-                            // one of them names a witness file, so the same
-                            // vault appeared to report a filename on one run
-                            // and nothing on the next, with no way to tell
-                            // that a different check had spoken.
-                            crate::warn::warn(
-                                "index older than vault (a directory's mtime moved since the \
-                                 index was built); results may be stale — re-run create-index",
-                            );
-                        } else if let Some(rel) =
-                            // INDEX-1 (iter-273, BUG-12): the directory probe
-                            // above sees notes added and removed, but an
-                            // in-place overwrite moves no directory mtime — so
-                            // a rewritten note was served from the snapshot
-                            // silently. Fall through to the per-entry mtime
-                            // comparison only when the cheap probe found
-                            // nothing, so the extra `stat`s are paid once, on
-                            // the vault that looked clean.
-                            hyalo_core::index::first_file_modified_since_snapshot(
-                                    &idx, &dir,
-                                )
-                        {
-                            crate::warn::warn(format!(
-                                "index older than vault (file {rel} changed on disk since the \
-                                 index was built); results may be stale — re-run create-index"
-                            ));
-                        }
-                    }
+                    // Content refresh belongs to the prepared invocation, after
+                    // cardinality validation and rooted target checks.
                     Some(idx)
                 } else {
                     let (hdr_vault, hdr_prefix, _, _) = idx.header_info();
@@ -2447,54 +2239,6 @@ fn run_inner() -> Result<(), AppError> {
     if let Some(idx) = snapshot_index.as_mut() {
         idx.set_frontmatter_link_props(frontmatter_link_props_owned.clone());
     }
-    // For `create-index`, merge the global `--index-file` flag into the
-    // subcommand's `-o / --output` field.  Both are synonyms on this subcommand.
-    // If both are provided and differ, return a clear user error.
-    if let Commands::CreateIndex {
-        output,
-        allow_outside_vault: _,
-    } = &mut cli.command
-        && let Some(global_path) = cli.index_file.as_ref()
-    {
-        match output.as_ref() {
-            // `--output` already set to the same value — no-op.
-            Some(local) if local == global_path => {}
-            // Both flags given with different values — conflict.
-            Some(local) => {
-                let out = crate::output::format_error(
-                    effective_format,
-                    "conflicting output paths for create-index",
-                    None,
-                    Some("pass either -o/--output or --index-file, not both with different paths"),
-                    Some(&format!(
-                        "--output = {}, --index-file = {}",
-                        local.display(),
-                        global_path.display()
-                    )),
-                );
-                let pipeline = OutputPipeline {
-                    user_format: format,
-                    error_format,
-                    jq_filter,
-                    hint_ctx: hint_ctx.as_ref(),
-                    count: cli.count,
-                    files_from_counters: None,
-                    github_path_prefix: String::new(),
-                };
-                let code = pipeline.finalize(Ok(CommandOutcome::UserError(out)));
-                return if code == 0 {
-                    Ok(())
-                } else {
-                    Err(AppError::Exit(code))
-                };
-            }
-            // Only `--index-file` provided — promote to `--output`.
-            None => {
-                *output = Some(global_path.clone());
-            }
-        }
-    }
-
     // Resolve --files-from before dispatch. This converts the files_from source
     // into the command's `file` list and returns skip counters for the envelope.
     // When the snapshot is active, route resolution through the snapshot so paths
@@ -2535,7 +2279,15 @@ fn run_inner() -> Result<(), AppError> {
         }
     };
 
+    let query_reports_counters = matches!(cli.command, Commands::Find(_));
+    output_plan.set_counters(
+        files_from_counters
+            .clone()
+            .or_else(|| query_reports_counters.then(FilesFromCounters::default)),
+    );
+
     let mut ctx = CommandContext {
+        hint_demand: output_plan.hint_demand(),
         dir: &dir,
         config_dir: &config_dir,
         configured_dir_str,
@@ -2562,12 +2314,10 @@ fn run_inner() -> Result<(), AppError> {
         auto_link_first_only,
         config_fuzzy_min_confidence,
         auto_link_warn_common_titles,
-        exit_code_override: None,
         config_default_limit,
         programmatic_output: jq_filter.is_some() || cli.count,
         lint_strict: lint_strict_from_config,
         lint_profiles: lint_profiles_active,
-        files_from_counters: None,
         // iter-273: remember *how* the file list arrived, because
         // `resolve_files_from_for_command` above has already flattened
         // `--files-from` into the command's `file` field.
@@ -2593,25 +2343,31 @@ fn run_inner() -> Result<(), AppError> {
     // run does not narrate a vault it never summarised.
     let summary_kb_dir_note = matches!(cli.command, Commands::Summary(_)) && format == Format::Text;
 
-    // iter-264 (BUG-22): `find`'s envelope always carries the three
-    // `--files-from` counters, zero when the flag was not used, so a consumer
-    // can read `.files_missing` without first checking how the file list was
-    // supplied. `views run` is `find` under another spelling and must stay
-    // byte-identical to it. Captured before dispatch, which moves `cli.command`.
-    let find_always_reports_counters = matches!(
-        cli.command,
-        Commands::Find(_)
-            | Commands::Views {
-                action: Some(crate::cli::args::ViewsAction::Run { .. })
-            }
-    );
-
     let dispatch_start = Instant::now();
     let result = if files_from_empty {
         // Produce the appropriate empty payload for the command type.
-        Ok(empty_result_for_command(&cli.command))
+        let empty = empty_result_for_command(&cli.command);
+        let empty = if output_plan.internal_report() {
+            empty.with_apply_report(crate::commands::apply::ApplyReport {
+                paths: Vec::new(),
+                index: crate::commands::apply::IndexDisposition::NotUsed,
+                index_error: None,
+            })
+        } else {
+            empty
+        };
+        Ok(match output_plan.projection() {
+            crate::prepared::Projection::Filenames0 => CommandOutcome::RawBytes(Vec::new()),
+            crate::prepared::Projection::Filenames => CommandOutcome::RawOutput(String::new()),
+            crate::prepared::Projection::Standard => empty,
+        })
     } else {
-        dispatch(cli.command, &mut ctx)
+        let prepared =
+            crate::prepared::PreparedInvocation::new(cli.command, output_plan, index_intent, &ctx)?;
+        prepared.refresh_index(&mut ctx)?;
+        let (result, plan) = dispatch(prepared, &mut ctx);
+        output_plan = plan;
+        result
     };
     // Saturate at u64::MAX on absurdly long runs (> ~585 million years).
     let elapsed_ms = u64::try_from(dispatch_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -2634,30 +2390,20 @@ fn run_inner() -> Result<(), AppError> {
         hctx.body_search_suggestion = ctx.zero_result_body_search.take();
     }
 
-    let exit_code_override = ctx.exit_code_override;
-    // Prefer counters captured inside dispatch (read/backlinks/task path through
-    // `resolve_inputs`); fall back to the pre-dispatch path used by other commands.
-    let final_files_from_counters = ctx
-        .files_from_counters
-        .take()
-        .or(files_from_counters)
-        .or_else(|| {
-            find_always_reports_counters
-                .then(crate::commands::files_from::FilesFromCounters::default)
-        });
-
     let pipeline = OutputPipeline {
-        user_format: format,
-        error_format,
-        jq_filter,
+        user_format: output_plan.format(),
+        error_format: output_plan.error_format(),
+        jq_filter: output_plan.jq(),
         hint_ctx: hint_ctx.as_ref(),
-        count: cli.count,
-        files_from_counters: final_files_from_counters,
+        count: output_plan.count(),
+        projection: output_plan.projection(),
+        internal_report: output_plan.internal_report(),
+        files_from_counters: output_plan.counters().cloned(),
         github_path_prefix,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.
-    let final_code = exit_code_override.unwrap_or(code);
+    let final_code = code;
     if final_code == 0 {
         Ok(())
     } else {

@@ -641,9 +641,7 @@ pub fn links_fix(
 
     let _ = format;
     Ok((
-        CommandOutcome::success(
-            serde_json::to_string_pretty(&output).context("failed to serialize")?,
-        ),
+        CommandOutcome::success(serde_json::to_value(&output).context("failed to serialize")?),
         modified_files,
         failed_count > 0,
     ))
@@ -1282,9 +1280,7 @@ pub fn links_auto(
 
     let _ = format;
     Ok((
-        CommandOutcome::success(
-            serde_json::to_string_pretty(&output).context("failed to serialize")?,
-        ),
+        CommandOutcome::success(serde_json::to_value(&output).context("failed to serialize")?),
         modified_files,
         failed_count > 0,
     ))
@@ -2139,15 +2135,13 @@ pub(crate) fn run(
             };
             // L-11: a mid-batch write failure yields a non-zero exit code
             // even though the envelope is emitted in full.
-            if had_failures {
-                ctx.exit_code_override = Some(1);
-            }
+
             // resolved is dropped — safe to borrow snapshot_index mutably.
             let mut journal =
                 crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
             journal.rescan_modified(dir, &modified_files)?;
             journal.flush()?;
-            Ok(outcome)
+            Ok(outcome.with_status(i32::from(had_failures)))
         }
         LinksAction::Auto {
             dry_run: _,
@@ -2201,14 +2195,12 @@ pub(crate) fn run(
                 IndexResolution::Outcome(outcome) => (outcome, Vec::new(), false),
             };
             // L-11: partial write failure ⇒ non-zero exit code.
-            if had_failures {
-                ctx.exit_code_override = Some(1);
-            }
+
             let mut journal =
                 crate::commands::journal::MutationJournal::new(snapshot_index, index_path);
             journal.rescan_modified(dir, &modified_files)?;
             journal.flush()?;
-            Ok(outcome)
+            Ok(outcome.with_status(i32::from(had_failures)))
         }
     }
 }

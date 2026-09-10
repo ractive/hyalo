@@ -756,7 +756,7 @@ fn required_property_empty_array_is_error() {
     let (outcome, counts) = lint_extended_strict(&path, "empty_tags.md", &schema, false);
     assert!(counts.errors > 0, "empty required list should error");
     let body = match outcome {
-        crate::output::CommandOutcome::Success { output, .. } => output,
+        crate::output::CommandOutcome::Success { output, .. } => output.to_string(),
         other => panic!("expected Success outcome, got: {other:?}"),
     };
     assert!(
@@ -787,7 +787,7 @@ fn required_property_null_value_is_error() {
     let (outcome, counts) = lint_extended_strict(&path, "null_tags.md", &schema, false);
     assert!(counts.errors > 0, "null required property should error");
     let body = match outcome {
-        crate::output::CommandOutcome::Success { output, .. } => output,
+        crate::output::CommandOutcome::Success { output, .. } => output.to_string(),
         other => panic!("expected Success outcome, got: {other:?}"),
     };
     assert!(

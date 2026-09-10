@@ -44,9 +44,20 @@ const FORMAT_TEXT: u8 = 0;
 const FORMAT_JSON: u8 = 1;
 const FORMAT_GITHUB: u8 = 2;
 
+/// The npm transport requests structured diagnostics while retaining the
+/// successful text ProcessResult API. This does not alter result rendering.
+pub(crate) fn transport_error_format(format: Format) -> Format {
+    if std::env::var_os("HYALO_INTERNAL_JSON_ERRORS").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        Format::Json
+    } else {
+        format
+    }
+}
+
 /// Record the effective error format for the top-level handler.
 pub(crate) fn set_error_format(format: Format) {
-    let code = match format {
+    let code = match transport_error_format(format) {
         Format::Text => FORMAT_TEXT,
         Format::Json => FORMAT_JSON,
         Format::Github => FORMAT_GITHUB,

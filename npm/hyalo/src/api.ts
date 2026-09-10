@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { resolveBinary } from "../lib/resolve-platform.js";
 
 import type { Envelope } from "./generated/Envelope.js";
+import type { MutationReportEnvelope } from "./generated/MutationReportEnvelope.js";
 import type { ErrorEnvelope } from "./generated/ErrorEnvelope.js";
 import type {
   ConfigOptions,
@@ -66,6 +67,9 @@ export class HyaloError extends Error {
   readonly stdout: string;
   readonly stderr: string;
   readonly envelope?: ErrorEnvelope;
+  /** Committed paths and index disposition, retained even after output failure. */
+  readonly effects?: ErrorEnvelope["effects"];
+  readonly category?: ErrorEnvelope["category"];
 
   constructor(result: ProcessResult, envelope?: ErrorEnvelope) {
     super(envelope?.error ?? `hyalo exited with code ${result.code}`);
@@ -74,6 +78,8 @@ export class HyaloError extends Error {
     this.stdout = result.stdout;
     this.stderr = result.stderr;
     this.envelope = envelope;
+    this.effects = envelope?.effects;
+    this.category = envelope?.category;
   }
 }
 
@@ -253,6 +259,7 @@ function nativeTransport(binaryPath?: string): HyaloTransport {
     return new Promise<ProcessResult>((resolve, reject) => {
       const child = spawn(binary, [...argv], {
         cwd: options.cwd,
+        env: { ...process.env, HYALO_INTERNAL_JSON_ERRORS: "1" },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -419,6 +426,19 @@ async function jsonCall<T>(argv: string[], options: Record<string, unknown>): Pr
   const envelope = parseEnvelope<T>(result);
   await reportDiagnostics(result, execution);
   return envelope;
+}
+
+/** @internal JSON mutation accessor for adapters; not exported by the package barrel.
+ * Public set/task keep their successful ProcessResult streams. This accessor
+ * executes exactly once and retains structured effects on HyaloError.
+ */
+export async function mutationReport<T>(argv: readonly string[], options: ExecutionOptions = {}): Promise<MutationReportEnvelope<T>> {
+  const args = [...argv];
+  const terminator = args.indexOf("--");
+  args.splice(terminator === -1 ? args.length : terminator, 0, "--internal-mutation-report");
+  const envelope = await jsonCall<T>(args, options as unknown as Record<string, unknown>);
+  if (!("effects" in envelope)) throw new HyaloParseError("hyalo returned no internal mutation report", { code: 0, stdout: JSON.stringify(envelope), stderr: "" });
+  return envelope as MutationReportEnvelope<T>;
 }
 
 export function find(options: FindCallOptions = {}): Promise<Envelope<FindResult>> {

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::cli::args::{Commands, FindArgs, ReadArgs, SummaryArgs};
+use crate::cli::args::{Commands, SummaryArgs};
 use crate::commands::{
     append as append_commands, backlinks as backlinks_commands, changelog as changelog_commands,
     create_index as create_index_commands, drop_index as drop_index_commands,
@@ -157,6 +157,7 @@ pub(crate) fn maybe_case_index(
 
 /// Shared context for command dispatch.
 pub(crate) struct CommandContext<'a> {
+    pub hint_demand: crate::prepared::HintDemand,
     pub dir: &'a Path,
     /// The directory where `.hyalo.toml` was loaded from.  This is the
     /// project root when `dir` comes from `dir = "subdir"` in the config,
@@ -238,7 +239,6 @@ pub(crate) struct CommandContext<'a> {
     /// Optional exit code override set by commands that need a non-0/2 exit code
     /// (e.g. `lint` returns 1 when errors are found). The output pipeline uses this
     /// to override its own exit code calculation.
-    pub exit_code_override: Option<i32>,
     /// Default output limit from `.hyalo.toml` (`default_limit`).
     /// `None` = use `DEFAULT_OUTPUT_LIMIT`.
     /// `Some(0)` = unlimited.
@@ -256,10 +256,6 @@ pub(crate) struct CommandContext<'a> {
     /// Enables every listed profile's advisory lint rules. Multiple profiles
     /// compose — all their rules fire in one lint pass.
     pub lint_profiles: Vec<String>,
-    /// `--files-from` counters captured during dispatch for commands that resolve
-    /// `--files-from` inside `resolve_inputs` (read/backlinks/task). Surfaced by
-    /// the output pipeline as `files_from_counters` in the envelope.
-    pub files_from_counters: Option<crate::commands::files_from::FilesFromCounters>,
     /// `true` when the command's `file` list was produced by `--files-from`
     /// rather than typed as `--file` / positional arguments (iter-273).
     ///
@@ -378,12 +374,11 @@ pub(crate) fn inject_ext_file_result(
     extra: &lint_commands::ExtFileLintResult,
 ) -> Result<CommandOutcome> {
     let (payload, total_count) = match outcome {
-        CommandOutcome::Success { output, total } => (output, total),
+        CommandOutcome::Success { output, total, .. } => (output, total),
         other => return Ok(other),
     };
 
-    let mut value: serde_json::Value =
-        serde_json::from_str(&payload).context("failed to re-parse extended lint output JSON")?;
+    let mut value: serde_json::Value = payload;
 
     if let Some(obj) = value.as_object_mut() {
         let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
@@ -475,7 +470,7 @@ pub(crate) fn inject_ext_file_result(
 
     let extra_violations: usize = extra.rule_groups.iter().map(|g| g.count).sum();
     let bump_total = extra_violations > 0;
-    let new_payload = crate::output::format_success(crate::output::Format::Json, &value);
+    let new_payload = value;
     Ok(match total_count {
         Some(t) => {
             CommandOutcome::success_with_total(new_payload, if bump_total { t + 1 } else { t })
@@ -500,7 +495,7 @@ pub(crate) fn property_filter_error_outcome(e: &anyhow::Error, format: Format) -
     } else {
         None
     };
-    CommandOutcome::UserError(crate::output::format_error(
+    CommandOutcome::UserError(crate::output::user_diagnostic(
         format,
         &e.to_string(),
         None,
@@ -526,34 +521,88 @@ pub(crate) fn parse_where_filters(
     Ok(filters)
 }
 
-pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Result<CommandOutcome> {
+pub(crate) fn dispatch(
+    prepared: crate::prepared::PreparedInvocation,
+    ctx: &mut CommandContext<'_>,
+) -> (Result<CommandOutcome>, crate::prepared::OutputPlan) {
+    use crate::prepared::PreparedCommand;
+    let (command, output, index) = prepared.into_parts();
+    ctx.hint_demand = output.hint_demand();
+    let result = match command {
+        PreparedCommand::Read {
+            target,
+            section,
+            lines,
+            frontmatter,
+        } => read_commands::run_command(ctx, target, section, lines, frontmatter),
+        PreparedCommand::Backlinks { target, limit } => backlinks_commands::run(ctx, target, limit),
+        PreparedCommand::TaskRead {
+            target,
+            lines,
+            section,
+            all,
+        } => task_commands::read_prepared(
+            ctx.dir,
+            target,
+            &lines,
+            section.as_deref(),
+            all,
+            ctx.effective_format,
+        ),
+        PreparedCommand::TaskMutation {
+            targets,
+            lines,
+            section,
+            all,
+            status,
+            dry_run,
+        } => {
+            let mut journal = crate::commands::journal::MutationJournal::new(
+                &mut *ctx.snapshot_index,
+                ctx.index_path,
+            );
+            task_commands::mutate_prepared(
+                ctx.dir,
+                targets,
+                &lines,
+                section.as_deref(),
+                all,
+                status,
+                ctx.effective_format,
+                &mut journal,
+                dry_run,
+            )
+        }
+        PreparedCommand::Find(query) => {
+            let (pattern, filters, provenance, sections, selection) = query.into_parts();
+            ctx.file_list_from_files_from =
+                matches!(provenance, crate::prepared::SelectionProvenance::FilesFrom);
+            find_commands::run::run(ctx, pattern, filters, sections, selection)
+        }
+        PreparedCommand::Legacy(mut command) => {
+            if let Some(path) = index.destination() {
+                match &mut command {
+                    Commands::CreateIndex { output, .. } => *output = Some(path.to_path_buf()),
+                    Commands::DropIndex { path: target, .. } => *target = Some(path.to_path_buf()),
+                    _ => {}
+                }
+            }
+            dispatch_command(command, ctx)
+        }
+    };
+    (result, output)
+}
+
+fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
 
     match command {
-        Commands::Find(FindArgs {
-            pattern,
-            file_positional,
-            view: _, // resolved before dispatch
-            filters,
-            index_flags: _, // consumed in run.rs before dispatch
-        }) => {
-            // ARCH-1 (iter-225): the ~310-line arm body now lives in
-            // `commands::find::run` — dispatch only forwards the parsed args.
-            find_commands::run::run(ctx, pattern, file_positional, filters)
-        }
-        Commands::Read(ReadArgs {
-            selection,
-            section,
-            lines,
-            frontmatter,
-            index_flags: _, // consumed in run.rs before dispatch
-        }) => {
-            // ARCH-1 (iter-225): the arm body now lives in
-            // `commands::read::run_command`.
-            read_commands::run_command(ctx, selection, section, lines, frontmatter)
-        }
+        Commands::Read(_)
+        | Commands::Backlinks { .. }
+        | Commands::Task { .. }
+        | Commands::Find(_) => anyhow::bail!("command requires a prepared request"),
         Commands::Properties {
             glob: bare_glob,
             limit: bare_limit,
@@ -571,10 +620,6 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
         } => {
             // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.
             tag_commands::run(ctx, bare_glob, bare_limit, action)
-        }
-        Commands::Task { action } => {
-            // ARCH-1 (iter-225): the arm body now lives in `commands::tasks::run`.
-            task_commands::run(ctx, action)
         }
         Commands::Summary(SummaryArgs {
             glob,
@@ -662,14 +707,7 @@ pub(crate) fn dispatch(command: Commands, ctx: &mut CommandContext<'_>) -> Resul
                 validate,
             )
         }
-        Commands::Backlinks {
-            selection,
-            limit: cli_limit,
-            index_flags: _, // consumed in run.rs before dispatch
-        } => {
-            // ARCH-1 (iter-225): the arm body now lives in `commands::backlinks::run`.
-            backlinks_commands::run(ctx, selection, cli_limit)
-        }
+
         Commands::Mv {
             file_positional,
             file,

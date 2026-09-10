@@ -1,29 +1,5 @@
-//! Make broken-pipe writes (`hyalo find | head`) terminate quietly instead of
-//! panicking.
-//!
-//! Rust's `println!`/`print!`/`eprintln!` macros panic on any write error —
-//! including `ErrorKind::BrokenPipe`, which happens whenever a downstream
-//! reader (e.g. `head`) closes its end of the pipe before we're done writing.
-//! That surfaces to the user as `thread 'main' panicked at ...: failed
-//! printing to stdout: Broken pipe (os error 32)`, which looks like a crash
-//! even though nothing is actually wrong.
-//!
-//! Two layers, since neither alone covers every platform:
-//!
-//! 1. On Unix, reset `SIGPIPE` to its default disposition (`SIG_DFL`). Rust's
-//!    runtime masks `SIGPIPE` at startup so writes fail with an `Err` instead
-//!    of killing the process the traditional Unix way; resetting it restores
-//!    that behavior, so the process is terminated by the kernel before the
-//!    write call can return an error to panic on. This matches how `cat`,
-//!    `grep`, etc. behave and yields the conventional 128+SIGPIPE (141) exit
-//!    code without touching any print call site.
-//! 2. A panic hook that recognizes the broken-pipe panic message and exits
-//!    quietly (same 141 code, for consistency) instead of printing a panic
-//!    backtrace. This is the only mechanism available on Windows (no
-//!    `SIGPIPE`), and is a backstop on Unix for any write that fails before
-//!    the signal takes effect.
-//!
-//! Call [`install`] once, as early as possible in `main`.
+//! Keep SIGPIPE ignored so the output boundary can retain committed effects.
+//! Legacy print sites retain a quiet broken-pipe panic backstop.
 
 /// Exit code used when a write fails because the reader closed the pipe.
 ///
@@ -42,10 +18,10 @@ pub fn install() {
 #[cfg(unix)]
 fn reset_sigpipe() {
     // SAFETY: `libc::signal` is called with a valid signal number (SIGPIPE)
-    // and a valid handler constant (SIG_DFL) per POSIX — the standard idiom
-    // for restoring default SIGPIPE behavior.
+    // and a valid handler constant (SIG_IGN) per POSIX — the standard idiom
+    // for receiving write errors instead of process termination.
     unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 }
 

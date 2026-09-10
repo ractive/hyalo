@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
-use crate::output::{CommandOutcome, Format, format_success};
+use crate::output::{CommandOutcome, Format};
 
 /// Data collected for the config report.
 pub(crate) struct ConfigReport {
@@ -374,7 +374,7 @@ fn run_config_json(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
     if !show_hints {
         envelope["hints"] = serde_json::Value::Array(Vec::new());
     }
-    CommandOutcome::success(format_success(Format::Json, &envelope))
+    CommandOutcome::success(envelope)
 }
 
 /// Render a list-valued config setting for the text report: comma-joined, or

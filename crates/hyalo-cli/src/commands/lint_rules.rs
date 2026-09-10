@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::commands::lint::SCHEMA_PSEUDO_RULE;
-use crate::output::{CommandOutcome, Format, format_error, format_output};
+use crate::output::{CommandOutcome, Format, output_value, user_diagnostic};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -91,7 +91,7 @@ pub(crate) fn list_rules(
 
     let _ = config_dir; // not used currently, kept for potential future hints
     let total = results.len() as u64;
-    CommandOutcome::success_with_total(format_output(Format::Json, &results), total)
+    CommandOutcome::success_with_total(output_value(&results), total)
 }
 
 // ---------------------------------------------------------------------------
@@ -109,30 +109,27 @@ pub(crate) fn show_rule(
     // UX-5 (iter-274): `SCHEMA` is listed and selectable, so it must also be
     // inspectable — a catalog entry `show` refuses is worse than no entry.
     if rule_id.eq_ignore_ascii_case(SCHEMA_PSEUDO_RULE) {
-        return CommandOutcome::success(format_output(
-            Format::Json,
-            &RuleResult {
-                id: SCHEMA_PSEUDO_RULE,
-                name: "frontmatter-schema",
-                description: "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
-                default_enabled: true,
-                default_severity: "error".to_owned(),
-                effective_enabled: true,
-                effective_severity: "error".to_owned(),
-                autofixable: false,
-                source: "hyalo-schema",
-                has_override: None,
-                configurable: Some(false),
-                activation: None,
-                r#override: Some(None),
-                note: Some(
-                    "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
-                ),
-            },
-        ));
+        return CommandOutcome::success(output_value(&RuleResult {
+            id: SCHEMA_PSEUDO_RULE,
+            name: "frontmatter-schema",
+            description: "Frontmatter validated against the [schema] types in .hyalo.toml: missing required properties, undeclared properties, type and enum constraints, and required sections.",
+            default_enabled: true,
+            default_severity: "error".to_owned(),
+            effective_enabled: true,
+            effective_severity: "error".to_owned(),
+            autofixable: false,
+            source: "hyalo-schema",
+            has_override: None,
+            configurable: Some(false),
+            activation: None,
+            r#override: Some(None),
+            note: Some(
+                "not configurable through lint-rules — edit the schema with `hyalo types set`, or exempt files with [schema] exempt",
+            ),
+        }));
     }
     let Some(entry) = engine.rule_entry(rule_id) else {
-        return CommandOutcome::UserError(format_error(
+        return CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("no such rule: {rule_id}"),
             None,
@@ -166,7 +163,7 @@ pub(crate) fn show_rule(
         note: None,
     };
 
-    CommandOutcome::success(format_output(Format::Json, &val))
+    CommandOutcome::success(output_value(&val))
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +184,7 @@ pub(crate) fn set_rule(
 ) -> Result<CommandOutcome> {
     // Validate rule ID
     let Some(entry) = engine.rule_entry(rule_id) else {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("no such rule: {rule_id}"),
             None,
@@ -201,7 +198,7 @@ pub(crate) fn set_rule(
         && sev != "warn"
         && sev != "error"
     {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("invalid severity {sev:?}"),
             None,
@@ -212,7 +209,7 @@ pub(crate) fn set_rule(
 
     // Require at least one mutation
     if enabled.is_none() && severity.is_none() {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             "nothing to set",
             None,
@@ -256,7 +253,7 @@ pub(crate) fn set_rule(
         let lint_rules = match lint_rules_table_mut(&mut doc) {
             Ok(item) => item,
             Err(err) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     &err.to_string(),
                     None,
@@ -304,7 +301,7 @@ pub(crate) fn set_rule(
         let lint_rules = match lint_rules_table_mut(&mut doc) {
             Ok(item) => item,
             Err(err) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     &err.to_string(),
                     None,
@@ -376,7 +373,7 @@ pub(crate) fn set_rule(
             removed: None,
             reason: None,
         };
-        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
+        return Ok(CommandOutcome::success(output_value(&val)));
     }
 
     // Skip the write when the on-disk content would not change (BUG-2:
@@ -410,7 +407,7 @@ pub(crate) fn set_rule(
         removed: None,
         reason: None,
     };
-    Ok(CommandOutcome::success(format_output(Format::Json, &val)))
+    Ok(CommandOutcome::success(output_value(&val)))
 }
 
 /// Get (creating if absent) the `[lint.rules]` table as a mutable `Item`.
@@ -478,7 +475,7 @@ pub(crate) fn remove_rule(
 ) -> Result<CommandOutcome> {
     // Validate rule ID
     let Some(entry) = engine.rule_entry(rule_id) else {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("no such rule: {rule_id}"),
             None,
@@ -516,7 +513,7 @@ pub(crate) fn remove_rule(
                 removed: Some(false),
                 reason: Some("no .hyalo.toml found"),
             };
-            return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
+            return Ok(CommandOutcome::success(output_value(&val)));
         }
         Err(e) => return Err(e).with_context(|| format!("reading {}", toml_path.display())),
     };
@@ -553,7 +550,7 @@ pub(crate) fn remove_rule(
             removed: Some(false),
             reason: Some("no override found"),
         };
-        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
+        return Ok(CommandOutcome::success(output_value(&val)));
     }
 
     let new_contents = doc.to_string();
@@ -583,7 +580,7 @@ pub(crate) fn remove_rule(
             removed: Some(true),
             reason: None,
         };
-        return Ok(CommandOutcome::success(format_output(Format::Json, &val)));
+        return Ok(CommandOutcome::success(output_value(&val)));
     }
 
     std::fs::write(&toml_path, &new_contents)
@@ -609,7 +606,7 @@ pub(crate) fn remove_rule(
         removed: Some(true),
         reason: None,
     };
-    Ok(CommandOutcome::success(format_output(Format::Json, &val)))
+    Ok(CommandOutcome::success(output_value(&val)))
 }
 
 /// Remove the `[lint.rules.<rule_id>]` entry (or scalar `rule_id = bool` entry)
@@ -933,7 +930,7 @@ mod tests {
 
         match outcome {
             CommandOutcome::Success { output, .. } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 assert_eq!(v["removed"], false);
             }
             other => panic!("expected success, got {other:?}"),

@@ -40,6 +40,15 @@ use std::path::Path;
 use hyalo_core::filter::extract_tags;
 use hyalo_core::index::{SnapshotIndex, VaultIndex as _, format_modified};
 
+#[derive(Debug)]
+struct RebuildRequired(&'static str);
+impl std::fmt::Display for RebuildRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+impl std::error::Error for RebuildRequired {}
+
 /// Owns index maintenance for one mutating command invocation.
 ///
 /// Construct it from the command context's snapshot handle + index path,
@@ -347,6 +356,114 @@ impl<'a> MutationJournal<'a> {
         Ok(())
     }
 
+    /// Reconcile all observed paths after a prepared apply, even when publication
+    /// stopped early. Persistent invalidation is only reported after removal.
+    pub(crate) fn finalize_observed(
+        &mut self,
+        dir: &Path,
+        paths: &[String],
+        unsafe_paths: &[String],
+    ) -> (super::apply::IndexDisposition, Option<String>) {
+        use super::apply::IndexDisposition;
+        if !self.has_index() || (paths.is_empty() && unsafe_paths.is_empty()) {
+            return (IndexDisposition::NotUsed, None);
+        }
+        let refresh = (|| -> Result<()> {
+            if self.index_path.is_none() {
+                anyhow::bail!("index publication path unavailable");
+            }
+            // A failed source may now be an external symlink or unreadable.
+            // Never send it through the legacy scanner; invalidate persistently.
+            if !unsafe_paths.is_empty() {
+                anyhow::bail!(RebuildRequired(
+                    "source could not be verified or published; snapshot is unsafe"
+                ));
+            }
+            if hyalo_core::discovery::link_aliases_enabled() {
+                anyhow::bail!(RebuildRequired(
+                    "alias-aware graph maintenance requires a complete index rebuild"
+                ));
+            }
+            for rel in paths {
+                // The legacy incremental graph cannot repair inbound links
+                // after title/alias catalog changes. Invalidate those cases
+                // until the complete catalog generation is owned by 292.
+                let before = self
+                    .index
+                    .as_ref()
+                    .and_then(|index| index.get(rel))
+                    .map(|entry| {
+                        (
+                            entry.properties.get("title").cloned(),
+                            entry.properties.get("aliases").cloned(),
+                        )
+                    });
+                self.add_entry_with_links(&dir.join(rel), rel)?;
+                let after = self
+                    .index
+                    .as_ref()
+                    .and_then(|index| index.get(rel))
+                    .map(|entry| {
+                        (
+                            entry.properties.get("title").cloned(),
+                            entry.properties.get("aliases").cloned(),
+                        )
+                    });
+                if before.is_none() || before != after {
+                    anyhow::bail!(RebuildRequired(
+                        "link target catalog changed; a complete index rebuild is required"
+                    ));
+                }
+            }
+            self.flush()
+        })();
+        match refresh {
+            Ok(()) => (IndexDisposition::Updated, None),
+            Err(error) => {
+                let planned_invalidation = error.downcast_ref::<RebuildRequired>().is_some();
+                let invalidation = self
+                    .index_path
+                    .ok_or_else(|| anyhow::anyhow!("index path unavailable"))
+                    .and_then(|path| {
+                        let root = hyalo_core::rooted::ConfigRoot::new(
+                            path.parent().unwrap_or_else(|| Path::new(".")),
+                        )?;
+                        let name = hyalo_core::rooted::RelativeName::new(
+                            path.file_name()
+                                .ok_or_else(|| anyhow::anyhow!("index has no name"))?,
+                        )?;
+                        let mut session = hyalo_core::rooted::WriteSession::new(
+                            hyalo_core::rooted::Durability::PerFile,
+                        );
+                        let effect = root.remove_artifact(&name, &mut session)?;
+                        if let Some(error) = effect.finalization_error() {
+                            anyhow::bail!("{error}");
+                        }
+                        session.finish()
+                    });
+                *self.index = None;
+                match invalidation {
+                    Ok(()) if planned_invalidation => {
+                        crate::warn::note(format!("snapshot invalidated: {error}"));
+                        (IndexDisposition::Invalidated, None)
+                    }
+                    Ok(()) => (
+                        IndexDisposition::Invalidated,
+                        Some(format!(
+                            "index update failed; snapshot invalidated: {error}"
+                        )),
+                    ),
+                    Err(invalidation) => (
+                        IndexDisposition::UpdateFailed,
+                        Some(format!(
+                            "index update failed: {error}; invalidation failed: {invalidation}"
+                        )),
+                    ),
+                }
+            }
+        }
+    }
+
     /// Persist the index to disk if any recorded mutation dirtied it.
     ///
     /// Called exactly once, at the end of the mutating command. No-op when
@@ -380,6 +497,31 @@ mod tests {
         )
         .unwrap();
         rel
+    }
+
+    #[test]
+    fn finalization_only_claims_invalidation_after_persistent_removal() {
+        for blocked in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("a.md"), "---\ntitle: A\n---\n").unwrap();
+            let mut index = Some(build_snapshot(dir.path()));
+            let path = dir.path().join(".hyalo-index-test");
+            if blocked {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::create_dir(&path).unwrap();
+            }
+            let mut journal = MutationJournal::new(&mut index, Some(&path));
+            let (disposition, error) =
+                journal.finalize_observed(dir.path(), &["missing.md".into()], &[]);
+            assert!(error.is_some());
+            assert!(matches!(
+                (blocked, disposition),
+                (false, super::super::apply::IndexDisposition::Invalidated)
+                    | (true, super::super::apply::IndexDisposition::UpdateFailed)
+            ));
+            assert_eq!(path.exists(), blocked);
+            assert!(index.is_none());
+        }
     }
 
     fn build_snapshot(dir: &Path) -> SnapshotIndex {

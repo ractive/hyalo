@@ -124,7 +124,7 @@ pub fn backlinks(
         backlinks: &items,
     };
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        serde_json::to_value(&result).context("failed to serialize")?,
         total,
     ))
 }
@@ -139,62 +139,41 @@ pub fn backlinks(
 #[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run(
     ctx: &mut crate::dispatch::CommandContext<'_>,
-    selection: crate::cli::inputs::InputSelection,
+    target: crate::prepared::SingleTargetRequest,
     cli_limit: Option<usize>,
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
     let snapshot_index = &mut *ctx.snapshot_index;
-    use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
     use crate::commands::{IndexResolution, resolve_index};
     use crate::dispatch::resolve_limit;
     use hyalo_core::index::ScanOptions;
-    use hyalo_core::mode_enabled;
-
-    match resolve_inputs(
-        &selection,
-        dir,
-        ctx.configured_dir_str,
+    let (_, file) = target.into_file();
+    match resolve_index(
         snapshot_index.as_ref(),
-        &ResolutionPolicy::Single { allow_glob: false },
+        dir,
+        &[],
+        &[],
         effective_format,
-        mode_enabled(ctx.case_insensitive_mode, dir),
+        site_prefix,
+        true,
+        &ScanOptions {
+            scan_body: true,
+            bm25_tokenize: false,
+            default_language: None,
+            frontmatter_link_props: ctx.frontmatter_link_props,
+        },
     )? {
-        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-        ResolvedInputsOrOutcome::Resolved(r) => {
-            ctx.files_from_counters = r.counters;
-            let (_full, file) = r
-                .files
-                .into_iter()
-                .next()
-                .context("Single resolution returned no files")?;
-            match resolve_index(
-                snapshot_index.as_ref(),
-                dir,
-                &[],
-                &[],
-                effective_format,
-                site_prefix,
-                true,
-                &ScanOptions {
-                    scan_body: true,
-                    bm25_tokenize: false,
-                    default_language: None,
-                    frontmatter_link_props: ctx.frontmatter_link_props,
-                },
-            )? {
-                IndexResolution::Resolved(resolved) => backlinks(
-                    resolved.as_index(),
-                    &file,
-                    dir,
-                    effective_format,
-                    resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
-                    hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
-                ),
-                IndexResolution::Outcome(outcome) => Ok(outcome),
-            }
-        }
+        IndexResolution::Resolved(resolved) => backlinks(
+            resolved.as_index(),
+            &file,
+            dir,
+            effective_format,
+            resolve_limit(cli_limit, ctx.config_default_limit, ctx.programmatic_output),
+            hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
+        ),
+        IndexResolution::Outcome(outcome) => Ok(outcome),
     }
 }
 

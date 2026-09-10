@@ -297,3 +297,32 @@ block incorporates the substantive tasks and acceptance criteria of original dra
 294, 310, 311, 312. Those drafts were uncommitted planning files and are replaced by the
 six-block queue 290–295; their internal sections do not retain separate branch or gate
 requirements.
+
+## Foundation reconciliation — 2026-09-10
+
+This note reconciles the iteration 290 candidate before independent review. The supervisor
+will verify these interfaces against the landed checkpoint before this block starts.
+
+Iteration 290 supplies `hyalo_cli::describe_invocation`, derived from the actual
+Clap hierarchy and exhaustive capabilities, plus `EffectiveQuery`, selection provenance,
+`HintDemand` and prepared single/batch requests. Extend these for lint/link-family resolved
+specs and raw-argv continuation transforms; do not create a second command-name registry.
+Views already normalize before output/index I/O. Empty filename projections and single-input
+cardinality corrections have foundation tests; retain them and execute downstream consumers
+and emitted hints across the complete acceptance matrix.
+
+The Pi runtime's internal `mutationReport()` uses hidden
+`--internal-mutation-report` with JSON/no-hints to receive generated
+`MutationReportEnvelope` and actual committed/unchanged/partial effects. Public npm
+`set()`/`task()` text `ProcessResult` contracts are unchanged. Adopt that accessor for
+guardrails and use `HyaloError.effects`/`category` on failure; do not scrape success text
+or infer changed files from requested targets. Hidden transport metadata is excluded from
+public descriptors/types. Preserve broken-pipe exit 141 and renderer/system exit 2.
+Read the current jq implementation before documenting guarantees; portable isolation remains
+295's responsibility. Actual live Pi loading and model-backed guardrail evidence remain
+mandatory, distinct from host simulations.
+
+The first independent review found that trailing warning summaries could hide structured
+effects from npm. The repaired output boundary drains summaries before the final envelope;
+retain the real malformed-note plus post-write failure regression when unifying diagnostics.
+Sanitize the completed text effect diagnostic while keeping exact filenames in JSON.

@@ -420,3 +420,188 @@ All 50 finding rows have one owner (49 distinct groups), and dependency metadata
 complete six-block chain. Independent review checked the grouping and actual plan bodies;
 its stale-number references were corrected. Strict lint on all eight documents and
 whitespace checks passed. No code implementation, commit, push or CI run was performed.
+
+## Iteration 290 implementation handoff
+
+This section describes the integrated implementation candidate, not a completed review,
+release or CI result. The supervisor records final revision and gate evidence in the
+iteration plan after independent review. The remaining finding owners above are unchanged.
+
+### Prepared application boundary
+
+`hyalo-cli::prepared` owns private-field `PreparedInvocation`, `OutputPlan`,
+`SingleTargetRequest`, `BatchTargetRequest` and `EffectiveQuery`. Runtime dispatch consumes
+`PreparedCommand` variants for read, backlinks, task read/mutation and find; it cannot route
+those variants through the legacy raw-command dispatcher. `EffectiveQuery` owns merged
+filters, parsed section filters, effective language and selection provenance. Both view-run
+spellings become the same effective find request before output validation and index I/O.
+`HintDemand` suppresses optional observation work for no-hints and jq requests.
+
+`IndexIntent` distinguishes no index, a read input, a create destination and a drop
+destination. Explicit index paths resolve against CWD; defaults resolve against the vault.
+Create/drop aliases are reconciled before I/O, and drop never loads the destination as a
+snapshot. Selection counters enter `OutputPlan` during preparation, not after dispatch.
+Explicit empty file lists remain empty. Missing required read/backlinks/task-read targets
+are Clap usage errors (2); empty or multiple explicit selections are structured errors (1),
+including a repeated named file whose second operand does not exist. Single-selection
+errors retain file-list counters and existing advisory diagnostics.
+
+`hyalo_cli::describe_invocation` is the reusable descriptor producer for 294. It walks the
+actual Clap tree, resolves aliases to canonical nested command identity, and combines its
+option spellings/value forms with exhaustive capability metadata for cardinality, empty
+input, formats, count, projections, writes, schema/profile and index intent. Hidden Clap
+arguments are excluded by metadata. This is not another public schema generator.
+
+### Rooted I/O and prepared effects
+
+`hyalo_core::rooted` provides checked `VaultRoot`, `InstallationRoot`, `ConfigRoot` and
+`RelativeName` construction. `open` yields an opened content handle; `capture` stages the
+bytes from that same handle and records its physical identity and followed referent.
+`CapturedInput::prepare` produces a private `PreparedReplacement`, whose `commit` checks
+identity and exact source bytes again. The public `SourceConflict` error marker separates
+source changes from I/O failures without parsing messages. Equal-size edits and restored
+mtime cannot defeat the byte comparison. Physical identity uses the existing maintained
+`same-file` dependency; a hash collision conservatively refuses a batch, never authorizes I/O.
+
+`destination` yields an exclusively published `NewEntry`. Replacement, create-new,
+no-replace move, artifact removal and directory creation report concrete entry effects.
+`move_no_replace` uses exclusive hard-link creation followed by source removal: a failed
+unlink reports the created destination and retained source; a completed move additionally
+reports source removal. Symlink-entry moves and filesystems without safe hard-link support
+fail explicitly. Existing and newly introduced destinations are never clobbered.
+
+Each operation rechecks static parent/file confinement before I/O. Internal symlink
+replacement preserves the alias entry while replacing its referent. This is not protection
+against an adversary swapping directories between checks and system calls, a filesystem
+transaction spanning a vault, or a crash-recovery journal. Temporary staged data closes file
+handles between entries. `WriteSession` owns durability and touched directories; `finish`
+is explicit and fallible. Unix/macOS directory sync is supported. Windows flushes file
+contents and uses exclusive/atomic publication, but exposes directory-sync support as
+unavailable and makes no directory-fsync crash-durability claim. Unsupported no-clobber
+operations never fall back to clobbering rename. Windows execution evidence remains a CI gate.
+
+Real pilots are the types command's captured TOML replacement and indexed regex content
+reads. Config transformation carries its original capture through publication; it does not
+recapture the edited file immediately before overwriting. Indexed regex scans use the
+confined opened bytes with the existing 100 MiB per-file scanner bound. This preserves the
+existing slice scanner's allocation model; a streaming scanner is not claimed.
+
+`commands::apply::PreparedChangeSet` stages complete set/append/task plans before the first
+note write, rejects physical duplicate targets, and bounds cumulative source/output staging
+at 8 GiB. Command output is bounded at 64 MiB; task result accumulation is charged as it is
+built. Exact rendered YAML passes current normal-reader limits before preparation completes.
+Dry-run and apply derive from the same edits. Serial publication stops at the first failure;
+`ApplyReport` records unchanged, committed, not-attempted, failed-before-commit and
+committed-with-finalization-error paths. `EffectFailure` distinguishes `source_conflict`,
+`io` and `finalization`. Progress reporting is CLI-owned, per invocation, separate from
+persistence policy, and retains the existing 200-file milestones and quiet behavior.
+
+Every migrated apply reaches `MutationJournal::finalize_observed`, including partial
+publication and failed durability finalization. Safe legacy refresh reports `updated`.
+Alias-enabled graphs, title/alias catalog changes and newly inserted catalog targets are
+persistently invalidated because the old incremental resolver cannot establish their graph
+coherence. Successful planned invalidation is a maintenance outcome, not a failed content
+write. A failed refresh attempts persistent invalidation; `invalidated` is reported only
+once removal succeeds. Failed refresh plus failed invalidation reports `update_failed` and
+retains both errors and committed effects. This is the pilot's limited safety guarantee;
+complete catalog-aware coherence and journal replacement remain owned by 292.
+
+### Output and adapter protocol
+
+Every successful command constructor now carries a `serde_json::Value` materialized from
+named DTOs, or a distinct raw text/byte payload. Command failures carry `UserDiagnostic`.
+The renderer's `ExecutionReport` retains domain status, diagnostics, completeness and
+optional effects through formatting and output writes. It owns projections, envelopes,
+GitHub output, empty results, sanitization and output failure classification. Legacy public
+formatting helpers remain compatibility wrappers; command dispatch no longer serializes
+success to a string and parses it back. Config's historic prebuilt envelope and init's
+historic text report pass through the same output boundary.
+
+Ordinary successful JSON/text/byte shapes remain unchanged. Structured failure metadata is
+additive: `effects.paths`, `effects.index`, optional `effects.index_error`, and a stable
+`category` (`mutation_failure` or `output_failure`). Per-path categories are separate from
+the overall failure. Task toggle is not safe to retry until committed effects are inspected.
+A jq/renderer failure after publication preserves the effect report. Renderer/system errors
+exit 2 and take precedence over lint findings; malformed jq preflight is a user error (1).
+The existing broken-pipe exception remains 141 on every platform. SIGPIPE remains ignored
+so the renderer can report committed effects before returning 141 instead of being killed.
+NUL filename output remains exact; empty filename projections emit zero bytes.
+
+The compile-only jq worker runs before effectful dispatch. Evaluation also uses a killable
+worker so recursion/abort after writes cannot discard the parent-owned effect report.
+Source is limited to 64 KiB, worker input to 64 MiB, output to the existing 10 MiB/one-million
+value limits, and wall time to three seconds. Unix additionally bounds CPU time and output
+file size; Linux bounds address space to 512 MiB. Darwin rejects `RLIMIT_AS`, so no equivalent
+Darwin memory guarantee is claimed. Windows currently relies on parent kill/reap and byte
+limits; portable hard resource isolation remains owned by 295. No compiler runs in the
+application process during user preflight.
+
+Public npm `set()` and `task()` retain successful `ProcessResult` streams. `HyaloError`
+retains parsed effects and categories. Native transport requests JSON errors separately
+from successful text. The internal `mutationReport()` accessor, exported through the Pi
+runtime but not the public package barrel, uses the hidden `--internal-mutation-report`
+protocol flag with JSON and no hints. It exposes the generated `MutationReportEnvelope`
+with actual committed/unchanged effects on success and preserves partial effects on error.
+Incompatible output modes are rejected before writes. Hidden metadata and `ts(skip)` exclude
+this flag from public descriptors and generated argument types. Iteration 294 owns adoption
+by Pi mutation consumers and option-parity enforcement using the descriptor producer.
+
+### Remaining migration ownership and author evidence
+
+Iteration 291 owns normal-reader/rendered-YAML policy consolidation, syntax authority and
+mutation semantic work beyond these prepared pilots. Iteration 292 owns query/catalog/index
+execution and full coherent refresh. Iteration 293 owns migration of remaining direct or
+legacy writes: remove, property/tag renames, lint autofix, new/move/link repair, generators,
+init/deinit, config writes outside the types pilot, and types default-note writes. Legacy
+`WritePhase` remains in remove, property/tag rename and lint engine, with other core legacy
+callers retaining ambient helpers; 293 removes these after migrating callers. The types
+pilot retains captured config effects across later errors, but its default-note loop is not
+a whole-batch prepared transaction. Iteration 294 owns remaining raw legacy input adapters,
+prepared hint/replay adoption and Pi consumers; 295 owns isolation/cancellation and final
+gates. No later plan needs to recreate the foundation interfaces above.
+
+Author checks passed: 1,021 CLI unit tests; eight initial foundation e2e tests (including
+alias invalidation, output preflight, empty/multiple inputs and the exact invalid-task-line
+case); eight rooted tests on macOS; focused config-capture and index-invalidation tests;
+and TypeScript generation/typecheck. The committed deterministic baseline fixture preserves
+eight cases' stdout, stderr, exit and file bytes, with source mtime fixed for text output.
+Independent integrated review, final workspace gates, generated Pi/package freshness, final
+release/npm tests and multi-platform CI remain pending supervisor verification.
+
+### Iteration 290 repair handoff — 2026-09-10
+
+The first integrated review identified four execution-boundary defects, repaired before final review and gates:
+
+- `MutationJournal::finalize_observed(dir, observed_paths, unsafe_paths)` now receives every `FailedBeforeCommit` path separately. Any such path forces persistent invalidation without legacy rescanning: the source may have changed bytes, become unreadable, or become an external symlink. An earlier committed path cannot cause the snapshot to be reported `Updated` while a known-unverified source remains stale. Invalidation failure remains `UpdateFailed`; full catalog/index ownership remains iteration 292.
+- Named index refresh and insertion consume `EffectiveQuery`'s private `PreparedSelection`. Explicit CLI names are normalized once; already-resolved files-from names retain their literal-first membership identity. `PreparedInvocation::refresh_index` runs after cardinality preparation and sends the whole selection through the rooted bridge before either existing-entry refresh or absent-entry insertion. Snapshot loading performs neither content path. Disk fallback, missing-name checks, and filters consume that same relative identity without stripping it again. These are static checks, not protection against concurrent directory swaps.
+- The output boundary drains warning summaries once before rendering the final error envelope. The process-exit fallback is idempotent, so malformed-frontmatter skip summaries cannot trail structured effects and break the npm parser. Existing public warning helpers remain available. Actual native child output and the internal mutation accessor's custom transport are covered by the npm regression; no public parser or success-envelope contract changes were required.
+- `UserDiagnostic::render` sanitizes the complete text diagnostic after appending effect paths. Structured JSON retains exact filenames, including control characters escaped by JSON serialization. Actual committed hostile-filename cases cover text broken-pipe failure and JSON jq failure.
+
+Focused repair evidence includes an indexed earlier commit followed by a same-size/restored-timestamp conflict, an indexed external-symlink substitution, zero scanner callbacks for external file/parent symlinks, indexed single-target cardinality, absolute vault aliases, malformed-skip/post-write errors, and terminal-safe effect diagnostics. Final platform, generated-asset, release/npm, and workspace gates remain supervisor-owned.
+
+### Iteration 290 normalized-selection handoff — 2026-09-10
+
+The final R03 repair closes the normalization gap exposed by the second review. `prepared::selection::{NormalizedTarget, PreparedSelection}` have private fields. `PreparedSelection::explicit` interprets CLI separators, vault prefixes, and absolute aliases once; `resolved` checks already-selected relative names without reinterpretation. `EffectiveQuery` owns this selection plus provenance and clears raw `FindFilters.file`. Thus a normalized `kb/note.md` in vault `kb` continues to mean the nested note, even though interpreting that string again as an explicit CLI argument would select the outer `note.md`.
+
+`refresh_named_selection` is the sole named snapshot content bridge used by prepared dispatch. It checks the entire set before any refresh/insertion scanner callback, then rechecks each actual operation, passing its checked full path and unchanged relative key together. `RefreshSummary` records refreshed, missing, and failed counts; a false result never short-circuits later targets. Both the existing-entry path (`refresh_if_changed_at`) and absent-entry path (`insert_or_replace_entry_with_links`) pass through it. A missing disk path does not authorize a scan; snapshot-known missing notes still answer metadata queries, and explicit paths absent from both sources retain missing-file errors. Legacy lint pre-refresh uses this bridge too.
+
+`find_prepared` and `resolve_index_prepared` consume the prepared selection; public raw `find` remains a wrapper that normalizes once. Shared disk collection delegates to `resolve_normalized_file_ci` for prepared identities. The existing raw resolver remains available and delegates after one normalization. Absolute-path adapters likewise call the normalized resolver after absolute-prefix conversion, avoiding a second strip when a nested directory shares the vault name. Extension, exclusion, and confinement checks apply to existing named inputs before content callbacks. Files-from preserves its independent literal-first policy, snapshot-only membership, counters, duplicate suppression, and explicit-empty outcome.
+
+The proof includes actual bridge callbacks and resulting index contents for existing refresh and absent insertion; zero callbacks and unchanged memory/persisted snapshots when either kind of safe operation precedes an external leaf/parent escape; false-result continuation; and prepared-dispatch matrices for snapshot-existing, snapshot-absent, and disk queries across relative, prefixed, canonical absolute, and absolute root-alias spellings. Nested directory identity, missing nested names, positional inputs, legacy lint/read adapters, files-from, and single cardinality are covered.
+
+This guarantee covers the named refresh/insertion bridge, named disk fallback, and the indexed-regex pilot's rooted content open. It does not claim that every scanner in the repository has migrated: whole-catalog graph ownership, anchor fallback scans, zero-result body-hint scans, and remaining legacy query/writer helpers retain their documented iteration 292–295 owners. The underlying public core path APIs do not confer authorization; application callers must use the checked bridge. No race-free directory-descriptor or crash-transaction guarantee is added.
+
+### Iteration 290 nonregular-input repair — 2026-09-10
+
+The third independent review found that a named FIFO could block in `File::open`
+before the new rooted boundary reached its regular-file check. The resumed repair
+checks followed metadata after confinement and rejects static nonregular inputs
+before opening them. Validation of the opened handle remains mandatory. This
+changes neither normalized selection identity nor supported in-root regular-file
+aliases. Later scanner and writer migrations must preserve both checks.
+
+The regression uses bounded child processes for direct FIFOs and aliases to FIFOs
+across named disk and indexed paths, with timeout termination and reaping. The
+check closes the static-input regression; it does not promise nonblocking I/O for
+every filesystem or protection against an entry replaced between system calls.
+Final review and checkpoint evidence remain supervisor-owned in the run ledger.

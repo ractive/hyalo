@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -28,7 +29,7 @@ import {
   type ReadResult,
   type VaultSummary,
 } from "../src/index.js";
-import { isClosedStdinWriteError } from "../src/api.js";
+import { isClosedStdinWriteError, mutationReport } from "../src/api.js";
 import { configForPi } from "../src/pi-runtime.js";
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -411,5 +412,58 @@ describe("successful diagnostics", () => {
     const piTransport = createPiTransport({ exec: async () => ({ code: 0, stdout, stderr: warning, killed: false }) });
     await find({ transport: piTransport, onDiagnostics });
     expect(onDiagnostics.mock.calls).toEqual([[warning]]);
+  });
+});
+
+it("preserves mutation effect and index metadata without changing successful text calls", async () => {
+  const effects = { paths: [{ file: "a.md", state: "committed" }], index: "update_failed", index_error: "cannot invalidate" };
+  const failure: HyaloTransport = async () => ({ code: 2, stdout: "", stderr: JSON.stringify({ error: "output failed", category: "output_failure", effects }) });
+  await expect(set({ file: "a.md", property: "status=done", transport: failure })).rejects.toMatchObject({ effects, category: "output_failure", exitCode: 2 });
+  const success: HyaloTransport = async (argv) => {
+    expect(argv).toContain("--format=json");
+    return { code: 0, stdout: JSON.stringify({ results: { modified: ["a.md"] }, hints: [], effects: { paths: [{ file: "a.md", state: "committed" }], index: "not_used" } }), stderr: "" };
+  };
+  await expect(mutationReport(["set", "--property", "status=done", "--", "a.md"], { transport: success })).resolves.toMatchObject({ results: { modified: ["a.md"] } });
+});
+
+it("internal mutation accessor works natively and through Pi exec without changing text ProcessResult", async () => {
+  await writeFile(path.join(vault, "report.md"), "---\nstatus: draft\n---\n- [ ] task\n");
+  const native = await mutationReport(["set", "--property", "status=done", "--", "report.md"], real());
+  expect(native.effects.paths[0]?.state).toBe("committed");
+  const second = await mutationReport(["set", "--property", "status=done", "--", "report.md"], real());
+  expect(second.effects.paths[0]?.state).toBe("unchanged");
+  const transport = createPiTransport({ exec: async (_command, args, options) => {
+    expect(args).toContain("--internal-mutation-report");
+    const result = await execute(args, { binaryPath: binary, cwd: options.cwd });
+    return { ...result, killed: false };
+  }});
+  const pi = await mutationReport(["task", "toggle", "--all", "--", "report.md"], { ...real(), transport });
+  expect(pi.effects.paths[0]?.state).toBe("committed");
+});
+
+it("retains actual effects after malformed skips and post-write output failures", async () => {
+  await writeFile(path.join(vault, "repair-good.md"), "---\nstatus: old\n---\n");
+  await writeFile(path.join(vault, "repair-bad.md"), "---\nstatus: [unterminated\n---\n");
+  const jqFailure: HyaloTransport = async () => {
+    const result = await execute(["append", "--glob", "repair-*.md", "--property", "tags=new", "--format=json", "--no-hints", "--jq", 'error("after write")'], real());
+    expect(result.stderr).toContain("warning: skipped 1 file");
+    return result;
+  };
+  await expect(set({ file: "repair-good.md", property: "status=new", ...real(), transport: jqFailure })).rejects.toMatchObject({
+    exitCode: 2, category: "output_failure", effects: { paths: [{ file: "repair-good.md", state: "committed" }], index: "not_used" },
+  });
+  // Exercise the internal accessor through a real Pi-style child transport.
+  // Closing the read end forces a post-commit stdout error without test hooks.
+  const transport: HyaloTransport = async (argv) => new Promise((resolve, reject) => {
+    const child = spawn(binary, [...argv], { cwd: scratch, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.destroy();
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? 2, stdout: "", stderr }));
+  });
+  await expect(mutationReport(["set", "--glob", "repair-*.md", "--property", "status=again"], { ...real(), transport })).rejects.toMatchObject({
+    category: "output_failure", effects: { paths: [{ file: "repair-good.md", state: "committed" }], index: "not_used" },
   });
 });

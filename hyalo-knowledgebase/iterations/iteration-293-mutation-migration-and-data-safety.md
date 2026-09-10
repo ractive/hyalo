@@ -358,3 +358,27 @@ block incorporates the substantive tasks and acceptance criteria of original dra
 299, 300, 301, 302, 304, 305. Those drafts were uncommitted planning files and are replaced by
 the six-block queue 290–295; their internal sections do not retain separate branch or gate
 requirements.
+
+## Foundation reconciliation — 2026-09-10
+
+This note reconciles the iteration 290 candidate before independent review. The supervisor
+will verify these interfaces against the landed checkpoint before this block starts.
+
+Iteration 290 establishes checked `VaultRoot`, `InstallationRoot`, `ConfigRoot`,
+`RelativeName`, `CapturedInput::prepare`, `PreparedReplacement::commit`,
+`NewEntry::create`, `move_no_replace` and explicit fallible `WriteSession::finish`.
+Effects distinguish entries from followed content. Source checks compare identity and exact
+captured bytes; static confinement does not eliminate directory-swap races. The no-replace
+pilot uses hard-link publication then source removal and rejects symlink moves. Extend its
+backend only with tested case-only and guarded-compensation behavior; never fall back to a
+clobbering rename. Windows directory sync is explicitly unavailable.
+
+Set/append/task already use `PreparedChangeSet` and typed `ApplyReport`; retain those
+pilots and expand their acceptance matrix. Types configuration carries its original capture
+through replacement and reports post-persist effects, but its default-note loop and other
+config/integration writers still require migration. `IndexIntent` already normalizes
+create/drop destinations; filesystem publication ownership still belongs here. Remaining
+legacy `WritePhase` callers include remove, property/tag rename and lint. Inventory every
+writer again after 291/292. Sol owns implementation; delegate difficult move/rollback design
+to Astra with serialized write ownership. Validate all original partial-effect, conflict,
+external-symlink and actual-platform cases.

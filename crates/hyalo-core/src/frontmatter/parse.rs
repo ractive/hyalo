@@ -659,11 +659,37 @@ fn write_frontmatter_impl(
     path: &Path,
     op: &WriteOp<'_>,
 ) -> Result<bool> {
-    // --- Step 0: open the file and guard against unbounded memory use ---
+    let mut file = open_frontmatter_file(path)?;
+    let Some(out) = render_frontmatter_impl(&mut file, path, op)? else {
+        return Ok(false);
+    };
+    match vault_root {
+        Some(root) => crate::fs_util::atomic_write_within(root, path, &out),
+        None => crate::fs_util::atomic_write(path, &out),
+    }
+    .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(true)
+}
+
+/// Render from the captured source handle without publishing any bytes.
+/// Exact emitted YAML is checked using the normal reader's parser budgets.
+pub fn render_frontmatter(
+    file: &mut File,
+    path: &Path,
+    props: &IndexMap<String, Value>,
+) -> Result<Vec<u8>> {
+    render_frontmatter_impl(file, path, &WriteOp::Props(props))?
+        .context("property rendering produced no output")
+}
+
+fn render_frontmatter_impl(
+    file: &mut File,
+    path: &Path,
+    op: &WriteOp<'_>,
+) -> Result<Option<Vec<u8>>> {
+    // Guard the captured source before rendering.
     // Step 2 below reads the whole body into memory; refuse up front rather
     // than let `read_to_end` allocate without bound for a huge file.
-    let mut file = open_frontmatter_file(path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
     let file_size = file
         .metadata()
         .with_context(|| format!("failed to stat {}", path.display()))?
@@ -679,7 +705,7 @@ fn write_frontmatter_impl(
 
     // --- Step 1: find the byte offset where the body starts, detect indent
     // style, and capture the original YAML text for the minimal-diff splice ---
-    let span = find_body_offset(&mut file)?;
+    let span = find_body_offset(file)?;
 
     let mut compact_list_indent = false;
     // The frontmatter's original YAML text (delimiters excluded), kept so that
@@ -742,7 +768,6 @@ fn write_frontmatter_impl(
     let mut body_bytes = Vec::new();
     file.read_to_end(&mut body_bytes)
         .with_context(|| format!("failed to read body of {}", path.display()))?;
-    drop(file);
 
     // --- Step 3: serialize new frontmatter ---
     let mut out: Vec<u8> = Vec::new();
@@ -796,7 +821,7 @@ fn write_frontmatter_impl(
                 .as_deref()
                 .and_then(|orig| rename_key_in_place(orig, from, to))
             else {
-                return Ok(false);
+                return Ok(None);
             };
             Some(renamed)
         }
@@ -818,6 +843,13 @@ fn write_frontmatter_impl(
 
         // Pre-flight budget check: reject before touching the file.
         check_frontmatter_size_budget(&yaml, path).map_err(anyhow::Error::new)?;
+        serde_saphyr::from_str_with_options::<IndexMap<String, Value>>(&yaml, hyalo_options())
+            .map_err(|e| {
+                anyhow::Error::new(FrontmatterError(friendly_parse_error(
+                    &e,
+                    MAX_FRONTMATTER_BYTES,
+                )))
+            })?;
 
         out.extend_from_slice(b"---");
         out.extend_from_slice(span.opening_trailing_ws.as_bytes());
@@ -836,14 +868,7 @@ fn write_frontmatter_impl(
     }
     out.extend_from_slice(&body_bytes);
 
-    // --- Step 4: write atomically ---
-    match vault_root {
-        Some(root) => crate::fs_util::atomic_write_within(root, path, &out),
-        None => crate::fs_util::atomic_write(path, &out),
-    }
-    .with_context(|| format!("failed to write {}", path.display()))?;
-
-    Ok(true)
+    Ok(Some(out))
 }
 
 /// A structured error returned when serialized frontmatter would exceed the size budget.
@@ -1128,9 +1153,7 @@ pub fn skip_frontmatter<R: BufRead>(reader: &mut R, first_line: &str) -> Result<
 /// `Budget` now enforces its own limits. The pre-read cap stops reading early for
 /// files with a missing closing `---`, which the parser budget cannot detect (it
 /// only sees the YAML string that was already read).
-pub(crate) fn read_frontmatter_from_reader<R: BufRead>(
-    reader: R,
-) -> Result<IndexMap<String, Value>> {
+pub fn read_frontmatter_from_reader<R: BufRead>(reader: R) -> Result<IndexMap<String, Value>> {
     let mut lines = reader.lines();
 
     // First line must open a frontmatter block (see `opening_delimiter`).

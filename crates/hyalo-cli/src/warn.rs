@@ -26,6 +26,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+static SUMMARY_FLUSHED: AtomicBool = AtomicBool::new(false);
+
 static QUIET: AtomicBool = AtomicBool::new(false);
 
 /// Per-message suppression counters.
@@ -155,6 +157,7 @@ fn emit(args: &Emit<'_>) {
 #[cfg(test)]
 pub fn reset_for_test() {
     QUIET.store(false, Ordering::Relaxed);
+    SUMMARY_FLUSHED.store(false, Ordering::Relaxed);
     if let Ok(mut guard) = SUPPRESSED.lock() {
         *guard = None;
     }
@@ -321,48 +324,69 @@ pub fn warn_llm_misuse(dir: &std::path::Path) {
 /// Should be called just before the process exits. Prints to stderr.
 /// If no warnings were suppressed (or `init` was never called) this is a no-op.
 pub fn flush_summary() {
-    flush_skipped_files();
+    use std::io::Write as _;
+    let _ = std::io::stderr()
+        .lock()
+        .write_all(take_summary().as_bytes());
+}
 
-    let total_suppressed: usize = match SUPPRESSED.lock() {
-        Ok(guard) => guard.as_ref().map_or(0, |map| map.values().sum()),
-        Err(_) => return,
-    };
+/// Drain invocation summaries at the output boundary, before any final error
+/// envelope. The exit fallback is idempotent and cannot append unframed text.
+pub(crate) fn take_summary() -> String {
+    use std::fmt::Write as _;
+    if SUMMARY_FLUSHED.swap(true, Ordering::Relaxed) || QUIET.load(Ordering::Relaxed) {
+        return String::new();
+    }
+    let mut text = skipped_summary();
+    let total: usize = SUPPRESSED
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|map| map.values().sum()))
+        .unwrap_or(0);
+    if total > 0 {
+        let _ = writeln!(
+            text,
+            "warning: {total} additional identical warning(s) suppressed"
+        );
+    }
+    text
+}
 
-    if !QUIET.load(Ordering::Relaxed) && total_suppressed > 0 {
-        eprintln!("warning: {total_suppressed} additional identical warning(s) suppressed");
+/// Compatibility API for callers that only need the collapsed skip diagnostic.
+pub fn flush_skipped_files() {
+    use std::io::Write as _;
+    if !SUMMARY_FLUSHED.load(Ordering::Relaxed) {
+        let _ = std::io::stderr()
+            .lock()
+            .write_all(skipped_summary().as_bytes());
     }
 }
 
-/// Collapse this run's skipped files into one stderr line (iter-265, DEC-278).
-///
-/// A vault of Templater templates printed one multi-line `serde_yaml` excerpt
-/// per unparsable file on *every* scanning command — 251 stderr lines for 28
-/// templates, which buried the actual output. The diagnostics are collected by
-/// `hyalo_core::warn::record_skip` and summarised here instead. `-q` silences
-/// the line, and `[scan] verbose_skips = true` / `RUST_LOG=hyalo=debug` streams
-/// the full excerpts as they happen (in which case there is nothing left to
-/// collapse and this prints nothing).
-pub fn flush_skipped_files() {
-    if QUIET.load(Ordering::Relaxed) || hyalo_core::warn::verbose_skips() {
-        return;
+fn skipped_summary() -> String {
+    use std::fmt::Write as _;
+    if QUIET.load(Ordering::Relaxed) {
+        return String::new();
     }
-    let frontmatter = hyalo_core::warn::skipped_frontmatter_count();
-    let total = hyalo_core::warn::skipped_count();
-    if frontmatter > 0 {
-        let plural = if frontmatter == 1 { "file" } else { "files" };
-        eprintln!(
-            "warning: skipped {frontmatter} {plural} with unparsable frontmatter \
-             (run hyalo lint --rule HYALO005 for details)"
-        );
+    let mut text = String::new();
+    if !hyalo_core::warn::verbose_skips() {
+        let frontmatter = hyalo_core::warn::skipped_frontmatter_count();
+        let other = hyalo_core::warn::skipped_count().saturating_sub(frontmatter);
+        if frontmatter > 0 {
+            let plural = if frontmatter == 1 { "file" } else { "files" };
+            let _ = writeln!(
+                text,
+                "warning: skipped {frontmatter} {plural} with unparsable frontmatter (run hyalo lint --rule HYALO005 for details)"
+            );
+        }
+        if other > 0 {
+            let plural = if other == 1 { "file" } else { "files" };
+            let _ = writeln!(
+                text,
+                "warning: skipped {other} unreadable {plural} (set [scan] verbose_skips = true, or RUST_LOG=hyalo=debug, to list them)"
+            );
+        }
     }
-    let other = total - frontmatter;
-    if other > 0 {
-        let plural = if other == 1 { "file" } else { "files" };
-        eprintln!(
-            "warning: skipped {other} unreadable {plural} \
-             (set [scan] verbose_skips = true, or RUST_LOG=hyalo=debug, to list them)"
-        );
-    }
+    text
 }
 
 /// Test-level mutex to serialise tests that touch the global warn state.

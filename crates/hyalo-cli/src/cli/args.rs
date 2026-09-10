@@ -340,6 +340,11 @@ const LONG_ABOUT_TEMPLATE: &str = "Hyalo — query, filter, and mutate YAML fron
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
+    /// Private adapter protocol; not a user-facing option or generated argument.
+    #[arg(long, global = true, hide = true)]
+    #[cfg_attr(test, ts(skip))]
+    pub internal_mutation_report: bool,
+
     /// Vault root for file and glob paths (default: .)
     ///
     /// Root directory for resolving all file and --glob paths.

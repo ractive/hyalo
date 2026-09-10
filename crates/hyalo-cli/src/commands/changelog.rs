@@ -22,7 +22,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::output::{CommandOutcome, Format, format_error};
+use crate::output::{CommandOutcome, Format, user_diagnostic};
 use hyalo_mdlint::profiles::changelog::CATEGORIES;
 
 /// Default changelog filename (vault-relative).
@@ -121,7 +121,7 @@ pub(crate) fn resolve_changelog_target(
         // the two-path form. `..` is normalized away so the message names a
         // real location rather than `…/kb/../../etc/passwd`.
         let resolved = lexically_normalize(&config_dir.join(raw.replace('\\', "/")));
-        ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::format_error(
+        ChangelogTarget::Refused(CommandOutcome::UserError(crate::output::user_diagnostic(
             format,
             &hyalo_core::outside_vault_message("[changelog] path", Some(&resolved)),
             Some(raw),
@@ -337,7 +337,7 @@ pub fn run_release(
     }
     if !is_semver(version) {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("`{version}` is not a valid MAJOR.MINOR.PATCH version"),
                 Some(version),
@@ -351,7 +351,7 @@ pub fn run_release(
         Some(d) => {
             if !is_iso_date(d) {
                 return Ok((
-                    CommandOutcome::UserError(format_error(
+                    CommandOutcome::UserError(user_diagnostic(
                         format,
                         &format!("`{d}` is not a valid YYYY-MM-DD date"),
                         Some(d),
@@ -369,7 +369,7 @@ pub fn run_release(
     let full = changelog_file.to_path_buf();
     if !full.is_file() {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("{display} not found"),
                 Some(&display),
@@ -386,7 +386,7 @@ pub fn run_release(
     // Idempotency guard: refuse to release an already-present version.
     if cl.has_version(version) {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("version `[{version}]` already exists in {display}"),
                 Some(version),
@@ -399,7 +399,7 @@ pub fn run_release(
 
     let Some(unreleased_idx) = cl.version_heading_index("Unreleased") else {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("no `## [Unreleased]` section found in {display}"),
                 None,
@@ -441,7 +441,7 @@ pub fn run_release(
     );
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
-        CommandOutcome::success_with_total(payload.to_string(), u64::from(changed)),
+        CommandOutcome::success_with_total(payload, u64::from(changed)),
         exit_override,
     ))
 }
@@ -522,7 +522,7 @@ pub fn run_add(
     }
     let Some(canonical) = CATEGORIES.iter().find(|c| c.eq_ignore_ascii_case(category)) else {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("`{category}` is not a Keep a Changelog category"),
                 Some(category),
@@ -534,7 +534,7 @@ pub fn run_add(
     };
     if message.trim().is_empty() {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 "entry message must not be empty",
                 None,
@@ -550,7 +550,7 @@ pub fn run_add(
         && cols < BULLET_PREFIX.len() + 1
     {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("--wrap width must be at least {}", BULLET_PREFIX.len() + 1),
                 None,
@@ -612,7 +612,7 @@ pub fn run_add(
     );
     let exit_override = if !apply && changed { Some(1) } else { None };
     Ok((
-        CommandOutcome::success_with_total(payload.to_string(), u64::from(changed)),
+        CommandOutcome::success_with_total(payload, u64::from(changed)),
         exit_override,
     ))
 }
@@ -1445,10 +1445,7 @@ pub(crate) fn run(
                 &ctx.lint_profiles,
                 effective_format,
             )?;
-            if let Some(code) = exit_override {
-                ctx.exit_code_override = Some(code);
-            }
-            Ok(outcome)
+            Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
         crate::cli::args::ChangelogAction::Add {
             category,
@@ -1481,10 +1478,7 @@ pub(crate) fn run(
                 &ctx.lint_profiles,
                 effective_format,
             )?;
-            if let Some(code) = exit_override {
-                ctx.exit_code_override = Some(code);
-            }
-            Ok(outcome)
+            Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
     }
 }

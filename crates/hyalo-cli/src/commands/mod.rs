@@ -1,5 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 pub mod append;
+pub mod apply;
 pub mod backlinks;
 pub mod changelog;
 pub(crate) mod config;
@@ -90,7 +91,7 @@ pub(crate) fn refuse_escaping_write(
         None => Some(hyalo_core::outside_vault_hint(dir)),
     };
     Ok(Some(CommandOutcome::UserError(
-        crate::output::format_error(
+        crate::output::user_diagnostic(
             format,
             &hyalo_core::outside_vault_message_with_dir(subject, Some(&target), dir),
             Some(display),
@@ -133,7 +134,8 @@ pub fn resolve_file_user_ci(
 ) -> std::result::Result<(std::path::PathBuf, String), FileResolveError> {
     warn_if_cwd_shadows_vault_path(dir, path_arg);
     if let Some(rewritten) = discovery::strip_absolute_vault_prefix(dir, path_arg) {
-        let result = discovery::resolve_file_ci(dir, &rewritten, case_insensitive);
+        // Absolute-prefix conversion already chose a vault-relative identity.
+        let result = discovery::resolve_normalized_file_ci(dir, &rewritten, case_insensitive);
         if result.is_ok() {
             crate::warn::warn_llm_misuse(dir);
         }
@@ -346,7 +348,7 @@ pub(crate) fn single_named_file_unparseable(
         return None;
     }
     let rel = &skipped_unparseable[0];
-    Some(CommandOutcome::UserError(crate::output::format_error(
+    Some(CommandOutcome::UserError(crate::output::user_diagnostic(
         format,
         &format!("{rel}: unparseable frontmatter; nothing was modified"),
         None,
@@ -367,7 +369,7 @@ pub(crate) fn named_file_unparseable_outcome(
     detail: &str,
     format: Format,
 ) -> CommandOutcome {
-    CommandOutcome::UserError(crate::output::format_error(
+    CommandOutcome::UserError(crate::output::user_diagnostic(
         format,
         &format!("{rel}: unparseable frontmatter"),
         Some(rel),
@@ -388,13 +390,23 @@ pub fn collect_files(
     globs: &[String],
     format: Format,
 ) -> Result<FilesOrOutcome> {
+    collect_files_with(dir, files, globs, format, resolve_file_user)
+}
+
+fn collect_files_with(
+    dir: &Path,
+    files: &[String],
+    globs: &[String],
+    format: Format,
+    resolve: impl Fn(&Path, &str) -> std::result::Result<(PathBuf, String), FileResolveError>,
+) -> Result<FilesOrOutcome> {
     match (files.is_empty(), globs.is_empty()) {
         (false, true) => {
             // Resolve each file, best-effort: collect successes and errors
             let mut resolved = Vec::new();
             let mut errors = Vec::new();
             for f in files {
-                match resolve_file_user(dir, f) {
+                match resolve(dir, f) {
                     Ok(r) => resolved.push(r),
                     Err(e) => errors.push((f.clone(), e)),
                 }
@@ -464,7 +476,7 @@ pub fn collect_files(
         }
         (false, false) => {
             // Clap enforces mutual exclusivity; this branch is unreachable in practice
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 "--file and --glob are mutually exclusive",
                 None,
@@ -592,6 +604,42 @@ pub(crate) fn resolve_index_named<'a>(
     }
 }
 
+/// Resolve a prepared selection without another CLI path interpretation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_index_prepared<'a>(
+    snapshot: Option<&'a SnapshotIndex>,
+    dir: &Path,
+    selection: &crate::prepared::PreparedSelection,
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions<'_>,
+    named_policy: NamedFilePolicy,
+) -> Result<IndexResolution<'a>> {
+    if let Some(index) = snapshot {
+        return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(index)));
+    }
+    selection.precheck(&hyalo_core::rooted::VaultRoot::new(dir)?)?;
+    let outcome = build_scanned_index_with(
+        dir,
+        &selection.names(),
+        globs,
+        format,
+        site_prefix,
+        needs_full_vault,
+        options,
+        named_policy,
+        |dir, name| discovery::resolve_normalized_file_ci(dir, name, false),
+    )?;
+    Ok(match outcome {
+        ScannedIndexOutcome::Index(build) => {
+            IndexResolution::Resolved(ResolvedIndex::Scanned(build))
+        }
+        ScannedIndexOutcome::Outcome(outcome) => IndexResolution::Outcome(outcome),
+    })
+}
+
 /// Build a [`ScannedIndex`] from disk, handling file discovery, warnings, and user errors.
 ///
 /// When `needs_full_vault` is `true`, all `.md` files in `dir` are scanned regardless of
@@ -631,6 +679,31 @@ pub(crate) fn build_scanned_index_named(
     options: &ScanOptions<'_>,
     named_policy: NamedFilePolicy,
 ) -> Result<ScannedIndexOutcome> {
+    build_scanned_index_with(
+        dir,
+        files_arg,
+        globs,
+        format,
+        site_prefix,
+        needs_full_vault,
+        options,
+        named_policy,
+        resolve_file_user,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_scanned_index_with(
+    dir: &Path,
+    files_arg: &[String],
+    globs: &[String],
+    format: Format,
+    site_prefix: Option<&str>,
+    needs_full_vault: bool,
+    options: &ScanOptions<'_>,
+    named_policy: NamedFilePolicy,
+    resolve: impl Fn(&Path, &str) -> std::result::Result<(PathBuf, String), FileResolveError>,
+) -> Result<ScannedIndexOutcome> {
     // Vault-relative paths of the files the caller named by hand, in the order
     // they resolved. Empty whenever the file list came from a glob or a whole-
     // vault sweep, so the [`NamedFilePolicy::Fatal`] check below can never fire
@@ -644,7 +717,7 @@ pub(crate) fn build_scanned_index_named(
             let mut resolved = Vec::new();
             let mut first_err = None;
             for f in files_arg {
-                match resolve_file_user(dir, f) {
+                match resolve(dir, f) {
                     Ok(r) => resolved.push(r),
                     Err(e) if first_err.is_none() => first_err = Some(e),
                     Err(_) => {}
@@ -667,7 +740,7 @@ pub(crate) fn build_scanned_index_named(
             })
             .collect()
     } else {
-        match collect_files(dir, files_arg, globs, format)? {
+        match collect_files_with(dir, files_arg, globs, format, &resolve)? {
             FilesOrOutcome::Outcome(o) => return Ok(ScannedIndexOutcome::Outcome(o)),
             FilesOrOutcome::Files(f) => {
                 if !files_arg.is_empty() {
@@ -727,7 +800,7 @@ pub fn require_file_or_glob(
     format: Format,
 ) -> Option<CommandOutcome> {
     if files.is_empty() && globs.is_empty() {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             &format!("{command_name} requires --file or --glob"),
             None,
@@ -771,7 +844,7 @@ pub fn reject_invalid_property_key(
     } else {
         return None;
     };
-    let out = crate::output::format_error(
+    let out = crate::output::user_diagnostic(
         format,
         &format!("invalid {flag} value: {reason}"),
         None,
@@ -797,7 +870,7 @@ pub fn reject_filter_in_mutation_property(key: &str, format: Format) -> Option<C
     if !FILTER_OP_SUFFIXES.contains(&ch) {
         return None;
     }
-    let out = crate::output::format_error(
+    let out = crate::output::user_diagnostic(
         format,
         &format!(
             "invalid property name '{trimmed}': ends with '{ch}' which looks like a filter \
@@ -836,7 +909,7 @@ pub fn reject_dotted_property_collision(
     if !matches!(props.get(prefix), Some(serde_json::Value::Object(_))) {
         return None;
     }
-    let out = crate::output::format_error(
+    let out = crate::output::user_diagnostic(
         format,
         &format!(
             "{rel_path}: invalid property name '{name}': '{prefix}' already exists as a \
@@ -876,7 +949,7 @@ pub(crate) fn reject_write_with_unloadable_schema(
         return None;
     }
     let diagnostic = schema_invalid?;
-    let out = crate::output::format_error(
+    let out = crate::output::user_diagnostic(
         format,
         &format!(
             "refusing to validate against an unusable [schema]: {diagnostic}; \
@@ -902,7 +975,7 @@ pub fn unwrap_single_file_result(
     if files.len() == 1 && results.len() == 1 {
         results.pop().unwrap_or_default()
     } else {
-        crate::output::output_value(&results)
+        serde_json::Value::Array(results)
     }
 }
 
@@ -945,7 +1018,7 @@ pub fn resolve_error_to_outcome(
 ) -> CommandOutcome {
     match err {
         FileResolveError::MissingExtension { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 "file not found",
                 Some(&path),
@@ -955,7 +1028,7 @@ pub fn resolve_error_to_outcome(
         }
         FileResolveError::NotFound { path } => {
             let hint = not_found_hint(&path);
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 "file not found",
                 Some(&path),
@@ -964,7 +1037,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::NotFoundSuggestion { path, suggestion } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 "file not found",
                 Some(&path),
@@ -973,7 +1046,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::IsDirectory { path, hint } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 "path is a directory, not a file",
                 Some(&path),
@@ -982,7 +1055,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::ScanExcluded { path, glob } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 &format!("file is excluded by [scan] exclude = [\"{glob}\"]"),
                 Some(&path),
@@ -994,7 +1067,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::OutsideVault { path, resolved } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 &hyalo_core::outside_vault_message_with_dir(
                     "file",
@@ -1007,7 +1080,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::ParentTraversal { path } => {
-            CommandOutcome::UserError(crate::output::format_error(
+            CommandOutcome::UserError(crate::output::user_diagnostic(
                 format,
                 "path contains '..' and is rejected",
                 Some(&path),
@@ -1016,7 +1089,7 @@ pub fn resolve_error_to_outcome(
             ))
         }
         FileResolveError::InvalidPath { path, reason } => CommandOutcome::UserError(
-            crate::output::format_error(format, "invalid path", Some(&path), Some(reason), None),
+            crate::output::user_diagnostic(format, "invalid path", Some(&path), Some(reason), None),
         ),
     }
 }

@@ -2,8 +2,6 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-use crate::cli::args::TaskAction;
-use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
 use crate::commands::resolve_error_to_outcome;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::heading::{SectionFilter, build_section_scope, parse_atx_heading};
@@ -98,11 +96,11 @@ fn resolve_task_lines(
 /// multiple. The output pipeline later wraps this in the
 /// `{"results": ..., "hints": [...]}` envelope. Generic over the result type
 /// so both `TaskReadResult` and `TaskDryRunResult` share the same branching.
-fn format_one_or_many<T: serde::Serialize>(results: &[T], format: Format) -> String {
+fn format_one_or_many<T: serde::Serialize>(results: &[T], _format: Format) -> serde_json::Value {
     if let [single] = results {
-        crate::output::format_output(format, single)
+        crate::output::output_value(single)
     } else {
-        crate::output::format_output(format, &results)
+        crate::output::output_value(&results)
     }
 }
 
@@ -124,11 +122,32 @@ pub fn task_read(
         Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
     };
 
+    read_resolved((full_path, rel_path), lines, section, all, format)
+}
+
+pub(crate) fn read_prepared(
+    _dir: &Path,
+    target: crate::prepared::SingleTargetRequest,
+    lines: &[usize],
+    section: Option<&str>,
+    all: bool,
+    format: Format,
+) -> Result<CommandOutcome> {
+    read_resolved(target.into_file(), lines, section, all, format)
+}
+
+fn read_resolved(
+    (full_path, rel_path): (std::path::PathBuf, String),
+    lines: &[usize],
+    section: Option<&str>,
+    all: bool,
+    format: Format,
+) -> Result<CommandOutcome> {
     let resolved = match resolve_task_lines(&full_path, lines, section, all) {
         Ok(v) => v,
         Err(e) => {
             let msg = e.to_string();
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 &msg,
                 Some(&rel_path),
@@ -146,7 +165,7 @@ pub fn task_read(
         match hyalo_core::tasks::read_task(&full_path, line)? {
             None => {
                 let msg = format!("line {line} is not a task");
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     &msg,
                     Some(&rel_path),
@@ -178,7 +197,7 @@ pub fn task_read(
 // `hyalo task toggle` — toggle task completion
 // ---------------------------------------------------------------------------
 
-/// Toggle one or more tasks by line selector.
+/// Toggle one or more tasks using captured preparation and effect accounting.
 #[allow(clippy::too_many_arguments)]
 pub fn task_toggle(
     dir: &Path,
@@ -190,115 +209,24 @@ pub fn task_toggle(
     journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
-        Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
+    let pair = match crate::commands::resolve_file_user(dir, file_arg) {
+        Ok(pair) => pair,
+        Err(error) => return Ok(resolve_error_to_outcome(error, format, dir)),
     };
-
-    let resolved = match resolve_task_lines(&full_path, lines, section, all) {
-        Ok(v) => v,
-        Err(e) => {
-            let msg = e.to_string();
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                format,
-                &msg,
-                Some(&rel_path),
-                None,
-                None,
-            )));
-        }
-    };
-
-    if dry_run {
-        // In dry-run mode: compute the toggled state without writing to disk.
-        //
-        // Single-pass scan: collect every task in the file once, then look up
-        // each resolved target line. Avoids O(n * file_length) from calling
-        // `read_task` per line when --all or a large --line list is used.
-        //
-        // We emit `TaskDryRunResult` (carrying both `old_status` and `status`)
-        // so the text formatter can render `"file":line [old] -> [new] text`
-        // and make the direction of change explicit. The dispatch layer always
-        // forces JSON here; text rendering happens later in the output
-        // pipeline via a shape-specific jq filter.
-        let tasks_by_line: std::collections::HashMap<usize, hyalo_core::types::FindTaskInfo> =
-            hyalo_core::tasks::find_task_lines(&full_path)?
-                .into_iter()
-                .map(|t| (t.line, t))
-                .collect();
-        let mut results: Vec<TaskDryRunResult> = Vec::with_capacity(resolved.len());
-        for &line_num in &resolved {
-            match tasks_by_line.get(&line_num) {
-                None => {
-                    let msg = format!("line {line_num} is not a task");
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        format,
-                        &msg,
-                        Some(&rel_path),
-                        None,
-                        None,
-                    )));
-                }
-                Some(info) => {
-                    // Simulate what toggle would do: flip done state.
-                    let new_done = !info.done;
-                    let new_status = if new_done { 'x' } else { ' ' };
-                    results.push(TaskDryRunResult {
-                        file: rel_path.clone(),
-                        line: info.line,
-                        old_status: info.status,
-                        status: new_status,
-                        text: info.text.clone(),
-                        done: new_done,
-                    });
-                }
-            }
-        }
-        return Ok(CommandOutcome::success(format_one_or_many(
-            &results, format,
-        )));
-    }
-
-    match hyalo_core::tasks::toggle_tasks(dir, &full_path, &resolved) {
-        Ok(infos) => {
-            // One re-scan per file, not per task (BUG-1, iter-249): every
-            // toggled line on this file has already landed on disk.
-            if !infos.is_empty() {
-                journal.update_task(&full_path, &rel_path)?;
-            }
-            journal.flush()?;
-            let results: Vec<TaskReadResult> = infos
-                .into_iter()
-                .map(|info| TaskReadResult {
-                    file: rel_path.clone(),
-                    line: info.line,
-                    status: info.status,
-                    text: info.text,
-                    done: info.done,
-                })
-                .collect();
-            Ok(CommandOutcome::success(format_one_or_many(
-                &results, format,
-            )))
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            Ok(CommandOutcome::UserError(crate::output::format_error(
-                format,
-                &msg,
-                Some(&rel_path),
-                None,
-                None,
-            )))
-        }
-    }
+    mutate_files(
+        dir,
+        &[pair],
+        lines,
+        section,
+        all,
+        None,
+        format,
+        journal,
+        dry_run,
+    )
 }
 
-// ---------------------------------------------------------------------------
-// `hyalo task set` — set custom status character
-// ---------------------------------------------------------------------------
-
-/// Set status on one or more tasks by line selector.
+/// Set a status using the same preparation as toggle and dry-run.
 #[allow(clippy::too_many_arguments)]
 pub fn task_set_status(
     dir: &Path,
@@ -311,95 +239,136 @@ pub fn task_set_status(
     journal: &mut crate::commands::journal::MutationJournal<'_>,
     dry_run: bool,
 ) -> Result<CommandOutcome> {
-    let (full_path, rel_path) = match crate::commands::resolve_file_user(dir, file_arg) {
-        Ok(r) => r,
-        Err(e) => return Ok(resolve_error_to_outcome(e, format, dir)),
+    let pair = match crate::commands::resolve_file_user(dir, file_arg) {
+        Ok(pair) => pair,
+        Err(error) => return Ok(resolve_error_to_outcome(error, format, dir)),
     };
+    mutate_files(
+        dir,
+        &[pair],
+        lines,
+        section,
+        all,
+        Some(status),
+        format,
+        journal,
+        dry_run,
+    )
+}
 
-    let resolved = match resolve_task_lines(&full_path, lines, section, all) {
-        Ok(v) => v,
-        Err(e) => {
-            let msg = e.to_string();
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                format,
-                &msg,
-                Some(&rel_path),
-                None,
-                None,
-            )));
-        }
-    };
-
-    if dry_run {
-        let tasks_by_line: std::collections::HashMap<usize, hyalo_core::types::FindTaskInfo> =
-            hyalo_core::tasks::find_task_lines(&full_path)?
-                .into_iter()
-                .map(|t| (t.line, t))
-                .collect();
-        let mut results: Vec<TaskDryRunResult> = Vec::with_capacity(resolved.len());
-        for &line_num in &resolved {
-            match tasks_by_line.get(&line_num) {
-                None => {
-                    let msg = format!("line {line_num} is not a task");
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
-                        format,
-                        &msg,
-                        Some(&rel_path),
-                        None,
-                        None,
-                    )));
+#[allow(clippy::too_many_arguments)]
+fn mutate_files(
+    dir: &Path,
+    files: &[(std::path::PathBuf, String)],
+    lines: &[usize],
+    section: Option<&str>,
+    all: bool,
+    status: Option<char>,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    dry_run: bool,
+) -> Result<CommandOutcome> {
+    let mut preparation = super::apply::PreparedChangeSet::new(dir, files.len())?;
+    let mut results = Vec::new();
+    for (_, rel) in files {
+        let captured = preparation.capture(rel)?;
+        let bytes = captured.bytes()?;
+        let content = std::str::from_utf8(&bytes).context("task source is not UTF-8")?;
+        let prepared = (|| -> Result<_> {
+            let tasks = hyalo_core::tasks::find_task_lines_in(&bytes)?;
+            let resolved = if !lines.is_empty() {
+                lines.to_vec()
+            } else if let Some(section) = section {
+                let filter = SectionFilter::parse(section)
+                    .map_err(|e| anyhow::anyhow!("invalid --section: {e}"))?;
+                let mut scanner = SectionScanner::new();
+                hyalo_core::scanner::scan_slice_multi(&bytes, &mut [&mut scanner])?;
+                let sections = scanner.into_sections();
+                if build_section_scope(&sections, std::slice::from_ref(&filter), usize::MAX).len()
+                    > 1
+                {
+                    bail!(
+                        "--section {section:?} matches multiple distinct headings; use --line or a more specific section"
+                    );
                 }
-                Some(info) => {
-                    let new_done = status == 'x' || status == 'X';
-                    results.push(TaskDryRunResult {
-                        file: rel_path.clone(),
+                let matched: Vec<_> = tasks
+                    .iter()
+                    .filter(|task| {
+                        parse_atx_heading(&task.section)
+                            .is_some_and(|(level, text)| filter.matches(level, text))
+                    })
+                    .map(|task| task.line)
+                    .collect();
+                if matched.is_empty() {
+                    bail!("no tasks found in section {section:?}");
+                }
+                matched
+            } else if all {
+                if tasks.is_empty() {
+                    bail!("no tasks found in file");
+                }
+                tasks.iter().map(|task| task.line).collect()
+            } else {
+                bail!("specify at least one of --line, --section, or --all");
+            };
+            let (rendered, infos) = hyalo_core::tasks::render_tasks(content, &resolved, status)?;
+            for info in infos {
+                let value = if dry_run {
+                    let old_status = tasks
+                        .iter()
+                        .find(|task| task.line == info.line)
+                        .context("prepared task missing")?
+                        .status;
+                    crate::output::output_value(&TaskDryRunResult {
+                        file: rel.clone(),
                         line: info.line,
-                        old_status: info.status,
-                        status,
-                        text: info.text.clone(),
-                        done: new_done,
-                    });
-                }
+                        old_status,
+                        status: info.status,
+                        text: info.text,
+                        done: info.done,
+                    })
+                } else {
+                    crate::output::output_value(&TaskReadResult {
+                        file: rel.clone(),
+                        line: info.line,
+                        status: info.status,
+                        text: info.text,
+                        done: info.done,
+                    })
+                };
+                preparation.charge_output(&value)?;
+                results.push(value);
             }
-        }
-        return Ok(CommandOutcome::success(format_one_or_many(
-            &results, format,
-        )));
-    }
-
-    match hyalo_core::tasks::set_tasks_status(dir, &full_path, &resolved, status) {
-        Ok(infos) => {
-            // One re-scan per file, not per task (BUG-1, iter-249): every
-            // set line on this file has already landed on disk.
-            if !infos.is_empty() {
-                journal.update_task(&full_path, &rel_path)?;
+            Ok(rendered)
+        })();
+        let rendered = match prepared {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+                    format,
+                    &error.to_string(),
+                    Some(rel),
+                    None,
+                    None,
+                )));
             }
-            journal.flush()?;
-            let results: Vec<TaskReadResult> = infos
-                .into_iter()
-                .map(|info| TaskReadResult {
-                    file: rel_path.clone(),
-                    line: info.line,
-                    status: info.status,
-                    text: info.text,
-                    done: info.done,
-                })
-                .collect();
-            Ok(CommandOutcome::success(format_one_or_many(
-                &results, format,
-            )))
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            Ok(CommandOutcome::UserError(crate::output::format_error(
-                format,
-                &msg,
-                Some(&rel_path),
-                None,
-                None,
-            )))
-        }
+        };
+        preparation.push(captured, (rendered != bytes).then_some(rendered.as_slice()))?;
     }
+    let total = results.len() as u64;
+    let outcome = if files.len() == 1 {
+        CommandOutcome::success(super::mutation::unwrap_single_result(results))
+    } else {
+        CommandOutcome::success_with_total(serde_json::Value::Array(results), total)
+    };
+    if let CommandOutcome::Success { output, .. } = &outcome {
+        preparation.check_output(output)?;
+    }
+    Ok(outcome.with_apply_report(if dry_run {
+        preparation.preview()
+    } else {
+        preparation.apply(journal, "updating tasks")
+    }))
 }
 
 #[cfg(test)]
@@ -411,7 +380,8 @@ mod tests {
 
     fn unwrap_success(outcome: CommandOutcome) -> String {
         match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::Success { output: s, .. } => s.to_string(),
+            CommandOutcome::RawOutput(s) => s,
             CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("expected success, got user error: {s}"),
         }
@@ -646,251 +616,28 @@ mod tests {
 // Dispatch handler (ARCH-1, iter-225)
 // ---------------------------------------------------------------------------
 
-/// The `hyalo task` dispatch arm, extracted verbatim from `dispatch.rs`.
-/// `index_flags` on each sub-action was consumed earlier in `run.rs`
-/// (snapshot loading) and never reaches here.
-#[allow(clippy::items_after_statements)] // extracted handler keeps its mid-fn imports (ARCH-1, iter-225)
-pub(crate) fn run(
-    ctx: &mut crate::dispatch::CommandContext<'_>,
-    action: TaskAction,
+#[allow(clippy::too_many_arguments)] // prepared target ownership plus existing task selectors
+pub(crate) fn mutate_prepared(
+    dir: &Path,
+    targets: crate::prepared::BatchTargetRequest,
+    lines: &[usize],
+    section: Option<&str>,
+    all: bool,
+    status: Option<char>,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    dry_run: bool,
 ) -> Result<CommandOutcome> {
-    let dir = ctx.dir;
-    let effective_format = ctx.effective_format;
-    let mut journal =
-        crate::commands::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path);
-
-    {
-        match action {
-            TaskAction::Read {
-                selection,
-                line,
-                section,
-                all,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                let configured_dir = ctx.configured_dir_str;
-                match resolve_inputs(
-                    &selection,
-                    dir,
-                    configured_dir,
-                    journal.index(),
-                    &ResolutionPolicy::Single { allow_glob: false },
-                    effective_format,
-                    false,
-                )? {
-                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                    ResolvedInputsOrOutcome::Resolved(r) => {
-                        ctx.files_from_counters = r.counters;
-                        let (_full, file) = r
-                            .files
-                            .into_iter()
-                            .next()
-                            .context("Single resolution returned no files")?;
-                        crate::commands::tasks::task_read(
-                            dir,
-                            &file,
-                            &line,
-                            section.as_deref(),
-                            all,
-                            effective_format,
-                        )
-                    }
-                }
-            }
-            TaskAction::Toggle {
-                selection,
-                line,
-                section,
-                all,
-                dry_run,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                if selection.files_from.is_some() && !all && section.is_none() {
-                    let out = crate::output::format_error(
-                        effective_format,
-                        "--files-from requires --all or --section",
-                        None,
-                        Some(
-                            "try: --files-from <list> --all   or   --files-from <list> --section <heading>",
-                        ),
-                        Some(
-                            "multi-file inputs need a selection that composes across files (--all or --section)",
-                        ),
-                    );
-                    return Ok(CommandOutcome::UserError(out));
-                }
-                let configured_dir = ctx.configured_dir_str;
-                match resolve_inputs(
-                    &selection,
-                    dir,
-                    configured_dir,
-                    journal.index(),
-                    &ResolutionPolicy::SingleOrMany,
-                    effective_format,
-                    false,
-                )? {
-                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                    ResolvedInputsOrOutcome::Resolved(r) => {
-                        ctx.files_from_counters.clone_from(&r.counters);
-                        if r.files.len() == 1 {
-                            // Single file: delegate directly — no wrapping.
-                            let (_full_path, rel) = &r.files[0];
-                            crate::commands::tasks::task_toggle(
-                                dir,
-                                rel,
-                                &line,
-                                section.as_deref(),
-                                all,
-                                effective_format,
-                                &mut journal,
-                                dry_run,
-                            )
-                        } else {
-                            // Multi-file: collect each file's raw results into a
-                            // flat array and let the pipeline wrap it in the
-                            // standard `{"results": [...], "total": N}` envelope.
-                            // `total` matches the flattened item count (consistent
-                            // with other list-shaped outputs and `--count`).
-                            let mut flat: Vec<serde_json::Value> = Vec::new();
-                            for (_full_path, rel) in &r.files {
-                                let outcome = crate::commands::tasks::task_toggle(
-                                    dir,
-                                    rel,
-                                    &line,
-                                    section.as_deref(),
-                                    all,
-                                    effective_format,
-                                    &mut journal,
-                                    dry_run,
-                                )?;
-                                match outcome {
-                                    CommandOutcome::Success { output, .. } => {
-                                        let val: serde_json::Value = serde_json::from_str(&output)
-                                            .unwrap_or(serde_json::Value::Null);
-                                        match val {
-                                            serde_json::Value::Array(items) => {
-                                                flat.extend(items);
-                                            }
-                                            other => flat.push(other),
-                                        }
-                                    }
-                                    other => return Ok(other),
-                                }
-                            }
-                            let total = flat.len() as u64;
-                            let output = serde_json::to_string(&flat)
-                                .context("failed to serialize multi-file task toggle output")?;
-                            Ok(CommandOutcome::success_with_total(output, total))
-                        }
-                    }
-                }
-            }
-            TaskAction::Set {
-                selection,
-                line,
-                section,
-                all,
-                status,
-                dry_run,
-                index_flags: _, // consumed in run.rs before dispatch
-            } => {
-                if selection.files_from.is_some() && !all && section.is_none() {
-                    let out = crate::output::format_error(
-                        effective_format,
-                        "--files-from requires --all or --section",
-                        None,
-                        Some(
-                            "try: --files-from <list> --all --status <c>   or   --files-from <list> --section <heading> --status <c>",
-                        ),
-                        Some(
-                            "multi-file inputs need a selection that composes across files (--all or --section)",
-                        ),
-                    );
-                    return Ok(CommandOutcome::UserError(out));
-                }
-                if status.chars().count() != 1 {
-                    let out = crate::output::format_error(
-                        effective_format,
-                        "--status must be a single character",
-                        None,
-                        Some("example: --status '?' or --status '-'"),
-                        None,
-                    );
-                    return Ok(CommandOutcome::UserError(out));
-                }
-                // chars().count() == 1 guarantees next() returns Some.
-                let ch = status
-                    .chars()
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--status must be a single character"))?;
-
-                let configured_dir = ctx.configured_dir_str;
-                match resolve_inputs(
-                    &selection,
-                    dir,
-                    configured_dir,
-                    journal.index(),
-                    &ResolutionPolicy::SingleOrMany,
-                    effective_format,
-                    false,
-                )? {
-                    ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-                    ResolvedInputsOrOutcome::Resolved(r) => {
-                        ctx.files_from_counters.clone_from(&r.counters);
-                        if r.files.len() == 1 {
-                            // Single file: delegate directly — no wrapping.
-                            let (_full_path, rel) = &r.files[0];
-                            crate::commands::tasks::task_set_status(
-                                dir,
-                                rel,
-                                &line,
-                                section.as_deref(),
-                                all,
-                                ch,
-                                effective_format,
-                                &mut journal,
-                                dry_run,
-                            )
-                        } else {
-                            // Multi-file: collect each file's raw results into a
-                            // flat array and let the pipeline wrap it in the
-                            // standard `{"results": [...], "total": N}` envelope.
-                            // `total` matches the flattened item count.
-                            let mut flat: Vec<serde_json::Value> = Vec::new();
-                            for (_full_path, rel) in &r.files {
-                                let outcome = crate::commands::tasks::task_set_status(
-                                    dir,
-                                    rel,
-                                    &line,
-                                    section.as_deref(),
-                                    all,
-                                    ch,
-                                    effective_format,
-                                    &mut journal,
-                                    dry_run,
-                                )?;
-                                match outcome {
-                                    CommandOutcome::Success { output, .. } => {
-                                        let val: serde_json::Value = serde_json::from_str(&output)
-                                            .unwrap_or(serde_json::Value::Null);
-                                        match val {
-                                            serde_json::Value::Array(items) => {
-                                                flat.extend(items);
-                                            }
-                                            other => flat.push(other),
-                                        }
-                                    }
-                                    other => return Ok(other),
-                                }
-                            }
-                            let total = flat.len() as u64;
-                            let output = serde_json::to_string(&flat)
-                                .context("failed to serialize multi-file task set output")?;
-                            Ok(CommandOutcome::success_with_total(output, total))
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let _provenance = targets.provenance();
+    mutate_files(
+        dir,
+        &targets.into_files(),
+        lines,
+        section,
+        all,
+        status,
+        format,
+        journal,
+        dry_run,
+    )
 }

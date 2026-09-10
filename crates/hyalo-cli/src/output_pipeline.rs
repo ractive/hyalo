@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::commands::files_from::FilesFromCounters;
 use crate::hints::{FilesFromCounterSummary, HintContext, generate_hints_with_counters};
-use crate::output::{CommandOutcome, Envelope, Format, apply_jq_filter_result, output_value};
+use crate::output::{CommandOutcome, Envelope, Format, evaluate_jq_isolated, output_value};
 
 /// Error message for `--count` on non-list commands (shared across match arms).
 ///
@@ -30,6 +30,8 @@ pub(crate) struct OutputPipeline<'a> {
     pub hint_ctx: Option<&'a HintContext>,
     /// Print only the total count as a bare integer.
     pub count: bool,
+    pub projection: crate::prepared::Projection,
+    pub internal_report: bool,
     /// When `--files-from` was used, inject skip counters into the envelope.
     pub files_from_counters: Option<FilesFromCounters>,
     /// Path prefix for `--format github` annotations: the vault dir expressed
@@ -40,6 +42,53 @@ pub(crate) struct OutputPipeline<'a> {
 }
 
 impl OutputPipeline<'_> {
+    pub(crate) fn plain(format: Format, jq: Option<&str>) -> OutputPipeline<'_> {
+        OutputPipeline {
+            user_format: format,
+            error_format: crate::error::transport_error_format(format),
+            jq_filter: jq,
+            hint_ctx: None,
+            count: false,
+            projection: crate::prepared::Projection::Standard,
+            internal_report: false,
+            files_from_counters: None,
+            github_path_prefix: String::new(),
+        }
+    }
+
+    pub(crate) fn finalize_config(&self, outcome: CommandOutcome) -> i32 {
+        let mut report = ExecutionReport::from_result(Ok(outcome));
+        report.payload = report.payload.map(|payload| match payload {
+            ReportPayload::Value(value, _) => ReportPayload::Envelope(value),
+            ReportPayload::Text(mut text) => {
+                if text.ends_with('\n') {
+                    text.pop();
+                }
+                ReportPayload::Text(text)
+            }
+            other => other,
+        });
+        self.write_report(
+            report,
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr().lock(),
+        )
+    }
+
+    pub(crate) fn finalize_with_effects(
+        &self,
+        outcome: CommandOutcome,
+        effects: crate::commands::apply::ApplyReport,
+    ) -> i32 {
+        let mut report = ExecutionReport::from_result(Ok(outcome));
+        report.effects = Some(effects);
+        self.write_report(
+            report,
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr().lock(),
+        )
+    }
+
     /// One-line human-readable summary of `--files-from` input paths that were
     /// dropped before linting, or `None` when every input resolved (or
     /// `--files-from` was not used).
@@ -75,70 +124,174 @@ impl OutputPipeline<'_> {
         }
     }
 
-    /// Process a command result through the output pipeline.
-    /// Prints output to stdout/stderr and returns the exit code.
+    /// Rendering completes before stdout publication. Effects remain owned by
+    /// the report until both output channels have been finalized.
     pub fn finalize(&self, result: Result<CommandOutcome>) -> i32 {
-        match result {
-            Ok(CommandOutcome::Success { output, total }) => {
-                // --count: print bare total and exit early.
+        self.finalize_to(
+            result,
+            &mut std::io::stdout().lock(),
+            &mut std::io::stderr().lock(),
+        )
+    }
+
+    fn finalize_to(
+        &self,
+        result: Result<CommandOutcome>,
+        stdout: &mut dyn std::io::Write,
+        stderr: &mut dyn std::io::Write,
+    ) -> i32 {
+        self.write_report(ExecutionReport::from_result(result), stdout, stderr)
+    }
+
+    fn write_report(
+        &self,
+        report: ExecutionReport,
+        stdout: &mut dyn std::io::Write,
+        stderr: &mut dyn std::io::Write,
+    ) -> i32 {
+        // Drain warnings before rendering: even a renderer failure must leave
+        // the typed error envelope as the final framed stderr object.
+        let _ = stderr.write_all(crate::warn::take_summary().as_bytes());
+        let effects = report.effects.clone();
+        let completeness = report.completeness;
+        let rendered = self.render(report);
+        let rendered = match rendered {
+            Ok(rendered) => rendered,
+            Err(mut diagnostic) => {
+                diagnostic.effects = effects;
+                if completeness == Completeness::Incomplete && diagnostic.hint.is_none() {
+                    diagnostic.hint = Some(
+                        "execution was incomplete; inspect the effect report before retrying"
+                            .into(),
+                    );
+                }
+                let text = format!("{}\n", diagnostic.render(self.error_format));
+                let _ = stderr.write_all(text.as_bytes());
+                return 2;
+            }
+        };
+        let write_result = stderr
+            .write_all(&rendered.stderr)
+            .and_then(|()| stdout.write_all(&rendered.stdout))
+            .and_then(|()| stdout.flush());
+        if let Err(error) = write_result {
+            let broken = error.kind() == std::io::ErrorKind::BrokenPipe;
+            if !broken
+                || effects
+                    .as_ref()
+                    .is_some_and(|report| !report.committed_paths().is_empty())
+            {
+                let mut diagnostic = crate::output::user_diagnostic(
+                    self.error_format,
+                    "failed to write output",
+                    None,
+                    Some("inspect committed paths before retrying"),
+                    Some(&error.to_string()),
+                );
+                diagnostic.category = Some("output_failure");
+                diagnostic.effects = effects;
+                let _ = writeln!(stderr, "{}", diagnostic.render(self.error_format));
+            }
+            return if broken {
+                crate::broken_pipe::BROKEN_PIPE_EXIT_CODE
+            } else {
+                2
+            };
+        }
+        rendered.code
+    }
+
+    fn render(
+        &self,
+        report: ExecutionReport,
+    ) -> std::result::Result<RenderedReport, Box<crate::output::UserDiagnostic>> {
+        let mut rendered = RenderedReport {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            code: report.code,
+        };
+        for diagnostic in report.diagnostics {
+            rendered.stderr.extend_from_slice(
+                format!("{}\n", diagnostic.render(self.error_format)).as_bytes(),
+            );
+        }
+        let Some(payload) = report.payload else {
+            return Ok(rendered);
+        };
+        match payload {
+            ReportPayload::Envelope(envelope) => {
+                let formatted = if let Some(filter) = self.jq_filter {
+                    evaluate_jq_isolated(filter, &envelope).map_err(|error| {
+                        let mut diagnostic = crate::output::user_diagnostic(
+                            self.error_format,
+                            "jq filter failed",
+                            None,
+                            None,
+                            Some(&error),
+                        );
+                        diagnostic.category = Some("output_failure");
+                        diagnostic
+                    })?
+                } else {
+                    serde_json::to_string_pretty(&envelope)
+                        .map_err(|error| crate::output::UserDiagnostic::new(error.to_string()))?
+                };
+                rendered.stdout = format!("{formatted}\n").into_bytes();
+            }
+            ReportPayload::Bytes(bytes) => rendered.stdout = bytes,
+            ReportPayload::Text(text) => {
+                rendered.stdout = crate::output::sanitize_control_chars(&text).into_bytes();
+                if !text.is_empty() {
+                    rendered.stdout.push(b'\n');
+                }
+            }
+            ReportPayload::Value(value, total) => {
                 if self.count {
-                    if let Some(n) = total {
-                        println!("{n}");
-                        return 0;
-                    }
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(
+                    let count = total.ok_or_else(|| {
+                        crate::output::user_diagnostic(
                             self.error_format,
                             count_unsupported_error(),
                             None,
                             None,
                             None,
                         )
-                    );
-                    // User error (unsupported flag) → exit 1, not 2 (iter-181 task 2).
-                    return 1;
+                    })?;
+                    rendered.stdout = format!("{count}\n").into_bytes();
+                    return Ok(rendered);
                 }
-
-                // Commands always produce JSON internally.
-                let value: serde_json::Value = match serde_json::from_str(&output) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let msg = crate::output::format_error(
-                            self.error_format,
-                            "internal error: failed to parse command JSON output",
-                            None,
-                            None,
-                            Some(&e.to_string()),
-                        );
-                        eprintln!("{msg}");
-                        return 2;
+                if self.projection != crate::prepared::Projection::Standard {
+                    for file in value
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|item| item.get("file").and_then(serde_json::Value::as_str))
+                    {
+                        if self.projection == crate::prepared::Projection::Filenames0 {
+                            rendered.stdout.extend_from_slice(file.as_bytes());
+                            rendered.stdout.push(0);
+                        } else {
+                            rendered.stdout.extend_from_slice(
+                                crate::output::sanitize_control_chars(file).as_bytes(),
+                            );
+                            rendered.stdout.push(b'\n');
+                        }
                     }
-                };
-
-                // `--format github`: render lint violations as GitHub Actions
-                // workflow commands (inline PR annotations) plus a summary line.
-                // This bypasses the JSON envelope, hints, and jq entirely — those
-                // are rejected for `github` upstream. `github` is lint-only, so
-                // `value` here is always the extended lint payload.
+                    return Ok(rendered);
+                }
                 if self.user_format == Format::Github {
-                    let rendered =
-                        hyalo_mdlint::profiles::github::render(&value, &self.github_path_prefix);
-                    println!("{rendered}");
-                    // Surface dropped `--files-from` input paths as a GitHub
-                    // Actions `::notice::` so a diff-scoped CI run shows in the
-                    // job log that some inputs never reached lint (UX-B).
+                    rendered.stdout = format!(
+                        "{}\n",
+                        hyalo_mdlint::profiles::github::render(&value, &self.github_path_prefix)
+                    )
+                    .into_bytes();
                     if let Some(summary) = self.skip_summary() {
-                        println!("::notice::{summary}");
+                        rendered
+                            .stdout
+                            .extend_from_slice(format!("::notice::{summary}\n").as_bytes());
                     }
-                    return 0;
+                    return Ok(rendered);
                 }
-
-                // Generate hints when a context is available. Pass through
-                // the `--files-from` counters so iter-143's counter-aware
-                // hints can fire (the envelope merge for the JSON shape
-                // happens later, so `value` doesn't carry them yet).
-                let hints = if let Some(ctx) = self.hint_ctx {
+                let hints = self.hint_ctx.map_or_else(Vec::new, |ctx| {
                     let counters =
                         self.files_from_counters
                             .as_ref()
@@ -147,207 +300,229 @@ impl OutputPipeline<'_> {
                                 files_skipped_outside_vault: c.files_skipped_outside_vault,
                             });
                     generate_hints_with_counters(ctx, &value, total, counters)
+                });
+                let envelope =
+                    Envelope::from_result(&value, total, &hints, self.files_from_counters.as_ref());
+                let envelope = if self.internal_report {
+                    let effects = report.effects.as_ref().ok_or_else(|| {
+                        crate::output::UserDiagnostic::new("internal mutation report unavailable")
+                    })?;
+                    output_value(&crate::output::MutationReportEnvelope { envelope, effects })
                 } else {
-                    Vec::new()
+                    output_value(&envelope)
                 };
-
-                if let Some(filter) = self.jq_filter {
-                    // Build the full envelope first so jq can address any field.
-                    let envelope = output_value(&Envelope::from_result(
-                        &value,
-                        total,
-                        &hints,
-                        self.files_from_counters.as_ref(),
-                    ));
-                    match apply_jq_filter_result(filter, &envelope) {
-                        Ok(filtered) => println!("{filtered}"),
-                        Err(e) => {
-                            let msg = crate::output::format_error(
-                                self.user_format,
-                                "jq filter failed",
-                                None,
-                                None,
-                                Some(&e),
-                            );
-                            eprintln!("{msg}");
-                            return 1;
-                        }
-                    }
+                let formatted = if let Some(filter) = self.jq_filter {
+                    evaluate_jq_isolated(filter, &envelope).map_err(|error| {
+                        let mut diagnostic = crate::output::user_diagnostic(
+                            self.error_format,
+                            "jq filter failed",
+                            None,
+                            None,
+                            Some(&error),
+                        );
+                        diagnostic.category = Some("output_failure");
+                        diagnostic
+                    })?
                 } else {
-                    let envelope = output_value(&Envelope::from_result(
-                        &value,
-                        total,
-                        &hints,
-                        self.files_from_counters.as_ref(),
-                    ));
-                    let formatted = crate::output::format_prebuilt_envelope(
+                    if self.user_format == Format::Text
+                        && total == Some(0)
+                        && value.as_array().is_some_and(Vec::is_empty)
+                    {
+                        let notice = self.hint_ctx.map_or_else(
+                            || "No results".to_owned(),
+                            crate::hints::zero_result_notice,
+                        );
+                        rendered
+                            .stderr
+                            .extend_from_slice(format!("{notice}\n").as_bytes());
+                    }
+                    crate::output::format_prebuilt_envelope(
                         self.user_format,
                         &envelope,
                         total,
                         &hints,
                         &value,
-                    );
-                    // In text mode, when a list command returns zero results,
-                    // emit the empty-state notice on stderr so the user knows
-                    // the command ran successfully. Only fires for list
-                    // commands (total is Some) with empty arrays.
-                    //
-                    // iter-267 (COH-17): printed BEFORE the hints, not after.
-                    // The hints go to stdout and this line to stderr, so on a
-                    // merged terminal the old order showed the suggested next
-                    // step above the reason it was suggested. Rust's stdout is
-                    // line-buffered even when piped, so emission order is what
-                    // a `2>&1` reader sees.
-                    let zero_results = self.user_format == Format::Text
-                        && total == Some(0)
-                        && value.as_array().is_some_and(Vec::is_empty);
-                    if zero_results {
-                        // iter-251: echo the effective filters. `No results`
-                        // alone left the reader to reconstruct what was asked;
-                        // naming the filters makes the empty state definitive
-                        // and pairs with the zero-result hints below it.
-                        match self.hint_ctx {
-                            Some(ctx) => eprintln!("{}", crate::hints::zero_result_notice(ctx)),
-                            None => eprintln!("No results"),
-                        }
-                    }
-                    println!("{formatted}");
-                    // Surface dropped `--files-from` input paths as a stderr
-                    // note so a diff-scoped `--format text` run shows that some
-                    // inputs never reached lint — matching the `::notice::` the
-                    // github format emits (UX-B). JSON stays as-is (the counters
-                    // are already injected into the envelope above).
-                    if self.user_format == Format::Text
-                        && let Some(summary) = self.skip_summary()
-                    {
-                        eprintln!("note: {summary}");
-                    }
-                }
-                0
-            }
-            Ok(CommandOutcome::RawOutput(output)) => {
-                if self.count {
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(
-                            self.error_format,
-                            count_unsupported_error(),
-                            None,
-                            None,
-                            None,
-                        )
-                    );
-                    // User error (unsupported flag) → exit 1, not 2 (iter-181 task 2).
-                    return 1;
-                }
-                // Raw output bypasses the JSON pipeline — print directly to stdout.
-                // Used by the `read` command for text-format content output, and by
-                // `find --filenames-only` for bare path lists (iter-235).
-                //
-                // `print!` (not `println!`) for an *empty* RawOutput so that a
-                // zero-result `--filenames-only` run prints nothing — not even a
-                // trailing newline — so a `while read` / `xargs` loop sees no
-                // phantom empty item. `read`'s content always ends with '\n' (its
-                // RawOutput is never empty), so it keeps the trailing-newline
-                // behaviour via the `else` arm.
-                //
-                // Sanitized here (unlike the JSON pipeline above) because RawOutput
-                // is raw file body content that never passes through format_success/
-                // format_envelope — without this, a vault file containing ANSI escapes
-                // or other control bytes would inject them straight into the terminal.
-                if output.is_empty() {
-                    print!("{}", crate::output::sanitize_control_chars(&output));
-                } else {
-                    println!("{}", crate::output::sanitize_control_chars(&output));
-                }
-                0
-            }
-            Ok(CommandOutcome::RawBytes(bytes)) => {
-                if self.count {
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(
-                            self.error_format,
-                            count_unsupported_error(),
-                            None,
-                            None,
-                            None,
-                        )
-                    );
-                    return 1;
-                }
-                // iter-238: verbatim byte output for `find --filenames0`. No
-                // sanitization and no added newline — the NUL delimiters ARE the
-                // payload, so the projection must reach `xargs -0` byte-exact.
-                if let Err(e) = std::io::Write::write_all(&mut std::io::stdout(), &bytes) {
-                    eprintln!(
-                        "{}",
-                        crate::output::format_error(
-                            self.error_format,
-                            &format!("failed to write stdout: {e}"),
-                            None,
-                            None,
-                            None,
-                        )
-                    );
-                    return 1;
-                }
-                0
-            }
-            Ok(CommandOutcome::UserError(output)) => {
-                // UserError strings are always formatted as JSON internally (effective_format=Json).
-                // When the user requested text format, re-format the error as human-readable text.
-                let displayed = if self.error_format == Format::Text {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&output) {
-                        let error = v["error"].as_str().unwrap_or("unknown error");
-                        let path = v["path"].as_str();
-                        let hint = v["hint"].as_str();
-                        let cause = v["cause"].as_str();
-                        crate::output::format_error(Format::Text, error, path, hint, cause)
-                    } else {
-                        output
-                    }
-                } else {
-                    output
+                    )
                 };
-                eprintln!("{displayed}");
-                1
+                rendered.stdout = format!("{formatted}\n").into_bytes();
+                if self.user_format == Format::Text
+                    && let Some(summary) = self.skip_summary()
+                {
+                    rendered
+                        .stderr
+                        .extend_from_slice(format!("note: {summary}\n").as_bytes());
+                }
             }
-            Err(e) => {
-                // iter-274 (BUG-25 / DEC-307): an error carrying the
-                // `UserFacingError` marker is the caller's mistake — it renders
-                // through the same envelope and exits 1, so `--format json`
-                // stays parseable and exit 2 keeps meaning "usage or internal".
-                if let Some(user) = e.downcast_ref::<hyalo_core::UserFacingError>() {
-                    let msg = crate::output::format_error(
-                        self.error_format,
+        }
+        Ok(rendered)
+    }
+}
+
+/// Domain outcome, diagnostics and committed effects cross the renderer as one
+/// report. A rendering failure cannot discard the effects or replace its exit
+/// status with a command's findings status.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Completeness {
+    Complete,
+    Incomplete,
+}
+struct ExecutionReport {
+    payload: Option<ReportPayload>,
+    diagnostics: Vec<crate::output::UserDiagnostic>,
+    effects: Option<crate::commands::apply::ApplyReport>,
+    code: i32,
+    completeness: Completeness,
+}
+enum ReportPayload {
+    Envelope(serde_json::Value),
+    Value(serde_json::Value, Option<u64>),
+    Text(String),
+    Bytes(Vec<u8>),
+}
+struct RenderedReport {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    code: i32,
+}
+impl ExecutionReport {
+    fn from_result(result: Result<CommandOutcome>) -> Self {
+        let mut report = Self {
+            payload: None,
+            diagnostics: Vec::new(),
+            effects: None,
+            code: 0,
+            completeness: Completeness::Complete,
+        };
+        match result {
+            Ok(CommandOutcome::Success {
+                output,
+                total,
+                effects,
+                status,
+            }) => {
+                report.payload = Some(ReportPayload::Value(output, total));
+                report.effects = effects;
+                report.code = i32::from(status == crate::output::DomainStatus::Findings);
+            }
+            Ok(CommandOutcome::RawOutput(text)) => report.payload = Some(ReportPayload::Text(text)),
+            Ok(CommandOutcome::RawBytes(bytes)) => {
+                report.payload = Some(ReportPayload::Bytes(bytes));
+            }
+            Ok(CommandOutcome::UserError(diagnostic)) => {
+                report.completeness = Completeness::Incomplete;
+                report.effects.clone_from(&diagnostic.effects);
+                report.diagnostics.push(diagnostic);
+                report.code = 1;
+            }
+            Err(error) => {
+                report.completeness = Completeness::Incomplete;
+                let diagnostic = if let Some(diagnostic) =
+                    error.downcast_ref::<crate::output::UserDiagnostic>()
+                {
+                    report.code = 1;
+                    diagnostic.clone()
+                } else if let Some(budget) = hyalo_core::frontmatter::as_budget_error(&error) {
+                    report.code = 1;
+                    crate::output::budget_diagnostic(Format::Json, budget)
+                } else if let Some(user) = error.downcast_ref::<hyalo_core::UserFacingError>() {
+                    report.code = 1;
+                    crate::output::user_diagnostic(
+                        Format::Json,
                         &user.message,
                         None,
                         user.hint.as_deref(),
                         user.cause.as_deref(),
-                    );
-                    eprintln!("{msg}");
-                    return 1;
-                }
-                let msg = crate::output::format_error(
-                    self.error_format,
-                    &e.to_string(),
-                    None,
-                    None,
-                    e.chain()
-                        .nth(1)
-                        .map(std::string::ToString::to_string)
-                        .as_deref(),
-                );
-                eprintln!("{msg}");
-                2
+                    )
+                } else {
+                    report.code = 2;
+                    crate::output::user_diagnostic(
+                        Format::Json,
+                        &error.to_string(),
+                        None,
+                        None,
+                        error.chain().nth(1).map(ToString::to_string).as_deref(),
+                    )
+                };
+                report.effects.clone_from(&diagnostic.effects);
+                report.diagnostics.push(diagnostic);
             }
         }
+        report
     }
 }
 
 #[cfg(test)]
 mod tests {
+    struct FailingWriter(std::io::ErrorKind);
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(self.0, "injected output failure"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    fn committed_outcome() -> CommandOutcome {
+        use crate::commands::apply::{ApplyReport, EffectState, IndexDisposition, PathEffect};
+        CommandOutcome::success(serde_json::Value::Null)
+            .with_status(1)
+            .with_apply_report(ApplyReport {
+                paths: vec![PathEffect {
+                    file: "a.md".into(),
+                    state: EffectState::Committed,
+                    error: None,
+                    category: None,
+                }],
+                index: IndexDisposition::Updated,
+                index_error: None,
+            })
+    }
+    #[test]
+    fn output_failures_preserve_effects_and_override_findings() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::BrokenPipe, 141),
+            (std::io::ErrorKind::Other, 2),
+        ] {
+            let pipeline = OutputPipeline::plain(Format::Json, None);
+            let mut stderr = Vec::new();
+            assert_eq!(
+                pipeline.finalize_to(
+                    Ok(committed_outcome()),
+                    &mut FailingWriter(kind),
+                    &mut stderr
+                ),
+                expected
+            );
+            let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+            assert_eq!(error["effects"]["paths"][0]["state"], "committed");
+            assert_eq!(error["effects"]["index"], "updated");
+        }
+    }
+    #[test]
+    fn renderer_failure_preserves_effects_and_count_preserves_findings() {
+        let mut pipeline = OutputPipeline::plain(Format::Json, None);
+        pipeline.count = true;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        assert_eq!(
+            pipeline.finalize_to(Ok(committed_outcome()), &mut out, &mut err),
+            2
+        );
+        assert!(out.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&err).unwrap();
+        assert_eq!(error["effects"]["paths"][0]["file"], "a.md");
+        err.clear();
+        assert_eq!(
+            pipeline.finalize_to(
+                Ok(CommandOutcome::success_with_total(serde_json::Value::Null, 1).with_status(1)),
+                &mut out,
+                &mut err
+            ),
+            1
+        );
+        assert_eq!(out, b"1\n");
+    }
+
     use super::*;
 
     fn pipeline_with_counters(counters: FilesFromCounters) -> OutputPipeline<'static> {
@@ -357,6 +532,8 @@ mod tests {
             jq_filter: None,
             hint_ctx: None,
             count: false,
+            projection: crate::prepared::Projection::Standard,
+            internal_report: false,
             files_from_counters: Some(counters),
             github_path_prefix: String::new(),
         }
@@ -409,6 +586,8 @@ mod tests {
             jq_filter: None,
             hint_ctx: None,
             count: false,
+            projection: crate::prepared::Projection::Standard,
+            internal_report: false,
             files_from_counters: None,
             github_path_prefix: String::new(),
         };

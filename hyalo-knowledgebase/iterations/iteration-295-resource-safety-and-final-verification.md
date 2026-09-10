@@ -195,3 +195,24 @@ The user requested larger execution blocks to reduce repeated Clippy/test/review
 block incorporates the substantive tasks and acceptance criteria of original draft iterations
 313, 314. Those drafts were uncommitted planning files and are replaced by the six-block queue
 290–295; their internal sections do not retain separate branch or gate requirements.
+
+## Foundation reconciliation — 2026-09-10
+
+This note reconciles the iteration 290 candidate before independent review. The supervisor
+will verify these interfaces against the landed checkpoint before this block starts.
+
+Iteration 290 now has compile-only preflight and killable jq evaluation workers in
+`output/jq.rs`, preserving the parent-owned `ExecutionReport` effects on output failure.
+This pilot is the starting point, not closure of A04. Implement the planned narrow versioned
+pipe protocol, cancellation/startup/abort/timeout/reap matrix and measured platform limits.
+Current source/input/output/time caps and Unix resource setup are documented in the
+architecture handoff; Darwin has no `RLIMIT_AS` guarantee and Windows currently relies on
+parent termination and byte limits. Reassess every promise against actual platform tests.
+
+Use `hyalo_cli::describe_invocation` for behavioral capability validation, including nested
+leaves and hidden-option exclusion, rather than a second schema. Keep the 290 deterministic
+compatibility and prepared-effect fixtures as regression inputs alongside all later blocks.
+Astra owns jq/resource design and implementation; after its writer freezes, Sol owns remaining
+gates, documentation and the held-out model comparison. The 50-row/49-group ledger and every
+original acceptance criterion remain authoritative; no stub, static proxy or unavailable
+platform/model run counts as passing evidence.

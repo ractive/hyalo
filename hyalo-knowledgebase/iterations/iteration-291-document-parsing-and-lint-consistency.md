@@ -266,3 +266,22 @@ block incorporates the substantive tasks and acceptance criteria of original dra
 295, 296, 306, 307. Those drafts were uncommitted planning files and are replaced by the
 six-block queue 290–295; their internal sections do not retain separate branch or gate
 requirements.
+
+## Foundation reconciliation — 2026-09-10
+
+This note reconciles the iteration 290 candidate before independent review. The supervisor
+will verify these interfaces against the landed checkpoint before this block starts.
+
+Iteration 290 now supplies `hyalo_core::rooted::CapturedInput`, captured-source
+`render_frontmatter` validation and `find_task_lines_in` / `render_tasks`.
+The CLI set/append/task pilots prepare complete batches through
+`commands::apply::PreparedChangeSet` before publication. Reuse these entrypoints:
+replace their current framing/budget/visibility internals with the shared authorities,
+preserving source offsets and byte identity. Do not recapture a source after transformation.
+The new normal-reader output check is an existing guard, not completion of S09's boundary
+matrix. All stage regressions and metadata-only counted-reader checks remain required.
+
+Ownership stays core framing/syntax, mdlint rule policy, CLI apply orchestration. Validate
+the existing prepared-mutation and deterministic baseline fixtures alongside new framing,
+literal-region and reader/writer boundary tests. The exact candidate interfaces and platform
+limits are recorded in [[research/rust-architecture-review-2026-09-10]].

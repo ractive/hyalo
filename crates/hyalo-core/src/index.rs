@@ -2073,14 +2073,19 @@ fn entry_is_stale_on_disk(entry: &IndexEntry, dir: &Path) -> bool {
 /// back to warning — the file is not in the index at all (so there is nothing
 /// to refresh in place), it could not be stat'ed, or the re-scan failed.
 pub fn refresh_if_changed_on_disk(index: &mut SnapshotIndex, dir: &Path, rel: &str) -> bool {
+    refresh_if_changed_at(index, &dir.join(rel), rel)
+}
+
+/// Refresh an exact path/key pair without reinterpreting it. The caller owns
+/// confinement; the CLI supplies this pair only through its rooted bridge.
+pub fn refresh_if_changed_at(index: &mut SnapshotIndex, full: &Path, rel: &str) -> bool {
     let Some(entry) = index.get(rel) else {
         return false;
     };
     let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
         return false;
     };
-    let full = dir.join(rel);
-    let Ok(meta) = std::fs::metadata(&full) else {
+    let Ok(meta) = std::fs::metadata(full) else {
         return false;
     };
     let Ok(modified) = meta.modified() else {
@@ -2096,9 +2101,7 @@ pub fn refresh_if_changed_on_disk(index: &mut SnapshotIndex, dir: &Path, rel: &s
     {
         return true;
     }
-    index
-        .refresh_entry_and_links_at(&full, rel)
-        .unwrap_or(false)
+    index.refresh_entry_and_links_at(full, rel).unwrap_or(false)
 }
 
 /// Files present under `dir` (per [`crate::discovery::discover_files`]) but

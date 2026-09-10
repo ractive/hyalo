@@ -68,7 +68,17 @@ embed detect-libc's Apache-2.0 license and source notice.
 Nonzero typed calls throw `HyaloError`, preserving `exitCode`, `stdout`,
 `stderr`, and a parsed `ErrorEnvelope` when Hyalo emitted one. Plain exit-2
 diagnostics remain plain stderr. Spawn, timeout, abort, invalid JSON, and empty
-JSON failures have distinct error classes.
+JSON failures have distinct error classes. `HyaloError.effects` retains per-path
+committed/unchanged/failed/not-attempted states and index disposition;
+`HyaloError.category` distinguishes mutation and output failures. Per-path failure
+categories distinguish source conflicts, I/O and finalization. Inspect effects
+before retrying, especially task toggles: a nonzero result can follow a committed
+write. Successful public `set()` and `task()` retain their `ProcessResult` streams.
+
+The bundled Pi runtime also exposes the internal `mutationReport()` accessor.
+It executes once with JSON/no hints and returns actual effects alongside the
+usual results. Its hidden CLI transport flag is not a public option or generated
+argument field; ordinary success envelopes do not acquire this extra metadata.
 
 Successful typed calls forward nonempty stderr to the caller's stderr by default.
 To collect it instead, pass `onDiagnostics`:

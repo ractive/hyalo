@@ -332,3 +332,36 @@ block incorporates the substantive tasks and acceptance criteria of original dra
 297, 298, 303, 308, 309 and the S10 portion of 313. Those drafts were uncommitted planning files
 and are replaced by the six-block queue 290–295; their internal sections do not retain separate
 branch or gate requirements.
+
+## Foundation reconciliation — 2026-09-10
+
+This note reconciles the iteration 290 candidate before independent review. The supervisor
+will verify these interfaces against the landed checkpoint before this block starts.
+
+Iteration 290 now dispatches find through `prepared::EffectiveQuery`, with merged
+filters, section/language inputs and `SelectionProvenance`; `OutputPlan::hint_demand`
+provides `HintDemand`. Consume these values rather than repeating option/view resolution.
+Indexed regex uses `VaultRoot::open` and bounded opened bytes; preserve that confinement
+when replacing scan/index paths.
+
+The migrated set/append/task coordinator always calls
+`MutationJournal::finalize_observed`. It persistently invalidates alias-enabled or changed
+catalog state that the legacy resolver cannot refresh safely. This is an interim safety
+policy: replace it with the planned coherent owner, preserving observed invalidation failures
+and complete `ApplyReport` effects. Do not count invalidation as the required unchanged-source
+graph update. Enforce S10 expansion bounds before introducing reconstruction. Reuse the
+alias/backlink foundation regression and add the full load/refresh/mutate/reload/disk matrix
+and per-batch graph/search counters. No finding ownership or acceptance is removed.
+
+The first independent review also requires unsafe apply paths to reach finalization:
+`finalize_observed(dir, observed_paths, unsafe_paths)` persistently invalidates after failed
+verification without rescanning an unsafe source. Preserve this invariant in the new owner.
+Named refresh and absent-entry insertion now consume `EffectiveQuery`'s private
+`PreparedSelection` through one whole-set rooted bridge after cardinality checks. Explicit
+CLI normalization occurs once; files-from retains literal-first resolved identity. Disk
+fallback, missing-name validation and filters use normalized variants without stripping
+again. `RefreshSummary` processes every target. Preserve absolute root-alias compatibility,
+nested vault-named directories and zero actual refresh/insertion callbacks on a whole-set
+refusal. This covers the named bridge, named disk fallback and indexed-regex pilot; it is
+not a universal scanner migration. Whole-catalog graph ownership, anchor fallback, body
+hints and remaining legacy helpers retain their ownership in iterations 292–295.

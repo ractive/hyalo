@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use crate::output::{CommandOutcome, Format, format_success};
+use crate::output::{CommandOutcome, Format, output_value};
 
 /// Delete a snapshot index file.
 ///
@@ -27,7 +27,7 @@ pub fn drop_index(
         match dunce::canonicalize(&index_path) {
             Ok(canonical_path) => {
                 if !canonical_path.starts_with(&canonical_dir) {
-                    let out = crate::output::format_error(
+                    let out = crate::output::user_diagnostic(
                         format,
                         &hyalo_core::outside_vault_message("index path", Some(&canonical_path)),
                         Some(&index_path.display().to_string()),
@@ -56,7 +56,7 @@ pub fn drop_index(
                         )));
                     }
                     Ok(canonical_parent) => {
-                        let out = crate::output::format_error(
+                        let out = crate::output::user_diagnostic(
                             format,
                             &hyalo_core::outside_vault_message(
                                 "index path",
@@ -75,7 +75,7 @@ pub fn drop_index(
                         let details = format!(
                             "failed to resolve index path for boundary check: {parent_err}"
                         );
-                        let out = crate::output::format_error(
+                        let out = crate::output::user_diagnostic(
                             format,
                             "could not verify that index path is inside the vault",
                             Some(&index_path.display().to_string()),
@@ -90,7 +90,7 @@ pub fn drop_index(
             }
             Err(e) => {
                 let details = format!("failed to resolve index path for boundary check: {e}");
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     "could not verify that index path is inside the vault",
                     Some(&index_path.display().to_string()),
@@ -124,13 +124,13 @@ pub fn drop_index(
         }),
     );
 
-    Ok(CommandOutcome::success(format_success(format, &result)))
+    Ok(CommandOutcome::success(output_value(&result)))
 }
 
 /// The "there is no index at this path" user error, shared by the boundary
 /// pre-check and the delete itself so both report the same thing (L-7).
-fn index_not_found_error(format: Format, index_path: &Path) -> String {
-    crate::output::format_error(
+fn index_not_found_error(format: Format, index_path: &Path) -> crate::output::UserDiagnostic {
+    crate::output::user_diagnostic(
         format,
         "index file not found",
         Some(&index_path.display().to_string()),

@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 290 — Execution and filesystem foundations
 date: 2026-09-10
-status: planned
+status: in-progress
 tags:
   - iteration
   - rust

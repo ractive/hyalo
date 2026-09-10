@@ -187,6 +187,63 @@ pub fn find(
     config_language: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Result<CommandOutcome> {
+    let selection = crate::prepared::PreparedSelection::explicit(dir, files_arg)?;
+    find_prepared(
+        index,
+        dir,
+        site_prefix,
+        pattern,
+        regexp,
+        property_filters,
+        tag_filters,
+        task_filter,
+        section_filters,
+        &selection,
+        globs,
+        fields,
+        sort,
+        reverse,
+        limit,
+        broken_links,
+        orphan,
+        dead_end,
+        title_filter,
+        format,
+        language,
+        config_language,
+        case_index,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+pub(crate) fn find_prepared(
+    index: &dyn VaultIndex,
+    dir: &Path,
+    site_prefix: Option<&str>,
+    pattern: Option<&str>,
+    regexp: Option<&str>,
+    property_filters: &[PropertyFilter],
+    tag_filters: &[String],
+    task_filter: Option<&FindTaskFilter>,
+    section_filters: &[SectionFilter],
+    selection: &crate::prepared::PreparedSelection,
+    globs: &[String],
+    fields: &Fields,
+    sort: Option<&SortField>,
+    reverse: bool,
+    limit: Option<usize>,
+    broken_links: bool,
+    orphan: bool,
+    dead_end: bool,
+    title_filter: Option<&str>,
+    format: Format,
+    language: Option<&str>,
+    config_language: Option<&str>,
+    case_index: Option<&CaseInsensitiveIndex>,
+) -> Result<CommandOutcome> {
+    let files = selection.names();
+    let files_arg = files.as_slice();
+    selection.precheck(&hyalo_core::rooted::VaultRoot::new(dir)?)?;
     // An empty-string pattern is accepted as "no body filter" rather than
     // being rejected with an error.  This makes scripted callers that build
     // query strings from variables work without special-casing the empty case.
@@ -226,7 +283,7 @@ pub fn find(
     // Compile --title filter once before the loop.
     let title_matcher = match title_filter.map(TitleMatcher::parse) {
         Some(Ok(m)) => Some(m),
-        Some(Err(outcome)) => return Ok(outcome),
+        Some(Err(outcome)) => return Ok(*outcome),
         None => None,
     };
 
@@ -246,7 +303,7 @@ pub fn find(
                     // compiles `(?i)<pattern>` internally; leaking that prefix
                     // into the message also shifted the regex engine's caret by
                     // four columns, pointing at the wrong character.
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                         format,
                         &format!("invalid regular expression: {re}"),
                         None,
@@ -266,36 +323,6 @@ pub fn find(
     // read from disk at most once each. Empty — and never touched — on the
     // vault-sweep path, where every target is already indexed.
     let anchor_sections_cache: AnchorSectionsCache = std::cell::RefCell::new(HashMap::new());
-
-    // Rewrite each --file argument to its vault-relative form when it is an
-    // absolute path inside the vault (mirrors what `set --file` etc. do via
-    // `resolve_file_user`). An absolute path *outside* the vault is escalated
-    // to a UserError so we never silently return zero results.
-    let mut rewritten_files: Vec<String> = Vec::with_capacity(files_arg.len());
-    let mut warned_misuse = false;
-    for f in files_arg {
-        let p = std::path::Path::new(f);
-        if p.is_absolute() {
-            if let Some(rel) = discovery::strip_absolute_vault_prefix(&canonical_dir, f) {
-                if !warned_misuse {
-                    crate::warn::warn_llm_misuse(dir);
-                    warned_misuse = true;
-                }
-                rewritten_files.push(rel);
-            } else {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
-                    format,
-                    &hyalo_core::outside_vault_message_with_dir("file", None, &canonical_dir),
-                    Some(f),
-                    Some(&hyalo_core::outside_vault_hint(&canonical_dir)),
-                    None,
-                )));
-            }
-        } else {
-            rewritten_files.push(f.clone());
-        }
-    }
-    let files_arg: &[String] = &rewritten_files;
 
     // L-7 parity (iter-210 / BUG-13): a `--file` / positional path that names
     // nothing is a user error here, exactly as it already is for `lint` and
@@ -317,7 +344,7 @@ pub fn find(
             if known.contains(f.as_str()) {
                 continue;
             }
-            if let Err(err) = discovery::resolve_file(dir, f) {
+            if let Err(err) = discovery::resolve_normalized_file_ci(dir, f, false) {
                 return Ok(crate::commands::resolve_error_to_outcome(
                     err,
                     format,
@@ -955,12 +982,16 @@ pub fn find(
 
         // --- Content search: regex path only (BM25 is handled via score_map) ---
         let content_matches: Option<Vec<ContentMatch>> = if has_regex_search {
-            let full_path = dir.join(&entry.rel_path);
+            let root = hyalo_core::rooted::VaultRoot::new(dir)?;
+            let name = hyalo_core::rooted::RelativeName::new(&entry.rel_path)?;
+            let bytes = root
+                .open(&name)?
+                .read_bounded(hyalo_core::scanner::MAX_FILE_SIZE)?;
             let re = compiled_regex.as_ref().unwrap(); // has_regex_search == compiled_regex.is_some()
 
             let mut content_visitor = ContentSearchVisitor::from_compiled(re.clone());
             let scan_result =
-                hyalo_core::scanner::scan_file_multi(&full_path, &mut [&mut content_visitor]);
+                hyalo_core::scanner::scan_slice_multi(&bytes, &mut [&mut content_visitor]);
             match scan_result {
                 Ok(()) => {}
                 Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
@@ -1613,92 +1644,9 @@ pub fn find(
 
     let json_output = serde_json::Value::Array(json_array);
     Ok(CommandOutcome::success_with_total(
-        crate::output::format_success(format, &json_output),
+        json_output,
         total as u64,
     ))
-}
-
-/// Project a `find` outcome onto bare file paths, one per line (iter-235).
-///
-/// `--filenames-only` is the agent/pipeline counterpart to `--format text`'s
-/// human layout: a compact, copy-pasteable list of the matching `file` paths
-/// with no JSON envelope, no count, no hints. It bypasses the entire output
-/// pipeline by producing a [`CommandOutcome::RawOutput`], so `--jq`, `--count`,
-/// and `--format` all become irrelevant (and are rejected upstream).
-///
-/// A `Success` outcome carries the find result array as a JSON string (the
-/// internal format is always JSON). Each element's `file` field is the
-/// vault-relative path we want. Zero results → empty output (no trailing
-/// newline), so `find --filenames-only` in a pipe yields nothing rather than
-/// a blank line. A non-empty result set ends with exactly one newline — the one
-/// the `RawOutput` printer adds — so the last path is complete for
-/// `while read` / `xargs` loops and `wc -l` equals `--count` (iter-264).
-///
-/// Errors pass through unchanged — a `UserError` (bad filter, missing
-/// file, boundary refusal) is never remangled into a filename list.
-pub(crate) fn project_filenames_only(outcome: CommandOutcome) -> CommandOutcome {
-    project_filenames_delimited(outcome, b'\n')
-}
-
-/// Project a `find` outcome onto NUL-terminated file paths (iter-238).
-///
-/// `--filenames0` is the `xargs -0` / newline-safe sibling of
-/// [`project_filenames_only`]: identical semantics except each path is
-/// terminated by a NUL byte instead of a newline, exactly like GNU
-/// `find -print0`. NUL is the only byte a POSIX path cannot contain, so the
-/// projection is unambiguous even for filenames with embedded newlines.
-pub(crate) fn project_filenames0(outcome: CommandOutcome) -> CommandOutcome {
-    project_filenames_delimited(outcome, b'\0')
-}
-
-/// Shared path-projection core: walk the find result array's `file` fields and
-/// emit them separated by `delim` (`\n` for --filenames-only, NUL for
-/// --filenames0). Zero results → empty output, exit 0; non-Success outcomes
-/// pass through unchanged.
-fn project_filenames_delimited(outcome: CommandOutcome, delim: u8) -> CommandOutcome {
-    let CommandOutcome::Success { output, .. } = &outcome else {
-        return outcome;
-    };
-    // The internal `output` is a JSON array of find result objects. Parse it
-    // once, then walk each element's `file` field. serde_json::Value keeps the
-    // cost to one allocation per path, which is the lower bound for emitting
-    // them as text anyway.
-    let value: serde_json::Value = match serde_json::from_str(output) {
-        Ok(v) => v,
-        // Should not happen — find always emits valid JSON. Leave the
-        // original Success outcome intact rather than inventing an error.
-        Err(_) => return outcome,
-    };
-    let paths: Vec<&str> = value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("file").and_then(|f| f.as_str()))
-        .collect();
-    if paths.is_empty() {
-        // Empty output, exit 0 — indistinguishable from a successful query
-        // that matched nothing, which is the intent (no spurious blank line
-        // for a `while read` loop to trip on).
-        return CommandOutcome::RawOutput(String::new());
-    }
-    // Each path is terminated by the delimiter so the last entry is complete
-    // for consumers. --filenames-only stays text (`RawOutput`, newline-
-    // sanitized and println-terminated as before); --filenames0 must reach
-    // `xargs -0` byte-exact — NUL is a control character the text pipeline
-    // strips, so it takes the unsanitized byte path.
-    if delim == b'\0' {
-        let mut out = Vec::new();
-        for p in paths {
-            out.extend_from_slice(p.as_bytes());
-            out.push(delim);
-        }
-        return CommandOutcome::RawBytes(out);
-    }
-    // --filenames-only: join, do NOT terminate. The RawOutput printer adds the
-    // final newline with `println!`, so terminating here too emitted a trailing
-    // blank line and made `--filenames-only | wc -l` one more than `--count`
-    // (iter-264, BUG-21).
-    CommandOutcome::RawOutput(paths.join("\n"))
 }
 
 // ---------------------------------------------------------------------------

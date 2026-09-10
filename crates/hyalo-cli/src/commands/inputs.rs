@@ -88,14 +88,11 @@ pub(crate) fn resolve_inputs(
         let (files_pairs, counters) =
             resolve_files_from(source, dir, configured_dir, snapshot_index)?;
         if let ResolutionPolicy::Single { .. } = policy
-            && files_pairs.len() > 1
+            && files_pairs.len() != 1
         {
-            let out = crate::output::format_error(
-                format,
-                "--files-from resolved to multiple files but this command accepts only one",
-                None,
-                Some("provide a list with exactly one entry, or use a multi-file command"),
-                None,
+            let out = crate::prepared::cardinality_diagnostic(
+                "this command requires exactly one resolved file from --files-from",
+                Some(&counters),
             );
             return Ok(ResolvedInputsOrOutcome::Outcome(CommandOutcome::UserError(
                 out,
@@ -113,7 +110,7 @@ pub(crate) fn resolve_inputs(
     match policy {
         ResolutionPolicy::Single { allow_glob } => {
             if !allow_glob && !globs_vec.is_empty() {
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     "--glob is not supported for this command",
                     None,
@@ -130,7 +127,7 @@ pub(crate) fn resolve_inputs(
                 Ok(f) => f,
                 Err(e) => {
                     return Ok(ResolvedInputsOrOutcome::Outcome(CommandOutcome::UserError(
-                        format!("{e}"),
+                        format!("{e}").into(),
                     )));
                 }
             };
@@ -186,13 +183,16 @@ fn merge_selection(sel: &InputSelection) -> (Vec<String>, Vec<String>) {
 /// Extract the single file argument from an `InputSelection` (positional or --file).
 /// Returns an error if neither or both are provided (the latter blocked by clap).
 fn single_file_from_selection(sel: &InputSelection) -> anyhow::Result<String> {
-    match (&sel.file_positional, sel.file.first()) {
-        (Some(f), None) | (None, Some(f)) => Ok(f.clone()),
-        (None, None) => {
+    if sel.file.len() > 1 {
+        anyhow::bail!("this command requires exactly one file; multiple files selected");
+    }
+    match (&sel.file_positional, sel.file.as_slice()) {
+        (Some(f), []) | (None, [f]) => Ok(f.clone()),
+        (None, []) => {
             anyhow::bail!("required argument missing: provide <FILE> or --file <FILE>")
         }
         // Clap prevents this at parse time.
-        (Some(_), Some(_)) => anyhow::bail!("cannot specify both <FILE> and --file"),
+        _ => anyhow::bail!("cannot specify both <FILE> and --file"),
     }
 }
 
@@ -241,8 +241,7 @@ fn resolve_files_from(
     if total_inputs == 0 {
         let source_label = if source == "-" { "stdin" } else { source };
         crate::warn::warn_always(format!(
-            "--files-from {source_label} listed no paths — nothing was examined (exit 0 here \
-             means \"no input\", not \"no findings\")"
+            "--files-from {source_label} listed no paths — nothing was examined"
         ));
     }
 

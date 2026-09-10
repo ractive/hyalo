@@ -58,6 +58,7 @@ export {
   createPiTransport,
   find,
   lint,
+  mutationReport,
   raw,
   read,
   set,

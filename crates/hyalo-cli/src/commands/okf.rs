@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::output::{CommandOutcome, Format, format_error};
+use crate::output::{CommandOutcome, Format, user_diagnostic};
 
 /// Markers delimiting the region of `index.md` that `okf index` owns. Prose
 /// outside these markers is preserved verbatim across regenerations.
@@ -231,7 +231,7 @@ pub fn run_index(
         Ok(p) => p,
         Err(msg) => {
             return Ok((
-                CommandOutcome::UserError(format_error(format, &msg, scope, None, None)),
+                CommandOutcome::UserError(user_diagnostic(format, &msg, scope, None, None)),
                 None,
             ));
         }
@@ -428,7 +428,7 @@ pub fn run_index(
 
     Ok((
         CommandOutcome::success_with_total(
-            crate::output::output_value(&payload).to_string(),
+            crate::output::output_value(&payload),
             changed.len() as u64,
         ),
         exit_override,
@@ -927,7 +927,7 @@ pub fn run_log(
     format: Format,
 ) -> Result<CommandOutcome> {
     if message.trim().is_empty() {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             "log message must not be empty",
             None,
@@ -942,7 +942,7 @@ pub fn run_log(
     if let Some(a) = action
         && a.trim().is_empty()
     {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             "log action must not be empty",
             None,
@@ -954,7 +954,7 @@ pub fn run_log(
     let rel_path = match resolve_log_target(dir, target) {
         Ok(p) => p,
         Err(msg) => {
-            return Ok(CommandOutcome::UserError(format_error(
+            return Ok(CommandOutcome::UserError(user_diagnostic(
                 format, &msg, target, None, None,
             )));
         }
@@ -981,7 +981,7 @@ pub fn run_log(
     // (or any non-file at that path) can't be written; reject it in both
     // dry-run and apply so they agree (BUG-11 parity for `okf log`).
     if full.exists() && !full.is_file() {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("target '{rel_path}' exists but is not a regular file"),
             target,
@@ -1023,9 +1023,9 @@ pub fn run_log(
         entry: &(entry_line),
         created: old_content.is_empty(),
     };
-    Ok(CommandOutcome::success(
-        crate::output::output_value(&payload).to_string(),
-    ))
+    Ok(CommandOutcome::success(crate::output::output_value(
+        &payload,
+    )))
 }
 
 /// Indent the continuation lines of a (possibly multi-line) log message so the
@@ -1825,10 +1825,7 @@ pub(crate) fn run(
                 case_insensitive,
                 effective_format,
             )?;
-            if let Some(code) = exit_override {
-                ctx.exit_code_override = Some(code);
-            }
-            Ok(outcome)
+            Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
         crate::cli::args::OkfAction::Log {
             target,
