@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 294 — CLI, agent and documentation contracts
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -280,7 +280,7 @@ marketing language true.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -422,4 +422,7 @@ Two ignored Rust tests, the two existing stub gates and the unavailable MADR
 recipe are excluded from coverage. Feature-fanout help checks are not behavioral
 capability proof. Iteration 295 retains the stronger gates and resource work;
 current jq, filesystem and partial-write limitations remain in force.
-Native PR checks and the final remote checkpoint are still pending.
+All 11 required native PR checks passed on implementation commit
+`824c7d1db1bb617ce5fb97e0bb929331460e3ee0` in PR #350, including Linux,
+macOS and Windows tests and launcher checks. This completion-only update must
+pass its own final-head CI before the GitHub merge checkpoint.
