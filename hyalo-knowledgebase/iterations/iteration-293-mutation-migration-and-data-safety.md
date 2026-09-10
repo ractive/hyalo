@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 293 — Mutation migration and data safety
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -210,7 +210,7 @@ inside their declared root and report actual effects rather than intended work.
   file/directory symlink escapes, partial installations and removal failures; no external
   fixture artifact may change.
 
-- [ ] S02/S03: reject alias.md -> real.md moved onto real.md; distinguish hard-link/symlink
+- [x] S02/S03: reject alias.md -> real.md moved onto real.md; distinguish hard-link/symlink
   entries from a supported regular-file case-only rename. Exercise a/Foo.md and b/foo.md into
   one directory on an actually case-insensitive volume, plus a case-sensitive counterpart and a
   destination created during execution.
@@ -242,7 +242,7 @@ Acceptance for this stage (focused checks):
 - [x] I/O failures never discard committed move/config effects; index reads cannot silently
   serve a snapshot known invalid after failure.
 
-- [ ] Platform-specific tests run on appropriate CI workers; an unsupported
+- [x] Platform-specific tests run on appropriate CI workers; an unsupported
   case-insensitive/symlink fixture is reported, not counted as coverage.
 
 Scope: Do not change supported path syntax or replace semantic link case policy with filesystem
@@ -323,7 +323,7 @@ version checks.
 
 ## One block completion gate
 
-- [ ] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
+- [x] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
   edits; public API/format changes must be explicit and tested. No whole-vault crash-transaction
   or concurrent-adversary guarantee is implied by the new types.
 
@@ -341,7 +341,7 @@ version checks.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -455,3 +455,15 @@ release SHA-256
 The supervisor reconciled 294, 295 and the architecture handoff; iteration 287's
 external consumer task remains deferred. Original criteria and finding ownership
 are unchanged.
+
+## Native CI completion — 2026-09-10
+
+PR #349 repair head `3bf8b92ecdee1e334c19f15b8ed3b798f252ba97` passed all
+11 required checks, including native Linux, macOS and Windows workspace tests
+and actual move destination case-policy checks. The third authorized repair pass
+changed only three Windows test fixtures: directory effects compare canonical
+paths, and a fallback probe closes before the real second writer runs. Fresh
+Astra/high review `293-review-attempt-4.json` found no issues in that delta.
+The production release and the reconciled successor interfaces remain unchanged.
+All 63 original criteria are verified; CI will also run on this documentation
+checkpoint before the GitHub merge commit. The limitations above remain in force.
