@@ -209,6 +209,34 @@ impl Report {
         out.trim_end().to_owned()
     }
 
+    pub(crate) fn effects(&self) -> crate::commands::apply::ApplyReport {
+        use crate::commands::apply::{ApplyReport, EffectState, IndexDisposition, PathEffect};
+        ApplyReport {
+            paths: self
+                .actions
+                .iter()
+                .filter(|step| {
+                    matches!(step.action, "created" | "updated" | "removed" | "unchanged")
+                })
+                .map(|step| PathEffect {
+                    file: Path::new(&self.root)
+                        .join(&step.target)
+                        .display()
+                        .to_string(),
+                    state: if step.action == "unchanged" {
+                        EffectState::Unchanged
+                    } else {
+                        EffectState::Committed
+                    },
+                    error: None,
+                    category: None,
+                })
+                .collect(),
+            index: IndexDisposition::NotUsed,
+            index_error: None,
+        }
+    }
+
     /// The `--format json` body. Serialization of a plain struct of owned
     /// strings cannot fail; an empty object is returned instead of panicking.
     #[must_use]

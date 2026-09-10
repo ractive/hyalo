@@ -752,6 +752,7 @@ dependencies = [
  "regex",
  "rmp-serde",
  "rust-stemmers",
+ "same-file",
  "serde",
  "serde-saphyr",
  "serde_json",

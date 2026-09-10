@@ -335,7 +335,7 @@ pub fn set(
 ) -> Result<CommandOutcome> {
     // At least one mutation target required
     if property_args.is_empty() && tag_args.is_empty() {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "set requires at least one --property K=V or --tag T",
             None,
@@ -356,7 +356,7 @@ pub fn set(
     for arg in property_args {
         match parse_kv(arg) {
             Err(msg) => {
-                let out = crate::output::format_error(format, &msg, None, None, None);
+                let out = crate::output::user_diagnostic(format, &msg, None, None, None);
                 return Ok(CommandOutcome::UserError(out));
             }
             Ok((key, _)) => {
@@ -370,7 +370,7 @@ pub fn set(
     // Validate tag names
     for tag in tag_args {
         if let Err(msg) = crate::commands::tags::validate_tag(tag) {
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 &msg,
                 None,
@@ -393,7 +393,7 @@ pub fn set(
             let value = match frontmatter::parse_value(raw_value, None) {
                 Ok(val) => val,
                 Err(e) => {
-                    let out = crate::output::format_error(
+                    let out = crate::output::user_diagnostic(
                         format,
                         &format!("failed to parse value for property '{name}': {e}"),
                         None,
@@ -409,7 +409,7 @@ pub fn set(
                 && has_date_shape(raw_value)
                 && !looks_like_date(raw_value)
             {
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     &format!(
                         "value {raw_value:?} is not a valid ISO 8601 date \
@@ -433,6 +433,11 @@ pub fn set(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
     let scanned = files.len();
+    let mut preparation = super::apply::PreparedChangeSet::new(dir, files.len())?;
+    let captures: Vec<_> = files
+        .iter()
+        .map(|(_, rel)| preparation.capture(rel))
+        .collect::<Result<_>>()?;
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -450,8 +455,10 @@ pub fn set(
     //     iteration on disk, and skipped the end-of-loop
     //     `journal flush` entirely — a partial write plus a stale
     //     on-disk index for whichever file happened to trip the guard.
-    for (full_path, rel_path) in &files {
-        let props = match frontmatter::read_frontmatter(full_path) {
+    for ((_full_path, rel_path), captured) in files.iter().zip(&captures) {
+        let props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             // Parse errors are reported as warnings during the write loop; skip here.
             Err(e) if frontmatter::is_parse_error(&e) => continue,
@@ -479,13 +486,15 @@ pub fn set(
         // treats `INDEX.md` on case-insensitive filesystems (macOS/Windows
         // default).
         let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
-        for (full_path, rel_path) in &files {
+        for ((_full_path, rel_path), captured) in files.iter().zip(&captures) {
             // Reserved / exempt files (e.g. OKF `index.md`, `log.md`) are not
             // subject to schema validation.
             if schema.exempt.is_exempt_ci(rel_path, case_insensitive) {
                 continue;
             }
-            let props = match frontmatter::read_frontmatter(full_path) {
+            let props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+                captured.reader()?,
+            )) {
                 Ok(p) => p,
                 // Parse errors are reported as warnings during the write loop; skip here.
                 Err(e) if frontmatter::is_parse_error(&e) => continue,
@@ -523,7 +532,7 @@ pub fn set(
                         constraint,
                     )
                 {
-                    let out = crate::output::format_error(
+                    let out = crate::output::user_diagnostic(
                         format,
                         &format!("{rel_path}: {violation}"),
                         None,
@@ -562,15 +571,11 @@ pub fn set(
     // in the error envelope's `cause` instead of a bare stderr line.
     let mut unparseable_cause: Option<String> = None;
 
-    // BUG-14 (iter-277): one write phase for the whole batch, so the
-    // durability fsync is paid once per directory instead of once per file
-    // (DEC-317), and a long run reports progress instead of going silent.
-    let _write_phase =
-        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "setting properties"));
-    // Outer loop: one read-modify-write per file
-    for (full_path, rel_path) in &files {
-        let mtime = frontmatter::read_mtime(full_path)?;
-        let mut props = match frontmatter::read_frontmatter(full_path) {
+    // Plan every selected input before the first publication.
+    for ((full_path, rel_path), captured) in files.iter().zip(captures) {
+        let mut props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 if let Some(detail) = super::report_unparseable_skip(files_arg, globs, rel_path, &e)
@@ -582,18 +587,6 @@ pub fn set(
             }
             Err(e) => return Err(e),
         };
-
-        // BUG-2 (iter-255): the command has just `stat`ed and read this file
-        // while holding the snapshot index open, so a file that changed on
-        // disk since the last `create-index` gets its entry repaired here —
-        // whether or not the mutation below turns out to be a no-op. Without
-        // it, a `set` that finds the property already at its target value
-        // reports `0 modified` and leaves `find --index` describing a body
-        // that is no longer on disk. Costs no extra I/O: the staleness check
-        // reuses the `mtime`/size fingerprint read above.
-        if !dry_run {
-            journal.refresh_if_stale(rel_path, full_path, mtime)?;
-        }
 
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
@@ -646,19 +639,16 @@ pub fn set(
             }
         }
 
-        if file_changed && !dry_run {
-            frontmatter::check_mtime(full_path, mtime)?;
-            match frontmatter::write_frontmatter_within(dir, full_path, &props) {
-                Ok(()) => {}
-                Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
-                    let budget_err = frontmatter::as_budget_error(e).unwrap();
-                    let out = crate::output::format_budget_error(format, budget_err);
-                    return Ok(CommandOutcome::UserError(out));
-                }
-                Err(e) => return Err(e),
-            }
-            journal.update_entry(rel_path, props, full_path)?;
-        }
+        let rendered = if file_changed {
+            Some(frontmatter::render_frontmatter(
+                &mut captured.reader()?,
+                full_path,
+                &props,
+            )?)
+        } else {
+            None
+        };
+        preparation.push(captured, rendered.as_deref())?;
     }
 
     // L-2: the single file the user named by hand was unparseable — report it
@@ -671,10 +661,6 @@ pub fn set(
         format,
     ) {
         return Ok(outcome);
-    }
-
-    if !dry_run {
-        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -761,9 +747,17 @@ pub fn set(
     // Return array if multiple mutations, single object if one
     let output = mutation::unwrap_single_result(results);
 
-    Ok(CommandOutcome::success(crate::output::format_success(
-        format, &output,
-    )))
+    preparation.check_output(&output)?;
+    let apply_report = if dry_run {
+        Some(preparation.preview())
+    } else {
+        Some(preparation.apply(journal, "setting properties"))
+    };
+    let outcome = CommandOutcome::success(output);
+    Ok(match apply_report {
+        Some(report) => outcome.with_apply_report(report),
+        None => outcome,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -847,7 +841,8 @@ title: Note
         )
         .unwrap();
         let out = match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::Success { output: s, .. } => s.to_string(),
+            CommandOutcome::RawOutput(s) => s,
             CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
@@ -929,7 +924,7 @@ status: done
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["scanned"], parsed["total"]);
@@ -967,7 +962,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["tag"], "rust");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
@@ -1008,7 +1003,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
     }
 
@@ -1044,7 +1039,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array(), "multiple mutations should return array");
         assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
@@ -1204,7 +1199,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr.len(), 2);
@@ -1250,7 +1245,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -1290,7 +1285,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 0);
         // 2 files scanned, 1 passed the where-filter (total = modified + skipped)
@@ -1329,7 +1324,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         // 2 files scanned, 1 passed the where-filter
         assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
@@ -1678,7 +1673,7 @@ versions:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         let note = parsed["note"].as_str().unwrap_or_default();
         assert!(
             note.contains("previously stored this property as a string"),
@@ -1713,7 +1708,7 @@ versions:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.get("note").is_none() || parsed["note"].is_null());
     }
 }
@@ -1752,7 +1747,7 @@ pub(crate) fn run(
     let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
         Ok(f) => f,
         Err(e) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e,
                 None,

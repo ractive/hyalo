@@ -22,7 +22,7 @@ pub fn unwrap_single_result(mut results: Vec<Value>) -> Value {
     if results.len() == 1 {
         results.pop().unwrap_or_default()
     } else {
-        crate::output::output_value(&results)
+        serde_json::Value::Array(results)
     }
 }
 

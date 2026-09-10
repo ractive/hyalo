@@ -10,7 +10,7 @@ use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default};
 
 use anyhow::Result;
 
-use crate::output::{CommandOutcome, Format, format_error, format_output};
+use crate::output::{CommandOutcome, Format, output_value, user_diagnostic};
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -37,7 +37,7 @@ pub(crate) fn create_new(
         } else {
             format!("available types: {}", sorted_types.join(", "))
         };
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("type '{type_name}' not found"),
             None,
@@ -55,7 +55,7 @@ pub(crate) fn create_new(
     for component in file_path.components() {
         match component {
             Component::RootDir | Component::Prefix(_) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     "invalid file path: must be vault-relative, not absolute",
                     Some(file_arg),
@@ -64,7 +64,7 @@ pub(crate) fn create_new(
                 )));
             }
             Component::ParentDir => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     "invalid file path: '..' traversal is not allowed",
                     Some(file_arg),
@@ -129,9 +129,10 @@ pub(crate) fn create_new(
         && let Err(budget_err) =
             hyalo_core::frontmatter::check_frontmatter_size_budget(yaml_part, &full_path)
     {
-        return Ok(CommandOutcome::UserError(
-            crate::output::format_budget_error(format, &budget_err),
-        ));
+        return Ok(CommandOutcome::UserError(crate::output::budget_diagnostic(
+            format,
+            &budget_err,
+        )));
     }
 
     // Normalize to forward slashes so the snapshot's rel_path invariant holds
@@ -149,7 +150,7 @@ pub(crate) fn create_new(
     // reports the same refusals a real run would. Only the write is skipped.
     if dry_run {
         if full_path.exists() {
-            return Ok(CommandOutcome::UserError(format_error(
+            return Ok(CommandOutcome::UserError(user_diagnostic(
                 format,
                 "file already exists; remove it first if you mean to re-create",
                 Some(file_arg),
@@ -158,7 +159,11 @@ pub(crate) fn create_new(
             )));
         }
         let out = match format {
-            Format::Text => format!("[dry-run] would create {rel_path}\n\n{content}"),
+            Format::Text => {
+                return Ok(CommandOutcome::RawOutput(format!(
+                    "[dry-run] would create {rel_path}\n\n{content}"
+                )));
+            }
             Format::Json | Format::Github => {
                 let val = NewResult {
                     r#type: type_name,
@@ -167,7 +172,7 @@ pub(crate) fn create_new(
                     dry_run: true,
                     content: Some(&content),
                 };
-                format_output(Format::Json, &val)
+                output_value(&val)
             }
         };
         return Ok(CommandOutcome::success(out));
@@ -180,7 +185,7 @@ pub(crate) fn create_new(
     {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Ok(CommandOutcome::UserError(format_error(
+            return Ok(CommandOutcome::UserError(user_diagnostic(
                 format,
                 "file already exists; remove it first if you mean to re-create",
                 Some(file_arg),
@@ -209,7 +214,7 @@ pub(crate) fn create_new(
     // Step 7: output
     // ------------------------------------------------------------------
     let out = match format {
-        Format::Text => format!("created {rel_path}\n"),
+        Format::Text => return Ok(CommandOutcome::RawOutput(format!("created {rel_path}\n"))),
         // `github` is rejected for non-lint commands upstream; treat as JSON here.
         Format::Json | Format::Github => {
             let val = NewResult {
@@ -219,7 +224,7 @@ pub(crate) fn create_new(
                 dry_run: false,
                 content: None,
             };
-            format_output(Format::Json, &val)
+            output_value(&val)
         }
     };
     Ok(CommandOutcome::success(out))

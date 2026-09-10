@@ -19,7 +19,7 @@ use std::path::Path;
 use crate::commands::managed_region::{
     AdoptMode, GeneratePlan, Markers, apply_plan, read_old_content,
 };
-use crate::output::{CommandOutcome, Format, format_error};
+use crate::output::{CommandOutcome, Format, user_diagnostic};
 
 /// Managed-region marker prefix for the ADR TOC.
 const TOC_PREFIX: &str = "madr:toc";
@@ -79,7 +79,7 @@ pub fn run_toc(
 
     if !adr_full.is_dir() {
         return Ok((
-            CommandOutcome::UserError(format_error(
+            CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("ADR directory '{adr_rel}' not found"),
                 Some(adr_rel),
@@ -144,7 +144,7 @@ pub fn run_toc(
     let exit_override = if !apply && changed { Some(1) } else { None };
 
     Ok((
-        CommandOutcome::success_with_total(payload.to_string(), u64::from(changed)),
+        CommandOutcome::success_with_total(payload, u64::from(changed)),
         exit_override,
     ))
 }
@@ -631,10 +631,7 @@ pub(crate) fn run(
                 &ctx.lint_profiles,
                 effective_format,
             )?;
-            if let Some(code) = exit_override {
-                ctx.exit_code_override = Some(code);
-            }
-            Ok(outcome)
+            Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
     }
 }

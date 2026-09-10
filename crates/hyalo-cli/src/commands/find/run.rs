@@ -6,14 +6,14 @@
 use anyhow::Result;
 
 use crate::cli::args::FindFilters;
-use crate::commands::{IndexResolution, NamedFilePolicy, resolve_index_named};
+use crate::commands::{IndexResolution, NamedFilePolicy, resolve_index_prepared};
 use crate::dispatch::{
     CommandContext, find_needs_stem_map, maybe_case_index, property_filter_error_outcome,
     resolve_limit,
 };
 use crate::output::CommandOutcome;
 
-use super::{find, needs_body, project_filenames_only, project_filenames0};
+use super::{find_prepared, needs_body};
 
 /// Handler for `Commands::Find`.
 ///
@@ -24,8 +24,9 @@ use super::{find, needs_body, project_filenames_only, project_filenames0};
 pub(crate) fn run(
     ctx: &mut CommandContext<'_>,
     pattern: Option<String>,
-    file_positional: Vec<String>,
-    mut filters_raw: FindFilters,
+    filters_raw: FindFilters,
+    section_filters: Vec<hyalo_core::heading::SectionFilter>,
+    selection: crate::prepared::PreparedSelection,
 ) -> Result<CommandOutcome> {
     let dir = ctx.dir;
     let site_prefix = ctx.site_prefix;
@@ -36,26 +37,14 @@ pub(crate) fn run(
     let from_files_from = ctx.file_list_from_files_from;
     let snapshot_index = &mut *ctx.snapshot_index;
 
-    // Merge positional files into filters (clap prevents positional+--file
-    // and positional+--glob at parse time; a view may have set glob though).
-    if !file_positional.is_empty() {
-        if !filters_raw.glob.is_empty() {
-            crate::warn::warn(
-                "positional file arguments override the view's --glob; \
-                 glob filter has been ignored",
-            );
-        }
-        filters_raw.file = file_positional;
-        filters_raw.glob.clear(); // file overrides view's glob
-    }
     let FindFilters {
         pattern: _, // pattern is handled in run.rs before dispatch
         regexp,
         properties,
         tag,
         task,
-        sections,
-        file,
+        sections: _,
+        file: _,
         glob,
         fields,
         sort,
@@ -67,8 +56,8 @@ pub(crate) fn run(
         dead_end,
         title,
         language,
-        filenames_only,
-        filenames0,
+        filenames_only: _,
+        filenames0: _,
         files_from: _, // resolved in run.rs before dispatch
     } = filters_raw;
     if orphan && dead_end {
@@ -91,7 +80,7 @@ pub(crate) fn run(
     let task_filter = match task.as_deref().map(hyalo_core::filter::parse_task_filter) {
         Some(Ok(f)) => Some(f),
         Some(Err(e)) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e.to_string(),
                 None,
@@ -105,7 +94,7 @@ pub(crate) fn run(
     let parsed_fields = match hyalo_core::filter::Fields::parse(&fields) {
         Ok(f) => f,
         Err(e) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e.to_string(),
                 None,
@@ -118,7 +107,7 @@ pub(crate) fn run(
     let sort_field = match sort.as_deref().map(hyalo_core::filter::parse_sort) {
         Some(Ok(f)) => Some(f),
         Some(Err(e)) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e.to_string(),
                 None,
@@ -128,27 +117,9 @@ pub(crate) fn run(
         }
         None => None,
     };
-    // Parse section filters
-    let section_filters: Vec<hyalo_core::heading::SectionFilter> = match sections
-        .iter()
-        .map(|s| hyalo_core::heading::SectionFilter::parse(s))
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(f) => f,
-        Err(e) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
-                effective_format,
-                &e,
-                None,
-                None,
-                None,
-            )));
-        }
-    };
-
     for t in &tag {
         if let Err(msg) = crate::commands::tags::validate_tag(t) {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &msg,
                 None,
@@ -158,36 +129,9 @@ pub(crate) fn run(
         }
     }
 
-    // Validate --language flag and config language against supported languages.
-    if let Some(ref lang) = language
-        && let Err(e) = hyalo_core::bm25::parse_language(lang)
-    {
-        return Ok(CommandOutcome::UserError(crate::output::format_error(
-            effective_format,
-            &format!("invalid --language value {lang:?}: {e}"),
-            None,
-            None,
-            None,
-        )));
-    }
-    if let Some(cfg_lang) = ctx.config_language
-        && let Err(e) = hyalo_core::bm25::parse_language(cfg_lang)
-    {
-        return Ok(CommandOutcome::UserError(crate::output::format_error(
-            effective_format,
-            &format!("invalid [search].language config value {cfg_lang:?}: {e}"),
-            None,
-            None,
-            None,
-        )));
-    }
-
-    // Strip the dir prefix from --file args so that
-    // filter_index_entries matches vault-relative paths.
-    let file: Vec<String> = file
-        .into_iter()
-        .map(|f| hyalo_core::discovery::strip_dir_prefix(dir, &f).unwrap_or(f))
-        .collect();
+    // Dispatch owns an already-normalized identity. Disk fallback and filters
+    // must consume this same selection without another prefix interpretation.
+    selection.precheck(&hyalo_core::rooted::VaultRoot::new(dir)?)?;
 
     let sort_needs_backlinks = matches!(
         sort_field.as_ref(),
@@ -225,19 +169,10 @@ pub(crate) fn run(
         parsed_fields.links,
         sort_needs_links,
     );
-    // NAMED-2 (iter-273, BUG-11): with `--index` active the snapshot is the
-    // whole universe, so a file the caller *named* that the snapshot has never
-    // seen used to produce `results: []` and exit 0 — a wrong answer about a
-    // path the caller typed. Stat-refresh it into the in-memory snapshot (one
-    // stat, one parse — DEC-280's cost argument), or, when it is on neither
-    // disk nor snapshot, count it under `files_missing`.
-    if !from_files_from {
-        refresh_named_files_into_snapshot(snapshot_index.as_mut(), dir, &file);
-    }
-    match resolve_index_named(
+    match resolve_index_prepared(
         snapshot_index.as_ref(),
         dir,
-        &file,
+        &selection,
         &glob,
         effective_format,
         site_prefix,
@@ -267,7 +202,7 @@ pub(crate) fn run(
             // JSON is untouched — every link is still reported, with its own
             // `path` / `broken_anchor` verdict.
             crate::output::set_broken_links_only(broken_links);
-            let mut outcome = find(
+            let mut outcome = find_prepared(
                 resolved.as_index(),
                 dir,
                 site_prefix,
@@ -277,7 +212,7 @@ pub(crate) fn run(
                 &tag,
                 task_filter.as_ref(),
                 &section_filters,
-                &file,
+                &selection,
                 &glob,
                 &parsed_fields,
                 sort_field.as_ref(),
@@ -296,14 +231,16 @@ pub(crate) fn run(
             // (most commonly `--broken-links`) a CI-gateable exit code.
             // Pure policy function, unit-tested in-process (ARCH-1 proof).
             if let Some(code) = strict_exit_code(&outcome, strict) {
-                ctx.exit_code_override = Some(code);
+                outcome = outcome.with_status(code);
             }
             // iter-251: an empty result set is where an agent most needs a
             // next step. Collect the distinct values each filtered property
             // key actually carries, reusing the index this query already
             // walked, so the hint layer can offer a did-you-mean and name the
             // real values instead of printing a bare `No results`.
-            if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
+            if ctx.hint_demand == crate::prepared::HintDemand::Requested
+                && matches!(outcome, CommandOutcome::Success { total: Some(0), .. })
+            {
                 ctx.zero_result_values =
                     observed_property_values(resolved.as_index(), &prop_filters);
                 // iter-258: `--property 'title~=/DEC-25/'` against a vault whose
@@ -317,74 +254,9 @@ pub(crate) fn run(
                     pattern.is_some() || regexp.is_some(),
                 );
             }
-            // iter-235: `--filenames-only` projects the find result
-            // set onto raw file paths (one per line, no envelope,
-            // no count, no hints). It runs *after* the `--strict`
-            // check above, so `find --filenames-only --strict`
-            // still flips the exit code (1 when results exist) —
-            // the CI-gate + filename-list use case. RawOutput bypasses
-            // the JSON pipeline entirely (no jq, no count, no hints,
-            // no envelope), which is exactly the point: an agent or
-            // shell pipeline wants bare paths, nothing else.
-            //
-            // iter-238: `--filenames0` is the NUL-delimited sibling
-            // (`find -print0` precedent) for `xargs -0` / newline-safe
-            // consumption; identical semantics otherwise.
-            if filenames_only {
-                outcome = project_filenames_only(outcome);
-            } else if filenames0 {
-                outcome = project_filenames0(outcome);
-            }
             Ok(outcome)
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),
-    }
-}
-
-/// Stat-refresh every `--file` the snapshot has never seen (iter-273, BUG-11).
-///
-/// `--index` makes the snapshot the universe, which is right for a *query*
-/// ("what in the vault matches?") and wrong for a *named path* ("tell me about
-/// this file"): a note written since the last `create-index` answered
-/// `results: []` with exit 0, the same empty success NAMED-1 fixes for
-/// unparsable files. The refresh is bounded by the number of paths the caller
-/// typed — one `is_file` plus one parse each — so it cannot turn a snapshot
-/// read into a vault scan.
-///
-/// A path in *neither* the snapshot nor the vault is left alone: `find`'s own
-/// L-7 guard (iter-210, BUG-13) already refuses it with `file not found` and
-/// exit 1, which is a stronger answer than the counter the plan proposed and
-/// the same one the non-`--index` path gives.
-fn refresh_named_files_into_snapshot(
-    snapshot: Option<&mut hyalo_core::index::SnapshotIndex>,
-    dir: &std::path::Path,
-    files: &[String],
-) {
-    use hyalo_core::index::VaultIndex as _;
-
-    let Some(index) = snapshot else {
-        // No `--index`: the disk scan already resolves named paths and errors
-        // on a missing one.
-        return;
-    };
-    for rel in files {
-        if index.get(rel).is_some() {
-            continue;
-        }
-        let full = dir.join(rel);
-        if !full.is_file() {
-            continue;
-        }
-        if let Err(e) = index.insert_or_replace_entry_with_links(&full, rel) {
-            crate::warn::warn(format!(
-                "{rel}: absent from the snapshot index and could not be read from disk: {e}"
-            ));
-            continue;
-        }
-        crate::warn::note(format!(
-            "{rel}: absent from the snapshot index — read from disk for this run \
-             (run `hyalo create-index` to fold it in)"
-        ));
     }
 }
 
@@ -677,8 +549,8 @@ mod tests {
 
     fn success_with_total(total: Option<u64>) -> CommandOutcome {
         match total {
-            Some(t) => CommandOutcome::success_with_total("{}".to_owned(), t),
-            None => CommandOutcome::success("{}".to_owned()),
+            Some(t) => CommandOutcome::success_with_total(serde_json::json!({}), t),
+            None => CommandOutcome::success(serde_json::json!({})),
         }
     }
 
@@ -828,7 +700,7 @@ mod tests {
             None,
             "no total ⇒ nothing to gate on"
         );
-        let err = CommandOutcome::UserError(crate::output::format_error(
+        let err = CommandOutcome::UserError(crate::output::user_diagnostic(
             Format::Json,
             "boom",
             None,

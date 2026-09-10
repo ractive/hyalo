@@ -653,6 +653,23 @@ pub fn resolve_file_ci(
         normalized = stripped;
     }
 
+    resolve_normalized_file_ci(dir, &normalized, case_insensitive)
+}
+
+/// Resolve an already normalized vault-relative identity without interpreting
+/// absolute paths or stripping the vault prefix a second time.
+pub fn resolve_normalized_file_ci(
+    dir: &Path,
+    relative: &str,
+    case_insensitive: bool,
+) -> Result<(PathBuf, String), FileResolveError> {
+    if relative.contains('\0') {
+        return Err(FileResolveError::InvalidPath {
+            path: relative.to_owned(),
+            reason: "contains null byte",
+        });
+    }
+    let mut normalized = relative.to_owned();
     // Reject path traversal attempts — use `OutsideVault` so the user
     // understands the path was rejected because it escapes the vault, not
     // because the file doesn't exist. `has_unsafe_windows_colon` catches the
@@ -1068,7 +1085,7 @@ pub fn strip_dir_prefix(dir: &Path, normalized: &str) -> Option<String> {
 }
 
 /// Normalize a path argument: strip leading `./`, normalize separators to forward slashes.
-fn normalize_path(path: &str) -> String {
+pub fn normalize_path(path: &str) -> String {
     let normalized = path.replace('\\', "/");
     normalized
         .strip_prefix("./")

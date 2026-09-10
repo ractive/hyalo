@@ -43,6 +43,7 @@ pub mod link_rewrite;
 pub mod link_score;
 pub mod link_write;
 pub mod links;
+pub mod rooted;
 pub mod scanner;
 pub mod schema;
 pub mod tasks;

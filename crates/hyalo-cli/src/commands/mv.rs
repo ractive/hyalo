@@ -175,10 +175,10 @@ pub fn mv(
                 skipped: vec![old_rel],
             };
             return Ok(CommandOutcome::success(
-                serde_json::to_string_pretty(&result).context("failed to serialize")?,
+                serde_json::to_value(&result).context("failed to serialize")?,
             ));
         }
-        Err(outcome) => return Ok(outcome),
+        Err(outcome) => return Ok(*outcome),
     };
 
     // 3. Capture source fingerprint BEFORE planning so any concurrent edit
@@ -264,7 +264,7 @@ pub fn mv(
     }
 
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        serde_json::to_value(&result).context("failed to serialize")?,
     ))
 }
 
@@ -292,7 +292,7 @@ pub fn mv_batch(
     // 1. Validate --to is a directory-shaped path.
     let to_dir = match validate_batch_target(to_arg, format) {
         Ok(d) => d,
-        Err(outcome) => return Ok(outcome),
+        Err(outcome) => return Ok(*outcome),
     };
 
     // 2. Resolve source files.
@@ -312,7 +312,7 @@ pub fn mv_batch(
     // 3. Check empty selection.
     if sources.is_empty() {
         let filter_desc = describe_filters(globs, property_filters, tag_filters);
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "no files matched the given filters",
             Some(&filter_desc),
@@ -326,7 +326,7 @@ pub fn mv_batch(
     let (renames, conflicts, skipped, collisions) =
         match build_rename_map(dir, &sources, &to_dir, on_conflict, format, apply) {
             Ok(t) => t,
-            Err(outcome) => return Ok(outcome),
+            Err(outcome) => return Ok(*outcome),
         };
     if !collisions.is_empty() {
         crate::warn::warn(format!(
@@ -408,7 +408,7 @@ pub fn mv_batch(
     }
 
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        serde_json::to_value(&result).context("failed to serialize")?,
     ))
 }
 
@@ -438,7 +438,7 @@ fn resolve_batch_sources(
         let matched = match match_globs(dir, &all_files, globs) {
             Ok(m) => m,
             Err(e) => {
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     &format!("invalid glob pattern: {e}"),
                     None,
@@ -509,7 +509,7 @@ fn build_rename_map(
         Vec<String>,
         Vec<Collision>,
     ),
-    CommandOutcome,
+    Box<CommandOutcome>,
 > {
     // Build proposed rename map: source → dest (old_rel → new_rel).
     let mut proposed: Vec<(String, String)> = Vec::new();
@@ -537,7 +537,7 @@ fn build_rename_map(
     // whole batch fails atomically rather than escaping partway through.
     if !proposed.is_empty() {
         let canonical_vault = canonicalize_vault_dir(dir).map_err(|e| {
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 "failed to canonicalize vault directory",
                 Some(&e.to_string()),
@@ -549,8 +549,9 @@ fn build_rename_map(
         for (_, new_rel) in &proposed {
             if let Err((msg, hint)) = ensure_dest_within_vault(&canonical_vault, dir, new_rel) {
                 let hint_opt = (!hint.is_empty()).then_some(hint.as_str());
-                let out = crate::output::format_error(format, &msg, Some(new_rel), hint_opt, None);
-                return Err(CommandOutcome::UserError(out));
+                let out =
+                    crate::output::user_diagnostic(format, &msg, Some(new_rel), hint_opt, None);
+                return Err(Box::new(CommandOutcome::UserError(out)));
             }
         }
     }
@@ -697,14 +698,14 @@ fn build_rename_map(
                   are already taken"
             }
         };
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             message,
             Some(&desc),
             Some("use --on-conflict=skip to skip colliding files"),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     Ok((proposed, vec![], vec![], vec![]))
@@ -1056,7 +1057,7 @@ fn validate_target_single(
     src_rel: &str,
     format: Format,
     on_conflict: ConflictPolicy,
-) -> std::result::Result<TargetSingle, CommandOutcome> {
+) -> std::result::Result<TargetSingle, Box<CommandOutcome>> {
     let normalized = to_arg.replace('\\', "/");
     // MV-4 (iter-275): strip *every* leading `./`, and read a bare `.` as the
     // vault root. `--to ./` used to normalise to the empty string and then be
@@ -1078,7 +1079,7 @@ fn validate_target_single(
     // "destination directory does not exist", which invites the reader to go
     // and create a directory outside the vault.
     if normalized.split('/').any(|seg| seg == "..") {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "path contains '..' and is rejected",
             Some(&normalized),
@@ -1088,7 +1089,7 @@ from the vault root, e.g. \"sub/note.md\"",
             ),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     // Must end with .md
@@ -1119,7 +1120,7 @@ from the vault root, e.g. \"sub/note.md\"",
             let basename = Path::new(src_rel)
                 .file_name()
                 .map_or_else(|| src_rel.to_string(), |n| n.to_string_lossy().into_owned());
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 "destination directory does not exist",
                 Some(&normalized),
@@ -1129,16 +1130,16 @@ from the vault root, e.g. \"sub/note.md\"",
                 )),
                 None,
             );
-            return Err(CommandOutcome::UserError(out));
+            return Err(Box::new(CommandOutcome::UserError(out)));
         }
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "target path must end with .md",
             Some(&normalized),
             Some(&format!("did you mean {normalized}.md?")),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     // Reject path traversal
@@ -1149,25 +1150,25 @@ from the vault root, e.g. \"sub/note.md\"",
         )
     }) || std::path::Path::new(&normalized).is_absolute();
     if has_traversal {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "target path must be relative and within the vault",
             Some(&normalized),
             None,
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     if normalized == src_rel {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "source and destination are the same path",
             Some(&normalized),
             Some("choose a different destination path"),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     let target_path = dir.join(&normalized);
@@ -1176,14 +1177,14 @@ from the vault root, e.g. \"sub/note.md\"",
     // word. `symlink_metadata` answers "is there an entry here", which is the
     // question the collision guard is actually asking.
     if target_path.symlink_metadata().is_ok() && !target_path.exists() {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "target path is a broken symlink",
             Some(&normalized),
             Some("remove the dangling symlink first, then re-run the move"),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
     if target_path.exists() {
         // L-14: on a case-insensitive filesystem, a pure case rename like
@@ -1201,14 +1202,14 @@ from the vault root, e.g. \"sub/note.md\"",
             if on_conflict.is_skip() {
                 return Ok(TargetSingle::Skipped(normalized));
             }
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 "target file already exists",
                 Some(&normalized),
                 Some("pass --on-conflict skip to leave the source in place instead"),
                 None,
             );
-            return Err(CommandOutcome::UserError(out));
+            return Err(Box::new(CommandOutcome::UserError(out)));
         }
     }
 
@@ -1218,20 +1219,20 @@ from the vault root, e.g. \"sub/note.md\"",
     let canonical_vault = match canonicalize_vault_dir(dir) {
         Ok(c) => c,
         Err(e) => {
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 "failed to canonicalize vault directory",
                 Some(&e.to_string()),
                 None,
                 None,
             );
-            return Err(CommandOutcome::UserError(out));
+            return Err(Box::new(CommandOutcome::UserError(out)));
         }
     };
     if let Err((msg, hint)) = ensure_dest_within_vault(&canonical_vault, dir, &normalized) {
         let hint_opt = (!hint.is_empty()).then_some(hint.as_str());
-        let out = crate::output::format_error(format, &msg, Some(&normalized), hint_opt, None);
-        return Err(CommandOutcome::UserError(out));
+        let out = crate::output::user_diagnostic(format, &msg, Some(&normalized), hint_opt, None);
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     Ok(TargetSingle::Path(normalized))
@@ -1242,7 +1243,7 @@ from the vault root, e.g. \"sub/note.md\"",
 fn validate_batch_target(
     to_arg: &str,
     format: Format,
-) -> std::result::Result<String, CommandOutcome> {
+) -> std::result::Result<String, Box<CommandOutcome>> {
     let replaced = to_arg.replace('\\', "/");
     let mut trimmed = replaced.as_str();
     while let Some(rest) = trimmed.strip_prefix("./") {
@@ -1257,14 +1258,14 @@ fn validate_batch_target(
     // Reject .md suffix in batch mode.
     #[allow(clippy::case_sensitive_file_extension_comparisons)]
     if normalized.ends_with(".md") {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "batch --to must be a directory path, not a .md file",
             Some(to_arg),
             Some("use a directory path (with or without trailing '/') for batch moves"),
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     // MV-4 (iter-275): an empty normalised path is the **vault root** —
@@ -1281,14 +1282,14 @@ fn validate_batch_target(
         )
     }) || std::path::Path::new(&normalized).is_absolute();
     if has_traversal {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "target path must be relative and within the vault",
             Some(&normalized),
             None,
             None,
         );
-        return Err(CommandOutcome::UserError(out));
+        return Err(Box::new(CommandOutcome::UserError(out)));
     }
 
     Ok(normalized)
@@ -1393,7 +1394,7 @@ pub(crate) fn run(
     // exclusive and that DEST requires the positional source; a missing
     // destination (neither form given) is reported here.
     let Some(to) = to.or(to_positional) else {
-        return Ok(CommandOutcome::UserError(crate::output::format_error(
+        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
             effective_format,
             "no destination provided: pass DEST positionally (e.g. `hyalo mv old.md new.md`) or --to <path>",
             None,
@@ -1402,7 +1403,7 @@ pub(crate) fn run(
         )));
     };
     if to.trim().is_empty() {
-        return Ok(CommandOutcome::UserError(crate::output::format_error(
+        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
             effective_format,
             "destination cannot be empty",
             Some(&to),
@@ -1434,7 +1435,7 @@ pub(crate) fn run(
             match hyalo_core::filter::parse_property_filter(&format!("type={t}")) {
                 Ok(f) => tf.push(f),
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(crate::output::format_error(
+                    return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                         effective_format,
                         &e.to_string(),
                         None,
@@ -1453,7 +1454,7 @@ pub(crate) fn run(
     let has_file = file_positional.is_some() || file.is_some();
 
     if !has_selectors && !has_file {
-        return Ok(CommandOutcome::UserError(crate::output::format_error(
+        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
             effective_format,
             "no source selection provided: pass a FILE (single-file mode) or at least one of --glob/--property/--tag/--type (batch mode)",
             None,
@@ -1468,7 +1469,7 @@ pub(crate) fn run(
         // Validate tag filters.
         for t in &tag {
             if let Err(msg) = crate::commands::tags::validate_tag(t) {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                     effective_format,
                     &msg,
                     None,
@@ -1504,7 +1505,7 @@ pub(crate) fn run(
         // form first — they had no way to tell whether the flag was
         // doing the work or the default was (iter-192, DEC-192-mv-apply).
         if apply {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 "single-file mv applies by default; use --dry-run to preview",
                 None,
@@ -1517,7 +1518,7 @@ pub(crate) fn run(
         let file = match resolve_single_file(file_positional, file) {
             Ok(f) => f,
             Err(e) => {
-                return Ok(CommandOutcome::UserError(crate::output::format_error(
+                return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                     effective_format,
                     &e.to_string(),
                     None,

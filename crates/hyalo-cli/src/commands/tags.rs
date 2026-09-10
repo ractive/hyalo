@@ -144,7 +144,7 @@ pub fn tags_summary(
     }
     let _ = format; // format is applied by the output pipeline
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&tags).context("failed to serialize")?,
+        serde_json::to_value(&tags).context("failed to serialize")?,
         total,
     ))
 }
@@ -221,15 +221,17 @@ pub fn tags_rename(
 ) -> Result<CommandOutcome> {
     // Validate both tag names
     if let Err(msg) = validate_tag(from) {
-        let out = crate::output::format_error(format, &msg, None, Some("invalid --from tag"), None);
+        let out =
+            crate::output::user_diagnostic(format, &msg, None, Some("invalid --from tag"), None);
         return Ok(CommandOutcome::UserError(out));
     }
     if let Err(msg) = validate_tag(to) {
-        let out = crate::output::format_error(format, &msg, None, Some("invalid --to tag"), None);
+        let out =
+            crate::output::user_diagnostic(format, &msg, None, Some("invalid --to tag"), None);
         return Ok(CommandOutcome::UserError(out));
     }
     if from.eq_ignore_ascii_case(to) {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "source and target tag names are identical (case-insensitive)",
             None,
@@ -380,8 +382,8 @@ pub fn tags_rename(
         scanned,
     };
 
-    Ok(CommandOutcome::success(crate::output::format_output(
-        format, &result,
+    Ok(CommandOutcome::success(crate::output::output_value(
+        &result,
     )))
 }
 
@@ -621,7 +623,8 @@ tags:
         let tmp = setup_vault();
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::Success { output: s, .. } => s.to_string(),
+            CommandOutcome::RawOutput(s) => s,
             CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
@@ -637,7 +640,8 @@ tags:
         let tmp = setup_vault();
         let outcome = run_tags_summary(tmp.path(), Some("a.md"), Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::Success { output: s, .. } => s.to_string(),
+            CommandOutcome::RawOutput(s) => s,
             CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected error: {s}"),
         };
@@ -683,7 +687,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["from"], "filtering");
         assert_eq!(parsed["to"], "filters");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
@@ -721,7 +725,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -759,7 +763,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped_count"].as_u64().unwrap(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }
@@ -820,7 +824,8 @@ tags:
 
         let outcome = run_tags_summary(tmp.path(), None, Format::Json).unwrap();
         let out = match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+            CommandOutcome::Success { output: s, .. } => s.to_string(),
+            CommandOutcome::RawOutput(s) => s,
             CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
             CommandOutcome::UserError(s) => panic!("unexpected UserError: {s}"),
         };

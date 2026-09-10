@@ -10,7 +10,7 @@ use super::{
     ExtLintOptions, ExtLintOutput, FixedGroup, RuleGroup, lint_one_file_extended,
     schema_has_completed_status,
 };
-use crate::output::{CommandOutcome, Format};
+use crate::output::CommandOutcome;
 use anyhow::{Context, Result};
 use hyalo_core::schema::SchemaConfig;
 use hyalo_mdlint::schema::{FileFixResult, FixAction, FixMode, LintCounts};
@@ -564,10 +564,7 @@ pub fn lint_files_extended(
         files_with_issues: total_files_with_violations,
     };
 
-    let outcome = CommandOutcome::success_with_total(
-        crate::output::format_success(Format::Json, &val),
-        total_files_with_violations as u64,
-    );
+    let outcome = CommandOutcome::success_with_total(val, total_files_with_violations as u64);
 
     Ok((outcome, counts))
 }

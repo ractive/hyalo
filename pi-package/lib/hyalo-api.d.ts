@@ -58,10 +58,72 @@ type Envelope<T> = {
     total?: number;
 };
 
+type IndexDisposition = "not_used" | "updated" | "invalidated" | "update_failed";
+
+type EffectFailure = "source_conflict" | "io" | "finalization";
+
+type EffectState = "unchanged" | "committed" | "not_attempted" | "failed_before_commit" | "committed_with_finalization_error";
+
+type PathEffect = {
+    file: string;
+    state: EffectState;
+    error?: string;
+    category?: EffectFailure;
+};
+
+type ApplyReport = {
+    paths: Array<PathEffect>;
+    index: IndexDisposition;
+    index_error?: string;
+};
+
 /**
- * Exit-1 error contract; the singular `hint` key is intentional.
+ * Internal adapter response; ordinary success envelopes do not gain effects.
+ */
+type MutationReportEnvelope<T> = {
+    effects: ApplyReport;
+    /**
+     * Optional vault directory hoisted from the command result.
+     */
+    dir?: string;
+    /**
+     * Missing paths from an explicitly supplied file list, including zero.
+     */
+    files_missing?: number;
+    /**
+     * Non-Markdown paths skipped from the supplied file list.
+     */
+    files_skipped_non_md?: number;
+    /**
+     * Paths outside the vault skipped from the supplied file list.
+     */
+    files_skipped_outside_vault?: number;
+    /**
+     * Read-only suggestions and explicitly marked mutation suggestions.
+     */
+    hints: Array<Hint>;
+    /**
+     * Named command output; arrays contain named result items.
+     */
+    results: T;
+    /**
+     * Total matching items before pagination, omitted for non-list commands.
+     */
+    total?: number;
+};
+
+/**
+ * Structured failure contract; the singular `hint` key is intentional.
  */
 type ErrorEnvelope = {
+    /**
+     * Effects remain present if rendering fails after publication.
+     */
+    effects?: ApplyReport;
+    /**
+     * Stable failure classification when available.
+     */
+    category?: string;
     /**
      * Underlying diagnostic, omitted when there is no additional cause.
      */
@@ -1554,6 +1616,9 @@ declare class HyaloError extends Error {
     readonly stdout: string;
     readonly stderr: string;
     readonly envelope?: ErrorEnvelope;
+    /** Committed paths and index disposition, retained even after output failure. */
+    readonly effects?: ErrorEnvelope["effects"];
+    readonly category?: ErrorEnvelope["category"];
     constructor(result: ProcessResult, envelope?: ErrorEnvelope);
 }
 declare class HyaloSpawnError extends Error {
@@ -1585,6 +1650,11 @@ declare function createPiTransport(pi: {
         killed: boolean;
     }>;
 }): HyaloTransport;
+/** @internal JSON mutation accessor for adapters; not exported by the package barrel.
+ * Public set/task keep their successful ProcessResult streams. This accessor
+ * executes exactly once and retains structured effects on HyaloError.
+ */
+declare function mutationReport<T>(argv: readonly string[], options?: ExecutionOptions): Promise<MutationReportEnvelope<T>>;
 declare function find(options?: FindCallOptions): Promise<Envelope<FindResult>>;
 declare function read(options?: ReadCallOptions): Promise<Envelope<ReadResult>>;
 declare function summary(options?: SummaryCallOptions): Promise<Envelope<SummaryResult>>;
@@ -1618,5 +1688,5 @@ interface PiConfigInfo {
  */
 declare function configForPi(options?: ExecutionOptions): Promise<PiConfigInfo>;
 
-export { HyaloAbortError, HyaloError, HyaloParseError, HyaloSpawnError, HyaloTimeoutError, HyaloTransportError, config, configForPi, createPiTransport, find, lint, raw, read, set, summary, task };
+export { HyaloAbortError, HyaloError, HyaloParseError, HyaloSpawnError, HyaloTimeoutError, HyaloTransportError, config, configForPi, createPiTransport, find, lint, mutationReport, raw, read, set, summary, task };
 export type { PiConfigInfo };

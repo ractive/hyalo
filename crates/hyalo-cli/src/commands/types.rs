@@ -3,7 +3,6 @@
 /// All TOML mutations use `toml_edit::DocumentMut` so that comments and
 /// formatting in the user's config file are preserved.
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -13,7 +12,7 @@ use hyalo_core::discovery;
 use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter_within};
 use hyalo_core::schema::{SchemaConfig, expand_default};
 
-use crate::output::{CommandOutcome, Format, format_error, format_output, format_success};
+use crate::output::{CommandOutcome, Format, output_value, user_diagnostic};
 
 const TOML_FILENAME: &str = ".hyalo.toml";
 
@@ -40,7 +39,7 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> CommandOutcome {
         .collect();
 
     let total = results.len() as u64;
-    CommandOutcome::success_with_total(format_output(Format::Json, &results), total)
+    CommandOutcome::success_with_total(output_value(&results), total)
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +49,7 @@ pub(crate) fn list_types(schema: &SchemaConfig) -> CommandOutcome {
 /// `hyalo types show <type>` — full merged schema for a type.
 pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) -> CommandOutcome {
     if !schema.types.contains_key(type_name) {
-        return CommandOutcome::UserError(format_error(
+        return CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("type '{type_name}' not found"),
             None,
@@ -76,7 +75,7 @@ pub(crate) fn show_type(type_name: &str, schema: &SchemaConfig, format: Format) 
         }),
     );
 
-    CommandOutcome::success(format_success(Format::Json, &val))
+    CommandOutcome::success(val)
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +95,7 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
         // there is no declaration to remove, and lint's complaints come from
         // `[schema.default]` plus the undeclared-type warning. Name both, and
         // the two things that actually change the outcome.
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!("no [schema.types.{type_name}] block in .hyalo.toml — nothing to remove"),
             None,
@@ -121,7 +120,7 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
         types.remove(type_name);
     }
 
-    write_toml_doc(&toml_path, &doc)?;
+    let effects = write_toml_doc(&toml_path, &mut doc)?;
 
     let val = crate::output::output_value(
         &(TypeRemoveResult {
@@ -130,7 +129,7 @@ pub(crate) fn remove_type(dir: &Path, type_name: &str, format: Format) -> Result
             dry_run: false,
         }),
     );
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
+    Ok(CommandOutcome::success(val).with_apply_report(effects))
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +187,7 @@ pub(crate) fn set_type(
 ) -> Result<CommandOutcome> {
     // Validate type name before anything else.
     if let Err(msg) = validate_type_name(type_name) {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format, &msg, None, None, None,
         )));
     }
@@ -200,7 +199,7 @@ pub(crate) fn set_type(
         && property_values_args.is_empty()
         && filename_template.is_none()
     {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             "no mutation flags provided — specify at least one of: --required, --default, --property-type, --property-values, --filename-template",
             None,
@@ -225,7 +224,7 @@ pub(crate) fn set_type(
                 defaults_map.insert(k.to_owned(), v.to_owned());
             }
             Err(e) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format, &e, None, None, None,
                 )));
             }
@@ -241,13 +240,13 @@ pub(crate) fn set_type(
                     prop_type_map.insert(k.to_owned(), pt);
                 }
                 Err(e) => {
-                    return Ok(CommandOutcome::UserError(format_error(
+                    return Ok(CommandOutcome::UserError(user_diagnostic(
                         format, &e, None, None, None,
                     )));
                 }
             },
             Err(e) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format, &e, None, None, None,
                 )));
             }
@@ -264,7 +263,7 @@ pub(crate) fn set_type(
                 // `""` value, which would make lint/fix output confusing.
                 let vals: Vec<String> = v.split(',').map(|s| s.trim().to_owned()).collect();
                 if vals.iter().any(String::is_empty) {
-                    return Ok(CommandOutcome::UserError(format_error(
+                    return Ok(CommandOutcome::UserError(user_diagnostic(
                         format,
                         &format!(
                             "invalid --property-values argument '{arg}': enum values cannot be empty"
@@ -277,7 +276,7 @@ pub(crate) fn set_type(
                 prop_values_map.insert(k.to_owned(), vals);
             }
             Err(e) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format, &e, None, None, None,
                 )));
             }
@@ -310,7 +309,7 @@ pub(crate) fn set_type(
                 }
             }
             Err(msg) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format, &msg, None, None, None,
                 )));
             }
@@ -431,140 +430,168 @@ pub(crate) fn set_type(
     }
 
     // Write TOML to disk (unless dry-run).
-    if !dry_run {
-        write_toml_doc(&toml_path, &doc)?;
+    let mut effects = if dry_run {
+        None
+    } else {
+        Some(write_toml_doc(&toml_path, &mut doc)?)
+    };
+    if effects
+        .as_ref()
+        .is_some_and(super::apply::ApplyReport::failed)
+    {
+        return Ok(CommandOutcome::success(serde_json::Value::Null)
+            .with_apply_report(effects.take().expect("checked report")));
     }
+    let result = (|| -> Result<CommandOutcome> {
+        // --- Side effects: --default auto-apply ---
+        let mut defaults_applied: Vec<DefaultAppliedOwned> = Vec::new();
 
-    // --- Side effects: --default auto-apply ---
-    let mut defaults_applied: Vec<DefaultAppliedOwned> = Vec::new();
+        if !defaults_map.is_empty() {
+            let all_vault_files = discovery::discover_files(dir)?;
+            let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
 
-    if !defaults_map.is_empty() {
-        let all_vault_files = discovery::discover_files(dir)?;
-        let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
+            for full_path in &all_vault_files {
+                let Ok(props) = read_frontmatter(full_path) else {
+                    continue;
+                };
+                let file_type = props
+                    .get("type")
+                    .and_then(hyalo_core::schema::normalize_type_value)
+                    .unwrap_or_default();
+                if file_type != type_name {
+                    continue;
+                }
+                let rel = discovery::relative_path(dir, full_path);
 
-        for full_path in &all_vault_files {
-            let Ok(props) = read_frontmatter(full_path) else {
-                continue;
-            };
-            let file_type = props
-                .get("type")
-                .and_then(hyalo_core::schema::normalize_type_value)
-                .unwrap_or_default();
-            if file_type != type_name {
-                continue;
+                // Find which defaults this file is missing.
+                let mut file_needs: HashMap<String, String> = HashMap::new();
+                for key in defaults_map.keys() {
+                    if !props.contains_key(key.as_str()) {
+                        let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
+                        file_needs.insert(key.clone(), expanded);
+                        per_default_files
+                            .entry(key.clone())
+                            .or_default()
+                            .push(rel.clone());
+                    }
+                }
+
+                if !dry_run && !file_needs.is_empty() {
+                    let mut new_props = props.clone();
+                    for (key, expanded) in &file_needs {
+                        // If the user declared a non-string property-type in this
+                        // same invocation, coerce the default to the matching
+                        // JSON type so we don't write `archived: "true"` when the
+                        // user intended `archived: true`.
+                        let typed = coerce_default_for_prop(
+                            expanded,
+                            prop_type_map.get(key.as_str()).copied(),
+                            prop_values_map.contains_key(key.as_str()),
+                        );
+                        new_props.insert(key.clone(), typed);
+                    }
+                    write_frontmatter_within(dir, full_path, &new_props)
+                        .with_context(|| format!("writing defaults to {rel}"))?;
+                    if let Some(report) = &mut effects {
+                        report.paths.push(super::apply::PathEffect {
+                            file: rel,
+                            state: super::apply::EffectState::Committed,
+                            error: None,
+                            category: None,
+                        });
+                    }
+                }
             }
-            let rel = discovery::relative_path(dir, full_path);
 
-            // Find which defaults this file is missing.
-            let mut file_needs: HashMap<String, String> = HashMap::new();
             for key in defaults_map.keys() {
-                if !props.contains_key(key.as_str()) {
-                    let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
-                    file_needs.insert(key.clone(), expanded);
-                    per_default_files
-                        .entry(key.clone())
-                        .or_default()
-                        .push(rel.clone());
-                }
-            }
-
-            if !dry_run && !file_needs.is_empty() {
-                let mut new_props = props.clone();
-                for (key, expanded) in &file_needs {
-                    // If the user declared a non-string property-type in this
-                    // same invocation, coerce the default to the matching
-                    // JSON type so we don't write `archived: "true"` when the
-                    // user intended `archived: true`.
-                    let typed = coerce_default_for_prop(
-                        expanded,
-                        prop_type_map.get(key.as_str()).copied(),
-                        prop_values_map.contains_key(key.as_str()),
-                    );
-                    new_props.insert(key.clone(), typed);
-                }
-                write_frontmatter_within(dir, full_path, &new_props)
-                    .with_context(|| format!("writing defaults to {rel}"))?;
+                let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
+                let applied_files = per_default_files.get(key).cloned().unwrap_or_default();
+                let count = applied_files.len();
+                defaults_applied.push(DefaultAppliedOwned {
+                    property: key.to_owned(),
+                    value: expanded,
+                    files: applied_files,
+                    count,
+                });
             }
         }
 
-        for key in defaults_map.keys() {
-            let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
-            let applied_files = per_default_files.get(key).cloned().unwrap_or_default();
-            let count = applied_files.len();
-            defaults_applied.push(DefaultAppliedOwned {
-                property: key.to_owned(),
-                value: expanded,
-                files: applied_files,
-                count,
-            });
+        // --- Side effects: constraint violation reporting ---
+        let needs_violation_check =
+            !required_fields.is_empty() || !prop_type_map.is_empty() || !prop_values_map.is_empty();
+
+        let mut constraint_violations: Vec<ConstraintViolationsOwned> = Vec::new();
+
+        if needs_violation_check && !dry_run {
+            let updated_schema = load_schema_from_doc(&doc)?;
+            let all_vault_files = discovery::discover_files(dir)?;
+
+            let file_pairs: Vec<(std::path::PathBuf, String)> = all_vault_files
+                .iter()
+                .filter(|p| {
+                    read_frontmatter(p)
+                        .ok()
+                        .and_then(|props| {
+                            props
+                                .get("type")
+                                .and_then(hyalo_core::schema::normalize_type_value)
+                                .map(|t| t == type_name)
+                        })
+                        .unwrap_or(false)
+                })
+                .map(|p| {
+                    let rel = discovery::relative_path(dir, p);
+                    (p.clone(), rel)
+                })
+                .collect();
+
+            // Resolved once here (only when a violation check is actually
+            // needed) rather than probing the filesystem unconditionally on
+            // every `hyalo types set` invocation.
+            let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
+            let counts = crate::commands::lint::lint_counts_only(
+                &file_pairs,
+                &updated_schema,
+                case_insensitive,
+            )?;
+
+            if counts.errors > 0 || counts.warnings > 0 {
+                constraint_violations.push(ConstraintViolationsOwned {
+                    file_count: counts.files_with_issues,
+                    error_count: counts.errors,
+                    warning_count: counts.warnings,
+                    message: "Run `hyalo lint` for details.",
+                });
+            }
+        }
+
+        let val = crate::output::output_value(
+            &(TypeSetResult {
+                action: if is_new {
+                    "created_and_updated"
+                } else {
+                    "updated"
+                },
+                r#type: type_name,
+                dry_run,
+                toml_changes: &toml_changes,
+                defaults_applied: &defaults_applied,
+                constraint_violations: &constraint_violations,
+            }),
+        );
+
+        Ok(CommandOutcome::success(val))
+    })();
+    match (result, effects) {
+        (Ok(outcome), Some(report)) => Ok(outcome.with_apply_report(report)),
+        (result, None) => result,
+        (Err(error), Some(report)) => {
+            let mut diagnostic = crate::output::UserDiagnostic::new(error.to_string());
+            diagnostic.effects = Some(report);
+            diagnostic.category = Some("mutation_failure");
+            Ok(CommandOutcome::UserError(diagnostic))
         }
     }
-
-    // --- Side effects: constraint violation reporting ---
-    let needs_violation_check =
-        !required_fields.is_empty() || !prop_type_map.is_empty() || !prop_values_map.is_empty();
-
-    let mut constraint_violations: Vec<ConstraintViolationsOwned> = Vec::new();
-
-    if needs_violation_check && !dry_run {
-        let updated_schema = load_schema_from_doc(&doc)?;
-        let all_vault_files = discovery::discover_files(dir)?;
-
-        let file_pairs: Vec<(std::path::PathBuf, String)> = all_vault_files
-            .iter()
-            .filter(|p| {
-                read_frontmatter(p)
-                    .ok()
-                    .and_then(|props| {
-                        props
-                            .get("type")
-                            .and_then(hyalo_core::schema::normalize_type_value)
-                            .map(|t| t == type_name)
-                    })
-                    .unwrap_or(false)
-            })
-            .map(|p| {
-                let rel = discovery::relative_path(dir, p);
-                (p.clone(), rel)
-            })
-            .collect();
-
-        // Resolved once here (only when a violation check is actually
-        // needed) rather than probing the filesystem unconditionally on
-        // every `hyalo types set` invocation.
-        let case_insensitive = hyalo_core::mode_enabled(case_insensitive_mode, dir);
-        let counts = crate::commands::lint::lint_counts_only(
-            &file_pairs,
-            &updated_schema,
-            case_insensitive,
-        )?;
-
-        if counts.errors > 0 || counts.warnings > 0 {
-            constraint_violations.push(ConstraintViolationsOwned {
-                file_count: counts.files_with_issues,
-                error_count: counts.errors,
-                warning_count: counts.warnings,
-                message: "Run `hyalo lint` for details.",
-            });
-        }
-    }
-
-    let val = crate::output::output_value(
-        &(TypeSetResult {
-            action: if is_new {
-                "created_and_updated"
-            } else {
-                "updated"
-            },
-            r#type: type_name,
-            dry_run,
-            toml_changes: &toml_changes,
-            defaults_applied: &defaults_applied,
-            constraint_violations: &constraint_violations,
-        }),
-    );
-
-    Ok(CommandOutcome::success(format_success(Format::Json, &val)))
 }
 
 // ---------------------------------------------------------------------------
@@ -577,19 +604,95 @@ fn resolve_toml_path(dir: &Path) -> PathBuf {
 }
 
 /// Read `.hyalo.toml` as a `DocumentMut`, or return an empty doc if not found.
-fn read_toml_doc(toml_path: &Path) -> Result<toml_edit::DocumentMut> {
-    match fs::read_to_string(toml_path) {
-        Ok(contents) => contents
-            .parse::<toml_edit::DocumentMut>()
-            .context("failed to parse .hyalo.toml"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml_edit::DocumentMut::new()),
+struct CapturedToml {
+    doc: toml_edit::DocumentMut,
+    source: Option<hyalo_core::rooted::CapturedInput>,
+}
+impl std::ops::Deref for CapturedToml {
+    type Target = toml_edit::DocumentMut;
+    fn deref(&self) -> &Self::Target {
+        &self.doc
+    }
+}
+impl std::ops::DerefMut for CapturedToml {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.doc
+    }
+}
+fn read_toml_doc(toml_path: &Path) -> Result<CapturedToml> {
+    let root =
+        hyalo_core::rooted::ConfigRoot::new(toml_path.parent().context("config has no parent")?)?;
+    let name = hyalo_core::rooted::RelativeName::new(
+        toml_path.file_name().context("config has no name")?,
+    )?;
+    match root.capture(&name) {
+        Ok(source) => {
+            let contents = String::from_utf8(source.bytes()?).context("config is not UTF-8")?;
+            let doc = contents.parse().context("failed to parse .hyalo.toml")?;
+            Ok(CapturedToml {
+                doc,
+                source: Some(source),
+            })
+        }
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(CapturedToml {
+                doc: toml_edit::DocumentMut::new(),
+                source: None,
+            })
+        }
         Err(e) => Err(e).context("failed to read .hyalo.toml"),
     }
 }
 
-/// Write a `DocumentMut` back to `.hyalo.toml`.
-fn write_toml_doc(toml_path: &Path, doc: &toml_edit::DocumentMut) -> Result<()> {
-    fs::write(toml_path, doc.to_string()).context("failed to write .hyalo.toml")
+/// Publish only the config whose bytes supplied this transformed document.
+fn write_toml_doc(toml_path: &Path, doc: &mut CapturedToml) -> Result<super::apply::ApplyReport> {
+    write_toml_doc_with_session(
+        toml_path,
+        doc,
+        hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile),
+    )
+}
+
+fn write_toml_doc_with_session(
+    toml_path: &Path,
+    doc: &mut CapturedToml,
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<super::apply::ApplyReport> {
+    use super::apply::{ApplyReport, EffectFailure, EffectState, IndexDisposition, PathEffect};
+    use hyalo_core::rooted::{ConfigRoot, RelativeName};
+    let root = ConfigRoot::new(toml_path.parent().context("config has no parent")?)?;
+    let name = RelativeName::new(toml_path.file_name().context("config has no name")?)?;
+    let bytes = doc.to_string();
+    let effect = if let Some(source) = doc.source.take() {
+        source
+            .prepare(bytes.as_bytes(), &session)?
+            .commit(&mut session)?
+    } else {
+        root.destination(name)?
+            .create(bytes.as_bytes(), &mut session)?
+    };
+    let finish_error = session.finish().err().map(|error| error.to_string());
+    let error = effect
+        .finalization_error()
+        .map(str::to_owned)
+        .or(finish_error);
+    Ok(ApplyReport {
+        paths: vec![PathEffect {
+            file: toml_path.display().to_string(),
+            state: if error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            category: error.as_ref().map(|_| EffectFailure::Finalization),
+            error,
+        }],
+        index: IndexDisposition::NotUsed,
+        index_error: None,
+    })
 }
 
 /// Returns `true` when `[schema.types.<name>]` exists in the doc.
@@ -1009,6 +1112,60 @@ fn load_schema_from_doc(doc: &toml_edit::DocumentMut) -> Result<SchemaConfig> {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)] // dispatch handler appended below (ARCH-1, iter-225)
 mod tests {
+    #[test]
+    fn config_finalization_failure_retains_persisted_bytes_and_typed_effect() {
+        use hyalo_core::rooted::{Durability, FaultPoint, WriteSession};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".hyalo.toml");
+        std::fs::write(&path, "dir = \".\"\n").unwrap();
+        let mut doc = super::read_toml_doc(&path).unwrap();
+        doc.doc["format"] = toml_edit::value("json");
+        let report = super::write_toml_doc_with_session(
+            &path,
+            &mut doc,
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap();
+        let outcome = CommandOutcome::success(serde_json::Value::Null).with_apply_report(report);
+        let CommandOutcome::UserError(diagnostic) = outcome else {
+            panic!("finalization is not a clean success");
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&diagnostic.render(Format::Json)).unwrap();
+        assert_eq!(
+            value["effects"]["paths"][0]["state"],
+            "committed_with_finalization_error"
+        );
+        assert_eq!(value["effects"]["paths"][0]["category"], "finalization");
+        assert_eq!(value["effects"]["index"], "not_used");
+        assert_eq!(
+            value["effects"]["paths"][0]["file"],
+            path.display().to_string()
+        );
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("format = \"json\"")
+        );
+    }
+
+    #[test]
+    fn config_publication_checks_the_capture_used_for_transformation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".hyalo.toml");
+        std::fs::write(&path, "dir = \".\"\n").unwrap();
+        let mut document = super::read_toml_doc(&path).unwrap();
+        document.doc["format"] = toml_edit::value("json");
+        std::fs::write(&path, "dir = \"other\"\n").unwrap();
+        let error = super::write_toml_doc(&path, &mut document).unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<hyalo_core::rooted::SourceConflict>()
+                .is_some()
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "dir = \"other\"\n");
+    }
+
     use super::*;
     use hyalo_core::schema::{PropertyConstraint, TypeSchema};
     use std::collections::HashMap;
@@ -1054,8 +1211,8 @@ mod tests {
         let schema = SchemaConfig::default();
         let outcome = list_types(&schema);
         match outcome {
-            CommandOutcome::Success { output, total } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+            CommandOutcome::Success { output, total, .. } => {
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 assert!(v.as_array().unwrap().is_empty());
                 assert_eq!(total, Some(0));
             }
@@ -1068,8 +1225,8 @@ mod tests {
         let schema = make_schema_with_type("iteration", &["title", "date"]);
         let outcome = list_types(&schema);
         match outcome {
-            CommandOutcome::Success { output, total } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+            CommandOutcome::Success { output, total, .. } => {
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 let arr = v.as_array().unwrap();
                 assert_eq!(arr.len(), 1);
                 assert_eq!(arr[0]["type"], "iteration");
@@ -1094,7 +1251,7 @@ mod tests {
         let outcome = show_type("note", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 assert_eq!(v["type"], "note");
                 assert!(
                     v["required"]
@@ -1119,7 +1276,7 @@ mod tests {
         let outcome = show_type("note", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 assert_eq!(v["properties"]["status"]["type"], "enum");
                 let vals = v["properties"]["status"]["values"].as_array().unwrap();
                 assert!(vals.contains(&serde_json::json!("draft")));
@@ -1144,7 +1301,7 @@ mod tests {
         let outcome = show_type("memory", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 let sources = &v["properties"]["sources"];
                 assert_eq!(sources["type"], "object-list");
                 assert_eq!(sources["required-keys"], serde_json::json!(["ref"]));
@@ -1172,7 +1329,7 @@ mod tests {
         let outcome = show_type("memory", &schema, Format::Json);
         match outcome {
             CommandOutcome::Success { output, .. } => {
-                let v: serde_json::Value = serde_json::from_str(&output).unwrap();
+                let v: serde_json::Value = serde_json::from_value(output).unwrap();
                 let sources = v["properties"]["sources"].as_object().unwrap();
                 assert!(!sources.contains_key("allowed-keys"));
                 assert!(!sources.contains_key("key-patterns"));

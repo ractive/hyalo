@@ -5,7 +5,7 @@ use hyalo_core::discovery;
 use hyalo_core::index::{ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes};
 use std::path::{Path, PathBuf};
 
-use crate::output::{CommandOutcome, Format, format_output};
+use crate::output::{CommandOutcome, Format, output_value};
 
 /// Build a snapshot index from disk and write it to `output` (default:
 /// `<dir>/.hyalo-index`).
@@ -54,7 +54,7 @@ pub fn create_index(
             )
         })?;
         if !canonical_parent.starts_with(&canonical_dir) {
-            let out = crate::output::format_error(
+            let out = crate::output::user_diagnostic(
                 format,
                 &hyalo_core::outside_vault_message("output path", Some(&canonical_parent)),
                 Some(&index_path.display().to_string()),
@@ -172,7 +172,7 @@ pub fn create_index(
         note: replacing_existing.then_some("replaced existing index"),
     };
 
-    Ok(CommandOutcome::success(format_output(format, &result)))
+    Ok(CommandOutcome::success(output_value(&result)))
 }
 
 /// Serialized CreateIndexResult command contract.

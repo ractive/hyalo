@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+pub use crate::diagnostic::{UserDiagnostic, user_diagnostic};
 use jaq_core::{Native, data};
 use jaq_json::Val;
 use serde::Serialize;
@@ -49,7 +50,7 @@ impl std::fmt::Display for Format {
 /// Result of a command execution: either success (exit 0) or a user-facing error (exit 1).
 /// Internal/unexpected errors are represented by `anyhow::Error` at the call site.
 ///
-/// **Invariant**: `Success.output` must always be a valid JSON string — the pipeline handles
+/// Successful payloads are typed JSON values; the pipeline handles
 /// format conversion. Commands must never store pre-formatted text here.
 ///
 /// For commands like `read` whose text output is raw file content (not structured data),
@@ -58,10 +59,12 @@ impl std::fmt::Display for Format {
 pub enum CommandOutcome {
     /// Successful operation — JSON output goes to stdout via the pipeline.
     Success {
-        /// Always-valid JSON string (bare array, object, etc.). Never pre-formatted text.
-        output: String,
+        /// Typed JSON value (bare array, object, etc.). Never pre-formatted text.
+        output: serde_json::Value,
         /// Optional total item count for pagination display.
         total: Option<u64>,
+        effects: Option<crate::commands::apply::ApplyReport>,
+        status: DomainStatus,
     },
     /// Raw text output, bypasses the JSON pipeline — printed directly to stdout as-is.
     /// Used by `read` command for text-format content output.
@@ -75,26 +78,62 @@ pub enum CommandOutcome {
     /// paths) belong here — never raw file body text.
     RawBytes(Vec<u8>),
     /// User error (file not found, property missing, etc.) — output goes to stderr.
-    UserError(String),
+    UserError(UserDiagnostic),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainStatus {
+    Success,
+    Findings,
 }
 
 impl CommandOutcome {
-    /// Construct a successful outcome carrying a JSON string with no total count.
+    /// Construct a successful outcome carrying a typed JSON value with no total count.
     #[must_use]
-    pub fn success(output: String) -> Self {
+    pub fn success(output: serde_json::Value) -> Self {
         Self::Success {
             output,
             total: None,
+            effects: None,
+            status: DomainStatus::Success,
         }
     }
 
-    /// Construct a successful outcome carrying a JSON string with a total item count.
+    /// Construct a successful outcome carrying a typed JSON value with a total item count.
     #[must_use]
-    pub fn success_with_total(output: String, total: u64) -> Self {
+    pub fn success_with_total(output: serde_json::Value, total: u64) -> Self {
         Self::Success {
             output,
             total: Some(total),
+            effects: None,
+            status: DomainStatus::Success,
         }
+    }
+
+    #[must_use]
+    pub fn with_apply_report(mut self, report: crate::commands::apply::ApplyReport) -> Self {
+        if report.failed() {
+            let mut diagnostic = UserDiagnostic::new("mutation did not finish completely");
+            diagnostic.category = Some("mutation_failure");
+            diagnostic.hint = Some("inspect committed effects before retrying; task toggle is not safe to retry blindly".into());
+            diagnostic.effects = Some(report);
+            return Self::UserError(diagnostic);
+        }
+        if let Self::Success { effects, .. } = &mut self {
+            *effects = Some(report);
+        }
+        self
+    }
+    #[must_use]
+    pub fn with_status(mut self, code: i32) -> Self {
+        if let Self::Success { status, .. } = &mut self {
+            *status = if code == 0 {
+                DomainStatus::Success
+            } else {
+                DomainStatus::Findings
+            };
+        }
+        self
     }
 
     /// Extract the output string from `Success` or `RawOutput`, or panic.
@@ -104,7 +143,8 @@ impl CommandOutcome {
     #[must_use]
     pub fn unwrap_output(self) -> String {
         match self {
-            Self::Success { output, .. } | Self::RawOutput(output) => output,
+            Self::Success { output, .. } => output.to_string(),
+            Self::RawOutput(output) => output,
             Self::RawBytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Self::UserError(msg) => panic!("expected success, got UserError: {msg}"),
         }
@@ -170,6 +210,16 @@ pub fn format_output<T: Serialize>(format: Format, value: &T) -> String {
 /// Output contracts contain only JSON-compatible fields and string map keys.
 pub(crate) fn output_value<T: Serialize>(value: &T) -> serde_json::Value {
     serde_json::to_value(value).expect("derived Serialize impl should not fail")
+}
+
+/// Internal adapter response; ordinary success envelopes do not gain effects.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct MutationReportEnvelope<'a, T> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a, T>,
+    pub(crate) effects: &'a crate::commands::apply::ApplyReport,
 }
 
 /// Successful output contract. Optional metadata is omitted, including all
@@ -245,12 +295,18 @@ impl<'a> Envelope<'a, Cow<'a, serde_json::Value>> {
     }
 }
 
-/// Exit-1 error contract; the singular `hint` key is intentional.
+/// Structured failure contract; the singular `hint` key is intentional.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 #[cfg_attr(test, ts(optional_fields))]
 pub(crate) struct ErrorEnvelope<'a> {
+    /// Effects remain present if rendering fails after publication.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effects: Option<&'a crate::commands::apply::ApplyReport>,
+    /// Stable failure classification when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<&'a str>,
     /// Underlying diagnostic, omitted when there is no additional cause.
     #[serde(skip_serializing_if = "Option::is_none")]
     cause: Option<&'a str>,
@@ -516,6 +572,8 @@ pub fn format_error(
         Format::Json | Format::Github => format_output(
             Format::Json,
             &ErrorEnvelope {
+                effects: None,
+                category: None,
                 cause,
                 error,
                 hint,
@@ -539,6 +597,27 @@ pub fn format_error(
             sanitize_control_chars(&msg)
         }
     }
+}
+
+#[must_use]
+pub fn budget_diagnostic(
+    _format: Format,
+    e: &hyalo_core::frontmatter::FrontmatterBudgetError,
+) -> UserDiagnostic {
+    let mut diagnostic = UserDiagnostic::new("frontmatter would exceed size budget");
+    let value = output_value(&BudgetErrorEnvelope {
+        error: "frontmatter would exceed size budget",
+        file: &e.file,
+        limit_bytes: e.limit_bytes,
+        limit_lines: e.limit_lines,
+        would_be_bytes: e.would_be_bytes,
+        would_be_lines: e.would_be_lines,
+    });
+    if let serde_json::Value::Object(mut fields) = value {
+        fields.remove("error");
+        diagnostic.details = fields.into_iter().collect();
+    }
+    diagnostic
 }
 
 /// Format a structured error for a frontmatter size-budget violation.

@@ -697,6 +697,9 @@ var HyaloError = class extends Error {
   stdout;
   stderr;
   envelope;
+  /** Committed paths and index disposition, retained even after output failure. */
+  effects;
+  category;
   constructor(result, envelope) {
     super(envelope?.error ?? `hyalo exited with code ${result.code}`);
     this.name = "HyaloError";
@@ -704,6 +707,8 @@ var HyaloError = class extends Error {
     this.stdout = result.stdout;
     this.stderr = result.stderr;
     this.envelope = envelope;
+    this.effects = envelope?.effects;
+    this.category = envelope?.category;
   }
 };
 var HyaloSpawnError = class extends Error {
@@ -860,6 +865,7 @@ function nativeTransport(binaryPath) {
     return new Promise((resolve, reject) => {
       const child = spawn(binary, [...argv], {
         cwd: options.cwd,
+        env: { ...process.env, HYALO_INTERNAL_JSON_ERRORS: "1" },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true
@@ -990,6 +996,14 @@ async function jsonCall(argv, options) {
   await reportDiagnostics(result, execution);
   return envelope;
 }
+async function mutationReport(argv, options = {}) {
+  const args = [...argv];
+  const terminator = args.indexOf("--");
+  args.splice(terminator === -1 ? args.length : terminator, 0, "--internal-mutation-report");
+  const envelope = await jsonCall(args, options);
+  if (!("effects" in envelope)) throw new HyaloParseError("hyalo returned no internal mutation report", { code: 0, stdout: JSON.stringify(envelope), stderr: "" });
+  return envelope;
+}
 function find(options = {}) {
   const values = options;
   return jsonCall(findArgv(values), values);
@@ -1088,6 +1102,7 @@ export {
   createPiTransport,
   find,
   lint,
+  mutationReport,
   raw,
   read,
   set,

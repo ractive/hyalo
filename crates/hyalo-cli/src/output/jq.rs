@@ -9,6 +9,158 @@ use jaq_core::load::{Arena, File, Loader};
 use jaq_core::{Compiler, Ctx, Native, Vars, load};
 use jaq_json::Val;
 
+/// Compile-only child entrypoint, before configuration or command dispatch.
+/// This is an internal process seam, not a public command or user flag.
+pub(crate) fn compile_worker() -> Option<i32> {
+    use std::io::{Read, Write};
+    if std::env::var_os("HYALO_INTERNAL_JQ_EVALUATE").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        let mut request = Vec::new();
+        let result = std::io::stdin()
+            .take(64 * 1024 * 1024 + 1)
+            .read_to_end(&mut request)
+            .map_err(|e| e.to_string())
+            .and_then(|_| {
+                if request.len() > 64 * 1024 * 1024 {
+                    return Err("jq input exceeds 64 MiB".into());
+                }
+                let (source, value): (String, serde_json::Value) =
+                    serde_json::from_slice(&request).map_err(|e| e.to_string())?;
+                compile_jq_filter(&source)
+                    .and_then(|filter| execute_jq_filter(&filter, &value, &source))
+            });
+        let code = i32::from(result.is_err());
+        let text = result.unwrap_or_else(|error| truncate_diagnostic(&error));
+        let _ = std::io::stdout().write_all(text.as_bytes());
+        return Some(code);
+    }
+    if std::env::var_os("HYALO_INTERNAL_JQ_COMPILE").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        return None;
+    }
+    let mut source = String::new();
+    let result = std::io::stdin()
+        .take(65_537)
+        .read_to_string(&mut source)
+        .map_err(|e| e.to_string())
+        .and_then(|_| {
+            if source.len() > 65_536 {
+                Err("jq source exceeds 64 KiB".into())
+            } else {
+                compile_jq_filter(&source).map(|_| ())
+            }
+        });
+    let code = i32::from(result.is_err());
+    if let Err(error) = result {
+        let _ = std::io::stdout().write_all(truncate_diagnostic(&error).as_bytes());
+    }
+    Some(code)
+}
+
+/// Untrusted compilation never runs in the invoking process. The child is
+/// killed and reaped on timeout, including recursive compiler/stack failures.
+pub(crate) fn preflight_jq(source: &str) -> Result<(), String> {
+    if source.len() > 65_536 {
+        return Err("jq source exceeds 64 KiB".into());
+    }
+    bounded_worker(source.as_bytes(), "HYALO_INTERNAL_JQ_COMPILE").map(|_| ())
+}
+
+/// Evaluation uses the same killable process boundary as compilation so an
+/// abort or allocation failure after publication returns to the effect owner.
+pub(crate) fn evaluate_jq_isolated(
+    source: &str,
+    value: &serde_json::Value,
+) -> Result<String, String> {
+    let request = serde_json::to_vec(&(source, value)).map_err(|e| e.to_string())?;
+    if request.len() > 64 * 1024 * 1024 {
+        return Err("jq input exceeds 64 MiB".into());
+    }
+    bounded_worker(&request, "HYALO_INTERNAL_JQ_EVALUATE")
+}
+
+fn bounded_worker(request: &[u8], mode: &str) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::process::{Command, Stdio};
+    let mut input = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    input.write_all(request).map_err(|e| e.to_string())?;
+    input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut output = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .env(mode, "1")
+        .stdin(Stdio::from(input.reopen().map_err(|e| e.to_string())?))
+        .stdout(Stdio::from(output.reopen().map_err(|e| e.to_string())?))
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: only async-signal-safe setrlimit calls execute after fork.
+        unsafe {
+            command.pre_exec(|| {
+                let limits = [
+                    (libc::RLIMIT_CPU, 3),
+                    (libc::RLIMIT_FSIZE, 16 * 1024 * 1024),
+                ];
+                for (resource, limit) in limits {
+                    let limit = libc::rlimit {
+                        rlim_cur: limit,
+                        rlim_max: limit,
+                    };
+                    if libc::setrlimit(resource, &raw const limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let limit = libc::rlimit {
+                        rlim_cur: 512 * 1024 * 1024,
+                        rlim_max: 512 * 1024 * 1024,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_AS, &raw const limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("cannot start bounded jq compiler: {e}"))?;
+    let deadline = std::time::Instant::now() + JQ_TIME_LIMIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut message = String::new();
+                let _ = output.seek(SeekFrom::Start(0));
+                let _ = output
+                    .take(16 * 1024 * 1024 + 1)
+                    .read_to_string(&mut message);
+                if status.success() {
+                    return Ok(message);
+                }
+                return Err(if message.is_empty() {
+                    "jq worker failed or exceeded its resource budget".into()
+                } else {
+                    message
+                });
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match result {
+                    Err(error) => error.to_string(),
+                    _ => "jq filter exceeded the 3s time limit".into(),
+                });
+            }
+        }
+    }
+}
+
 /// Apply a jq filter string to a `serde_json::Value` and return the text output.
 ///
 /// Looks up or compiles the filter in `cache`. Multiple outputs are joined with

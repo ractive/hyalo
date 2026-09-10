@@ -170,8 +170,8 @@ impl TitleMatcher {
     /// - `/pattern/`: regex (case-insensitive by default)
     /// - `/pattern/i`: regex with explicit flags
     ///
-    /// Returns `Err(CommandOutcome::UserError(...))` on invalid regex.
-    pub(super) fn parse(pattern: &str) -> Result<Self, CommandOutcome> {
+    /// Returns `Err(Box::new(CommandOutcome::UserError(...)))` on invalid regex.
+    pub(super) fn parse(pattern: &str) -> Result<Self, Box<CommandOutcome>> {
         if let Some(rest) = pattern.strip_prefix('/') {
             // Slash-delimited regex: /pattern/ or /pattern/i
             if let Some(close) = rest.rfind('/') {
@@ -181,15 +181,19 @@ impl TitleMatcher {
                 // Validate flags — only 'i' is supported
                 for ch in flags.chars() {
                     if ch != 'i' {
-                        return Err(CommandOutcome::UserError(format!(
-                            "invalid --title regex: {pattern}\nunsupported regex flag {ch:?}: only 'i' is supported"
+                        return Err(Box::new(CommandOutcome::UserError(
+                            crate::output::UserDiagnostic::new(format!(
+                                "invalid --title regex: {pattern}\nunsupported regex flag {ch:?}: only 'i' is supported"
+                            )),
                         )));
                     }
                 }
 
                 if inner.is_empty() {
-                    return Err(CommandOutcome::UserError(format!(
-                        "invalid --title regex: {pattern}\nregex pattern must not be empty"
+                    return Err(Box::new(CommandOutcome::UserError(
+                        crate::output::UserDiagnostic::new(format!(
+                            "invalid --title regex: {pattern}\nregex pattern must not be empty"
+                        )),
                     )));
                 }
 
@@ -201,8 +205,10 @@ impl TitleMatcher {
                     .build()
                 {
                     Ok(re) => Ok(Self::Regex(re)),
-                    Err(e) => Err(CommandOutcome::UserError(format!(
-                        "invalid --title regex: {pattern}\n{e}"
+                    Err(e) => Err(Box::new(CommandOutcome::UserError(
+                        crate::output::UserDiagnostic::new(format!(
+                            "invalid --title regex: {pattern}\n{e}"
+                        )),
                     ))),
                 }
             } else {

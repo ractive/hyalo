@@ -163,7 +163,7 @@ pub fn summary(
     recent: usize,
     depth: Option<usize>,
     site_prefix: Option<&str>,
-    format: Format,
+    _format: Format,
     schema: &SchemaConfig,
     lint_ignore: &[String],
     case_index: Option<&CaseInsensitiveIndex>,
@@ -516,10 +516,7 @@ pub fn summary(
     };
 
     let json_value = serde_json::to_value(&vault_summary).context("failed to serialize summary")?;
-    Ok(CommandOutcome::success(crate::output::format_success(
-        format,
-        &json_value,
-    )))
+    Ok(CommandOutcome::success(json_value))
 }
 
 /// Truncate a directory path to at most `max_depth` components.
@@ -655,9 +652,8 @@ No tasks here.
 
     fn unwrap_success(outcome: CommandOutcome) -> serde_json::Value {
         match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => {
-                serde_json::from_str(&s).unwrap()
-            }
+            CommandOutcome::Success { output: s, .. } => s,
+            CommandOutcome::RawOutput(s) => serde_json::from_str(&s).unwrap(),
             CommandOutcome::RawBytes(b) => {
                 serde_json::from_str(&String::from_utf8_lossy(&b)).unwrap()
             }
@@ -865,10 +861,12 @@ Body.
         let tmp = setup_vault();
         let outcome = run_summary(tmp.path(), &[], 10, None, None, Format::Text).unwrap();
         match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => {
-                assert!(s.contains("Files:"), "expected 'Files:' in: {s}");
-                assert!(s.contains("Tasks:"), "expected 'Tasks:' in: {s}");
+            CommandOutcome::Success { output: s, .. } => {
+                let text = crate::output::format_success(Format::Text, &s);
+                assert!(text.contains("Files:"));
+                assert!(text.contains("Tasks:"));
             }
+            CommandOutcome::RawOutput(_) => panic!("summary produces a typed value"),
             CommandOutcome::RawBytes(_) => panic!("summary never emits RawBytes"),
             CommandOutcome::UserError(s) => panic!("expected success, got: {s}"),
         }

@@ -205,7 +205,7 @@ pub fn remove(
     dry_run: bool,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() && tag_args.is_empty() {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "remove requires at least one --property K or --tag T",
             None,
@@ -230,7 +230,7 @@ pub fn remove(
     for arg in property_args {
         match parse_kv_optional(arg) {
             Err(msg) => {
-                let out = crate::output::format_error(format, &msg, None, None, None);
+                let out = crate::output::user_diagnostic(format, &msg, None, None, None);
                 return Ok(CommandOutcome::UserError(out));
             }
             Ok((key, _)) => {
@@ -340,7 +340,7 @@ pub fn remove(
                 Ok(()) => {}
                 Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
                     let budget_err = frontmatter::as_budget_error(e).unwrap();
-                    let out = crate::output::format_budget_error(format, budget_err);
+                    let out = crate::output::budget_diagnostic(format, budget_err);
                     return Ok(CommandOutcome::UserError(out));
                 }
                 Err(e) => return Err(e),
@@ -412,8 +412,8 @@ pub fn remove(
 
     let output = mutation::unwrap_single_result(results);
 
-    Ok(CommandOutcome::success(crate::output::format_success(
-        format, &output,
+    Ok(CommandOutcome::success(crate::output::output_value(
+        &output,
     )))
 }
 
@@ -498,7 +498,7 @@ status: draft
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["property"], "status");
         assert!(parsed.get("value").is_none() || parsed["value"].is_null());
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
@@ -537,7 +537,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
     }
@@ -573,7 +573,7 @@ status: draft
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -609,7 +609,7 @@ status: published
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
         // File should be unchanged
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -649,7 +649,7 @@ aliases:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -690,7 +690,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["tag"], "rust");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
@@ -729,7 +729,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
     }
 
@@ -802,7 +802,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
@@ -867,7 +867,7 @@ priority: low
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr[0]["modified"].as_array().unwrap().len(), 1);
@@ -912,7 +912,7 @@ priority: low
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         // 2 files scanned, 1 passed the where-filter
         assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
@@ -951,7 +951,7 @@ priority: low
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         // 2 files scanned, 1 passed the where-filter
         assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
@@ -1062,7 +1062,7 @@ tags:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success, got: {outcome:?}")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["tag"], "cli,ux");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
 
@@ -1105,7 +1105,7 @@ pub(crate) fn run(
     let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
         Ok(f) => f,
         Err(e) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e,
                 None,

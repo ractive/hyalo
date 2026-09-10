@@ -146,7 +146,7 @@ pub fn append(
     schema: Option<&SchemaConfig>,
 ) -> Result<CommandOutcome> {
     if property_args.is_empty() {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "append requires at least one --property K=V",
             None,
@@ -167,7 +167,7 @@ pub fn append(
     for arg in property_args {
         match parse_kv(arg) {
             Err(msg) => {
-                let out = crate::output::format_error(format, &msg, None, None, None);
+                let out = crate::output::user_diagnostic(format, &msg, None, None, None);
                 return Ok(CommandOutcome::UserError(out));
             }
             Ok((key, _)) => {
@@ -187,7 +187,7 @@ pub fn append(
             // Reject empty values for the tags property -- `tags=` would silently
             // insert an empty string into the list, which is never meaningful.
             if name == "tags" && raw_value.trim().is_empty() {
-                let out = crate::output::format_error(
+                let out = crate::output::user_diagnostic(
                     format,
                     "append --property tags= requires a non-empty tag value",
                     None,
@@ -210,6 +210,11 @@ pub fn append(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
     let scanned = files.len();
+    let mut preparation = super::apply::PreparedChangeSet::new(dir, files.len())?;
+    let captures: Vec<_> = files
+        .iter()
+        .map(|(_, rel)| preparation.capture(rel))
+        .collect::<Result<_>>()?;
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -219,8 +224,10 @@ pub fn append(
     //     before any file is modified, not mid-loop (a mid-loop `return` left
     //     earlier files in the batch already written, and skipped the
     //     end-of-loop journal flush entirely).
-    for (full_path, rel_path) in &files {
-        let props = match frontmatter::read_frontmatter(full_path) {
+    for ((_full_path, rel_path), captured) in files.iter().zip(&captures) {
+        let props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => continue,
             Err(e) => return Err(e),
@@ -242,8 +249,10 @@ pub fn append(
     //     value so that list constraints (e.g. `type = "list"`) see the resulting
     //     list rather than the individual element.
     if validate && let Some(schema) = schema {
-        for (full_path, rel_path) in &files {
-            let props = match frontmatter::read_frontmatter(full_path) {
+        for ((_full_path, rel_path), captured) in files.iter().zip(&captures) {
+            let props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+                captured.reader()?,
+            )) {
                 Ok(p) => p,
                 Err(e) if frontmatter::is_parse_error(&e) => continue,
                 Err(e) => return Err(e),
@@ -283,7 +292,7 @@ pub fn append(
                         constraint,
                     )
                 {
-                    let out = crate::output::format_error(
+                    let out = crate::output::user_diagnostic(
                         format,
                         &format!("{rel_path}: {violation}"),
                         None,
@@ -304,15 +313,11 @@ pub fn append(
     // in the error envelope's `cause` instead of a bare stderr line.
     let mut unparseable_cause: Option<String> = None;
 
-    // BUG-14 (iter-277): one write phase for the whole batch, so the
-    // durability fsync is paid once per directory instead of once per file
-    // (DEC-317), and a long run reports progress instead of going silent.
-    let _write_phase =
-        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "appending properties"));
-    // Outer loop: one read-modify-write per file
-    for (full_path, rel_path) in &files {
-        let mtime = frontmatter::read_mtime(full_path)?;
-        let mut props = match frontmatter::read_frontmatter(full_path) {
+    // Plan every selected input before the first publication.
+    for ((full_path, rel_path), captured) in files.iter().zip(captures) {
+        let mut props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 if let Some(detail) = super::report_unparseable_skip(files_arg, globs, rel_path, &e)
@@ -324,18 +329,6 @@ pub fn append(
             }
             Err(e) => return Err(e),
         };
-
-        // BUG-2 (iter-255): the command has just `stat`ed and read this file
-        // while holding the snapshot index open, so a file that changed on
-        // disk since the last `create-index` gets its entry repaired here —
-        // whether or not the mutation below turns out to be a no-op. Without
-        // it, a `set` that finds the property already at its target value
-        // reports `0 modified` and leaves `find --index` describing a body
-        // that is no longer on disk. Costs no extra I/O: the staleness check
-        // reuses the `mtime`/size fingerprint read above.
-        if !dry_run {
-            journal.refresh_if_stale(rel_path, full_path, mtime)?;
-        }
 
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
@@ -360,19 +353,16 @@ pub fn append(
             }
         }
 
-        if file_changed && !dry_run {
-            frontmatter::check_mtime(full_path, mtime)?;
-            match frontmatter::write_frontmatter_within(dir, full_path, &props) {
-                Ok(()) => {}
-                Err(ref e) if frontmatter::as_budget_error(e).is_some() => {
-                    let budget_err = frontmatter::as_budget_error(e).unwrap();
-                    let out = crate::output::format_budget_error(format, budget_err);
-                    return Ok(CommandOutcome::UserError(out));
-                }
-                Err(e) => return Err(e),
-            }
-            journal.update_entry(rel_path, props, full_path)?;
-        }
+        let rendered = if file_changed {
+            Some(frontmatter::render_frontmatter(
+                &mut captured.reader()?,
+                full_path,
+                &props,
+            )?)
+        } else {
+            None
+        };
+        preparation.push(captured, rendered.as_deref())?;
     }
 
     // L-2: the single file the user named by hand was unparseable — report it
@@ -385,10 +375,6 @@ pub fn append(
         format,
     ) {
         return Ok(outcome);
-    }
-
-    if !dry_run {
-        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -416,9 +402,17 @@ pub fn append(
 
     let output = mutation::unwrap_single_result(results);
 
-    Ok(CommandOutcome::success(crate::output::format_success(
-        format, &output,
-    )))
+    preparation.check_output(&output)?;
+    let apply_report = if dry_run {
+        Some(preparation.preview())
+    } else {
+        Some(preparation.apply(journal, "appending properties"))
+    };
+    let outcome = CommandOutcome::success(output);
+    Ok(match apply_report {
+        Some(report) => outcome.with_apply_report(report),
+        None => outcome,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +464,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["property"], "aliases");
         assert_eq!(parsed["value"], "my-note");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
@@ -546,7 +540,7 @@ aliases:
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }
@@ -618,7 +612,7 @@ author: Alice
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped"].as_array().unwrap().len(), 1);
     }
 
@@ -654,7 +648,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
@@ -803,7 +797,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert!(parsed.is_array());
 
         let content = fs::read_to_string(tmp.path().join("note.md")).unwrap();
@@ -841,7 +835,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         // 2 files scanned, 1 passed the where-filter
         assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
@@ -877,7 +871,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
         // 2 files scanned, 1 passed the where-filter
         assert_eq!(parsed["scanned"].as_u64().unwrap(), 2);
@@ -1201,7 +1195,7 @@ pub(crate) fn run(
     let where_prop_filters = match parse_where_filters(&where_properties, &where_tags) {
         Ok(f) => f,
         Err(e) => {
-            return Ok(CommandOutcome::UserError(crate::output::format_error(
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
                 effective_format,
                 &e,
                 None,

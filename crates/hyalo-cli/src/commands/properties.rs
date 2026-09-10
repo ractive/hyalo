@@ -50,7 +50,7 @@ pub fn properties_summary(
     }
     let _ = format;
     Ok(CommandOutcome::success_with_total(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        serde_json::to_value(&result).context("failed to serialize")?,
         total,
     ))
 }
@@ -147,7 +147,7 @@ pub fn properties_rename(
     }
 
     if from == to {
-        let out = crate::output::format_error(
+        let out = crate::output::user_diagnostic(
             format,
             "source and target property names are identical",
             None,
@@ -249,7 +249,7 @@ pub fn properties_rename(
 
     let _ = format;
     Ok(CommandOutcome::success(
-        serde_json::to_string_pretty(&result).context("failed to serialize")?,
+        serde_json::to_value(&result).context("failed to serialize")?,
     ))
 }
 
@@ -320,9 +320,10 @@ tags:
     /// Extract the output string from a `CommandOutcome`.
     fn unwrap_output(outcome: CommandOutcome) -> (String, bool) {
         match outcome {
-            CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => (s, true),
+            CommandOutcome::Success { output: s, .. } => (s.to_string(), true),
+            CommandOutcome::RawOutput(s) => (s, true),
             CommandOutcome::RawBytes(b) => (String::from_utf8_lossy(&b).into_owned(), true),
-            CommandOutcome::UserError(s) => (s, false),
+            CommandOutcome::UserError(s) => (s.render(Format::Json), false),
         }
     }
 
@@ -366,7 +367,7 @@ keywords: test
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["from"], "keywords");
         assert_eq!(parsed["to"], "Keywords");
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 1);
@@ -402,7 +403,7 @@ title: Note
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["skipped_count"].as_u64().unwrap(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }
@@ -435,7 +436,7 @@ Keywords: other
         let CommandOutcome::Success { output: out, .. } = outcome else {
             panic!("expected success")
         };
-        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
         assert_eq!(parsed["conflicts"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["modified"].as_array().unwrap().len(), 0);
     }

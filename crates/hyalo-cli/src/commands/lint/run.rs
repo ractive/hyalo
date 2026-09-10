@@ -72,7 +72,7 @@ pub(crate) fn run(
                         Ok(tpl) => Some(tpl.to_glob()),
                         Err(e) => {
                             return Ok(crate::output::CommandOutcome::UserError(
-                                crate::output::format_error(
+                                crate::output::user_diagnostic(
                                     ctx.user_format,
                                     &format!(
                                         "invalid filename_template for type '{type_name}': {e}"
@@ -86,7 +86,7 @@ pub(crate) fn run(
                     },
                     None => {
                         return Ok(crate::output::CommandOutcome::UserError(
-                            crate::output::format_error(
+                            crate::output::user_diagnostic(
                                 ctx.user_format,
                                 &format!("type '{type_name}' has no filename_template defined"),
                                 None,
@@ -100,7 +100,7 @@ pub(crate) fn run(
                 },
                 None => {
                     return Ok(crate::output::CommandOutcome::UserError(
-                        crate::output::format_error(
+                        crate::output::user_diagnostic(
                             ctx.user_format,
                             &format!("unknown type '{type_name}'"),
                             None,
@@ -315,7 +315,7 @@ pub(crate) fn run(
                 Some(entry) => Some(entry.id.clone()),
                 None => {
                     return Ok(crate::output::CommandOutcome::UserError(
-                        crate::output::format_error(
+                        crate::output::user_diagnostic(
                             ctx.user_format,
                             &format!("no such rule: {raw}"),
                             None,
@@ -341,7 +341,7 @@ pub(crate) fn run(
                 .starts_with(&prefix.to_ascii_lowercase())
         {
             return Ok(crate::output::CommandOutcome::UserError(
-                crate::output::format_error(
+                crate::output::user_diagnostic(
                     ctx.user_format,
                     &format!("no rule matches prefix: {prefix}"),
                     None,
@@ -489,10 +489,6 @@ pub(crate) fn run(
         };
 
         // Signal exit code 1 when errors remain after fixes (set before returning).
-        if counts.errors > 0 {
-            ctx.exit_code_override = Some(1);
-        }
-
-        Ok(outcome)
+        Ok(outcome.with_status(i32::from(counts.errors > 0)))
     }
 }

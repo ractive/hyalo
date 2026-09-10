@@ -182,7 +182,8 @@ macro_rules! md {
 
 fn unwrap_success(outcome: CommandOutcome) -> String {
     match outcome {
-        CommandOutcome::Success { output: s, .. } | CommandOutcome::RawOutput(s) => s,
+        CommandOutcome::Success { output: s, .. } => s.to_string(),
+        CommandOutcome::RawOutput(s) => s,
         CommandOutcome::RawBytes(b) => String::from_utf8_lossy(&b).into_owned(),
         CommandOutcome::UserError(s) => panic!("expected success, got user error: {s}"),
     }
@@ -743,7 +744,7 @@ fn find_empty_string_pattern_matches_all_files() {
         CommandOutcome::Success { output, .. } => output,
         other => panic!("expected success for empty pattern, got: {other:?}"),
     };
-    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
     let arr = parsed.as_array().expect("expected array");
     assert_eq!(arr.len(), 2, "empty pattern should match all 2 files");
 }
@@ -779,7 +780,7 @@ fn find_whitespace_only_pattern_matches_all_files() {
         CommandOutcome::Success { output, .. } => output,
         other => panic!("expected success for whitespace pattern, got: {other:?}"),
     };
-    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_value(out).unwrap();
     let arr = parsed.as_array().expect("expected array");
     assert_eq!(
         arr.len(),

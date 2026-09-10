@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
-use crate::output::{CommandOutcome, Format, format_error};
+use crate::output::{CommandOutcome, Format, user_diagnostic};
 use anyhow::{Context, Result};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
@@ -305,6 +305,24 @@ pub fn run(
         Err(e) => return Ok(super::resolve_error_to_outcome(e, format, dir)),
     };
 
+    read_resolved(
+        (full_path, rel_path),
+        section,
+        lines,
+        frontmatter_flag,
+        format,
+        user_format,
+    )
+}
+
+fn read_resolved(
+    (full_path, rel_path): (std::path::PathBuf, String),
+    section: Option<&str>,
+    lines: Option<&str>,
+    frontmatter_flag: bool,
+    format: Format,
+    user_format: Format,
+) -> Result<CommandOutcome> {
     // `read` targets one explicit file, so — unlike the read-only scanner,
     // which silently skips oversized files across a whole vault — an
     // oversized target here must be a hard, clear error rather than a
@@ -313,7 +331,7 @@ pub fn run(
         .with_context(|| format!("failed to stat {}", full_path.display()))?
         .len();
     if file_size > scanner::MAX_FILE_SIZE {
-        return Ok(CommandOutcome::UserError(format_error(
+        return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
             &format!(
                 "file too large to read ({} MiB exceeds {} MiB limit)",
@@ -331,7 +349,7 @@ pub fn run(
         match parse_line_range(range_str) {
             Ok(r) => Some(r),
             Err(msg) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     &msg,
                     None,
@@ -350,7 +368,7 @@ pub fn run(
         match frontmatter::read_frontmatter(&full_path) {
             Ok(props) => Some(props),
             Err(e) if frontmatter::is_parse_error(&e) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     &e.to_string(),
                     Some(&rel_path),
@@ -397,7 +415,7 @@ pub fn run(
         let filter = match SectionFilter::parse(query) {
             Ok(f) => f,
             Err(e) => {
-                return Ok(CommandOutcome::UserError(format_error(
+                return Ok(CommandOutcome::UserError(user_diagnostic(
                     format,
                     &e,
                     Some(&rel_path),
@@ -410,7 +428,7 @@ pub fn run(
         if sections.is_empty() {
             let available = collect_headings(&content_lines);
             let hint = section_not_found_hint(query, &available);
-            return Ok(CommandOutcome::UserError(format_error(
+            return Ok(CommandOutcome::UserError(user_diagnostic(
                 format,
                 &format!("section not found: {query}"),
                 Some(&rel_path),
@@ -472,7 +490,7 @@ pub fn run(
     // For text user format: return raw text (bypasses pipeline).
     if user_format == Format::Json {
         return Ok(CommandOutcome::success(
-            serde_json::to_string_pretty(&obj).context("failed to serialize")?,
+            serde_json::to_value(&obj).context("failed to serialize")?,
         ));
     }
 
@@ -976,44 +994,19 @@ mod tests {
 #[allow(clippy::needless_pass_by_value)] // args moved verbatim from the clap variant
 pub(crate) fn run_command(
     ctx: &mut crate::dispatch::CommandContext<'_>,
-    selection: crate::cli::inputs::InputSelection,
+    target: crate::prepared::SingleTargetRequest,
     section: Option<String>,
     lines: Option<String>,
     frontmatter: bool,
 ) -> Result<CommandOutcome> {
-    let dir = ctx.dir;
-    let effective_format = ctx.effective_format;
-    let snapshot_index = &mut *ctx.snapshot_index;
-    use crate::commands::inputs::{ResolutionPolicy, ResolvedInputsOrOutcome, resolve_inputs};
-
-    match resolve_inputs(
-        &selection,
-        dir,
-        ctx.configured_dir_str,
-        snapshot_index.as_ref(),
-        &ResolutionPolicy::Single { allow_glob: false },
-        effective_format,
-        false,
-    )? {
-        ResolvedInputsOrOutcome::Outcome(o) => Ok(o),
-        ResolvedInputsOrOutcome::Resolved(r) => {
-            ctx.files_from_counters = r.counters;
-            let (_full, file) = r
-                .files
-                .into_iter()
-                .next()
-                .context("Single resolution returned no files")?;
-            run(
-                dir,
-                &file,
-                section.as_deref(),
-                lines.as_deref(),
-                frontmatter,
-                effective_format,
-                ctx.user_format,
-            )
-        }
-    }
+    read_resolved(
+        target.into_file(),
+        section.as_deref(),
+        lines.as_deref(),
+        frontmatter,
+        ctx.effective_format,
+        ctx.user_format,
+    )
 }
 
 /// Serialized ReadResult command contract.

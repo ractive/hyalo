@@ -507,6 +507,48 @@ pub fn find_task_lines(path: &Path) -> Result<Vec<crate::types::FindTaskInfo>> {
     Ok(extractor.into_tasks())
 }
 
+/// Scan captured bytes using the same task visitor as ordinary readers.
+pub fn find_task_lines_in(content: &[u8]) -> Result<Vec<crate::types::FindTaskInfo>> {
+    let mut extractor = TaskExtractor::new();
+    scanner::scan_slice_multi(content, &mut [&mut extractor])?;
+    Ok(extractor.into_tasks())
+}
+
+/// Validate every selector and render one captured task edit without I/O.
+/// `None` toggles, while `Some` assigns a status. Duplicate line selectors apply once.
+pub fn render_tasks(
+    content: &str,
+    lines: &[usize],
+    status: Option<char>,
+) -> Result<(Vec<u8>, Vec<TaskInfo>)> {
+    let file_lines: Vec<&str> = content.split('\n').collect();
+    let line_count = file_lines.len() - usize::from(file_lines.last() == Some(&""));
+    let valid_lines = valid_task_line_set(content.as_bytes())?;
+    let mut deduped = lines.to_vec();
+    deduped.sort_unstable();
+    deduped.dedup();
+    let mut results = Vec::with_capacity(deduped.len());
+    let mut replacements = Vec::with_capacity(deduped.len());
+    for line in deduped {
+        let target = validate_task_line(&file_lines, line_count, &valid_lines, line)?;
+        let (current, _) = detect_task_checkbox(target)
+            .ok_or_else(|| anyhow::anyhow!("line {line} is not a task"))?;
+        let new_status = status.unwrap_or(if matches!(current, 'x' | 'X') {
+            ' '
+        } else {
+            'x'
+        });
+        let (replacement, info) = mutate_task_line(target, line, new_status)
+            .ok_or_else(|| anyhow::anyhow!("failed to mutate task on line {line}"))?;
+        replacements.push((line, replacement));
+        results.push(info);
+    }
+    Ok((
+        build_new_content(content, &file_lines, &replacements).into_bytes(),
+        results,
+    ))
+}
+
 /// Toggle multiple tasks in one atomic read-modify-write pass. Lines are 1-based.
 /// Duplicate lines are deduplicated; results are returned in sorted line order.
 /// Errors if any line is not a task checkbox.

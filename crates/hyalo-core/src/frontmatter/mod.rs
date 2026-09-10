@@ -8,8 +8,9 @@ use anyhow::Context as _;
 
 pub use parse::{
     FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
-    read_frontmatter, read_frontmatter_raw, rename_frontmatter_key_within, skip_frontmatter,
-    write_frontmatter, write_frontmatter_within,
+    read_frontmatter, read_frontmatter_from_reader, read_frontmatter_raw,
+    rename_frontmatter_key_within, render_frontmatter, skip_frontmatter, write_frontmatter,
+    write_frontmatter_within,
 };
 pub(crate) use parse::{friendly_parse_error, is_closing_delimiter, is_opening_delimiter};
 pub use types::{infer_type, parse_value};
@@ -920,6 +921,34 @@ Body.
             result.is_ok(),
             "exactly-at-limit YAML should pass: {result:?}"
         );
+    }
+
+    #[test]
+    fn compatibility_writers_release_source_before_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let original = b"---\r\nold: value\r\nother: untouched # keep\r\n---\r\nbody\0bytes\r\n";
+        for mode in ["unrooted", "rooted", "rename"] {
+            std::fs::write(&path, original).unwrap();
+            let expected = if mode == "rename" {
+                assert!(rename_frontmatter_key_within(dir.path(), &path, "old", "new").unwrap());
+                b"---\r\nnew: value\r\nother: untouched # keep\r\n---\r\nbody\0bytes\r\n".as_slice()
+            } else {
+                let mut props = read_frontmatter(&path).unwrap();
+                props.insert("old".to_owned(), Value::String("updated".to_owned()));
+                if mode == "rooted" {
+                    write_frontmatter_within(dir.path(), &path, &props).unwrap();
+                } else {
+                    write_frontmatter(&path, &props).unwrap();
+                }
+                b"---\r\nold: updated\r\nother: untouched # keep\r\n---\r\nbody\0bytes\r\n"
+                    .as_slice()
+            };
+            // On Windows, keeping the render reader open causes the actual
+            // replacement above to fail with access denied. Every platform
+            // also verifies that the compatibility path preserves other bytes.
+            assert_eq!(std::fs::read(&path).unwrap(), expected, "{mode}");
+        }
     }
 
     #[test]
