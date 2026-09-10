@@ -567,6 +567,7 @@ pub(crate) fn resolve_index<'a>(
     site_prefix: Option<&str>,
     needs_full_vault: bool,
     options: &ScanOptions<'_>,
+    case_insensitive: bool,
 ) -> Result<IndexResolution<'a>> {
     resolve_index_named(
         snapshot,
@@ -578,6 +579,7 @@ pub(crate) fn resolve_index<'a>(
         needs_full_vault,
         options,
         NamedFilePolicy::Skip,
+        case_insensitive,
     )
 }
 
@@ -605,11 +607,12 @@ pub(crate) fn resolve_index_named<'a>(
     needs_full_vault: bool,
     options: &ScanOptions<'_>,
     named_policy: NamedFilePolicy,
+    case_insensitive: bool,
 ) -> Result<IndexResolution<'a>> {
     if let Some(idx) = snapshot {
         return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(idx)));
     }
-    let outcome = build_scanned_index_named(
+    let outcome = build_scanned_index_with(
         dir,
         files,
         globs,
@@ -618,6 +621,8 @@ pub(crate) fn resolve_index_named<'a>(
         needs_full_vault,
         options,
         named_policy,
+        resolve_file_user,
+        case_insensitive,
     )?;
     match outcome {
         ScannedIndexOutcome::Index(build) => {
@@ -639,6 +644,7 @@ pub(crate) fn resolve_index_prepared<'a>(
     needs_full_vault: bool,
     options: &ScanOptions<'_>,
     named_policy: NamedFilePolicy,
+    case_insensitive: bool,
 ) -> Result<IndexResolution<'a>> {
     if let Some(index) = snapshot {
         return Ok(IndexResolution::Resolved(ResolvedIndex::Snapshot(index)));
@@ -654,6 +660,7 @@ pub(crate) fn resolve_index_prepared<'a>(
         options,
         named_policy,
         |dir, name| discovery::resolve_normalized_file_ci(dir, name, false),
+        case_insensitive,
     )?;
     Ok(match outcome {
         ScannedIndexOutcome::Index(build) => {
@@ -712,6 +719,7 @@ pub(crate) fn build_scanned_index_named(
         options,
         named_policy,
         resolve_file_user,
+        true,
     )
 }
 
@@ -726,6 +734,7 @@ pub(crate) fn build_scanned_index_with(
     options: &ScanOptions<'_>,
     named_policy: NamedFilePolicy,
     resolve: impl Fn(&Path, &str) -> std::result::Result<(PathBuf, String), FileResolveError>,
+    case_insensitive: bool,
 ) -> Result<ScannedIndexOutcome> {
     // Vault-relative paths of the files the caller named by hand, in the order
     // they resolved. Empty whenever the file list came from a glob or a whole-
@@ -774,7 +783,8 @@ pub(crate) fn build_scanned_index_with(
         }
     };
 
-    let build = ScannedIndex::build(&files, site_prefix, options)?;
+    let build =
+        ScannedIndex::build_with_case_policy(&files, site_prefix, options, case_insensitive)?;
 
     // DEC-301 (iter-273): a path the caller typed is a promise that the answer
     // is about *that* file. Dropping it into the skip summary and exiting 0

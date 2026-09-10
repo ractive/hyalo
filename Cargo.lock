@@ -725,6 +725,7 @@ dependencies = [
  "predicates",
  "rayon",
  "regex",
+ "rmp-serde",
  "serde",
  "serde-saphyr",
  "serde_json",

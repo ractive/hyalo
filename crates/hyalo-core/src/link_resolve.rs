@@ -1,26 +1,4 @@
-//! Unified **rewrite-planning** link resolver for `hyalo`'s link-*mutating*
-//! commands (`mv`, auto-link planning).
-//!
-//! [`LinkResolver`] is the write-side resolver: it decides how to *rewrite* a
-//! link when a file moves or a bare title is auto-linked. It is deliberately
-//! **distinct** from the read-side entry points in
-//! [`crate::discovery`] — `resolve_link_from_source` (Exists mode: "does this
-//! link resolve to a vault file?") and `classify_link_from_source` (Classify
-//! mode: the full fix-policy verdict used by `links fix`). A reader auditing for
-//! stray resolution loops should count this module as the sanctioned
-//! rewrite-planning resolver, not a rogue duplicate of those two.
-//!
-//! It consolidates the three independent resolver implementations that existed
-//! before iter-150:
-//! - `StemIndex` (now in `discovery.rs`, formerly `link_fix.rs`)
-//! - `CaseInsensitiveIndex` in `link_graph.rs`
-//! - Ad-hoc canonicalization in `link_rewrite.rs:plan_inbound_rewrites`
-//!
-//! A single ordered precedence for match strategies is applied:
-//! 1. Exact path match (stem or `.md` form).
-//! 2. Case-insensitive path match (through [`CaseInsensitiveIndex`]).
-//! 3. `.md`-suffix tolerance (wikilinks with explicit `.md`).
-//! 4. Bare-basename stem lookup — returns `Ambiguous` when >1 match.
+//! Rewrite policy adapter over the shared source-aware catalog resolver.
 
 use std::path::Path;
 
@@ -72,6 +50,7 @@ pub fn detect_wikilink_form(raw_target: &str) -> WrittenForm {
 pub struct LinkResolver<'a> {
     case_index: &'a CaseInsensitiveIndex,
     site_prefix: Option<&'a str>,
+    aliases: bool,
 }
 
 impl<'a> LinkResolver<'a> {
@@ -80,6 +59,7 @@ impl<'a> LinkResolver<'a> {
         Self {
             case_index,
             site_prefix,
+            aliases: case_index.aliases_enabled(),
         }
     }
 
@@ -98,78 +78,19 @@ impl<'a> LinkResolver<'a> {
         old_rel: &str,
         old_stem: &str,
     ) -> bool {
-        match span.kind {
-            LinkKind::Wikilink => self.wikilink_matches(span, source_rel, old_rel, old_stem),
-            LinkKind::Markdown => self.markdown_matches(span, source_rel, old_rel, old_stem),
-        }
-    }
-
-    fn wikilink_matches(
-        &self,
-        span: &LinkSpan,
-        source_rel: &str,
-        old_rel: &str,
-        old_stem: &str,
-    ) -> bool {
-        let t = &span.link.target;
-        // Normalize `./`-prefixed wikilinks against source dir.
-        let resolved: std::borrow::Cow<str> = if let Some(wo) = t.strip_prefix("./") {
-            std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
-        } else {
-            std::borrow::Cow::Borrowed(t.as_str())
-        };
-        let t = resolved.as_ref();
-
-        let is_bare = !(t.contains('/') || t.contains('\\'));
-        if is_bare {
-            // Bare wikilinks: only rewrite when unambiguously resolved to old_rel.
-            let t_norm = t.to_ascii_lowercase();
-            let stem = if Path::new(&t_norm)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-            {
-                &t_norm[..t_norm.len() - 3]
-            } else {
-                &t_norm
-            };
-            let canonical = self.case_index.lookup_stem(stem);
-            canonical == Some(old_rel) || canonical == Some(old_stem)
-        } else if t == old_stem || t == old_rel {
-            true
-        } else {
-            // Case-insensitive path canonicalization.
-            let t_norm = t.replace('\\', "/").to_ascii_lowercase();
-            let canonical = self.case_index.lookup_unique(&t_norm).or_else(|| {
-                let with_md = format!("{t_norm}.md");
-                self.case_index.lookup_unique(&with_md)
-            });
-            canonical == Some(old_rel) || canonical == Some(old_stem)
-        }
-    }
-
-    fn markdown_matches(
-        &self,
-        span: &LinkSpan,
-        source_rel: &str,
-        old_rel: &str,
-        old_stem: &str,
-    ) -> bool {
-        use crate::link_graph::strip_site_prefix;
-
-        let norm = if span.link.target.starts_with('/') {
-            strip_site_prefix(&span.link.target, self.site_prefix)
-        } else {
-            normalize_target(Path::new(source_rel), &span.link.target)
-        };
-        if norm == old_rel || norm == old_stem {
-            return true;
-        }
-        let norm_lower = norm.to_ascii_lowercase();
-        let canonical = self.case_index.lookup_unique(&norm_lower).or_else(|| {
-            let with_md = format!("{norm_lower}.md");
-            self.case_index.lookup_unique(&with_md)
-        });
-        canonical == Some(old_rel) || canonical == Some(old_stem)
+        let _ = old_stem;
+        crate::catalog::resolve(
+            self.case_index,
+            source_rel,
+            span.kind,
+            &span.link.target,
+            crate::catalog::ResolutionOptions {
+                aliases: self.aliases,
+                site_prefix: self.site_prefix,
+            },
+        )
+        .path()
+            == Some(old_rel)
     }
 
     /// Whether `span` is a **directory reference** to `old_rel` (iter-203).
@@ -192,6 +113,21 @@ impl<'a> LinkResolver<'a> {
     ) -> Option<bool> {
         use crate::link_graph::strip_site_prefix;
 
+        if crate::catalog::resolve(
+            self.case_index,
+            source_rel,
+            span.kind,
+            &span.link.target,
+            crate::catalog::ResolutionOptions {
+                aliases: self.aliases,
+                site_prefix: self.site_prefix,
+            },
+        )
+        .path()
+            != Some(old_rel)
+        {
+            return None;
+        }
         let old_dir = crate::discovery::directory_for_index_file(old_rel)?;
 
         let raw = span.link.target.replace('\\', "/");
@@ -259,12 +195,14 @@ impl<'a> LinkResolver<'a> {
     /// Used by the ambiguity-detection path in `mv` to distinguish `Hit` (safe
     /// to rewrite) from `Ambiguous` (warn + skip without `--allow-ambiguous`).
     pub fn resolve_stem(&self, stem: &str) -> Resolution {
-        let stem_lower = stem.to_ascii_lowercase();
-        let candidates = self.case_index.lookup_stem_all(&stem_lower);
-        match candidates.len() {
-            0 => Resolution::Broken,
-            1 => Resolution::Hit {
-                vault_path: candidates[0].clone(),
+        // A move deliberately has a stronger refusal policy than a read: a
+        // root-path winner does not make a multiply declared bare name safe
+        // to rewrite, and a stable alias should keep its authored spelling.
+        let candidates = self.case_index.lookup_stem_all(stem.trim());
+        match candidates {
+            [] => Resolution::Broken,
+            [only] => Resolution::Hit {
+                vault_path: only.to_owned(),
             },
             _ => Resolution::Ambiguous(candidates.to_vec()),
         }

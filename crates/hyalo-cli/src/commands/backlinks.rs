@@ -164,6 +164,7 @@ pub(crate) fn run(
             default_language: None,
             frontmatter_link_props: ctx.frontmatter_link_props,
         },
+        hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
     )? {
         IndexResolution::Resolved(resolved) => backlinks(
             resolved.as_index(),

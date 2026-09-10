@@ -14,9 +14,8 @@ use std::path::Path;
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::bm25::{
-    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, TOKENIZER_VERSION, create_stemmer,
-    is_low_discriminative, parse_language, query_is_operator_only, resolve_language,
-    tokenize_document,
+    Bm25InvertedIndex, DocumentInput, PreTokenizedInput, TOKENIZER_VERSION, is_low_discriminative,
+    parse_language, query_is_operator_only, resolve_language, tokenize_document,
 };
 use hyalo_core::content_search::ContentSearchVisitor;
 use hyalo_core::discovery;
@@ -444,8 +443,13 @@ pub(crate) fn find_prepared(
 
     // For BM25 search we run metadata filters first (no I/O), then do a single
     // I/O pass to read bodies and build the corpus.
-    let bm25_score_map: Option<HashMap<String, f64>> = if has_bm25_search {
-        let pat = pattern.unwrap(); // has_bm25_search == pattern.is_some()
+    let compiled_query = pattern.filter(|_| has_bm25_search).map(|pattern| {
+        hyalo_core::bm25::CompiledQuery::new(
+            pattern,
+            resolve_language(None, language, config_language),
+        )
+    });
+    let bm25_score_map: Option<HashMap<String, f64>> = if let Some(query) = &compiled_query {
         'bm25: {
             // Collect entries that pass all metadata filters.
             let mut candidates: Vec<usize> = Vec::new();
@@ -524,11 +528,6 @@ pub(crate) fn find_prepared(
                 candidates.push(idx);
             }
 
-            // Resolve query-time stemmer (language from CLI/config, no per-document override for
-            // the query itself).
-            let query_lang = resolve_language(None, language, config_language);
-            let stemmer = create_stemmer(query_lang);
-
             // Build the candidate set (rel_path strings) for filtering persisted-index results.
             let candidate_paths: std::collections::HashSet<&str> = candidates
                 .iter()
@@ -554,13 +553,14 @@ pub(crate) fn find_prepared(
             // produce until the version check below routes to the live-scan fallback instead.
             // Score all docs, then intersect with metadata-passing candidates.
             if !has_section_filter
+                && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
                 && bm25_idx
                     .document_paths()
                     .all(|path| index.get(path).is_some_and(cached_language_matches))
             {
-                let all_scored = bm25_idx.score(pat, &stemmer);
+                let all_scored = bm25_idx.score_compiled(query);
                 let map: HashMap<String, f64> = all_scored
                     .into_iter()
                     .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
@@ -786,11 +786,11 @@ pub(crate) fn find_prepared(
             let scored_corpus = if doc_inputs.is_empty() {
                 // All entries were pre-tokenized — fast path.
                 let corpus = Bm25InvertedIndex::build_from_tokens(pre_tok_inputs);
-                corpus.score(pat, &stemmer)
+                corpus.score_compiled(query)
             } else if pre_tok_inputs.is_empty() {
                 // All entries need file reads — original slow path.
                 let corpus = Bm25InvertedIndex::build(doc_inputs);
-                corpus.score(pat, &stemmer)
+                corpus.score_compiled(query)
             } else {
                 // Mixed: some entries have pre-tokenized data from the index, others were
                 // read from disk. Tokenize the disk-read entries and combine into a single
@@ -800,7 +800,7 @@ pub(crate) fn find_prepared(
                     all_pre_tok.push(tokenize_document(doc));
                 }
                 let corpus = Bm25InvertedIndex::build_from_tokens(all_pre_tok);
-                corpus.score(pat, &stemmer)
+                corpus.score_compiled(query)
             };
 
             // When no section filter is active, `scored_corpus` was scored against the
@@ -1550,12 +1550,9 @@ pub(crate) fn find_prepared(
 
     // Snapshot tokens cannot recover original lines. Read only final results,
     // after every filter, sort and limit (including an explicit zero limit).
-    if let Some(pat) = pattern.filter(|_| has_bm25_search) {
+    if let Some(compiled) = &compiled_query {
         use rayon::prelude::*;
-        let query = hyalo_core::bm25::SnippetQuery::new(
-            pat,
-            resolve_language(None, language, config_language),
-        );
+        let query = hyalo_core::bm25::SnippetQuery::from_compiled(compiled);
         // Gather references before parallel I/O: VaultIndex need not be Sync,
         // and each worker owns one distinct result slot. Output order is kept.
         let selected: Vec<_> = results

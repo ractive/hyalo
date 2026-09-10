@@ -205,6 +205,16 @@ impl ScannedIndex {
         site_prefix: Option<&str>,
         options: &ScanOptions<'_>,
     ) -> Result<ScannedIndexBuild> {
+        Self::build_with_case_policy(files, site_prefix, options, true)
+    }
+
+    /// Build with the invocation's semantic case policy; filesystem identity is separate.
+    pub fn build_with_case_policy(
+        files: &[(PathBuf, String)],
+        site_prefix: Option<&str>,
+        options: &ScanOptions<'_>,
+        case_insensitive: bool,
+    ) -> Result<ScannedIndexBuild> {
         let mut entries = Vec::with_capacity(files.len());
         let mut file_links_vec: Vec<FileLinks> = Vec::with_capacity(files.len());
         let mut warnings: Vec<IndexWarning> = Vec::new();
@@ -251,6 +261,12 @@ impl ScannedIndex {
                     }
                 }
                 Err(e) if frontmatter::is_parse_error(&e) => {
+                    // A parse failure removes scan coverage, never filename identity.
+                    file_links_vec.push(FileLinks {
+                        source: PathBuf::from(&files[i].1),
+                        links: Vec::new(),
+                        self_anchors: Vec::new(),
+                    });
                     warnings.push(IndexWarning {
                         rel_path: files[i].1.clone(),
                         message: e.to_string(),
@@ -281,7 +297,12 @@ impl ScannedIndex {
             } else {
                 Vec::new()
             };
-            let graph_build = LinkGraph::from_file_links(file_links_vec, site_prefix, &aliases);
+            let graph_build = LinkGraph::from_file_links_with_case_policy(
+                file_links_vec,
+                site_prefix,
+                &aliases,
+                case_insensitive,
+            );
             graph_build.graph
         } else {
             LinkGraph::default()
@@ -670,6 +691,12 @@ const MAX_BM25_POSTINGS: usize = 50_000_000;
 /// treated as absent, which routes text queries to the live-scan fallback
 /// exactly as a snapshot without a BM25 index does.
 fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
+    if !bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES) {
+        if warn {
+            eprintln!("warning: BM25 expanded-token budget exceeded; rebuild the snapshot");
+        }
+        return false;
+    }
     let posting_count = bm25.total_postings();
     if posting_count > MAX_BM25_POSTINGS {
         if warn {
@@ -712,6 +739,8 @@ enum PendingBm25 {
 /// the buffer is dropped as soon as the decode consumes it, so a text query
 /// ends up with the same steady-state footprint as before this change.
 enum Bm25Section {
+    /// A supplied section failed structural/resource validation.
+    Refused,
     /// The snapshot carries no BM25 index, or its section was refused by
     /// [`validate_bm25`].
     Absent,
@@ -739,7 +768,7 @@ impl Bm25Section {
     /// the same way, by falling back to a live scan.
     fn get(&self) -> Option<&Bm25InvertedIndex> {
         match self {
-            Self::Absent => None,
+            Self::Absent | Self::Refused => None,
             Self::Loaded(bm25) => Some(bm25),
             Self::Deferred {
                 raw,
@@ -790,6 +819,35 @@ impl Bm25Section {
     }
 }
 
+/// Complete document replacement produced by the shared scanner.
+struct ScannedDocument {
+    entry: IndexEntry,
+}
+
+/// Observable global work, counted at the actual rebuild boundaries.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RefreshWork {
+    /// Catalog/graph rebuilds in this live owner.
+    pub graph_rebuilds: u64,
+    /// BM25 reconstructions in this live owner.
+    pub search_rebuilds: u64,
+    /// Documents replaced by scans.
+    pub documents: u64,
+}
+
+#[derive(Default)]
+struct LiveState {
+    catalog: Option<crate::catalog::VaultCatalog>,
+    generation: u64,
+    dirty: bool,
+    batching: bool,
+    aliases: bool,
+    case_insensitive: bool,
+    default_language: Option<String>,
+    language_configured: bool,
+    work: RefreshWork,
+}
+
 /// A vault index loaded from a MessagePack snapshot file.
 ///
 /// Created by [`SnapshotIndex::save`] and loaded by [`SnapshotIndex::load`].
@@ -809,13 +867,7 @@ pub struct SnapshotIndex {
     /// [`SnapshotIndex::set_frontmatter_link_props`]; `None` falls back to
     /// [`DEFAULT_FRONTMATTER_LINK_PROPERTIES`].
     frontmatter_link_props: Option<Vec<String>>,
-    /// Lazily built case-insensitive path lookup used by incremental link
-    /// refreshes ([`refresh_links`](Self::refresh_links)). Rebuilding it per
-    /// refreshed file would be O(entries × refreshed files) in bulk loops
-    /// (`lint --fix --index`, `links fix --apply`), so it is cached here and
-    /// invalidated whenever the set of indexed paths changes
-    /// ([`rebuild_path_index`](Self::rebuild_path_index)). Not persisted.
-    case_index_cache: Option<CaseInsensitiveIndex>,
+    live: LiveState,
 }
 
 impl SnapshotIndex {
@@ -828,21 +880,31 @@ impl SnapshotIndex {
         if let Some(&idx) = self.path_index.get(rel_path) {
             self.entries.remove(idx);
             self.rebuild_path_index();
+            self.changed();
         }
     }
 
     /// Insert a new entry (for `mv` new path). Maintains sorted order.
     pub fn insert_entry(&mut self, entry: IndexEntry) {
+        self.clear_frontmatter_skip(&entry.rel_path);
         let pos = self
             .entries
             .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
             .unwrap_or_else(|i| i);
-        self.entries.insert(pos, entry);
+        if pos < self.entries.len() && self.entries[pos].rel_path == entry.rel_path {
+            self.entries[pos] = entry;
+        } else {
+            self.entries.insert(pos, entry);
+        }
         self.rebuild_path_index();
+        self.changed();
     }
 
-    /// Get a mutable reference to an entry by path.
+    /// Legacy mutable-entry adapter. Call finish_changes before persistence;
+    /// new callers use complete scanned replacements through apply_changes.
     pub fn get_mut(&mut self, rel_path: &str) -> Option<&mut IndexEntry> {
+        // Legacy adapter: explicit finish_changes is required before persistence.
+        self.live.dirty = true;
         self.path_index
             .get(rel_path)
             .copied()
@@ -851,6 +913,7 @@ impl SnapshotIndex {
 
     /// Get a mutable reference to the link graph for in-place updates.
     pub fn graph_mut(&mut self) -> &mut LinkGraph {
+        self.live.dirty = true;
         &mut self.graph
     }
 
@@ -883,9 +946,13 @@ impl SnapshotIndex {
     fn bm25_scan_args(&self, rel_path: &str) -> (bool, Option<String>) {
         (
             self.bm25.is_present(),
-            self.path_index
-                .get(rel_path)
-                .and_then(|&i| self.entries[i].bm25_language.clone()),
+            if self.live.language_configured {
+                self.live.default_language.clone()
+            } else {
+                self.path_index
+                    .get(rel_path)
+                    .and_then(|&i| self.entries[i].bm25_language.clone())
+            },
         )
     }
 
@@ -908,15 +975,34 @@ impl SnapshotIndex {
         let Some(old) = self.bm25.get() else {
             return;
         };
+        // Do not label legacy or ambiguous validity metadata as current by
+        // reconstructing it with today's builder. Absence invokes the normal
+        // disk fallback, including untouched documents in the scoped corpus.
+        let uncertain: std::collections::HashSet<&str> = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.bm25_tokens.is_none()
+                    && entry.bm25_tokenizer_version != Some(crate::bm25::TOKENIZER_VERSION)
+            })
+            .map(|entry| entry.rel_path.as_str())
+            .collect();
+        if old.tokenizer_version() != crate::bm25::TOKENIZER_VERSION
+            || old.document_paths().any(|path| uncertain.contains(path))
+        {
+            self.bm25 = Bm25Section::Absent;
+            return;
+        }
         let reconstructed = old.reconstruct_all_tokens();
+        self.live.work.search_rebuilds += 1;
         let docs: Vec<crate::bm25::PreTokenizedInput> = self
             .entries
             .iter()
             .filter_map(|e| {
-                let tokens = e
-                    .bm25_tokens
-                    .clone()
-                    .or_else(|| reconstructed.get(e.rel_path.as_str()).cloned())?;
+                let tokens = e.bm25_tokens.clone().or_else(|| {
+                    e.bm25_tokenizer_version
+                        .and_then(|_| reconstructed.get(e.rel_path.as_str()).cloned())
+                })?;
                 Some(crate::bm25::PreTokenizedInput {
                     rel_path: e.rel_path.clone(),
                     tokens,
@@ -935,10 +1021,6 @@ impl SnapshotIndex {
     /// Returns the `FileLinks` for the re-scanned file so the caller can
     /// update the link graph separately. Returns `Ok(None)` if the file
     /// is not in the index.
-    pub(crate) fn rescan_entry(&mut self, dir: &Path, rel_path: &str) -> Result<Option<FileLinks>> {
-        self.rescan_entry_at(&dir.join(rel_path), rel_path)
-    }
-
     /// Shared implementation behind [`rescan_entry`] and [`refresh_links`]:
     /// scan `full_path` from disk and replace the index entry for `rel_path`
     /// wholesale. Returns the file's `FileLinks` for graph updates, or `None`
@@ -958,99 +1040,158 @@ impl SnapshotIndex {
             fm_props.as_deref(),
         )?;
         self.entries[idx] = entry;
+        self.clear_frontmatter_skip(rel_path);
+        self.live.work.documents += 1;
         Ok(file_links)
     }
 
-    /// Build a case-insensitive lookup index from every path currently known
-    /// to this snapshot. Used to resolve bare-basename wikilinks (e.g.
-    /// `[[note]]` matching a unique `sub/note.md`) the same way a full
-    /// [`LinkGraph::build`] does, without persisting the case index in the
-    /// snapshot itself.
-    fn build_case_index(&self) -> CaseInsensitiveIndex {
-        let mut case_index = CaseInsensitiveIndex::new();
-        case_index.set_case_insensitive_paths(true);
-        for entry in &self.entries {
-            case_index.insert(&entry.rel_path);
-        }
-        case_index
-    }
-
-    /// Re-scan the body/frontmatter of `rel_path` (already written to disk at
-    /// `full_path`) and refresh the parts of its index entry and the
-    /// persisted [`LinkGraph`] that are derived from wikilinks: the entry's
-    /// `sections`, `tasks`, and `links` fields, plus the graph's outbound
-    /// edges for this file.
-    ///
-    /// `size` and `lines` are refreshed too (both are derived from the bytes
-    /// on disk, which a body rewrite changes).
-    ///
-    /// `properties`, `tags`, and `modified` are left untouched — callers that
-    /// already know the new values in memory (e.g. `set`/`append`/`remove`)
-    /// should patch those directly, since they don't require a disk read.
-    /// `bm25_tokens`/`bm25_language` are refreshed from the re-scan when the
-    /// snapshot carries a BM25 inverted index (BUG-4, iter-244); without one
-    /// they stay untouched, as only `create-index --bm25` populates them.
-    ///
-    /// This closes the gap where a frontmatter link property (`related`,
-    /// `depends-on`, ...) mutated via `set`/`append`/`remove`/`lint --fix`
-    /// with `--index` left the persisted link graph stale — `backlinks` and
-    /// `find --fields backlinks`/`links` would return pre-mutation results
-    /// until a full `create-index` rebuild.
-    ///
-    /// Returns `Ok(true)` if `rel_path` was found and refreshed, `Ok(false)`
-    /// if it is not in the index (a no-op).
+    /// Compatibility adapter: every refresh replaces the complete scan product.
     pub fn refresh_links(&mut self, full_path: &Path, rel_path: &str) -> Result<bool> {
-        let Some(&idx) = self.path_index.get(rel_path) else {
-            return Ok(false);
-        };
-        let fm_props = self.effective_frontmatter_link_props();
-        let (bm25_tokenize, default_language) = self.bm25_scan_args(rel_path);
-        let (scanned, file_links) = scan_one_file(
-            full_path,
-            rel_path,
-            true,
-            bm25_tokenize,
-            default_language.as_deref(),
-            fm_props.as_deref(),
-        )?;
-
-        let entry = &mut self.entries[idx];
-        entry.sections = scanned.sections;
-        entry.tasks = scanned.tasks;
-        entry.links = scanned.links;
-        // iter-252: `size`/`lines` are body-derived, so every write path that
-        // routes through `refresh_links` (set/append/remove, task toggles)
-        // keeps them in step with the bytes now on disk.
-        entry.size = scanned.size;
-        entry.lines = scanned.lines;
-        // BUG-4 (iter-244): keep BM25 tokens current alongside the body so a
-        // post-mutation rebuild of the inverted index scores this file as a
-        // fresh disk scan would. Only touched when the snapshot is a BM25
-        // snapshot (`scan_one_file` returns `None` otherwise).
-        entry.bm25_tokens = scanned.bm25_tokens;
-        entry.bm25_language = scanned.bm25_language;
-        entry.bm25_tokenizer_version = scanned.bm25_tokenizer_version;
-
-        self.graph.remove_source(rel_path);
-        if let Some(fl) = file_links {
-            self.insert_graph_links(fl);
-        }
-
-        Ok(true)
+        self.refresh_entry_and_links_at(full_path, rel_path)
     }
 
-    /// Insert a file's outbound links into the graph, using (and lazily
-    /// building) the cached case-insensitive index. The cache is taken out
-    /// and put back so `self.graph` and `self.header` can be borrowed
-    /// alongside it.
-    fn insert_graph_links(&mut self, fl: FileLinks) {
-        let case_index = self
-            .case_index_cache
-            .take()
-            .unwrap_or_else(|| self.build_case_index());
-        self.graph
-            .insert_links(fl, self.header.site_prefix.as_deref(), &case_index);
-        self.case_index_cache = Some(case_index);
+    /// Configure a generation explicitly. Re-resolves every retained occurrence.
+    pub fn set_resolution_options(
+        &mut self,
+        aliases: bool,
+        case_insensitive: bool,
+        default_language: Option<String>,
+    ) {
+        self.live.aliases = aliases;
+        self.live.case_insensitive = case_insensitive;
+        self.live.default_language = default_language;
+        self.live.language_configured = true;
+        self.rebuild_graph();
+    }
+
+    /// Defer global work until the entire effect/named-refresh batch is collected.
+    pub fn begin_changes(&mut self) {
+        self.live.batching = true;
+    }
+
+    /// Finish one coherent generation, rebuilding global structures at most once.
+    pub fn finish_changes(&mut self) {
+        self.live.batching = false;
+        if self.live.dirty {
+            self.rebuild_graph();
+            self.rebuild_bm25_index();
+            self.live.dirty = false;
+        }
+    }
+
+    /// Work performed by this live owner (no inferred timing claims).
+    pub fn refresh_work(&self) -> RefreshWork {
+        self.live.work
+    }
+
+    /// Current coherent generation, absent while compatibility mutation is pending.
+    pub fn coherent_generation(&self) -> Option<u64> {
+        (!self.live.dirty).then_some(self.live.generation)
+    }
+
+    fn changed(&mut self) {
+        self.live.dirty = true;
+        if !self.live.batching {
+            self.finish_changes();
+        }
+    }
+
+    fn rebuild_graph(&mut self) {
+        let mut lookup = CaseInsensitiveIndex::with_capacity(self.entries.len());
+        lookup.set_case_insensitive_paths(self.live.case_insensitive);
+        lookup.set_complete(true);
+        lookup.set_aliases_enabled(self.live.aliases);
+        for path in self.note_paths() {
+            lookup.insert(path);
+        }
+        for entry in &self.entries {
+            lookup.insert_aliases(
+                &entry.rel_path,
+                crate::filter::extract_aliases(&entry.properties),
+            );
+        }
+        for path in &self.header.attachments {
+            lookup.insert(path);
+        }
+        self.live.generation += 1;
+        let catalog = crate::catalog::VaultCatalog::new(lookup, self.live.generation);
+        self.graph = LinkGraph::from_catalog(
+            self.entries.iter().map(|entry| FileLinks {
+                source: PathBuf::from(&entry.rel_path),
+                links: entry.links.clone(),
+                self_anchors: entry.self_anchors.clone(),
+            }),
+            &catalog,
+            crate::catalog::ResolutionOptions {
+                aliases: self.live.aliases,
+                site_prefix: self.header.site_prefix.as_deref(),
+            },
+        );
+        self.live.catalog = Some(catalog);
+        self.live.work.graph_rebuilds += 1;
+    }
+
+    /// Discovered note identities, including notes without usable scan coverage.
+    pub fn note_paths(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .iter()
+            .map(|entry| entry.rel_path.as_str())
+            .chain(self.header.skipped.iter().map(String::as_str))
+    }
+
+    fn clear_frontmatter_skip(&mut self, rel_path: &str) {
+        self.header.skipped.retain(|path| path != rel_path);
+        crate::warn::clear_frontmatter_skip(rel_path);
+    }
+
+    /// Validate deferred search resources before a command publishes any note changes.
+    pub fn validate_before_changes(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.bm25.is_present() || self.bm25.get().is_some(),
+            "snapshot BM25 data is invalid or exceeds its expansion budget; rebuild the index before modifying notes"
+        );
+        Ok(())
+    }
+
+    /// Refresh a checked set of actual effect paths. Scans all replacements before applying any.
+    /// Unsafe effects must be handled by persistent invalidation, never passed here.
+    pub fn apply_changes(&mut self, dir: &Path, paths: &[String]) -> Result<()> {
+        self.validate_before_changes()?;
+        let root = crate::rooted::VaultRoot::new(dir)?;
+        let mut replacements = Vec::with_capacity(paths.len());
+        let mut seen = std::collections::HashSet::with_capacity(paths.len());
+        for rel in paths {
+            if !seen.insert(rel) {
+                continue;
+            }
+            let name = crate::rooted::RelativeName::new(rel)?;
+            let _opened = root.open(&name)?;
+            let (tokenize, language) = self.bm25_scan_args(rel);
+            let (entry, _) = scan_one_file(
+                &dir.join(rel),
+                rel,
+                true,
+                tokenize,
+                language.as_deref(),
+                self.frontmatter_link_props.as_deref(),
+            )?;
+            replacements.push(ScannedDocument { entry });
+        }
+        for document in replacements {
+            let entry = document.entry;
+            self.clear_frontmatter_skip(&entry.rel_path);
+            if let Some(&id) = self.path_index.get(&entry.rel_path) {
+                self.entries[id] = entry;
+            } else {
+                self.entries.push(entry);
+            }
+            self.live.work.documents += 1;
+        }
+        self.entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        self.rebuild_path_index();
+        self.live.dirty = true;
+        self.finish_changes();
+        Ok(())
     }
 
     /// Re-scan `rel_path` once and refresh both its full index entry (like
@@ -1077,27 +1218,15 @@ impl SnapshotIndex {
         if !self.path_index.contains_key(rel_path) {
             return Ok(false);
         }
-        let file_links = self.rescan_entry_at(full_path, rel_path)?;
-        self.graph.remove_source(rel_path);
-        if let Some(fl) = file_links {
-            self.insert_graph_links(fl);
-        }
+        self.rescan_entry_at(full_path, rel_path)?;
+        self.changed();
         Ok(true)
     }
 
-    /// Re-scan a single file from disk and replace its index entry in-place.
-    ///
-    /// This updates the entry's properties, tags, sections, tasks, links, and
-    /// modified timestamp. The link graph is **not** touched — callers that
-    /// need graph updates should use [`LinkGraph::rename_path`] separately.
-    ///
-    /// Returns `true` if the entry was found and refreshed, `false` if
-    /// `rel_path` is not in the index.
+    /// Compatibility adapter for complete entry, graph and search refresh.
+    /// Returns false when the path is absent; otherwise replaces the full scan product.
     pub fn refresh_entry(&mut self, dir: &Path, rel_path: &str) -> Result<bool> {
-        match self.rescan_entry(dir, rel_path)? {
-            Some(_) => Ok(true),
-            None => Ok(false),
-        }
+        self.refresh_entry_and_links(dir, rel_path)
     }
 
     /// Scan a file at `full_path` and insert (or replace) its entry under
@@ -1128,6 +1257,8 @@ impl SnapshotIndex {
             self.entries.insert(pos, entry);
             self.rebuild_path_index();
         }
+        self.clear_frontmatter_skip(rel_path);
+        self.live.work.documents += 1;
         Ok(file_links)
     }
 
@@ -1150,6 +1281,7 @@ impl SnapshotIndex {
     /// [`Self::insert_or_replace_entry_with_links`] instead.
     pub fn insert_or_replace_entry(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
         self.insert_or_replace_entry_impl(full_path, rel_path)?;
+        self.changed();
         Ok(())
     }
 
@@ -1168,27 +1300,14 @@ impl SnapshotIndex {
         full_path: &Path,
         rel_path: &str,
     ) -> Result<()> {
-        let file_links = self.insert_or_replace_entry_impl(full_path, rel_path)?;
-        self.graph.remove_source(rel_path);
-        if let Some(fl) = file_links {
-            self.insert_graph_links(fl);
-        }
+        self.insert_or_replace_entry_impl(full_path, rel_path)?;
+        self.changed();
         Ok(())
     }
 
-    /// Rename an entry: remove the old entry, scan the file at its new path,
-    /// and insert the result — rebuilding the path index only once.
-    ///
-    /// This is the preferred move/rename counterpart of [`refresh_entry`].
-    /// Unlike calling [`remove_entry`] followed by [`insert_entry`] (two
-    /// path-index rebuilds), this method defers the rebuild until both the
-    /// removal and insertion are complete.
-    ///
-    /// The link graph is **not** touched — callers must update it separately
-    /// via [`LinkGraph::rename_path`].
-    ///
-    /// Returns `Ok(true)` if `old_rel` was found and replaced, `Ok(false)` if
-    /// `old_rel` was not in the index (in which case nothing is changed).
+    /// Compatibility move adapter: scan the new path, replace the old entry and
+    /// reconcile the complete graph/search generation. Deferred while a batch is open.
+    /// Returns false when the old path is absent.
     pub fn rename_entry(&mut self, dir: &Path, old_rel: &str, new_rel: &str) -> Result<bool> {
         let Some(&old_idx) = self.path_index.get(old_rel) else {
             return Ok(false);
@@ -1208,6 +1327,8 @@ impl SnapshotIndex {
         )?;
 
         // Remove without triggering a path-index rebuild.
+        self.clear_frontmatter_skip(old_rel);
+        self.clear_frontmatter_skip(new_rel);
         self.entries.remove(old_idx);
 
         // Insert in sorted order.
@@ -1219,16 +1340,15 @@ impl SnapshotIndex {
 
         // Single rebuild covering both the removal and the insertion.
         self.rebuild_path_index();
+        self.changed();
         Ok(true)
     }
 
     /// Rebuild the path → index lookup after insertions/removals.
     ///
-    /// Also drops the cached case-insensitive index: every code path that
-    /// changes the set of indexed paths funnels through here, so this is the
-    /// single invalidation point for [`Self::case_index_cache`].
+    /// Drops the frozen catalog; finishing the batch rebuilds it from all entries.
     fn rebuild_path_index(&mut self) {
-        self.case_index_cache = None;
+        self.live.catalog = None;
         self.path_index = self
             .entries
             .iter()
@@ -1247,6 +1367,11 @@ impl SnapshotIndex {
     /// `lint --fix --index`) would silently delete the search index it was
     /// only ever meant to patch.
     pub fn save_to(&self, path: &Path) -> Result<()> {
+        anyhow::ensure!(
+            !self.live.dirty,
+            "index generation is incomplete; finish changes before saving"
+        );
+        self.validate_before_changes()?;
         write_snapshot(
             self,
             path,
@@ -1412,7 +1537,7 @@ impl SnapshotIndex {
                 if validate_bm25(&bm25, warn) {
                     Bm25Section::Loaded(bm25)
                 } else {
-                    Bm25Section::Absent
+                    Bm25Section::Refused
                 }
             }
             PendingBm25::Deferred(offset) => Bm25Section::Deferred {
@@ -1489,15 +1614,22 @@ impl SnapshotIndex {
         // freshly-deserialized graph has an empty one — rebuild it from
         // the restored index keys so `backlinks_ci` works off snapshots.
         graph.rebuild_lower_index();
-        Some(Self {
+        let mut snapshot = Self {
             entries,
             path_index,
             graph,
             header,
             bm25,
             frontmatter_link_props: None,
-            case_index_cache: None,
-        })
+            live: LiveState {
+                aliases: crate::discovery::link_aliases_enabled(),
+                case_insensitive: true,
+                ..LiveState::default()
+            },
+        };
+        // Persisted graphs from older binaries are derived data, never resolution authority.
+        snapshot.rebuild_graph();
+        Some(snapshot)
     }
 
     /// Load a snapshot from a MessagePack file.
@@ -1566,7 +1698,11 @@ impl SnapshotIndex {
 
     /// Return the persisted BM25 inverted index, if present.
     pub fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
-        self.bm25.get()
+        if self.live.dirty {
+            None
+        } else {
+            self.bm25.get()
+        }
     }
 
     /// Whether the BM25 section is still undecoded (test-only perf invariant).
@@ -1755,7 +1891,7 @@ impl VaultIndex for SnapshotIndex {
     }
 
     fn bm25_index(&self) -> Option<&Bm25InvertedIndex> {
-        self.bm25.get()
+        Self::bm25_index(self)
     }
 
     fn snapshot_format_version(&self) -> Option<u32> {
@@ -2079,28 +2215,6 @@ pub fn refresh_if_changed_on_disk(index: &mut SnapshotIndex, dir: &Path, rel: &s
 /// Refresh an exact path/key pair without reinterpreting it. The caller owns
 /// confinement; the CLI supplies this pair only through its rooted bridge.
 pub fn refresh_if_changed_at(index: &mut SnapshotIndex, full: &Path, rel: &str) -> bool {
-    let Some(entry) = index.get(rel) else {
-        return false;
-    };
-    let Some(indexed) = parse_iso8601_secs(&entry.modified) else {
-        return false;
-    };
-    let Ok(meta) = std::fs::metadata(full) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    let Ok(disk) = modified.duration_since(SystemTime::UNIX_EPOCH) else {
-        return false;
-    };
-    // Size is compared too: a same-second edit that changes the length is
-    // invisible to an mtime-only check, and appending is exactly that case.
-    if disk.as_secs() <= indexed.saturating_add(STALENESS_TOLERANCE_SECS)
-        && meta.len() == entry.size
-    {
-        return true;
-    }
     index.refresh_entry_and_links_at(full, rel).unwrap_or(false)
 }
 
@@ -3694,6 +3808,128 @@ Content.
         assert!(
             result.is_none(),
             "oversized index file must return Ok(None)"
+        );
+    }
+    #[test]
+    fn iteration292_complete_replacement_and_batch_work() {
+        for (count, dense) in [(8, false), (32, false), (8, true), (32, true)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let paths: Vec<_> = (0..count).map(|id| format!("n{id}.md")).collect();
+            for (id, path) in paths.iter().enumerate() {
+                let links = if dense {
+                    let mut links = String::new();
+                    for target in &paths {
+                        links.push_str("[[");
+                        links.push_str(target);
+                        links.push_str("]] ");
+                    }
+                    links
+                } else {
+                    format!("[[n{}.md]]", (id + 1) % count)
+                };
+                std::fs::write(
+                    tmp.path().join(path),
+                    format!("# Note\noldtoken {links}\n[self](#note)\n- [ ] task\n"),
+                )
+                .unwrap();
+            }
+            let pairs: Vec<_> = paths
+                .iter()
+                .map(|path| (tmp.path().join(path), path.clone()))
+                .collect();
+            let options = ScanOptions {
+                scan_body: true,
+                bm25_tokenize: true,
+                default_language: None,
+                frontmatter_link_props: None,
+            };
+            let build = ScannedIndex::build(&pairs, None, &options).unwrap();
+            let bm25 = Bm25InvertedIndex::build_from_entries(build.index.entries()).unwrap();
+            let snapshot_path = tmp.path().join(".snapshot");
+            SnapshotIndex::save(
+                &build.index,
+                &snapshot_path,
+                tmp.path().to_str().unwrap(),
+                None,
+                Some(&bm25),
+            )
+            .unwrap();
+            let mut snapshot = SnapshotIndex::load(&snapshot_path).unwrap().unwrap();
+            for path in &paths {
+                let original = std::fs::read_to_string(tmp.path().join(path)).unwrap();
+                std::fs::write(
+                    tmp.path().join(path),
+                    format!(
+                        "---\ntitle: Changed\naliases: [Nickname]\nlanguage: german\n---\n{}",
+                        original.replace("oldtoken", "newtoken")
+                    ),
+                )
+                .unwrap();
+            }
+            let before = snapshot.refresh_work();
+            snapshot.apply_changes(tmp.path(), &paths).unwrap();
+            let after = snapshot.refresh_work();
+            assert_eq!(after.graph_rebuilds - before.graph_rebuilds, 1);
+            assert_eq!(after.search_rebuilds - before.search_rebuilds, 1);
+            assert_eq!(after.documents - before.documents, count as u64);
+            eprintln!(
+                "iteration292 batch: files={count}, edges={}, loaded-snapshot/warm-files, graph_rebuilds=1, search_rebuilds=1",
+                if dense { count * count } else { count }
+            );
+            let fresh = ScannedIndex::build(&pairs, None, &options).unwrap();
+            assert_eq!(
+                serde_json::to_value(snapshot.entries()).unwrap(),
+                serde_json::to_value(fresh.index.entries()).unwrap()
+            );
+            snapshot.save_to(&snapshot_path).unwrap();
+            let loaded = SnapshotIndex::load(&snapshot_path).unwrap().unwrap();
+            let expected = Bm25InvertedIndex::build_from_entries(fresh.index.entries()).unwrap();
+            let stemmer = crate::bm25::create_stemmer(crate::bm25::StemLanguage::German);
+            for query in ["newtoken", "oldtoken"] {
+                let actual: Vec<_> = loaded
+                    .bm25_index()
+                    .unwrap()
+                    .score(query, &stemmer)
+                    .into_iter()
+                    .map(|hit| (hit.rel_path, hit.score))
+                    .collect();
+                let expected: Vec<_> = expected
+                    .score(query, &stemmer)
+                    .into_iter()
+                    .map(|hit| (hit.rel_path, hit.score))
+                    .collect();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn iteration292_alias_changes_reresolve_unchanged_occurrences() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "[[Nickname]] [[Later]]").unwrap();
+        std::fs::write(tmp.path().join("b.md"), "---\naliases: [Nickname]\n---\n").unwrap();
+        let (_storage, path, mut snapshot) = build_and_reload_snapshot(tmp.path());
+        snapshot.set_resolution_options(true, true, None);
+        assert_eq!(snapshot.link_graph().backlinks("b.md").len(), 1);
+        std::fs::write(tmp.path().join("b.md"), "---\naliases: [Later]\n---\n").unwrap();
+        snapshot
+            .apply_changes(tmp.path(), &["b.md".into()])
+            .unwrap();
+        let backlinks = snapshot.link_graph().backlinks("b.md");
+        assert_eq!(backlinks.len(), 1);
+        assert_eq!(backlinks[0].link.target, "Later");
+        snapshot.save_to(&path).unwrap();
+        std::fs::write(tmp.path().join("Later.md"), "new destination").unwrap();
+        snapshot
+            .apply_changes(tmp.path(), &["Later.md".into()])
+            .unwrap();
+        assert_eq!(snapshot.link_graph().backlinks("Later.md").len(), 1);
+        assert!(snapshot.link_graph().backlinks("b.md").is_empty());
+        std::fs::write(tmp.path().join("b.md"), "---\naliases: [\n---\n").unwrap();
+        assert!(
+            snapshot
+                .apply_changes(tmp.path(), &["b.md".into()])
+                .is_err()
         );
     }
 }

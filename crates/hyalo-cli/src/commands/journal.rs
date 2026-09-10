@@ -37,8 +37,7 @@ use indexmap::IndexMap;
 use serde_json::Value;
 use std::path::Path;
 
-use hyalo_core::filter::extract_tags;
-use hyalo_core::index::{SnapshotIndex, VaultIndex as _, format_modified};
+use hyalo_core::index::{SnapshotIndex, VaultIndex as _};
 
 #[derive(Debug)]
 struct RebuildRequired(&'static str);
@@ -71,6 +70,9 @@ impl<'a> MutationJournal<'a> {
     /// access to the snapshot index — see the module docs for the guard
     /// rationale.
     pub fn new(index: &'a mut Option<SnapshotIndex>, index_path: Option<&'a Path>) -> Self {
+        if let Some(index) = index.as_mut() {
+            index.begin_changes();
+        }
         Self {
             index,
             index_path,
@@ -99,21 +101,9 @@ impl<'a> MutationJournal<'a> {
         self.dirty
     }
 
-    /// Record a frontmatter mutation for `rel_path` (the `set`/`remove`/
-    /// `append` write path).
-    ///
-    /// Patches the entry's `properties`/`tags`/`modified` from the already
-    /// updated in-memory `props`, then re-scans the file so the entry's
-    /// `links` field *and* the persisted link graph's outbound edges for
-    /// this file are current — frontmatter link properties (`related`,
-    /// `depends-on`, …) feed the graph, so a property mutation can change
-    /// outbound edges.
-    ///
-    /// Upserts: if `rel_path` is not yet present (a file created outside
-    /// `hyalo new`, or on disk before the index was built), it is inserted
-    /// from a fresh disk scan rather than silently dropped — a mutation
-    /// under `--index` must never leave the index missing the file it just
-    /// wrote. No-op only when no index is loaded at all.
+    /// Record a published frontmatter mutation by replacing its complete scan product.
+    /// The legacy property argument is consumed for compatibility; disk bytes are authoritative.
+    /// Global structures are rebuilt once by flush, after all file effects are recorded.
     pub fn update_entry(
         &mut self,
         rel_path: &str,
@@ -123,15 +113,8 @@ impl<'a> MutationJournal<'a> {
         let Some(idx) = self.index.as_mut() else {
             return Ok(());
         };
-        if let Some(entry) = idx.get_mut(rel_path) {
-            let new_tags = extract_tags(&props);
-            entry.properties = props;
-            entry.tags = new_tags;
-            entry.modified = format_modified(full_path)?;
-            idx.refresh_links(full_path, rel_path)?;
-        } else {
-            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
-        }
+        drop(props); // Complete scan replacement is authoritative after publication.
+        idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
         self.dirty = true;
         Ok(())
     }
@@ -261,55 +244,18 @@ impl<'a> MutationJournal<'a> {
             let _ = idx.refresh_entry_and_links(dir, rel);
         }
 
-        // 3. Link graph: targets don't change in a move, only source paths.
-        idx.graph_mut().rename_path(old_rel, new_rel);
-
         self.dirty = true;
         Ok(())
     }
 
-    /// Record a task-checkbox mutation (`task toggle` / `task set`) for one
-    /// file, after all of that file's task writes have landed on disk.
-    ///
-    /// BUG-1 (iter-249 dogfood): this used to patch just the toggled tasks'
-    /// `status`/`done` flags and rebuild section task counts in place,
-    /// leaving `bm25_tokens` untouched. A checkbox flip changes the file's
-    /// raw body bytes (`[ ]` <-> `[x]`), so the stale cached tokens no
-    /// longer matched what a fresh disk scan would tokenize; rebuilding the
-    /// BM25 corpus statistics (`avgdl`) at [`Self::flush`] from that one
-    /// stale doc-length then drifted every score in the corpus by a couple
-    /// of decimal places versus a disk scan. Fixed by re-scanning the file
-    /// via [`hyalo_core::index::SnapshotIndex::refresh_links`] instead —
-    /// the same "full re-index of the mutated file" every other
-    /// parity-preserving write path (`set`/`append`/`mv`) already uses.
-    /// `properties`/`tags` are untouched by a task mutation and are left as
-    /// `refresh_links` leaves them (unchanged); `modified` is not part of
-    /// that refresh, so it is patched here from the file's current mtime.
-    ///
-    /// Batched per file: call once per file after every task line on it has
-    /// been toggled/set, not once per task — the cost is one disk read +
-    /// re-tokenize, so an `--all`/multi-line caller must not pay it per
-    /// task. Nothing is written to disk until [`Self::flush`], so a
-    /// multi-file toggle saves once.
-    ///
-    /// Upserts: if `rel_path` is not yet present, the write this method
-    /// records has already landed on disk (callers invoke this after
-    /// `toggle_tasks`/`set_tasks_status`), so a fresh disk scan already
-    /// reflects the post-toggle state — insert it and register its links
-    /// rather than dropping the mutation. No-op only when no index is
-    /// loaded at all.
+    /// Rescan a file once after all selected task changes have been published.
+    /// Anchors, fields, language/validity metadata and tokens are replaced together.
+    /// Absent entries are inserted; flush performs one global rebuild for the batch.
     pub fn update_task(&mut self, full_path: &Path, rel_path: &str) -> Result<()> {
         let Some(idx) = self.index.as_mut() else {
             return Ok(());
         };
-        if idx.get(rel_path).is_none() {
-            idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
-        } else {
-            idx.refresh_links(full_path, rel_path)?;
-            if let Some(entry) = idx.get_mut(rel_path) {
-                entry.modified = format_modified(full_path)?;
-            }
-        }
+        idx.insert_or_replace_entry_with_links(full_path, rel_path)?;
         self.dirty = true;
         Ok(())
     }
@@ -379,41 +325,9 @@ impl<'a> MutationJournal<'a> {
                     "source could not be verified or published; snapshot is unsafe"
                 ));
             }
-            if hyalo_core::discovery::link_aliases_enabled() {
-                anyhow::bail!(RebuildRequired(
-                    "alias-aware graph maintenance requires a complete index rebuild"
-                ));
-            }
-            for rel in paths {
-                // The legacy incremental graph cannot repair inbound links
-                // after title/alias catalog changes. Invalidate those cases
-                // until the complete catalog generation is owned by 292.
-                let before = self
-                    .index
-                    .as_ref()
-                    .and_then(|index| index.get(rel))
-                    .map(|entry| {
-                        (
-                            entry.properties.get("title").cloned(),
-                            entry.properties.get("aliases").cloned(),
-                        )
-                    });
-                self.add_entry_with_links(&dir.join(rel), rel)?;
-                let after = self
-                    .index
-                    .as_ref()
-                    .and_then(|index| index.get(rel))
-                    .map(|entry| {
-                        (
-                            entry.properties.get("title").cloned(),
-                            entry.properties.get("aliases").cloned(),
-                        )
-                    });
-                if before.is_none() || before != after {
-                    anyhow::bail!(RebuildRequired(
-                        "link target catalog changed; a complete index rebuild is required"
-                    ));
-                }
+            if let Some(index) = self.index.as_mut() {
+                index.apply_changes(dir, paths)?;
+                self.dirty = true;
             }
             self.flush()
         })();
@@ -474,10 +388,12 @@ impl<'a> MutationJournal<'a> {
     /// match a fresh `create-index` build — otherwise `find --index` scores
     /// would drift from a disk scan after every mutation wave.
     pub fn flush(&mut self) -> Result<()> {
+        if let Some(index) = self.index.as_mut() {
+            index.finish_changes();
+        }
         if self.dirty
             && let (Some(idx), Some(idx_path)) = (self.index.as_mut(), self.index_path)
         {
-            idx.rebuild_bm25_index();
             idx.save_to(idx_path)?;
         }
         Ok(())

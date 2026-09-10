@@ -633,7 +633,7 @@ fn backlinks_target_spelling_is_consistent_across_occurrences() {
         .collect();
     assert_eq!(
         written,
-        vec!["target.md", "target.md", "target"],
+        vec!["../target.md", "/target.md", "../target"],
         "written_target must preserve each occurrence's own spelling: {json}"
     );
 }

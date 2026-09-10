@@ -269,7 +269,7 @@ fn internal_mutation_protocol_exposes_real_effects_and_rejects_bad_output_before
 }
 
 #[test]
-fn alias_aware_legacy_index_is_invalidated_even_for_unrelated_source_edits() {
+fn alias_aware_index_stays_coherent_after_unrelated_source_edits() {
     let dir = vault();
     fs::write(
         dir.path().join(".hyalo.toml"),
@@ -306,8 +306,8 @@ fn alias_aware_legacy_index_is_invalidated_even_for_unrelated_source_edits() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["effects"]["index"], "invalidated");
-    assert!(!dir.path().join(".hyalo-index").exists());
+    assert_eq!(report["effects"]["index"], "updated");
+    assert!(dir.path().join(".hyalo-index").exists());
     let output = run(&dir, &["backlinks", "target.md", "--index", "--count"]);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"1\n");

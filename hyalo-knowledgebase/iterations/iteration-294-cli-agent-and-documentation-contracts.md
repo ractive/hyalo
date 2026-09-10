@@ -340,3 +340,25 @@ corrupting structured stdout. A06/help/README/skills should state that broken fr
 missing delimiters and incomplete edits receive useful diagnostics and no mutation when
 processing cannot continue; do not promise compatibility with arbitrary fuzzed/gibberish
 syntax.
+
+
+## Iteration 292 reconciliation — 2026-09-10
+
+Iteration 292 connects `HintDemand` to the actual injected body-read boundary: no-hints, jq and
+typed-API argv shapes perform zero hint-only reads, while enabled hints use bounded rooted
+reads and the shared 291 syntax. Preserve this measured contract when migrating resolved specs
+and raw-argv continuations; the fixture begins after validated jq preflight and does not
+establish new worker guarantees. Reuse `CompiledQuery::new(query, language)` through
+`score_compiled` and `SnippetQuery::from_compiled`, retaining flat-OR eligibility, language
+precedence and valid empty snippets for title-only/cross-line matches. Keep exact authored
+`written_target` separate from canonical `target`.
+
+C08/C15 and active docs must preserve explicit alias/case policy on disk and snapshots, skipped
+filename identity without claiming metadata coverage or write authority, and diagnostics
+cleared only for successfully repaired notes while other skips remain current. Keep the
+independent language/Boolean and section/projection/cap regressions alongside actual-read
+checks. All original acceptance criteria, ownership and live-Pi requirements remain unchanged.
+Normal authored Markdown includes broken frontmatter, missing delimiters and incomplete edits:
+provide useful diagnostics and safe refusal without corruption where processing cannot
+continue; retain crash, security, confinement, resource and partial-write protections without
+exhaustive random-gibberish/fuzz exploration.

@@ -1614,6 +1614,7 @@ fn ranked_legacy_language_metadata_falls_back_and_checks_containment() {
     assert_eq!(entry.bm25_language.as_deref(), Some("english"));
     assert!(entry.bm25_tokens.is_none());
     entry.bm25_language = None; // Snapshot shape produced before iteration 289.
+    snapshot.finish_changes(); // Legacy mutable adapter requires coherent publication.
     snapshot.save_to(&snapshot_path).unwrap();
     let output = hyalo_no_hints()
         .arg("--dir")

@@ -349,17 +349,67 @@ pub struct Bm25Match {
 enum Clause {
     /// Document must contain these terms (implicit AND).
     /// Single-element for a plain word; multi-element for a quoted phrase.
-    Must(Vec<String>),
+    Must(QueryAtom),
     /// Document may contain these terms (OR group member, contributes score).
-    Should(Vec<String>),
+    Should(QueryAtom),
     /// Document must not contain these terms.
-    MustNot(Vec<String>),
+    MustNot(QueryAtom),
+}
+
+/// Typed normalized atom; quoting survives compilation independently of clause occurrence.
+#[derive(Debug, Clone, PartialEq)]
+enum QueryAtom {
+    Term(String),
+    Phrase(Vec<String>),
+}
+impl QueryAtom {
+    fn terms(&self) -> &[String] {
+        match self {
+            Self::Term(term) => std::slice::from_ref(term),
+            Self::Phrase(terms) => terms,
+        }
+    }
+}
+impl From<Vec<String>> for QueryAtom {
+    fn from(mut terms: Vec<String>) -> Self {
+        if terms.len() == 1 {
+            Self::Term(terms.remove(0))
+        } else {
+            Self::Phrase(terms)
+        }
+    }
+}
+impl std::ops::Deref for QueryAtom {
+    type Target = [String];
+    fn deref(&self) -> &Self::Target {
+        self.terms()
+    }
+}
+impl<'a> IntoIterator for &'a QueryAtom {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.terms().iter()
+    }
 }
 
 /// Parsed boolean query with AND/OR/NOT/phrase support.
 #[derive(Debug, Clone)]
 struct BooleanQuery {
     clauses: Vec<Clause>,
+}
+
+/// One normalized query shared by indexed scoring, disk fallback and snippets.
+pub struct CompiledQuery {
+    query: BooleanQuery,
+}
+impl CompiledQuery {
+    /// Compile flat Boolean/phrase semantics with the effective query language.
+    pub fn new(query: &str, language: StemLanguage) -> Self {
+        Self {
+            query: parse_boolean_query(query, &create_stemmer(language)),
+        }
+    }
 }
 
 /// Positive clauses compiled once for ranked body snippets. Shares scoring's
@@ -393,11 +443,17 @@ pub fn resolve_document_path(
 impl SnippetQuery {
     /// Compile with the query-time stemming language (no document override).
     pub fn new(query: &str, language: StemLanguage) -> Self {
-        let clauses: Vec<_> = parse_boolean_query(query, &create_stemmer(language))
+        Self::from_compiled(&CompiledQuery::new(query, language))
+    }
+
+    /// Build a snippet selector from the same normalized atoms used for scoring.
+    pub fn from_compiled(query: &CompiledQuery) -> Self {
+        let clauses: Vec<_> = query
+            .query
             .clauses
-            .into_iter()
+            .iter()
             .filter_map(|clause| match clause {
-                Clause::Must(terms) | Clause::Should(terms) => Some(terms),
+                Clause::Must(atom) | Clause::Should(atom) => Some(atom.terms().to_vec()),
                 Clause::MustNot(_) => None,
             })
             .collect();
@@ -552,18 +608,6 @@ impl BooleanQuery {
             .iter()
             .any(|c| matches!(c, Clause::Must(_) | Clause::Should(_)))
     }
-
-    /// Collect all `MustNot` terms (flattened) as `&str` slices.
-    fn must_not_terms(&self) -> Vec<&str> {
-        self.clauses
-            .iter()
-            .filter_map(|c| match c {
-                Clause::MustNot(terms) => Some(terms.iter().map(String::as_str)),
-                _ => None,
-            })
-            .flatten()
-            .collect()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -579,6 +623,7 @@ enum QuerySegment {
     Phrase(String),
     /// A word that was prefixed with `-`; also accepts `-"phrase"`.
     Negated(String),
+    NegatedPhrase(String),
     /// The literal keyword `OR` or `or`.
     Or,
     /// The literal keyword `AND` or `and` (syntactic sugar — treated as whitespace).
@@ -622,7 +667,7 @@ fn tokenize_query_segments(query: &str) -> Vec<QuerySegment> {
                     phrase.push(c);
                 }
                 if !phrase.is_empty() {
-                    segments.push(QuerySegment::Negated(phrase));
+                    segments.push(QuerySegment::NegatedPhrase(phrase));
                 }
             } else {
                 // Negated word: -foo
@@ -678,18 +723,23 @@ fn parse_boolean_query(query: &str, stemmer: &Stemmer) -> BooleanQuery {
         match seg {
             QuerySegment::Or | QuerySegment::And => {}
             QuerySegment::Negated(text) => {
+                for token in tokenize(&text, stemmer) {
+                    clauses.push(Clause::MustNot(QueryAtom::Term(token)));
+                }
+            }
+            QuerySegment::NegatedPhrase(text) => {
                 let tokens = tokenize(&text, stemmer);
                 if !tokens.is_empty() {
-                    clauses.push(Clause::MustNot(tokens));
+                    clauses.push(Clause::MustNot(QueryAtom::Phrase(tokens)));
                 }
             }
             QuerySegment::Phrase(text) => {
                 let tokens = tokenize(&text, stemmer);
                 if !tokens.is_empty() {
                     if has_or {
-                        clauses.push(Clause::Should(tokens));
+                        clauses.push(Clause::Should(QueryAtom::Phrase(tokens)));
                     } else {
-                        clauses.push(Clause::Must(tokens));
+                        clauses.push(Clause::Must(QueryAtom::Phrase(tokens)));
                     }
                 }
             }
@@ -698,9 +748,9 @@ fn parse_boolean_query(query: &str, stemmer: &Stemmer) -> BooleanQuery {
                 if !tokens.is_empty() {
                     for token in tokens {
                         if has_or {
-                            clauses.push(Clause::Should(vec![token]));
+                            clauses.push(Clause::Should(vec![token].into()));
                         } else {
-                            clauses.push(Clause::Must(vec![token]));
+                            clauses.push(Clause::Must(vec![token].into()));
                         }
                     }
                 }
@@ -714,6 +764,9 @@ fn parse_boolean_query(query: &str, stemmer: &Stemmer) -> BooleanQuery {
 // ---------------------------------------------------------------------------
 // BM25 inverted index
 // ---------------------------------------------------------------------------
+
+/// Aggregate expanded-token budget, including temporary reconstruction slots.
+pub(crate) const MAX_EXPANDED_TOKEN_BYTES: usize = 256 * 1024 * 1024;
 
 /// A (doc_id, term_frequency, positions) triple stored in a posting list.
 ///
@@ -876,11 +929,34 @@ impl Bm25InvertedIndex {
             .sum()
     }
 
+    /// Check the complete allocation amplification before reconstructing owned tokens.
+    /// Counts term bytes, owned String slots, and temporary positional storage.
+    pub(crate) fn expansion_within_budget(&self, budget: usize) -> bool {
+        self.postings
+            .iter()
+            .try_fold(0usize, |total, (term, posts)| {
+                let width = term
+                    .len()
+                    .checked_add(std::mem::size_of::<String>())?
+                    .checked_add(std::mem::size_of::<(u32, &str)>())?;
+                posts.iter().try_fold(total, |sum, p| {
+                    let next = sum.checked_add(width.checked_mul(p.positions.len())?)?;
+                    (next <= budget).then_some(next)
+                })
+            })
+            .is_some()
+    }
+
     /// Returns **all** matches for `query`, ranked by BM25 score (highest first).
     ///
     /// Returns an empty vec when `query` produces no positive tokens or has no matches.
     pub fn score(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
-        self.ranked_matches(query, stemmer)
+        self.ranked_matches(&parse_boolean_query(query, stemmer))
+    }
+
+    /// Score already-compiled atoms without repeating query normalization.
+    pub fn score_compiled(&self, query: &CompiledQuery) -> Vec<Bm25Match> {
+        self.ranked_matches(&query.query)
     }
 
     /// Reconstruct every document's full ordered token list from postings.
@@ -914,6 +990,9 @@ impl Bm25InvertedIndex {
         &self,
         include: impl Fn(&str) -> bool,
     ) -> HashMap<&str, Vec<String>> {
+        if !self.expansion_within_budget(MAX_EXPANDED_TOKEN_BYTES) {
+            return HashMap::new();
+        }
         let selected: Vec<_> = self
             .doc_paths
             .iter()
@@ -1025,8 +1104,7 @@ impl Bm25InvertedIndex {
     // ------------------------------------------------------------------
 
     /// Compute BM25 scores for all documents matching the parsed query.
-    fn ranked_matches(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
-        let query = parse_boolean_query(query, stemmer);
+    fn ranked_matches(&self, query: &BooleanQuery) -> Vec<Bm25Match> {
         if query.is_empty() || !query.has_positive_clauses() {
             return Vec::new();
         }
@@ -1035,50 +1113,46 @@ impl Bm25InvertedIndex {
         let n = self.doc_paths.len() as f64;
         let avgdl = self.avgdl;
 
-        // Build excluded doc set from MustNot terms via postings lookup.
-        let must_not_terms = query.must_not_terms();
-        let excluded: HashSet<u32> = must_not_terms
-            .iter()
-            .filter_map(|t| self.postings.get(*t))
-            .flat_map(|posts| posts.iter().map(|p| p.doc_id))
-            .collect();
-
-        // Accumulate BM25 scores across all positive clauses.
-        let mut scores: HashMap<u32, f64> = HashMap::new();
-
-        // For AND semantics: track how many Must clauses each doc satisfies.
-        let must_clause_count = query
+        // Eligibility is computed for whole clauses before any score is accumulated.
+        // In particular, a failed optional phrase contributes neither admission nor score.
+        let evaluated: Vec<_> = query
             .clauses
             .iter()
-            .filter(|c| matches!(c, Clause::Must(_)))
-            .count();
-        let mut must_hits: HashMap<u32, usize> = HashMap::new();
-
-        // Docs that received phrase-term scores but don't satisfy phrase adjacency.
-        // These must have those scores removed in the final filter.
-        let mut phrase_rejected: HashSet<u32> = HashSet::new();
-
-        for clause in &query.clauses {
-            let (terms, is_must) = match clause {
-                Clause::Must(t) => (t, true),
-                Clause::Should(t) => (t, false),
+            .map(|clause| {
+                let terms = match clause {
+                    Clause::Must(t) | Clause::Should(t) | Clause::MustNot(t) => t,
+                };
+                (clause, self.matching_documents(terms))
+            })
+            .collect();
+        let mut eligible = HashSet::new();
+        for (clause, documents) in &evaluated {
+            if !matches!(clause, Clause::MustNot(_)) {
+                eligible.extend(documents);
+            }
+        }
+        for (clause, documents) in &evaluated {
+            match clause {
+                Clause::Must(_) => eligible.retain(|id| documents.contains(id)),
+                Clause::MustNot(_) => eligible.retain(|id| !documents.contains(id)),
+                Clause::Should(_) => {}
+            }
+        }
+        let mut scores: HashMap<u32, f64> = HashMap::new();
+        for (clause, satisfied) in &evaluated {
+            let terms = match clause {
+                Clause::Must(t) | Clause::Should(t) => t,
                 Clause::MustNot(_) => continue,
             };
-
-            let is_phrase = terms.len() > 1;
-
-            // Accumulate BM25 score contribution for each term in this clause.
             for term in terms {
-                let Some(posting_list) = self.postings.get(term) else {
+                let Some(postings) = self.postings.get(term) else {
                     continue;
                 };
-
                 #[allow(clippy::cast_precision_loss)]
-                let nt = posting_list.len() as f64;
+                let nt = postings.len() as f64;
                 let idf = (1.0 + (n - nt + 0.5) / (nt + 0.5)).ln();
-
-                for p in posting_list {
-                    if excluded.contains(&p.doc_id) {
+                for p in postings {
+                    if !eligible.contains(&p.doc_id) || !satisfied.contains(&p.doc_id) {
                         continue;
                     }
                     let tf = f64::from(p.term_freq);
@@ -1088,56 +1162,10 @@ impl Bm25InvertedIndex {
                     *scores.entry(p.doc_id).or_insert(0.0) += idf * tf_norm;
                 }
             }
-
-            // Validate phrase adjacency and record Must clause satisfaction.
-            if is_phrase {
-                let phrase_docs: HashSet<u32> = self
-                    .docs_with_all_terms(terms)
-                    .into_iter()
-                    .filter(|&doc_id| self.has_phrase_at_positions(terms, doc_id))
-                    .collect();
-
-                if is_must {
-                    for &doc_id in &phrase_docs {
-                        *must_hits.entry(doc_id).or_insert(0) += 1;
-                    }
-                }
-
-                // Track docs that got individual term scores but don't match the phrase.
-                // These scores must be excluded so phrases aren't matched as bag-of-words.
-                let all_term_docs: HashSet<u32> = self.docs_with_all_terms(terms);
-                for doc_id in all_term_docs {
-                    if !phrase_docs.contains(&doc_id) {
-                        phrase_rejected.insert(doc_id);
-                    }
-                }
-            } else if is_must {
-                // Single-term Must: presence in posting list is sufficient.
-                if let Some(posting_list) = self.postings.get(&terms[0]) {
-                    for p in posting_list {
-                        *must_hits.entry(p.doc_id).or_insert(0) += 1;
-                    }
-                }
-            }
         }
-
-        // Collect results: exclude negated docs, enforce AND intersection,
-        // and reject docs that only matched phrase terms non-adjacently.
         let mut matches: Vec<Bm25Match> = scores
             .into_iter()
-            .filter(|(doc_id, score)| {
-                if *score <= 0.0 {
-                    return false;
-                }
-                if phrase_rejected.contains(doc_id) {
-                    return false;
-                }
-                if must_clause_count > 0 {
-                    must_hits.get(doc_id).copied().unwrap_or(0) >= must_clause_count
-                } else {
-                    true // pure OR query
-                }
-            })
+            .filter(|(_, score)| *score > 0.0)
             .map(|(doc_id, score)| Bm25Match {
                 rel_path: self.doc_paths[doc_id as usize].clone(),
                 score,
@@ -1159,8 +1187,28 @@ impl Bm25InvertedIndex {
         matches
     }
 
+    fn matching_documents(&self, atom: &QueryAtom) -> HashSet<u32> {
+        match atom {
+            QueryAtom::Term(term) => self
+                .postings
+                .get(term)
+                .into_iter()
+                .flatten()
+                .map(|p| p.doc_id)
+                .collect(),
+            QueryAtom::Phrase(terms) => self
+                .docs_with_all_terms(terms)
+                .into_iter()
+                .filter(|&id| self.has_phrase_at_positions(terms, id))
+                .collect(),
+        }
+    }
+
     /// Returns the set of `doc_id`s that contain **all** given terms.
     fn docs_with_all_terms(&self, terms: &[String]) -> HashSet<u32> {
+        if terms.iter().any(|t| !self.postings.contains_key(t)) {
+            return HashSet::new();
+        }
         let mut iter = terms.iter().filter_map(|t| self.postings.get(t));
         let first = match iter.next() {
             Some(postings) => postings.iter().map(|p| p.doc_id).collect::<HashSet<u32>>(),
@@ -1692,7 +1740,7 @@ mod tests {
         // Single quoted phrase → Must with multiple tokens
         assert_eq!(q.clauses.len(), 1);
         match &q.clauses[0] {
-            Clause::Must(tokens) => {
+            Clause::Must(QueryAtom::Phrase(tokens)) => {
                 assert_eq!(tokens.len(), 2, "phrase should produce two tokens");
             }
             other => panic!("expected Must, got {other:?}"),
@@ -2436,5 +2484,212 @@ mod tests {
             !query_is_operator_only("   "),
             "whitespace-only query should return false"
         );
+    }
+}
+
+#[cfg(test)]
+mod iteration292_tests {
+    use super::*;
+
+    #[test]
+    fn independent_flat_clause_evaluator_matches_small_authored_corpus() {
+        // The reference evaluator scans token windows directly; it does not use
+        // posting intersection, positional lookup or the production query parser.
+        let bodies = [
+            "green red x blue",
+            "red",
+            "red blue",
+            "neither",
+            "rust memory allocation",
+            "rust memory safety",
+            "rust memory\nsafety",
+            "red red blue",
+        ];
+        let stemmer = create_stemmer(StemLanguage::English);
+        let corpus = Bm25InvertedIndex::build(
+            bodies
+                .iter()
+                .enumerate()
+                .map(|(i, body)| DocumentInput {
+                    rel_path: format!("{i}.md"),
+                    title: String::new(),
+                    body: (*body).into(),
+                    language: StemLanguage::English,
+                })
+                .collect(),
+        );
+        let atoms = [
+            "red",
+            "green",
+            "\"red blue\"",
+            "rust",
+            "\"memory safety\"",
+            "\"red red\"",
+            "the",
+        ];
+        for left in atoms {
+            for right in atoms {
+                for or in [false, true] {
+                    for negative in ["", "red", "\"memory safety\""] {
+                        let query = format!(
+                            "{left} {} {right} {}",
+                            if or { "OR" } else { "AND" },
+                            if negative.is_empty() {
+                                String::new()
+                            } else {
+                                format!("-{negative}")
+                            }
+                        );
+                        let mut expected = Vec::new();
+                        for (id, body) in bodies.iter().enumerate() {
+                            let tokens = tokenize(body, &stemmer);
+                            let matches = |atom: &str| {
+                                let needle = tokenize(atom.trim_matches('"'), &stemmer);
+                                !needle.is_empty()
+                                    && tokens.windows(needle.len()).any(|window| window == needle)
+                            };
+                            let positive = if or {
+                                matches(left) || matches(right)
+                            } else {
+                                matches(left) && matches(right)
+                            };
+                            if positive && (negative.is_empty() || !matches(negative)) {
+                                expected.push(format!("{id}.md"));
+                            }
+                        }
+                        let mut actual: Vec<_> = corpus
+                            .score(&query, &stemmer)
+                            .into_iter()
+                            .map(|hit| hit.rel_path)
+                            .collect();
+                        actual.sort();
+                        expected.sort();
+                        assert_eq!(actual, expected, "{query}");
+                    }
+                }
+            }
+        }
+        let or_hits = corpus.score("\"red blue\" OR green", &stemmer);
+        let green = corpus.score("green", &stemmer);
+        assert_eq!(
+            or_hits
+                .iter()
+                .find(|hit| hit.rel_path == "0.md")
+                .unwrap()
+                .score
+                .to_bits(),
+            green[0].score.to_bits()
+        );
+    }
+
+    #[test]
+    fn independent_boolean_reference_covers_language_precedence() {
+        use StemLanguage::{English, German};
+        // Expected precedence is authored here, independently of resolve_language.
+        let settings = [
+            (None, None, English),
+            (None, Some("german"), German),
+            (Some("english"), Some("german"), English),
+            (Some("german"), Some("english"), German),
+        ];
+        let documents = [
+            (None, "running fast"),
+            (Some("english"), "running fast safely"),
+            (Some("german"), "Häuser Häuser running"),
+            (Some("invalid"), "the running slow"),
+        ];
+        assert_ne!(
+            tokenize("running", &create_stemmer(English)),
+            tokenize("running", &create_stemmer(German))
+        );
+        for (cli, config, expected_query_language) in settings {
+            assert_eq!(resolve_language(None, cli, config), expected_query_language);
+            let expected_languages: Vec<_> = documents
+                .iter()
+                .map(|(fm, _)| match fm {
+                    Some("english") => English,
+                    Some("german") => German,
+                    _ => expected_query_language,
+                })
+                .collect();
+            let corpus = Bm25InvertedIndex::build(
+                documents
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (fm, body))| {
+                        let language = resolve_language(*fm, cli, config);
+                        assert_eq!(language, expected_languages[i]);
+                        DocumentInput {
+                            rel_path: format!("{i}.md"),
+                            title: String::new(),
+                            body: (*body).into(),
+                            language,
+                        }
+                    })
+                    .collect(),
+            );
+            for (left, right, either, negative) in [
+                ("run", "fast", false, ""),
+                ("running fast", "Häuser Häuser", true, "running slow"),
+                ("the", "running", true, "fast safely"),
+                ("Häuser Häuser", "running", false, ""),
+            ] {
+                let query = format!(
+                    "\"{left}\" {} \"{right}\" {}",
+                    if either { "OR" } else { "AND" },
+                    if negative.is_empty() {
+                        String::new()
+                    } else {
+                        format!("-\"{negative}\"")
+                    }
+                );
+                let query_stemmer = create_stemmer(expected_query_language);
+                let mut expected = Vec::new();
+                for (i, (_, body)) in documents.iter().enumerate() {
+                    let tokens = tokenize(body, &create_stemmer(expected_languages[i]));
+                    let matches = |atom: &str| {
+                        let needle = tokenize(atom, &query_stemmer);
+                        !needle.is_empty()
+                            && tokens.windows(needle.len()).any(|window| window == needle)
+                    };
+                    let positive = if either {
+                        matches(left) || matches(right)
+                    } else {
+                        matches(left) && matches(right)
+                    };
+                    if positive && (negative.is_empty() || !matches(negative)) {
+                        expected.push(format!("{i}.md"));
+                    }
+                }
+                let mut actual: Vec<_> = corpus
+                    .score_compiled(&CompiledQuery::new(&query, expected_query_language))
+                    .into_iter()
+                    .map(|hit| hit.rel_path)
+                    .collect();
+                expected.sort();
+                actual.sort();
+                assert_eq!(actual, expected, "{cli:?}/{config:?}: {query}");
+            }
+        }
+    }
+
+    #[test]
+    fn checked_expansion_budget_rejects_term_position_product() {
+        let corpus = Bm25InvertedIndex::new_for_test(
+            HashMap::from([(
+                "x".repeat(128),
+                vec![Posting {
+                    doc_id: 0,
+                    term_freq: 32,
+                    positions: (0..32).collect(),
+                }],
+            )]),
+            vec![32],
+            vec!["a.md".into()],
+            32.0,
+        );
+        assert!(!corpus.expansion_within_budget(1024));
+        assert!(corpus.expansion_within_budget(8192));
+        assert_eq!(corpus.reconstruct_all_tokens()["a.md"].len(), 32);
     }
 }

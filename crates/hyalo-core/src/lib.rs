@@ -26,6 +26,7 @@ pub mod anchor;
 pub mod auto_link;
 pub mod bm25;
 pub(crate) mod case_index;
+pub mod catalog;
 pub(crate) mod common_words;
 pub mod content_search;
 pub mod discovery;

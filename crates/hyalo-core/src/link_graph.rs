@@ -115,6 +115,7 @@ impl LinkGraph {
         let mut index: HashMap<String, Vec<BacklinkEntry>> = HashMap::with_capacity(files.len());
         let mut warnings: Vec<(PathBuf, String)> = Vec::new();
         let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_aliases_enabled(discovery::link_aliases_enabled());
         // `LinkGraph::build` returns a comprehensive case index spanning the
         // whole vault. Enable case-insensitive path lookups by default so
         // downstream consumers (e.g. `hyalo mv` link rewriting) can use
@@ -184,15 +185,26 @@ impl LinkGraph {
     ///
     /// Warnings are always empty because callers are expected to handle parse errors
     /// before collecting `FileLinks`.
+    #[cfg(test)]
     pub(crate) fn from_file_links(
         file_links: Vec<FileLinks>,
         site_prefix: Option<&str>,
         aliases: &[(String, Vec<String>)],
     ) -> LinkGraphBuild {
+        Self::from_file_links_with_case_policy(file_links, site_prefix, aliases, true)
+    }
+
+    pub(crate) fn from_file_links_with_case_policy(
+        file_links: Vec<FileLinks>,
+        site_prefix: Option<&str>,
+        aliases: &[(String, Vec<String>)],
+        case_insensitive: bool,
+    ) -> LinkGraphBuild {
         let mut index: HashMap<String, Vec<BacklinkEntry>> =
             HashMap::with_capacity(file_links.len());
         let mut case_index = CaseInsensitiveIndex::new();
-        case_index.set_case_insensitive_paths(true);
+        case_index.set_aliases_enabled(discovery::link_aliases_enabled());
+        case_index.set_case_insensitive_paths(case_insensitive);
         for fl in &file_links {
             let rel_fwd = fl.source.to_string_lossy().replace('\\', "/");
             case_index.insert(&rel_fwd);
@@ -213,6 +225,19 @@ impl LinkGraph {
             // The caller scanned the files and never captured the marker.
             split_frontmatter_candidates: Vec::new(),
         }
+    }
+
+    /// Build once from retained authored occurrences and a frozen catalog.
+    pub(crate) fn from_catalog(
+        file_links: impl IntoIterator<Item = FileLinks>,
+        catalog: &crate::catalog::VaultCatalog,
+        options: crate::catalog::ResolutionOptions<'_>,
+    ) -> Self {
+        let mut index = HashMap::new();
+        for links in file_links {
+            insert_file_links_with_options(&mut index, links, catalog.case_index(), options);
+        }
+        Self::from_index(index)
     }
 
     /// Construct a graph from a fully-populated index, deriving the
@@ -481,6 +506,7 @@ impl LinkGraph {
     /// [`remove_source`] first to clear the old ones, then this method to
     /// insert the new ones (mirroring how a full index build populates the
     /// graph from every file's [`FileLinks`], one file at a time).
+    #[cfg(test)]
     pub(crate) fn insert_links(
         &mut self,
         file_links: FileLinks,
@@ -558,81 +584,6 @@ fn strip_md_extension(s: &str) -> &str {
     }
 }
 
-/// Extra backlink index key for a link target that names a *directory*
-/// (iter-203).
-///
-/// `[x](/foo)`, `[x](foo/)` and `[[foo]]` all resolve to `foo/index.md` when
-/// that file exists, so the graph stores an additional `foo/index` key —
-/// `.md`-stripped, matching how path-form wikilinks are stored — and
-/// `backlinks("foo/index.md")` finds them through its built-in `.md` toggle.
-///
-/// Mirrors `discovery::resolve_target`'s precedence so the graph and the
-/// read-side resolver agree: a target that already names a real file (`foo`
-/// with `foo.md` present) is not a directory reference, unless it was written
-/// with a trailing slash, which is explicit.
-///
-/// `trailing_slash` must describe the target **as written** — normalization
-/// drops it, but it is what makes the reference explicit.
-///
-/// Returns `None` when the target is not a resolvable directory reference.
-fn directory_index_key(
-    target: &str,
-    trailing_slash: bool,
-    case_index: &CaseInsensitiveIndex,
-) -> Option<String> {
-    let trimmed = target.trim_end_matches('/');
-    if trimmed.is_empty() || trimmed.starts_with('/') {
-        return None;
-    }
-    // A target that already carries `.md` names a file, never a directory.
-    if strip_md_extension(trimmed) != trimmed {
-        return None;
-    }
-    let exists =
-        |path: &str| case_index.contains_path(path) || case_index.lookup_unique(path).is_some();
-    if exists(trimmed) {
-        return None;
-    }
-    if !trailing_slash && exists(&format!("{trimmed}.md")) {
-        return None;
-    }
-    let dir_index = format!("{trimmed}/{}", crate::discovery::DIRECTORY_INDEX_FILE);
-    if case_index.contains_path(&dir_index) {
-        return Some(strip_md_extension(&dir_index).to_owned());
-    }
-    let canonical = case_index.lookup_unique(&dir_index)?;
-    Some(strip_md_extension(canonical).to_owned())
-}
-
-/// Whether `target` names a **vault attachment**, for
-/// [`crate::types::is_note_graph_edge`]'s `is_attachment` parameter
-/// (iter-261; index-aware fix in iter-277 review).
-///
-/// This graph's own `case_index` holds notes only (see [`insert_file_links`]),
-/// so a real attachment like `real.png` is never a `contains_path` /
-/// `lookup_unique` / `lookup_stem` hit here — it falls through to the
-/// syntactic fallback below, same as a genuinely missing one. What the index
-/// *does* settle is the opposite case: a note called `Foo.v2.md`, linked as
-/// `[[Foo.v2]]` — `lookup_stem("Foo.v2")` finds the note, so the syntactic
-/// "`v2` looks like an extension" guess never gets a chance to misfire.
-fn target_is_attachment(target: &str, case_index: &CaseInsensitiveIndex) -> bool {
-    let normalized = target.replace('\\', "/");
-    if case_index.contains_path(&normalized) {
-        return !crate::discovery::has_md_extension(&normalized);
-    }
-    if let Some(path) = case_index.lookup_unique(&normalized) {
-        return !crate::discovery::has_md_extension(path);
-    }
-    let basename = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
-    if let Some(path) = case_index.lookup_stem(basename) {
-        return !crate::discovery::has_md_extension(path);
-    }
-    // No index hit at all: resolution never crosses an explicit extension
-    // (DEC-266), so a target that still looks like it carries a non-`.md`
-    // extension can only ever have named an attachment — existing or not.
-    crate::discovery::has_non_md_extension(target)
-}
-
 /// Normalize and insert one file's links into the shared index.
 fn insert_file_links(
     index: &mut HashMap<String, Vec<BacklinkEntry>>,
@@ -640,135 +591,48 @@ fn insert_file_links(
     site_prefix: Option<&str>,
     case_index: &CaseInsensitiveIndex,
 ) {
-    for (line, mut link) in file_links.links {
-        // DEC-318 (iter-277): one predicate decides what an edge is, shared
-        // verbatim with `find --orphan` / `find --dead-end`. It covers the
-        // external URI of iter-261 / BUG-2 (`obsidian://…`, `mailto:…` name
-        // nothing in the vault) and the attachment reference of BUG-5 / BUG-6
-        // (`![[img.png]]`, `[[Books.base]]` — a note whose only outbound link
-        // is an image is still a dead end, and nothing queries
-        // `backlinks img.png`) — decided here by [`target_is_attachment`],
-        // whose fallback keeps it agreeing with `find`'s own verdict even
-        // though this graph's own `case_index` holds notes only (BUG-16).
-        let is_attachment = target_is_attachment(&link.target, case_index);
-        if !crate::types::is_note_graph_edge(&link.target, link.external, is_attachment) {
-            continue;
-        }
-        // Captured before normalization, which drops it: a trailing slash is
-        // what marks a target as an explicit directory reference (iter-203).
-        let raw_trailing_slash = link.target.ends_with('/');
-        // Normalize markdown link targets that contain path separators
-        // so that, for example, `sub/a.md` linking to `../target.md`
-        // is stored as `target.md`, matching how callers query by
-        // vault-relative path.
-        //
-        // Wikilinks are vault-relative by definition — `[[backlog/item]]`
-        // written in any file always refers to `backlog/item.md` at the
-        // vault root, never a path relative to the source file.  They
-        // must NOT be passed through `normalize_target`.
-        //
-        // Exception: `[[./something]]` uses an explicit current-directory
-        // prefix.  Normalize these the same way as markdown links so that
-        // `[[./b]]` in `notes/a.md` is indexed as `notes/b` and matches
-        // a backlink query for `notes/b.md`.
-        // L-23: percent-decode markdown destinations so that a linker who wrote
-        // `[x](my%20dest.md)` is indexed under the decoded key `my dest.md` —
-        // matching how callers query `backlinks "my dest.md"` and stopping
-        // `find --broken-links` from false-positiving. Malformed / non-UTF-8
-        // escapes keep the literal text (helper returns None). Wikilinks are not
-        // decoded (they never carry percent-escapes).
-        if link.kind == LinkKind::Markdown
-            && let Some(decoded) = crate::discovery::percent_decode_path(&link.target)
-        {
-            link.target = decoded;
-        }
-        if link.kind == LinkKind::Wikilink && link.target.starts_with("./") {
-            link.target = normalize_target(&file_links.source, &link.target[2..]);
-        } else if link.kind == LinkKind::Markdown
-            && (link.target.contains('/') || link.target.contains('\\'))
-        {
-            if link.target.starts_with('/') {
-                link.target = strip_site_prefix(&link.target, site_prefix);
-            } else {
-                link.target = normalize_target(&file_links.source, &link.target);
+    insert_file_links_with_options(
+        index,
+        file_links,
+        case_index,
+        crate::catalog::ResolutionOptions {
+            aliases: case_index.aliases_enabled(),
+            site_prefix,
+        },
+    );
+}
+
+fn insert_file_links_with_options(
+    index: &mut HashMap<String, Vec<BacklinkEntry>>,
+    file_links: FileLinks,
+    case_index: &CaseInsensitiveIndex,
+    options: crate::catalog::ResolutionOptions<'_>,
+) {
+    use crate::catalog::Resolution;
+    for (line, link) in file_links.links {
+        let resolved = crate::catalog::resolve(
+            case_index,
+            &file_links.source.to_string_lossy(),
+            link.kind,
+            &link.target,
+            options,
+        );
+        let key = match resolved {
+            Resolution::Resolved(path) => strip_md_extension(&path).to_owned(),
+            Resolution::External | Resolution::Attachment(_) => continue,
+            Resolution::Missing | Resolution::Ambiguous(_) => {
+                if link.kind == LinkKind::Markdown && !link.target.starts_with('/') {
+                    normalize_target(&file_links.source, &link.target)
+                } else {
+                    strip_site_prefix(link.target.trim(), options.site_prefix)
+                }
             }
-        }
-        // iter-211 / BUG-10: a trailing slash is a directory *spelling*, never
-        // part of the key. `normalize_target` already drops it for relative
-        // targets, but `strip_site_prefix` keeps it, so `[b](/baz/)` was
-        // indexed under `baz/` — a key `backlinks baz.md` (which probes `baz.md`
-        // and `baz`) can never hit, even though `find --broken-links` happily
-        // resolved the same link to `baz.md`. Strip it uniformly, after
-        // `raw_trailing_slash` has captured the author's spelling for the
-        // directory-index rule below.
-        while link.target.len() > 1 && link.target.ends_with('/') {
-            link.target.pop();
-        }
-
-        // Compute an extra storage key for bare-basename wikilinks that
-        // unambiguously resolve to a known vault file, so
-        // `backlinks("rdp/resources/reflow.md")` finds `[[reflow]]` written
-        // anywhere in the vault. The canonical path is stored with the `.md`
-        // suffix stripped — matching how path-form wikilinks (`[[a/b]]`) are
-        // stored — so that `backlinks()`'s built-in `.md` toggle handles both
-        // query forms naturally. We skip insertion when the resolved key would
-        // equal the raw target (only `.md`-suffix difference) to avoid
-        // double-counting via the toggle.
-        //
-        // iter-272 Part B (DEC-296): when no file has that stem, a frontmatter
-        // `aliases:` entry can still name one — and an alias-resolved link is
-        // a real graph edge, so `backlinks`, `--orphan`, `--dead-end` and
-        // `summary.links` all agree with what `find --fields links` reports.
-        // A filename always wins: the alias lookup runs only after
-        // `lookup_stem` comes up empty.
-        let resolved_key = (link.kind == LinkKind::Wikilink
-            && !link.target.contains('/')
-            && !link.target.contains('\\'))
-        .then(|| {
-            let stem = strip_md_extension(&link.target);
-            case_index
-                .lookup_stem(stem)
-                .or_else(|| case_index.lookup_alias(stem))
-                .map(|canon| strip_md_extension(canon).to_owned())
-        })
-        .flatten()
-        .filter(|resolved| *resolved != link.target);
-
-        // iter-203: a target naming a directory (`/foo`, `foo`, `foo/`) is a
-        // backlink of `foo/index.md`. Store the extra key so `backlinks` and
-        // `mv` see those edges. Only one extra key is ever added: a target is
-        // either a stem hit or a directory hit, never both.
-        let dir_index_key = resolved_key
-            .is_none()
-            .then(|| directory_index_key(&link.target, raw_trailing_slash, case_index))
-            .flatten()
-            .filter(|resolved| *resolved != link.target);
-
-        let entry = BacklinkEntry {
+        };
+        index.entry(key).or_default().push(BacklinkEntry {
             source: file_links.source.clone(),
             line,
-            link: link.clone(),
-        };
-        // iter-211 / BUG-10 — **one link occurrence, one index key.**
-        //
-        // Resolution above already picked the single file this occurrence
-        // points at, mirroring `discovery::resolve_target`'s precedence. The
-        // graph therefore stores the *resolved* key when there is one and the
-        // written key otherwise — never both. Registering both is what made
-        // a single `[b](foo/)` show up as a backlink of `foo.md` *and*
-        // `foo/index.md` when both files existed, while `links` reported
-        // `ambiguous: 0`.
-        //
-        // This generalizes the narrower L-1 rule it replaces (which suppressed
-        // the written key only when it was an ASCII-case variant of the
-        // canonical one, e.g. `[[NOTE]]` → `note.md`). Nothing is lost:
-        // `backlinks` / `backlinks_ci` probe both the `.md` and stem forms of
-        // the canonical path, and `mv` rewrites from the `BacklinkEntry`,
-        // which still carries the original written link text.
-        let key = resolved_key
-            .or(dir_index_key)
-            .unwrap_or_else(|| link.target.clone());
-        index.entry(key).or_default().push(entry);
+            link,
+        });
     }
 }
 
@@ -2043,6 +1907,7 @@ mod tests {
     fn insert_links_adds_edges_without_touching_other_sources() {
         let mut graph = LinkGraph::default();
         let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_aliases_enabled(discovery::link_aliases_enabled());
         case_index.set_case_insensitive_paths(true);
         case_index.insert("note.md");
         case_index.insert("target.md");
@@ -2094,6 +1959,7 @@ mod tests {
         );
 
         let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_aliases_enabled(discovery::link_aliases_enabled());
         case_index.set_case_insensitive_paths(true);
         for p in ["note.md", "old-dep.md", "new-dep.md"] {
             case_index.insert(p);
@@ -2179,6 +2045,7 @@ mod tests {
 
         // insert_links: re-insert a.md with a brand-new target key.
         let mut case_index = CaseInsensitiveIndex::new();
+        case_index.set_aliases_enabled(discovery::link_aliases_enabled());
         case_index.set_case_insensitive_paths(true);
         for p in ["Baz.md", "Bar.md", "a.md", "b.md", "Quux.md"] {
             case_index.insert(p);
@@ -2522,12 +2389,8 @@ mod tests {
         );
 
         // The raw graph entry for the written link "Web/Foo" should exist.
-        let bl = graph.backlinks("Web/Foo");
-        assert_eq!(
-            bl.len(),
-            1,
-            "backlinks for the written key 'Web/Foo' should find 1 entry"
-        );
+        let bl = graph.backlinks("web/foo");
+        assert_eq!(bl.len(), 1, "backlinks use the resolved canonical key");
         assert_eq!(bl[0].source, PathBuf::from("other.md"));
     }
 

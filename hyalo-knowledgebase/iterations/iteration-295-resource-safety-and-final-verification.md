@@ -229,3 +229,27 @@ Do not reopen exhaustive random-gibberish/fuzz syntax exploration. Controlled ne
 remain required for crashes, data loss, security, confinement, resource bounds and unsafe
 partial writes. A04, R16, the 50-row/49-group ledger and all original acceptance rows remain
 unchanged.
+
+
+## Iteration 292 reconciliation — 2026-09-10
+
+Carry the reviewed 292 contracts into final behavioral verification: complete owner-managed
+replacements and pending-generation guards; explicit disk/snapshot case and alias policy;
+skipped filename identity distinct from metadata coverage; successful repair clearing only
+current diagnostics for that path; conservative move ambiguity and alias preservation; typed
+Boolean/phrase eligibility shared with snippets; and zero actual hint-only reads for suppressed
+demand. Snapshot wire format remains v2, with real disk fallback when untouched postings lack
+current tokenizer metadata. Retain the S10 crafted-snapshot expansion refusal and
+unchanged-note preflight evidence, plus 8/32-note sparse/dense batch counters and independent
+authored query references; their measured fixtures imply neither universal memory bounds nor
+speedup guarantees.
+
+A04/R16 ownership, the 50-row/49-group ledger and every original criterion remain unchanged.
+Retain `291-ci-resource-observation.json` solely as A04 diagnostic-ordering evidence: the
+failing check passed one retry with no product change, and this observation adds no new scope.
+The 292 review accepted all four repairs; supplied execution records report 5,083 passing
+tests, two ignored tests and a successful release build, not final 295 or remote closure. Use
+normal authored Markdown, including broken frontmatter, missing delimiters and incomplete
+edits, with useful diagnostics and safe refusal without corruption where processing cannot
+continue; preserve crash, security, confinement, resource and partial-write protections without
+exhaustive random-gibberish/fuzz exploration.

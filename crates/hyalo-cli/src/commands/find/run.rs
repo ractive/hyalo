@@ -189,6 +189,7 @@ pub(crate) fn run(
         } else {
             NamedFilePolicy::Fatal
         },
+        hyalo_core::links_case_insensitive(ctx.case_insensitive_mode),
     )? {
         IndexResolution::Resolved(resolved) => {
             let ci = maybe_case_index(
@@ -252,6 +253,7 @@ pub(crate) fn run(
                     dir,
                     &prop_filters,
                     pattern.is_some() || regexp.is_some(),
+                    ctx.hint_demand,
                 );
             }
             Ok(outcome)
@@ -345,10 +347,31 @@ fn zero_result_body_search(
     dir: &std::path::Path,
     filters: &[hyalo_core::filter::PropertyFilter],
     already_searched_body: bool,
+    demand: crate::prepared::HintDemand,
+) -> Option<crate::hints::BodySearchSuggestion> {
+    zero_result_body_search_with_reader(
+        index,
+        filters,
+        already_searched_body,
+        demand,
+        |rel, budget| {
+            let root = hyalo_core::rooted::VaultRoot::new(dir)?;
+            let name = hyalo_core::rooted::RelativeName::new(rel)?;
+            root.open(&name)?.read_bounded(budget)
+        },
+    )
+}
+
+fn zero_result_body_search_with_reader(
+    index: &dyn hyalo_core::index::VaultIndex,
+    filters: &[hyalo_core::filter::PropertyFilter],
+    already_searched_body: bool,
+    demand: crate::prepared::HintDemand,
+    mut read: impl FnMut(&str, u64) -> anyhow::Result<Vec<u8>>,
 ) -> Option<crate::hints::BodySearchSuggestion> {
     use hyalo_core::filter::PropertyFilter;
 
-    if already_searched_body {
+    if already_searched_body || demand != crate::prepared::HintDemand::Requested {
         return None;
     }
     let (key, pattern) = filters.iter().find_map(|f| match f {
@@ -374,16 +397,15 @@ fn zero_result_body_search(
             return None;
         }
         files_left -= 1;
-        bytes_left -= entry.size;
+        let bytes = read(&entry.rel_path, bytes_left).ok()?;
+        bytes_left = bytes_left.saturating_sub(bytes.len() as u64);
         let mut visitor = BodyProbeVisitor {
             re: &probe,
             hit: false,
         };
         // A file the index knows but the filesystem does not (a snapshot built
         // elsewhere) is skipped, not escalated: this is a hint, not a query.
-        if hyalo_core::scanner::scan_file_multi(&dir.join(&entry.rel_path), &mut [&mut visitor])
-            .is_err()
-        {
+        if hyalo_core::scanner::scan_slice_multi(&bytes, &mut [&mut visitor]).is_err() {
             continue;
         }
         if visitor.hit {
@@ -587,8 +609,14 @@ mod tests {
     fn probe(dir: &std::path::Path, filter: &str, already_searched_body: bool) -> Option<String> {
         let index = probe_index(dir);
         let filters = vec![hyalo_core::filter::parse_property_filter(filter).unwrap()];
-        zero_result_body_search(&index, dir, &filters, already_searched_body)
-            .map(|s| format!("{}:{}", s.key, s.pattern))
+        zero_result_body_search(
+            &index,
+            dir,
+            &filters,
+            already_searched_body,
+            crate::prepared::HintDemand::Requested,
+        )
+        .map(|s| format!("{}:{}", s.key, s.pattern))
     }
 
     /// The motivating case: `DEC-NNN` lives in `##` headings, not in `title`.
@@ -632,7 +660,16 @@ mod tests {
             hyalo_core::filter::parse_property_filter("status=draft").unwrap(),
             hyalo_core::filter::parse_property_filter("!archived").unwrap(),
         ];
-        assert!(zero_result_body_search(&index, tmp.path(), &filters, false).is_none());
+        assert!(
+            zero_result_body_search(
+                &index,
+                tmp.path(),
+                &filters,
+                false,
+                crate::prepared::HintDemand::Requested
+            )
+            .is_none()
+        );
     }
 
     /// An empty regex matches the first body line of the first file, which
@@ -649,7 +686,16 @@ mod tests {
             key: "title".to_owned(),
             pattern: regex::Regex::new("").unwrap(),
         }];
-        assert!(zero_result_body_search(&index, tmp.path(), &filters, false).is_none());
+        assert!(
+            zero_result_body_search(
+                &index,
+                tmp.path(),
+                &filters,
+                false,
+                crate::prepared::HintDemand::Requested
+            )
+            .is_none()
+        );
     }
 
     /// The probe matches fenced code, because `find -e` does.
@@ -712,5 +758,44 @@ mod tests {
             None,
             "non-success outcomes keep their own exit code"
         );
+    }
+    #[test]
+    fn iteration292_hint_demand_counts_actual_body_reads() {
+        use clap::Parser;
+        let tmp = probe_vault(&[("a.md", "---\ntitle: A\n---\nneedle\n")]);
+        let index = probe_index(tmp.path());
+        let filters = [hyalo_core::filter::parse_property_filter("title~=needle").unwrap()];
+        for flags in [
+            vec!["--no-hints"],
+            vec!["--jq", ".results"],
+            vec!["--no-hints", "--format", "json"],
+            vec!["--hints"],
+        ] {
+            // The third shape is emitted by the typed API transport.
+            let mut args = vec!["hyalo", "find", "--property", "title~=needle"];
+            args.extend(flags);
+            let cli = crate::cli::args::Cli::try_parse_from(args).unwrap();
+            let plan = crate::prepared::OutputPlan::new(
+                crate::prepared::OutputPreflight::validated_for_test(&cli),
+                &cli.command,
+                Format::Json,
+                Format::Json,
+                true,
+                !cli.no_hints,
+            )
+            .unwrap();
+            let demand = plan.hint_demand();
+            let mut reads = 0;
+            let suggestion =
+                zero_result_body_search_with_reader(&index, &filters, false, demand, |rel, _| {
+                    reads += 1;
+                    Ok(std::fs::read(tmp.path().join(rel))?)
+                });
+            assert_eq!(
+                reads,
+                usize::from(demand == crate::prepared::HintDemand::Requested)
+            );
+            assert_eq!(suggestion.is_some(), reads == 1);
+        }
     }
 }
