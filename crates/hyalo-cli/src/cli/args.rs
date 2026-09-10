@@ -890,9 +890,10 @@ pub(crate) struct ReadArgs {
     /// file-absolute, with the frontmatter included.
     #[arg(short, long, value_name = "RANGE")]
     pub lines: Option<String>,
-    /// Include the YAML frontmatter in output
+    /// Return YAML frontmatter only, or combine it with a body selector
     ///
-    /// Text output echoes the block's own bytes between its `---` fences —
+    /// By itself, this omits the body. Combine with --lines or --section to
+    /// return both frontmatter and the selected body. Text output echoes the block's own bytes between its `---` fences —
     /// indentation, quote style and comments exactly as on disk; no YAML is
     /// re-serialized on a read path. JSON keeps the parsed map under
     /// `frontmatter` and adds the raw text as `frontmatter_raw` (null for a
@@ -1121,7 +1122,8 @@ pub(crate) enum Commands {
             Returns the raw text after the YAML frontmatter block. Use --section to extract a \
             specific section by heading (case-insensitive substring match; use leading '#' to \
             pin heading level, e.g. '## Tasks'; use '/regex/' for regex matching; nested subsections are included), \
-            --lines to slice a line range, and --frontmatter to include the YAML frontmatter.\n\n\
+            --lines to slice a line range. --frontmatter by itself returns only the YAML block;\n\
+            combine it with --lines or --section to return frontmatter plus selected body text.\n\n\
             OUTPUT: Defaults to plain text (unlike all other commands which default to JSON). \
             Pass --format json to get \
             {\"results\": {\"file\": \"...\", \"size\": N, \"lines\": N, \"content\": \"...\"}, \"hints\": [...]}. \

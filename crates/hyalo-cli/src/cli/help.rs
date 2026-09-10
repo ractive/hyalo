@@ -477,8 +477,8 @@ COOKBOOK:
   # Get just file paths (no metadata)
   hyalo find --property status=draft --jq '[.results[].file]'
 
-  # Pipe file paths for scripting (Unix)
-  hyalo find --tag research --jq '.results[].file' | xargs -I{} hyalo set --property reviewed=true --file {}
+  # Preview a native filtered mutation; rerun without --dry-run after review
+  hyalo set --tag reviewed --where-tag research --glob '**/*.md' --dry-run
 
   # Find all files that link to a given note (positional FILE)
   hyalo backlinks decision-log.md
@@ -561,7 +561,8 @@ OUTPUT SHAPES (JSON, default):
   #     links auto: matched)
   #   - top-level results keys are always present (0 / false / [] / null
   #     included); only per-item records inside arrays omit optional keys
-  #   - every mutating command reports dry_run and skipped_count
+  #   - object-shaped mutation results report dry_run where the command supports it;
+  #     skipped_count belongs to the bulk set/remove/append/rename families
 
   # find — results is an array of file objects; these keys are the default
   # set, and `title` is promoted OUT of `properties`. `title_source` rides

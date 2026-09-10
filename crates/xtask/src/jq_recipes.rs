@@ -128,6 +128,90 @@ fn comment_start(cmd: &str) -> Option<usize> {
     None
 }
 
+/// Extract one continued `hyalo` command from the fenced example following a
+/// named heading. The executable documentation contracts use only this small
+/// shell subset: argv quoting plus a trailing `\` line continuation.
+fn fenced_command_after(body: &str, heading: &str, prefix: &str) -> Option<String> {
+    let section = body.split_once(heading)?.1;
+    let section = section.split("\n##").next().unwrap_or(section);
+    let mut in_fence = false;
+    let mut command = String::new();
+    let mut collecting = false;
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            if collecting && !command.is_empty() {
+                return Some(command);
+            }
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence || trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        if !collecting {
+            if !trimmed.starts_with(prefix) {
+                continue;
+            }
+            collecting = true;
+        }
+        let continued = trimmed.ends_with('\\');
+        let part = trimmed.strip_suffix('\\').unwrap_or(trimmed).trim_end();
+        if !command.is_empty() {
+            command.push(' ');
+        }
+        command.push_str(part);
+        if !continued {
+            return Some(command);
+        }
+    }
+    collecting.then_some(command).filter(|cmd| !cmd.is_empty())
+}
+
+/// Detect the unsafe legacy shape where JSON output was handed to `xargs` as
+/// filenames. Pipes inside the quoted jq program do not count.
+fn has_unsafe_hyalo_xargs_pipeline(body: &str) -> bool {
+    let body = body.replace("\\\n", " ");
+    body.lines().any(|line| {
+        let mut quote = None;
+        for (offset, ch) in line.char_indices() {
+            match quote {
+                Some(current) if ch == current => quote = None,
+                Some(_) => {}
+                None if ch == '\'' || ch == '"' => quote = Some(ch),
+                None if ch == '|' => {
+                    let left = &line[..offset];
+                    let right = line[offset + ch.len_utf8()..].trim_start();
+                    if left.contains("hyalo ")
+                        && left.contains("--jq")
+                        && (right == "xargs" || right.starts_with("xargs "))
+                    {
+                        return true;
+                    }
+                }
+                None => {}
+            }
+        }
+        false
+    })
+}
+
+/// Extract the ordinary shell body from the OKF GitHub Actions `run: |`
+/// example. The block is executed by Bash as a whole; its individual commands
+/// are deliberately not interpreted or replaced in Rust.
+fn okf_ci_shell_block(body: &str) -> Option<String> {
+    let section = body.split_once("## OKF reserved-file drift check")?.1;
+    let section = section.split("\n## ").next().unwrap_or(section);
+    let mut lines = section.lines();
+    lines.find(|line| matches!(line.trim(), "- run: |" | "run: |"))?;
+    let commands: Vec<_> = lines
+        .take_while(|line| !line.trim().starts_with("```"))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    (!commands.is_empty()).then(|| commands.join("\n"))
+}
+
 /// Split a documented command line into argv, honouring single and double
 /// quotes (the only quoting the recipes use).
 pub fn split_argv(cmd: &str) -> Vec<String> {
@@ -227,6 +311,8 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
         }
     }
 
+    failures.extend(documentation_contract_failures(root)?);
+
     if failures.is_empty() {
         println!(
             "check-jq-recipes: {checked} shipped --jq recipe(s) execute against the vault \
@@ -244,6 +330,297 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
         );
         Ok(false)
     }
+}
+
+/// Execute the mutation/CI/view recipes whose contract cannot be established
+/// by merely proving that an embedded jq expression parses.
+fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
+    let mut failures = Vec::new();
+    let skill = std::fs::read_to_string(root.join("pi-package/skills/hyalo/SKILL.md"))?;
+    let tmp = tempfile::tempdir().context("creating documentation recipe fixture")?;
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(vault.join("iterations"))?;
+    let config = "dir = \"vault\"\n\n[views.existing]\nproperties = [\"status=planned\"]\n";
+    std::fs::write(tmp.path().join(".hyalo.toml"), config)?;
+    let selected = vault.join("iterations/planned note.md");
+    let sentinel = vault.join("iterations/completed.md");
+    std::fs::write(
+        &selected,
+        "---\ntitle: Planned\nstatus: planned\n---\nbody\n",
+    )?;
+    std::fs::write(
+        &sentinel,
+        "---\ntitle: Completed\nstatus: completed\n---\nsentinel\n",
+    )?;
+    let selected_before = std::fs::read(&selected)?;
+    let sentinel_before = std::fs::read(&sentinel)?;
+
+    match fenced_command_after(&skill, "### Bulk Status Updates", "hyalo set ") {
+        Some(recipe) => {
+            let argv = split_argv(&recipe);
+            if argv.first().map(String::as_str) != Some("hyalo")
+                || !argv.iter().any(|arg| arg == "--dry-run")
+            {
+                failures
+                    .push("bulk status recipe must be an executable dry-run hyalo command".into());
+            } else {
+                let preview_args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
+                let preview = run_hyalo(root, tmp.path(), &preview_args)?;
+                if !preview.status.success()
+                    || std::fs::read(&selected)? != selected_before
+                    || std::fs::read(&sentinel)? != sentinel_before
+                {
+                    failures.push(
+                        "documented native bulk recipe did not preview without changing bytes"
+                            .into(),
+                    );
+                }
+                let apply_args: Vec<_> = preview_args
+                    .iter()
+                    .copied()
+                    .filter(|arg| *arg != "--dry-run")
+                    .collect();
+                let applied = run_hyalo(root, tmp.path(), &apply_args)?;
+                let selected_after = std::fs::read_to_string(&selected)?;
+                if !applied.status.success()
+                    || !selected_after.contains("status: deferred")
+                    || std::fs::read(&sentinel)? != sentinel_before
+                {
+                    failures.push(
+                        "documented native bulk recipe changed the wrong selected set".into(),
+                    );
+                }
+
+                // The same shipped preview must be safe when its filter selects
+                // nothing; this is also the state after the apply above.
+                let selected_after = std::fs::read(&selected)?;
+                let empty_preview = run_hyalo(root, tmp.path(), &preview_args)?;
+                if !empty_preview.status.success()
+                    || std::fs::read(&selected)? != selected_after
+                    || std::fs::read(&sentinel)? != sentinel_before
+                {
+                    failures.push(
+                        "documented native bulk recipe mishandled an empty selected set".into(),
+                    );
+                }
+
+                // Negative control: removing the documented filter must make
+                // this fixture catch the broadened write through the sentinel.
+                let unfiltered = recipe.replace("--where-property status=planned ", "");
+                let unfiltered_argv = split_argv(&unfiltered);
+                let unfiltered_args: Vec<_> = unfiltered_argv
+                    .iter()
+                    .skip(1)
+                    .map(String::as_str)
+                    .filter(|arg| *arg != "--dry-run")
+                    .collect();
+                let negative = tempfile::tempdir().context("creating unfiltered recipe control")?;
+                let negative_vault = negative.path().join("vault/iterations");
+                std::fs::create_dir_all(&negative_vault)?;
+                std::fs::write(negative.path().join(".hyalo.toml"), "dir = \"vault\"\n")?;
+                std::fs::write(
+                    negative_vault.join("planned note.md"),
+                    "---\ntitle: Planned\nstatus: planned\n---\nbody\n",
+                )?;
+                let negative_sentinel = negative_vault.join("completed.md");
+                std::fs::write(
+                    &negative_sentinel,
+                    "---\ntitle: Completed\nstatus: completed\n---\nsentinel\n",
+                )?;
+                let negative_before = std::fs::read(&negative_sentinel)?;
+                let broadened = run_hyalo(root, negative.path(), &unfiltered_args)?;
+                if !broadened.status.success()
+                    || std::fs::read(&negative_sentinel)? == negative_before
+                {
+                    failures.push(
+                        "bulk recipe fixture no longer rejects removal of the selection filter"
+                            .into(),
+                    );
+                }
+            }
+        }
+        None => failures.push("canonical Pi skill has no executable bulk status recipe".into()),
+    }
+
+    let config_before = std::fs::read(tmp.path().join(".hyalo.toml"))?;
+    let views = run_hyalo(
+        root,
+        tmp.path(),
+        &["views", "list", "--format", "json", "--no-hints"],
+    )?;
+    if !views.status.success() || std::fs::read(tmp.path().join(".hyalo.toml"))? != config_before {
+        failures.push("tidy orientation did not preserve saved views byte-for-byte".into());
+    }
+
+    let ci = std::fs::read_to_string(root.join("docs/ci.md"))?;
+    failures.extend(okf_ci_contract_failures(root, &ci)?);
+    if has_unsafe_hyalo_xargs_pipeline(&skill) {
+        failures.push("canonical Pi skill pipes JSON output into xargs filenames".into());
+    }
+    let empty = run_hyalo(
+        root,
+        tmp.path(),
+        &[
+            "find",
+            "--property",
+            "status=missing",
+            "--jq",
+            ".results",
+            "--no-hints",
+        ],
+    )?;
+    let empty_stdout = String::from_utf8_lossy(&empty.stdout);
+    let mut unsafe_args = vec!["set"];
+    unsafe_args.extend(empty_stdout.split_whitespace());
+    unsafe_args.extend(["--property", "status=deferred", "--dry-run"]);
+    let unsafe_consumer = run_hyalo(root, tmp.path(), &unsafe_args)?;
+    if !empty.status.success() || empty_stdout.trim() != "[]" || unsafe_consumer.status.success() {
+        failures.push(
+            "empty-result control no longer proves that JSON [] is unsafe filename input".into(),
+        );
+    }
+    let tidy = std::fs::read_to_string(root.join("pi-package/skills/hyalo-tidy/SKILL.md"))?;
+    if tidy.contains("hyalo views set") {
+        failures.push("tidy orientation still overwrites saved views".into());
+    }
+    Ok(failures)
+}
+
+fn okf_ci_contract_failures(root: &Path, ci: &str) -> Result<Vec<String>> {
+    let mut failures = Vec::new();
+    let Some(script) = okf_ci_shell_block(ci) else {
+        return Ok(vec!["OKF CI block has no executable run script".into()]);
+    };
+    let tmp = tempfile::tempdir().context("creating OKF CI recipe fixture")?;
+    let vault = tmp.path().join("vault");
+    std::fs::create_dir_all(&vault)?;
+    std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \"vault\"\n")?;
+    std::fs::write(
+        vault.join("concept.md"),
+        "---\ntype: Concept\ntitle: Example\n---\nBody\n",
+    )?;
+
+    let drift = run_okf_ci_shell(root, tmp.path(), &script)?;
+    if let Some(failure) = shell_status_failure(&drift, false, "actual drift") {
+        failures.push(failure);
+    }
+
+    // Negative control for the review finding: `set +e` makes the first
+    // failing test ignorable and lets the later successful test overwrite the
+    // block status. The same status validator used above must reject it.
+    let ignored_check = format!("set +e\n{script}");
+    let ignored = run_okf_ci_shell(root, tmp.path(), &ignored_check)?;
+    if shell_status_failure(&ignored, false, "ignored-check negative control").is_none() {
+        failures.push("OKF shell gate did not reject an ignored drift check".into());
+    }
+
+    let applied = run_hyalo(
+        root,
+        tmp.path(),
+        &["okf", "index", "--format", "json", "--no-hints", "--apply"],
+    )?;
+    let clean = run_okf_ci_shell(root, tmp.path(), &script)?;
+    if !applied.status.success() {
+        failures.push("preparing the clean OKF shell fixture failed".into());
+    }
+    if let Some(failure) = shell_status_failure(&clean, true, "clean generated bundle") {
+        failures.push(failure);
+    }
+
+    std::fs::write(
+        vault.join("index.md"),
+        "# Index\n\n<!-- okf:index:begin -->\nhand prose\n",
+    )?;
+    let skipped = run_okf_ci_shell(root, tmp.path(), &script)?;
+    if let Some(failure) = shell_status_failure(&skipped, false, "skipped marker") {
+        failures.push(failure);
+    }
+
+    std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \"missing\"\n")?;
+    let failed = run_okf_ci_shell(root, tmp.path(), &script)?;
+    if let Some(failure) = shell_status_failure(&failed, false, "configuration failure") {
+        failures.push(failure);
+    }
+    Ok(failures)
+}
+
+fn shell_status_failure(
+    output: &std::process::Output,
+    expected_success: bool,
+    scenario: &str,
+) -> Option<String> {
+    (output.status.success() != expected_success).then(|| {
+        format!(
+            "documented OKF shell block returned {} for {scenario}; stderr: {}",
+            output.status,
+            first_error_line(
+                &String::from_utf8_lossy(&output.stdout),
+                &String::from_utf8_lossy(&output.stderr)
+            )
+        )
+    })
+}
+
+fn run_okf_ci_shell(root: &Path, cwd: &Path, script: &str) -> Result<std::process::Output> {
+    let executable = [
+        root.join("target")
+            .join("release")
+            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" }),
+        root.join("target")
+            .join("debug")
+            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" }),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .context("check-jq-recipes needs a built hyalo binary")?;
+    let binary_dir = executable
+        .parent()
+        .context("built hyalo binary has no parent directory")?;
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(binary_dir.to_path_buf()).chain(std::env::split_paths(&existing_path)),
+    )
+    .context("constructing PATH for documented OKF shell block")?;
+    Command::new("bash")
+        .args(["-euo", "pipefail", "-c", script])
+        .env("PATH", path)
+        .current_dir(cwd)
+        .output()
+        .context(
+            "running documented OKF CI block (requires Bash and jq; GitHub ubuntu-latest provides both)",
+        )
+}
+
+fn run_hyalo(root: &Path, cwd: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let release =
+        root.join("target")
+            .join("release")
+            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" });
+    let mut command = if release.is_file() {
+        Command::new(release)
+    } else {
+        let mut cargo = Command::new("cargo");
+        cargo.args([
+            "run",
+            "-q",
+            "--manifest-path",
+            &root.join("Cargo.toml").to_string_lossy(),
+            "-p",
+            "hyalo-cli",
+            "--",
+        ]);
+        cargo
+    };
+    command
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .with_context(|| {
+            format!(
+                "running documentation contract recipe: hyalo {}",
+                args.join(" ")
+            )
+        })
 }
 
 /// What running one recipe proved.
@@ -383,5 +760,41 @@ mod tests {
             Some("set")
         );
         assert_eq!(subcommand_of(&split_argv("hyalo --dir kb find")), None);
+    }
+
+    #[test]
+    fn extracts_the_actual_continued_bulk_recipe() {
+        let body = "### Bulk Status Updates\n```bash\n# Preview\nhyalo set --glob 'iterations/*.md' --where-property status=planned \\\n  --property status=deferred --dry-run --format text\n```";
+        assert_eq!(
+            fenced_command_after(body, "### Bulk Status Updates", "hyalo set ").as_deref(),
+            Some(
+                "hyalo set --glob 'iterations/*.md' --where-property status=planned --property status=deferred --dry-run --format text"
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_filename_consumers_across_spacing_and_lines() {
+        assert!(has_unsafe_hyalo_xargs_pipeline(
+            "hyalo find --jq '.results' \\\n              |   xargs hyalo set --property status=done"
+        ));
+        assert!(!has_unsafe_hyalo_xargs_pipeline(
+            "hyalo find --jq '.results[] | .file'"
+        ));
+    }
+
+    #[test]
+    fn extracts_the_complete_okf_ci_shell_block() {
+        let command = "report=\"$(hyalo okf index --format json --no-hints)\"";
+        let changed = "test \"$(jq '.results.changed' <<<\"$report\")\" -eq 0";
+        let markers = "test \"$(jq '.results.skipped_markers' <<<\"$report\")\" -eq 0";
+        let docs = format!(
+            "## OKF reserved-file drift check\n\n```yaml\n      - run: |\n          {command}\n          {changed}\n          {markers}\n```\n\n## Next"
+        );
+        let expected = format!("{command}\n{changed}\n{markers}");
+        assert_eq!(
+            okf_ci_shell_block(&docs).as_deref(),
+            Some(expected.as_str())
+        );
     }
 }

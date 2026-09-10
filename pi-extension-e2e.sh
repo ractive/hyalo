@@ -48,6 +48,12 @@ done
 [[ -f "$PI_PKG/package.json" ]] || fail "could not locate pi package.json from $PI_BIN"
 [[ -f "$PI_PKG/dist/index.d.ts" ]] || fail "pi package at $PI_PKG has no dist/index.d.ts"
 echo "pi package: $PI_PKG ($(node -p "require('$PI_PKG/package.json').version"))"
+PI_VERSION="$($PI_BIN --version)"
+PI_PROVIDER="openrouter"
+PI_MODEL="openai/gpt-5.6-sol"
+PI_THINKING="high"
+PI_MODEL_ARGS=(--provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING")
+echo "live model: provider=$PI_PROVIDER model=$PI_MODEL thinking=$PI_THINKING pi=$PI_VERSION"
 
 [[ -f "$TEMPLATE" ]] || fail "template not found: $TEMPLATE"
 [[ -f "$RUNTIME" ]] || fail "API runtime not found beside template: $RUNTIME"
@@ -102,7 +108,34 @@ EOF
 
 (cd "$WORK" && npm exec --package=typescript@5 -- tsc -p tsconfig.json) \
     || fail "template does not type-check against installed pi ($PI_PKG) — extension API drift"
-echo "type-check OK"
+cat > "$WORK/validate-entry.ts" <<'EOF'
+import extension from "./extensions/extension-hyalo.js";
+import { Value } from "typebox/value";
+const tools = new Map<string, { parameters: unknown }>();
+extension({
+  exec: async () => ({ code: 0, stdout: "", stderr: "", killed: false }),
+  registerTool: (tool: { name: string; parameters: unknown }) => tools.set(tool.name, tool),
+  registerCommand() {}, on() {}, sendMessage() {},
+} as never);
+const valid: Record<string, unknown> = {
+  hyalo: { subcommand: "find", args: ["--count"] },
+  hyalo_find: { property: ["status=planned"], limit: 2 },
+  hyalo_read: { file: "note.md" },
+  hyalo_set: { file: "note.md", property: "status=completed" },
+  hyalo_task: { file: "note.md", mode: "line", lines: [7] },
+};
+for (const [name, value] of Object.entries(valid)) {
+  const tool = tools.get(name);
+  if (!tool || !Value.Check(tool.parameters as never, value)) throw new Error(`${name}: valid fixture rejected`);
+}
+if (Value.Check(tools.get("hyalo_task")!.parameters as never, { file: "note.md", mode: "bogus" })) {
+  throw new Error("hyalo_task: invalid enum accepted");
+}
+EOF
+"$REPO_ROOT/npm/hyalo/node_modules/.bin/esbuild" "$WORK/validate-entry.ts" \
+    --bundle --platform=node --format=esm --outfile="$WORK/validate-entry.mjs" >/dev/null
+node "$WORK/validate-entry.mjs" || fail "real TypeBox schemas rejected expected fixtures"
+echo "type-check and real TypeBox validation OK"
 
 # --- layer 2: live e2e with builtin tools disabled ----------------------
 echo
@@ -110,7 +143,7 @@ echo "== [3/5] live e2e: forcing the hyalo tool (no bash fallback possible) =="
 # Query must return a plain count. Vault contents change, but the term
 # "iteration" always matches in hyalo's own knowledgebase and test vaults
 # that run this script; --count output is a bare number.
-OUT="$(pi -ne --no-builtin-tools -e "$TEMPLATE" -p \
+OUT="$(pi -ne "${PI_MODEL_ARGS[@]}" --no-builtin-tools -e "$TEMPLATE" -p \
     'Call the hyalo tool with subcommand "find" and args ["\"iteration\"", "--count"]. Reply with ONLY the number the tool returned, nothing else.')" \
     || fail "pi run failed (extension may not have loaded — check registerTool/registerCommand API)"
 
@@ -131,7 +164,7 @@ echo
 echo "== [4/5] guardrail e2e: lint findings appended to write result =="
 GUARD_FILE="hyalo-knowledgebase/.pi-e2e-guard.md"
 rm -f "$GUARD_FILE"
-OUT="$(pi -ne -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
+OUT="$(pi -ne "${PI_MODEL_ARGS[@]}" -t write -e "$TEMPLATE" -p "Use the write tool to create $GUARD_FILE with exactly this content:
 ---
 title: Guardrail test
 ---
@@ -178,7 +211,7 @@ EOF
 run_typed() {
     local label="$1" prompt="$2" needle="$3"
     local out
-    out="$(pi -ne --no-builtin-tools -e "$TEMPLATE" -p "$prompt")" \
+    out="$(pi -ne "${PI_MODEL_ARGS[@]}" --no-builtin-tools -e "$TEMPLATE" -p "$prompt")" \
         || fail "typed tool '$label': pi run failed (tool may not be registered)"
     if ! grep -q "$needle" <<<"$out"; then
         fail "typed tool '$label': expected output containing '$needle', got: $out"
@@ -202,6 +235,65 @@ run_typed hyalo_task \
 grep -q '\[x\]' "$SCRATCH" || fail "hyalo_task ran but no checkbox toggled to [x]"
 rm -rf "$(dirname "$SCRATCH")"
 echo "typed-tool e2e OK: all four typed tools answered structured calls"
+
+# Exact model-backed C10 fixture: the enum accepts `completed`, the write
+# succeeds, and the resulting open task makes HYALO002 visible once through
+# the typed tool's effect-based guardrail.
+LIVE_VAULT="$WORK/live-vault"
+mkdir "$LIVE_VAULT"
+cat > "$LIVE_VAULT/.hyalo.toml" <<'EOF'
+dir = "."
+
+[schema.types.iteration]
+required = ["title", "status"]
+
+[schema.types.iteration.properties.status]
+type = "enum"
+values = ["planned", "in-progress", "completed"]
+
+[lint.rules.HYALO002]
+enabled = true
+severity = "warning"
+EOF
+cat > "$LIVE_VAULT/guarded.md" <<'EOF'
+---
+title: Guarded iteration
+type: iteration
+status: planned
+---
+
+- [ ] unfinished acceptance
+EOF
+LIVE_EVENTS="$WORK/live-guardrail-events.jsonl"
+(cd "$LIVE_VAULT" && pi --mode json --print --no-session --offline --no-extensions --no-skills \
+    "${PI_MODEL_ARGS[@]}" --no-builtin-tools -e "$TEMPLATE" \
+    'Call hyalo_set exactly once with file "guarded.md" and property "status=completed". The write must remain successful. Then reply with the complete tool result verbatim, including any post-write lint warning. Do not call another tool and do not fix the task.' \
+    >"$LIVE_EVENTS") || fail "model-backed typed guardrail run failed"
+OUT="$(node - "$LIVE_EVENTS" <<'NODE'
+const fs = require("node:fs");
+const events = fs.readFileSync(process.argv[2], "utf8").trim().split("\n").map(JSON.parse);
+const end = [...events].reverse().find((event) => event.type === "message_end" && event.message?.role === "assistant");
+if (!end) process.exit(2);
+process.stdout.write(end.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n"));
+NODE
+)" || fail "could not extract final assistant text from live Pi JSON events"
+grep -q 'status: completed' "$LIVE_VAULT/guarded.md" \
+    || fail "model-backed hyalo_set did not persist the accepted enum value"
+HYALO002_COUNT="$(grep -o 'HYALO002' <<<"$OUT" | wc -l | tr -d '[:space:]')"
+[[ "$HYALO002_COUNT" == "1" ]] \
+    || fail "expected visible HYALO002 exactly once after successful typed write, got $HYALO002_COUNT: $OUT"
+node - "$LIVE_EVENTS" <<'NODE'
+const fs = require("node:fs");
+const events = fs.readFileSync(process.argv[2], "utf8").trim().split("\n").map(JSON.parse);
+const end = [...events].reverse().find((event) => event.type === "message_end" && event.message?.role === "assistant");
+const message = end?.message;
+if (!message?.usage) process.exit(2);
+const usage = message.usage;
+console.log(`model-backed usage: provider=${message.provider} model=${message.model} ` +
+  `input=${usage.input} output=${usage.output} cacheRead=${usage.cacheRead} ` +
+  `cacheWrite=${usage.cacheWrite} reasoning=${usage.reasoning ?? 0} totalTokens=${usage.totalTokens}`);
+NODE
+echo "model-backed typed guardrail OK: successful write retained and HYALO002 visible exactly once"
 
 echo
 echo "PASS: template is compatible with installed pi; generic + typed tools and lint guardrail work"

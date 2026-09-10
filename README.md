@@ -14,7 +14,7 @@ Hyalo does not define how you organize your notes. It works with the structure y
 
 Andrej Karpathy popularized the idea of an [LLM-maintained wiki](https://x.com/karpathy/status/1908527375407042770): instead of asking an LLM the same questions repeatedly, you have it build and maintain a persistent, structured knowledgebase that compounds over time. Every source ingested, every question answered adds to the wiki rather than vanishing with the conversation.
 
-Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyalo find` to search across thousands of notes by metadata, full-text, or regex. It can use `hyalo set` to bulk-update frontmatter, `hyalo mv` to reorganize files while keeping all links intact, and `hyalo lint` to enforce schema consistency — all without ever touching raw files or guessing at YAML syntax.
+Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyalo find` to search across thousands of notes by metadata, full-text, or regex. It can use `hyalo set` to bulk-update frontmatter, `hyalo mv` to reorganize files while reporting any ambiguous or unsupported link rewrites, and `hyalo lint` to enforce schema consistency — without guessing at YAML syntax.
 
 ### What it does
 
@@ -22,7 +22,7 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 |---|---|
 | **Search** | Full-text search with BM25 ranking, regex, frontmatter filters, tag/section/task queries |
 | **Mutate** | Set, remove, or append to properties and tags — one file or hundreds at once |
-| **Move** | Rename or reorganize files; hyalo rewrites all `[[wikilinks]]` and `[markdown](links)` across the vault |
+| **Move** | Rename or reorganize files; hyalo rewrites supported links and reports ambiguous or unsupported cases |
 | **Fix links** | Detect broken links and auto-repair them with fuzzy matching |
 | **Validate** | Lint frontmatter against type schemas, auto-fix defaults, typos, and date formats |
 | **Overview** | Property/tag distributions, task counts, orphan files, link health at a glance |
@@ -32,7 +32,7 @@ Hyalo is the tooling layer that makes this practical. An LLM agent can use `hyal
 - **Fast.** Parallel scanning, streaming I/O, optional snapshot index. Handles 10,000+ file vaults in under a second.
 - **Structured output.** TTY-aware: compact `text` for terminals, `json` when piped — with built-in `--jq` support. Easy to pipe into scripts, CI, or AI agents.
 - **AI-agent friendly.** Integrates with Claude Code, Codex, and Pi. Set up project workflows with `hyalo init --claude`, `hyalo init --codex`, or `hyalo init --pi`; Codex and Pi also have installable packages.
-- **Safe mutations.** Dry-run mode on all write operations. Preview before committing changes.
+- **Safe mutations.** Bulk repairs, moves, generators, and link rewrites provide documented preview modes. Check `hyalo <cmd> --help` for the exact command contract.
 - **Cross-platform.** Works on macOS, Linux, and Windows. No runtime dependencies.
 
 ## Installation
@@ -193,7 +193,7 @@ hyalo lint --fix     # apply autofixes
 hyalo new --type iteration --file iterations/iter-99-example.md
 ```
 
-Write commands that modify existing files support `--dry-run` to preview changes before applying them, and every command documents its flags: `hyalo <cmd> --help`.
+Commands that expose `--dry-run` preview their documented changes before applying them. Other mutations, including task toggles, report their exact behavior in `hyalo <cmd> --help`.
 
 ### Agent loop: new → edit → lint
 
@@ -273,7 +273,7 @@ below work once v0.21.0 is tagged):
 pi install git:github.com/ractive/hyalo@v0.21.0
 ```
 
-This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, `hyalo_task`, and a post-write lint guardrail) plus the `hyalo` and `hyalo-tidy` skills. A main-HEAD install updates independently of hyalo releases via `pi update --extensions`; a pinned-tag install moves only on an explicit re-pin (`pi install git:…@vX.Y.Z`).
+This registers the `hyalo` extension (generic + typed tools: `hyalo_find`, `hyalo_read`, `hyalo_set`, and `hyalo_task`) plus the `hyalo` and `hyalo-tidy` skills. The extension runs a post-write lint guardrail for typed `hyalo_set`/`hyalo_task` effects and Pi host write/edit events; generic mutation calls retain their normal CLI result and diagnostics. A main-HEAD install updates independently of hyalo releases via `pi update --extensions`; a pinned-tag install moves only on an explicit re-pin (`pi install git:…@vX.Y.Z`).
 
 A `hyalo` binary on `PATH` is required (any recent release; typed tools need ≥ 0.21). See `pi-package/README.md` for details.
 

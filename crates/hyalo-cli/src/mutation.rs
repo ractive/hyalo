@@ -19,6 +19,7 @@ use crate::cli::args::{
     ChangelogAction, Commands, LinksAction, LintRulesAction, MadrAction, OkfAction,
     PropertiesAction, TagsAction, TaskAction, TypesAction, ViewsAction,
 };
+use clap::Parser as _;
 
 impl Commands {
     /// `true` when this invocation will modify the vault, `.hyalo.toml`, or a
@@ -241,6 +242,12 @@ impl Commands {
             _ => false,
         }
     }
+}
+
+/// Classify a generated continuation from its raw argv through the real Clap
+/// hierarchy. Hints must not infer effects by reparsing their shell rendering.
+pub(crate) fn command_argv_writes(argv: &[String]) -> bool {
+    crate::cli::args::Cli::try_parse_from(argv).is_ok_and(|cli| cli.command.writes())
 }
 
 /// Top-level subcommands (and `group sub` pairs) that write unconditionally.
@@ -468,7 +475,6 @@ fn split_command_line(cmd: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::cli::args::Cli;
-    use clap::Parser as _;
 
     /// Command lines exercised by both classifiers, with the expected verdict.
     const CORPUS: &[(&str, bool)] = &[

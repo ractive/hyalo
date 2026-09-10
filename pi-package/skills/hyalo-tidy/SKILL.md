@@ -46,13 +46,19 @@ hyalo summary --format text
 # 2. Create snapshot index (one scan, reused by all subsequent queries)
 hyalo create-index --format text
 
-# 3. Save recurring diagnostic queries as views for reuse
-hyalo views set stale-in-progress --property status=in-progress --fields tasks --format text
-hyalo views set missing-status --property '!status' --format text
-hyalo views set missing-type --property '!type' --format text
-hyalo views set orphans --orphan --fields backlinks --format text
-hyalo views set completed-with-todos --property status=completed --task todo --fields tasks --format text
+# 3. Inspect existing saved views without rewriting configuration
+hyalo views list --format text
+
+# Use a matching saved view when present; otherwise keep diagnostics inline
+hyalo find --property status=in-progress --fields tasks --index --format text
+hyalo find --property '!status' --index --format text
+hyalo find --property '!type' --index --format text
+hyalo find --orphan --fields backlinks --index --format text
+hyalo find --property status=completed --task todo --fields tasks --index --format text
 ```
+
+Do not create or replace saved views during a tidy unless the user explicitly asks;
+the diagnostic phase must leave existing definitions byte-for-byte unchanged.
 
 The snapshot index captures every file's metadata in a binary file (`.hyalo-index`).
 All read-only queries in Phase 2 and Phase 3 should use `--index` to

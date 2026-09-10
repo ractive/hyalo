@@ -1259,9 +1259,10 @@ type ReadArgs = {
      */
     lines?: string;
     /**
-     * Include the YAML frontmatter in output
+     * Return YAML frontmatter only, or combine it with a body selector
      *
-     * Text output echoes the block's own bytes between its `---` fences —
+     * By itself, this omits the body. Combine with --lines or --section to
+     * return both frontmatter and the selected body. Text output echoes the block's own bytes between its `---` fences —
      * indentation, quote style and comments exactly as on disk; no YAML is
      * re-serialized on a read path. JSON keeps the parsed map under
      * `frontmatter` and adds the raw text as `frontmatter_raw` (null for a
