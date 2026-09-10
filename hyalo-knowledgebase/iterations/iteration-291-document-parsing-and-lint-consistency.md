@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 291 — Document parsing and lint consistency
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -249,7 +249,7 @@ a documented change. Do not broaden this into fuzzy heading matching.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -309,3 +309,7 @@ whole-vault crash-transaction guarantee is implied.
 The run retains the complete original acceptance and finding ledgers, repair/review reports,
 byte snapshots and measured native-review usage. Remote CI and merge are recorded separately;
 this local verification does not claim that pending remote checks have passed.
+
+PR #347 passed all eleven required checks at implementation head
+0e56f0cd9504f0bed1b28944e754b0e2ed9ae29b, including Windows runtime tests and all npm
+launchers. The completed metadata head must pass its own checks before GitHub merge.
