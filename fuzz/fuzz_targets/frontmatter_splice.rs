@@ -48,6 +48,11 @@ fuzz_target!(|data: &[u8]| {
     if std::fs::write(path, data).is_err() {
         return;
     }
+    let before = std::fs::read(path).expect("scratch source remains readable");
+    let before_body = std::str::from_utf8(&before)
+        .ok()
+        .and_then(|source| hyalo_core::frontmatter::DocumentFrame::parse(source).ok())
+        .and_then(|frame| frame.body(&before).map(<[u8]>::to_vec));
 
     // Read side: `Document::parse` (via `read_frontmatter`) must never panic
     // on arbitrary bytes, regardless of what the write side below then does.
@@ -67,10 +72,30 @@ fuzz_target!(|data: &[u8]| {
 
     // Write side: this is what actually drives `splice_frontmatter` when the
     // file already had a parseable frontmatter block.
-    let _ = hyalo_core::frontmatter::write_frontmatter(path, &props);
-
-    // Round-trip: whatever was just written must itself be re-parseable —
-    // a splice bug that emits invalid YAML would show up here even if
-    // `write_frontmatter` itself didn't panic.
-    let _ = hyalo_core::frontmatter::read_frontmatter(path);
+    let write = hyalo_core::frontmatter::write_frontmatter(path, &props);
+    let after = std::fs::read(path).expect("scratch result remains readable");
+    match write {
+        Ok(()) => {
+            // Successful output must satisfy the same normal parser and the
+            // exact property map requested by the mutation.
+            let reparsed = hyalo_core::frontmatter::read_frontmatter(path)
+                .expect("successful frontmatter write must be normally readable");
+            assert_eq!(reparsed, props);
+            // The splice/serialization operation owns frontmatter only. For
+            // every UTF-8 source whose frame can be identified, body bytes are
+            // unrelated source and must survive exactly.
+            if let Some(before_body) = before_body {
+                let after_source = std::str::from_utf8(&after)
+                    .expect("writer preserves a valid UTF-8 source");
+                let after_frame = hyalo_core::frontmatter::DocumentFrame::parse(after_source)
+                    .expect("successful output has a valid frame");
+                assert_eq!(after_frame.body(&after), Some(before_body.as_slice()));
+            }
+        }
+        Err(_) => {
+            // A rejected mutation is transactional: no prefix, delimiter,
+            // body, or unrelated byte may change.
+            assert_eq!(after, before);
+        }
+    }
 });

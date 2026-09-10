@@ -1,4 +1,4 @@
-//! Shared, stateful line classifier for the body-scan loops (iter-183 Phase B).
+//! Compatibility cursor for link-oriented body scan loops.
 //!
 //! Before this module, six independent loops (`link_fix`'s
 //! `build_replacements_for_file`, `auto_link`'s `resolve_existing_link_targets`
@@ -13,9 +13,12 @@
 //! Each copy drifted slightly and none handled **cross-line** suppression: a
 //! CommonMark code span opened with `` `N` `` backticks and closed several
 //! lines later (L-3), or an HTML `<!-- … -->` comment spanning multiple lines
-//! (L-15), leaked `[[links]]` to the extractor. [`LineScanner`] centralizes
-//! all of that so the fixes land once, everywhere, and the frontmatter
-//! delimiter policy is the single canonical one
+//! (L-15), leaked `[[links]]` to the extractor. [`LineScanner`] now delegates
+//! Markdown structural visibility and cross-line inline/HTML state snapshots
+//! to [`crate::body_syntax::BodySyntax`], the shared authority used by index,
+//! read, task and lint consumers, including Obsidian `%%` suppression. This
+//! adapter retains only byte-preserving link cleaning and frontmatter
+//! transport. Frontmatter routing uses the canonical delimiter predicates
 //! ([`crate::frontmatter::is_opening_delimiter`] /
 //! [`crate::frontmatter::is_closing_delimiter`], L-4/L-13).
 //!
@@ -40,13 +43,11 @@
 
 use std::borrow::Cow;
 
-use super::fence::FenceTracker;
-use super::strip::{is_comment_fence, strip_html_comments, strip_inline_code_stateful};
-use super::strip_inline_comments;
+use crate::body_syntax::BodySyntax;
 use crate::frontmatter::{is_closing_delimiter, is_opening_delimiter};
 
 /// Classification of a single physical line produced by [`LineScanner::classify`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LineClass {
     /// The opening `---` of a frontmatter block (line 1 only).
     FrontmatterOpen,
@@ -69,13 +70,9 @@ pub enum LineClass {
 /// returning the cleaned `Cow` directly) so [`LineClass`] stays `Copy` and the
 /// caller decides when to pay for the strip; call [`BodyLine::cleaned`] with
 /// the original line to produce the cleaned text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BodyLine {
-    /// Length of an inline code-span run left open at the start of this line
-    /// (carried from a previous line); `None` if no span was open.
-    open_code_run: Option<usize>,
-    /// Whether an HTML comment was open at the start of this line.
-    in_html_comment: bool,
+    visible: String,
 }
 
 impl BodyLine {
@@ -89,47 +86,28 @@ impl BodyLine {
     /// pass the slice after this line; `""` yields single-line semantics for
     /// an unclosed opener.
     #[must_use]
-    pub fn cleaned<'a>(&self, line: &'a str, rest: &str) -> Cow<'a, str> {
-        // 1. Inline code spans first (carrying the open run), then 2. `%%`
-        //    comments, then 3. HTML comments — the same order the multi-visitor
-        //    scanner uses, extended with cross-line state.
-        let mut open = self.open_code_run;
-        let after_code = strip_inline_code_stateful(line, &mut open, rest);
-        let after_comment = strip_inline_comments(after_code.as_ref());
-        let mut in_html = self.in_html_comment;
-        // `strip_html_comments` needs to see the code/comment-blanked text so
-        // a `<!--` inside a code span is not treated as a real comment opener.
-        match strip_html_comments(after_comment.as_ref(), &mut in_html) {
-            Cow::Borrowed(_) => {
-                // No HTML change: return whichever earlier form we have,
-                // preserving the borrow when possible.
-                match after_comment {
-                    Cow::Borrowed(_) => after_code,
-                    Cow::Owned(s) => Cow::Owned(s),
-                }
-            }
-            Cow::Owned(s) => Cow::Owned(s),
+    pub fn cleaned<'a>(&self, line: &'a str, _rest: &str) -> Cow<'a, str> {
+        if self.visible == line {
+            Cow::Borrowed(line)
+        } else {
+            Cow::Owned(self.visible.clone())
         }
     }
 }
 
-/// Stateful, single-pass line classifier shared by every body-scan loop.
+/// Stateful compatibility cursor shared by link-oriented body-scan loops.
 ///
-/// Tracks frontmatter, fenced code blocks, `%%` comment fences, cross-line
-/// inline code spans (L-3), and cross-line HTML comments (L-15). Feed it one
-/// physical line at a time via [`classify`](Self::classify); it returns a
-/// [`LineClass`] describing how the caller should treat the line.
+/// It routes frontmatter, while [`BodySyntax`] supplies fenced/indented-code,
+/// `%%` comment, HTML-comment and inline-code state. Feed it one
+/// physical line at a time via [`classify`](Self::classify).
 #[derive(Debug)]
 pub struct LineScanner {
     line_num: usize,
-    fence: FenceTracker,
-    in_comment_fence: bool,
     in_frontmatter: bool,
     frontmatter_done: bool,
-    /// Open inline code-span run length carried across body lines (L-3).
-    open_code_run: Option<usize>,
-    /// Whether an HTML comment is open across body lines (L-15).
-    in_html_comment: bool,
+    /// Shared structural classification, initialized at the first body line.
+    body_syntax: Option<BodySyntax>,
+    body_line: usize,
 }
 
 impl Default for LineScanner {
@@ -144,12 +122,10 @@ impl LineScanner {
     pub fn new() -> Self {
         Self {
             line_num: 0,
-            fence: FenceTracker::new(),
-            in_comment_fence: false,
             in_frontmatter: false,
             frontmatter_done: false,
-            open_code_run: None,
-            in_html_comment: false,
+            body_syntax: None,
+            body_line: 0,
         }
     }
 
@@ -185,47 +161,36 @@ impl LineScanner {
             self.frontmatter_done = true;
         }
 
-        // ---- Comment fence (Obsidian %% blocks) ----
-        // When already inside a comment block, only the closing `%%` matters;
-        // fenced code inside a comment is literal, so it is not processed.
-        if self.in_comment_fence {
-            if is_comment_fence(line) {
-                self.in_comment_fence = false;
-            }
-            return LineClass::Skip;
+        if self.body_syntax.is_none() {
+            let body = if rest.is_empty() {
+                line.to_owned()
+            } else {
+                format!("{line}\n{rest}")
+            };
+            self.body_syntax = Some(BodySyntax::new(&body));
         }
+        self.body_line += 1;
+        let syntax = self.body_syntax.as_ref().expect("initialized above");
 
-        // ---- Fenced code block ----
-        // Process fences BEFORE the `%%` toggle so a literal `%%` inside a
-        // fenced code block is treated as code, not a comment delimiter (L-8).
-        if self.fence.process_line(line) {
-            return LineClass::Skip;
-        }
-
-        // ---- Comment fence opening (only outside code blocks) ----
-        if is_comment_fence(line) {
-            self.in_comment_fence = true;
+        // Structural visibility comes from BodySyntax, the single authority
+        // shared with task, heading, read, index and lint consumers.
+        if syntax.line_is_code(self.body_line)
+            || syntax.line_is_fence_delimiter(self.body_line)
+            || syntax.line_is_html_comment(self.body_line)
+            || syntax.line_is_percent_comment(self.body_line)
+        {
             return LineClass::Skip;
         }
 
         // ---- Normal body line ----
-        let body = BodyLine {
-            open_code_run: self.open_code_run,
-            in_html_comment: self.in_html_comment,
-        };
-
-        // Advance the cross-line suppression state so the NEXT line continues
-        // any code span / HTML comment that this line left open (L-3, L-15).
-        // We compute the trailing state cheaply by re-running the stateful
-        // strippers here (the caller re-runs them in `BodyLine::cleaned`, but
-        // that pass is on a snapshot; state must live on the scanner).
-        let mut open = self.open_code_run;
-        let after_code = strip_inline_code_stateful(line, &mut open, rest);
-        self.open_code_run = open;
-        let after_comment = strip_inline_comments(after_code.as_ref());
-        let mut in_html = self.in_html_comment;
-        let _ = strip_html_comments(after_comment.as_ref(), &mut in_html);
-        self.in_html_comment = in_html;
+        let mut visible = syntax
+            .visible_line(self.body_line)
+            .unwrap_or(line)
+            .to_owned();
+        if line.ends_with('\r') {
+            visible.push('\r');
+        }
+        let body = BodyLine { visible };
 
         LineClass::Body(body)
     }
@@ -402,15 +367,18 @@ mod tests {
         // L-15: an HTML comment spanning lines blanks interior links.
         let content = "before <!-- open\n[[hidden]]\nclose --> after [[visible]]";
         let lines = body_lines(content);
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].0.contains("before"));
-        assert!(!lines[1].0.contains("hidden"), "line2: {:?}", lines[1].0);
-        assert!(
-            lines[2].0.contains("[[visible]]"),
-            "line3: {:?}",
-            lines[2].0
+        assert_eq!(
+            lines.len(),
+            2,
+            "wholly commented line is structurally skipped"
         );
-        assert!(!lines[2].0.contains("close"), "line3: {:?}", lines[2].0);
+        assert!(lines[0].0.contains("before"));
+        assert!(
+            lines[1].0.contains("[[visible]]"),
+            "line3: {:?}",
+            lines[1].0
+        );
+        assert!(!lines[1].0.contains("close"), "line3: {:?}", lines[1].0);
     }
 
     #[test]

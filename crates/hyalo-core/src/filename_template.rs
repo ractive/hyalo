@@ -129,13 +129,18 @@ impl FilenameTemplate {
     /// - `{slug}` -> `*`             (any characters - glob has no slug-char class)
     /// - `{date}` -> `[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]` (YYYY-MM-DD digits only)
     ///
-    /// Literal segments are passed through unchanged.
+    /// Literal segments are escaped so supported template paths containing
+    /// glob metacharacters remain discoverable by the coarse superset.
     pub fn to_glob(&self) -> String {
         let mut out = String::new();
         for seg in &self.segments {
             match seg {
-                Segment::Literal(s) => out.push_str(s),
-                Segment::Placeholder(Placeholder::N { .. }) => out.push_str("[0-9][0-9]*"),
+                Segment::Literal(s) => out.push_str(&globset::escape(s)),
+                // Glob `*` is not a repetition operator: `[0-9][0-9]*`
+                // requires two digits. Keep discovery deliberately coarse
+                // (one leading digit plus any tail), then use `matches` as
+                // the exact post-filter.
+                Segment::Placeholder(Placeholder::N { .. }) => out.push_str("[0-9]*"),
                 Segment::Placeholder(Placeholder::Slug) => out.push('*'),
                 Segment::Placeholder(Placeholder::Date) => {
                     out.push_str("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]");
@@ -338,7 +343,18 @@ mod tests {
     fn padded_number_glob_is_permissive() {
         let t = FilenameTemplate::parse("decisions/{n:04}-{slug}.md").unwrap();
         // The glob for a padded number is the same permissive digit-run form.
-        assert_eq!(t.to_glob(), "decisions/[0-9][0-9]*-*.md");
+        assert_eq!(t.to_glob(), "decisions/[0-9]*-*.md");
+    }
+
+    #[test]
+    fn glob_escapes_literal_metacharacters_and_remains_a_superset() {
+        let template = FilenameTemplate::parse("decisions/[draft]/{n}-{slug}.md").unwrap();
+        assert!(template.matches("decisions/[draft]/1-test.md"));
+        let glob = globset::Glob::new(&template.to_glob())
+            .unwrap()
+            .compile_matcher();
+        assert!(glob.is_match("decisions/[draft]/1-test.md"));
+        assert!(!glob.is_match("decisions/d/1-test.md"));
     }
 
     #[test]

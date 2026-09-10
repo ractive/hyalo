@@ -450,16 +450,24 @@ impl SnippetQuery {
             return Ok(Vec::new());
         }
         let mut reader = std::io::BufReader::new(file);
-        let mut buf = String::new();
-        let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)?;
-        if n == 0 {
+        let framed = crate::frontmatter::read_frame_for_body(&mut reader, MAX_BODY_LINE_BYTES)?;
+        if framed.bytes().is_empty() {
             return Ok(Vec::new());
         }
-        let fm_lines = crate::frontmatter::skip_frontmatter(&mut reader, &buf)?;
+        let fm_lines = if framed.frame().frontmatter().is_some() {
+            memchr::memchr_iter(b'\n', framed.bytes()).count()
+                + usize::from(!framed.bytes().ends_with(b"\n"))
+        } else {
+            0
+        };
         let mut line = fm_lines.max(1);
-        if fm_lines == 0 && outcome == LineOutcome::Complete {
-            visitor.on_raw_body_line(buf.trim_end_matches(['\r', '\n']), line);
+        if fm_lines == 0
+            && framed.first_line_complete()
+            && let Ok(first_line) = std::str::from_utf8(framed.bytes())
+        {
+            visitor.on_raw_body_line(first_line.trim_end_matches(['\r', '\n']), line);
         }
+        let mut buf = String::new();
         loop {
             buf.clear();
             let (n, outcome) = read_line_capped(&mut reader, &mut buf, MAX_BODY_LINE_BYTES)?;

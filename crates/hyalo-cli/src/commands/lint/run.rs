@@ -64,12 +64,12 @@ pub(crate) fn run(
         // --strict flag wins over config value; config value is the fallback.
         let effective_strict = lint_strict_flag || ctx.lint_strict;
         // Resolve --type to a glob pattern from its filename_template.
-        let type_glob: Option<String> = if let Some(type_name) = lint_type {
+        let type_template = if let Some(type_name) = lint_type {
             use hyalo_core::filename_template::FilenameTemplate;
             match ctx.schema.types.get(&type_name) {
                 Some(ts) => match &ts.filename_template {
                     Some(template_str) => match FilenameTemplate::parse(template_str) {
-                        Ok(tpl) => Some(tpl.to_glob()),
+                        Ok(tpl) => Some(tpl),
                         Err(e) => {
                             return Ok(crate::output::CommandOutcome::UserError(
                                 crate::output::user_diagnostic(
@@ -120,8 +120,8 @@ pub(crate) fn run(
         let mut files_arg: Vec<String> = file_positional;
         files_arg.extend(file);
         // --type expands to a glob that overrides file/glob args.
-        let effective_glob: Vec<String> = if let Some(g) = type_glob {
-            vec![g]
+        let effective_glob: Vec<String> = if let Some(template) = type_template.as_ref() {
+            vec![template.to_glob()]
         } else {
             glob
         };
@@ -135,6 +135,9 @@ pub(crate) fn run(
             crate::commands::FilesOrOutcome::Files(f) => f,
             crate::commands::FilesOrOutcome::Outcome(o) => return Ok(o),
         };
+        if let Some(template) = type_template.as_ref() {
+            file_pairs.retain(|(_, relative)| template.matches(relative));
+        }
 
         // Reach a repo-root CHANGELOG.md that lives *outside* the vault dir.
         // When the changelog profile is active and `[changelog] path`

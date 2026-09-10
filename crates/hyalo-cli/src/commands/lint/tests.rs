@@ -1542,6 +1542,14 @@ fn find_body_start_bom_prefixed_frontmatter_is_split() {
     assert_eq!(&content[start..], "body line\n");
 }
 
+#[test]
+fn find_body_start_does_not_close_on_delimiter_like_yaml_key() {
+    let content = "---\n---note: \"a\tb\"\n--- \nbody\n";
+    let start = find_body_start(content);
+    assert_eq!(&content[start..], "body\n");
+    assert!(content[..start].contains("a\tb"));
+}
+
 // --- group_severity ---
 
 fn iv(severity: &str) -> InternalViolation {

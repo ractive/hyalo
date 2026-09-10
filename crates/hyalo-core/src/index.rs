@@ -2609,7 +2609,9 @@ impl SectionScanner {
 
 impl FileVisitor for SectionScanner {
     fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
-        if let Some((level, heading_text)) = parse_atx_heading(raw) {
+        if parse_atx_heading(cleaned).is_some()
+            && let Some((level, heading_text)) = parse_atx_heading(raw)
+        {
             let finished = std::mem::replace(
                 &mut self.current,
                 SectionBuilder::new(level, Some(heading_text.to_owned()), line_num),
@@ -2635,7 +2637,7 @@ impl FileVisitor for SectionScanner {
             self.current.links.push(format_link_string(&link));
         }
 
-        if let Some((_status, done)) = crate::tasks::detect_task_checkbox(raw) {
+        if let Some((_status, done)) = crate::tasks::detect_task_checkbox(cleaned) {
             self.current.task_total += 1;
             if done {
                 self.current.task_done += 1;

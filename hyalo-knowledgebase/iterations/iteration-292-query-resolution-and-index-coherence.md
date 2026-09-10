@@ -365,3 +365,16 @@ nested vault-named directories and zero actual refresh/insertion callbacks on a 
 refusal. This covers the named bridge, named disk fallback and indexed-regex pilot; it is
 not a universal scanner migration. Whole-catalog graph ownership, anchor fallback, body
 hints and remaining legacy helpers retain their ownership in iterations 292–295.
+
+
+## Iteration 291 reconciliation — 2026-09-10
+
+Iteration 291 now provides DocumentFrame/read_frame/read_frame_for_body as the sole bounded
+frontmatter boundary and BodySyntax as the shared structural visibility source. This supersedes
+the Stage 1 future-tense dependency: graph/index code consumes the shared occurrence handoff
+and must not add another YAML parser.
+
+Retain malformed/unparseable-note diagnostics, skipped counters and disk/index parity for
+broken authored frontmatter, missing delimiters and incomplete edits. Safe refusal must
+preserve bytes. Use compact controlled S10 fixtures; do not expand this block into
+random-gibberish/fuzz syntax compatibility work.

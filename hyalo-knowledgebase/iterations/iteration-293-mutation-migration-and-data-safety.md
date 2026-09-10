@@ -382,3 +382,17 @@ legacy `WritePhase` callers include remove, property/tag rename and lint. Invent
 writer again after 291/292. Sol owns implementation; delegate difficult move/rollback design
 to Astra with serialized write ownership. Validate all original partial-effect, conflict,
 external-symlink and actual-platform cases.
+
+
+## Iteration 291 reconciliation — 2026-09-10
+
+Iteration 291 makes DocumentFrame the framing authority and validates exact rendered YAML plus
+the complete rendered document before publication. Preserve this boundary in lint,
+property/tag/remove, link, move, generator and config migrations; do not reconstruct delimiters
+or body offsets independently.
+
+A malformed or ambiguous normal authored document must yield a clear diagnostic and no
+corruption. In particular, final-property removal refuses before publication when the body
+would become frontmatter. Preserve original bytes on refusal and retain complete effects/index
+disposition after any earlier commit. No exhaustive exotic-YAML or random-gibberish
+compatibility expansion is required.

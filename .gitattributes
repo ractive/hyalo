@@ -6,3 +6,4 @@ pi-package/lib/*.d.ts text eol=lf
 crates/hyalo-cli/templates/pi/extensions/*.ts text eol=lf
 crates/hyalo-cli/templates/pi/lib/*.js text eol=lf
 crates/hyalo-cli/templates/pi/lib/*.d.ts text eol=lf
+fuzz/seeds/frontmatter_splice/seed-bom-crlf-whitespace.md -text whitespace=-blank-at-eol

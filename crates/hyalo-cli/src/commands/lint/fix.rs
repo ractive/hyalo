@@ -120,30 +120,7 @@ pub(super) fn apply_body_fixes(
 /// splits BOM-prefixed files the same way the read/write paths do instead of
 /// treating the whole file as body.
 pub(super) fn find_body_start(content: &str) -> usize {
-    let rest = content.strip_prefix('\u{feff}').unwrap_or(content);
-    if !(rest.starts_with("---\n") || rest.starts_with("---\r\n") || rest == "---") {
-        return 0;
-    }
-    // Find the second `---` delimiter.
-    let after_first = content.find('\n').map_or(content.len(), |i| i + 1);
-    let rest = &content[after_first..];
-    if let Some(pos) = rest.find("\n---") {
-        // Skip past `\n---\n` or `\n---` at end.
-        let abs = after_first + pos + 4; // skip \n---
-        // Skip the terminator after the closing `---` — LF or CRLF, so the
-        // body slice never starts with a stray carriage return on CRLF files.
-        let bytes = content.as_bytes();
-        if bytes.get(abs) == Some(&b'\r') && bytes.get(abs + 1) == Some(&b'\n') {
-            abs + 2
-        } else if bytes.get(abs) == Some(&b'\n') {
-            abs + 1
-        } else {
-            abs
-        }
-    } else {
-        // No closing delimiter — treat whole file as body.
-        0
-    }
+    hyalo_core::frontmatter::DocumentFrame::parse(content).map_or(0, |frame| frame.body_offset())
 }
 
 /// Compute the 1-based file line number on which the body begins, given the

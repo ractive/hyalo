@@ -253,6 +253,29 @@ pub(crate) fn terse_root_cause(err: &anyhow::Error) -> String {
     msg.trim_end().to_owned()
 }
 
+/// Convert an input-dependent frontmatter rewrite refusal into the CLI's
+/// domain-error envelope. I/O and invariant failures remain internal errors.
+pub(crate) fn frontmatter_write_error_outcome(
+    err: &anyhow::Error,
+    format: Format,
+    path: &str,
+) -> Option<CommandOutcome> {
+    if let Some(budget) = hyalo_core::frontmatter::as_budget_error(err) {
+        return Some(CommandOutcome::UserError(crate::output::budget_diagnostic(
+            format, budget,
+        )));
+    }
+    hyalo_core::frontmatter::is_parse_error(err).then(|| {
+        CommandOutcome::UserError(crate::output::user_diagnostic(
+            format,
+            "frontmatter rewrite refused because the resulting document would be invalid",
+            Some(path),
+            Some("adjust the document body or frontmatter, then retry"),
+            Some(&terse_root_cause(err)),
+        ))
+    })
+}
+
 /// The `hyalo lint --profile <profile>` hint to attach to a generator command's
 /// output — or `None` when it would be redundant.
 ///

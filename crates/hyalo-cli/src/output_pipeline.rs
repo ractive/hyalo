@@ -424,6 +424,15 @@ impl ExecutionReport {
                 } else if let Some(budget) = hyalo_core::frontmatter::as_budget_error(&error) {
                     report.code = 1;
                     crate::output::budget_diagnostic(Format::Json, budget)
+                } else if hyalo_core::frontmatter::is_parse_error(&error) {
+                    report.code = 1;
+                    crate::output::user_diagnostic(
+                        Format::Json,
+                        "frontmatter input or rewrite was rejected",
+                        None,
+                        Some("fix the document's frontmatter framing or size, then retry"),
+                        Some(&crate::commands::terse_root_cause(&error)),
+                    )
                 } else if let Some(user) = error.downcast_ref::<hyalo_core::UserFacingError>() {
                     report.code = 1;
                     crate::output::user_diagnostic(

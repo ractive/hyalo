@@ -838,7 +838,19 @@ impl HyaloLintEngine {
                     {
                         continue;
                     }
-                    let fix = convert_fix(&v, body_content);
+                    let mut fix = convert_fix(&v, body_content);
+                    if !CODE_BLOCK_AWARE_RULE_IDS.contains(rule_id)
+                        && fix
+                            .as_ref()
+                            .is_some_and(|fix| spans.fix_intersects_protected(fix.start, fix.end))
+                    {
+                        // Some upstream fixes span several physical lines.
+                        // The diagnostic may begin in ordinary prose while
+                        // the replacement would delete bytes inside a code or
+                        // HTML-comment block; retain the finding but suppress
+                        // that unsafe edit.
+                        fix = None;
+                    }
                     // A handful of upstream rules report `column` as a byte
                     // offset, not a Unicode scalar one — see
                     // `BYTE_COLUMN_RULE_IDS` (DEC-073, iter-218 NEW-11).
@@ -886,7 +898,6 @@ impl HyaloLintEngine {
                     // autolink. Narrow the fix's span rather than dropping the
                     // diagnostic — the URL really is bare and really should be
                     // wrapped, just not that far.
-                    let mut fix = fix;
                     if *rule_id == "MD034"
                         && let Some(f) = fix.as_mut()
                     {
@@ -918,7 +929,8 @@ impl HyaloLintEngine {
 
         // --- HYALO001 ---
         if should_run("HYALO001") {
-            let doc = Document::new(body_content.to_string(), PathBuf::from(rel_path))
+            let structural_body = spans.structural_body(body_content);
+            let doc = Document::new(structural_body, PathBuf::from(rel_path))
                 .with_context(|| format!("creating Document for HYALO001 on {rel_path}"))?;
             let sev = effective_severity("HYALO001");
             let violations = Hyalo001
@@ -940,7 +952,8 @@ impl HyaloLintEngine {
 
         // --- HYALO002 (completed-tasks; renamed from HYALO003 in iter-127) ---
         if should_run("HYALO002") {
-            let doc = Document::new(body_content.to_string(), PathBuf::from(rel_path))
+            let structural_body = spans.structural_body(body_content);
+            let doc = Document::new(structural_body, PathBuf::from(rel_path))
                 .with_context(|| format!("creating Document for HYALO002 on {rel_path}"))?;
             let rule = Hyalo002::new(schema_has_completed, frontmatter_status.map(str::to_owned));
             let sev = effective_severity("HYALO002");
@@ -1245,6 +1258,66 @@ mod tests {
             .lint_body("[] Open task\n", "test.md", None, false, &config, &[])
             .unwrap();
         assert!(diagnostics.iter().any(|d| d.rule_id == "HYALO001"));
+    }
+
+    #[test]
+    fn hyalo001_preserves_inline_literals_and_ignores_indented_code() {
+        let engine = HyaloLintEngine::create().unwrap();
+        let config = LintConfig::default();
+        let body =
+            "[] run `cmd` <!-- keep -->\n\ntext\n\n    - [] literal `code` <!-- comment -->\n";
+        let diagnostics = engine
+            .lint_body(
+                body,
+                "test.md",
+                None,
+                false,
+                &config,
+                &["HYALO001".to_owned()],
+            )
+            .unwrap();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let fix = diagnostics[0].fix.as_ref().unwrap();
+        assert_eq!(&body[fix.start..fix.end], "[]");
+        assert_eq!(fix.replacement, "- [ ]");
+    }
+
+    #[test]
+    fn native_rules_ignore_indented_and_html_comment_examples() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let body = "\n    [] indented example\n<!--\n[] comment example\n- [ ] open example\n-->\n- [ ] visible task\n";
+        let diagnostics = engine
+            .lint_body(body, "test.md", Some("completed"), true, &config, &[])
+            .unwrap();
+        assert!(diagnostics.iter().all(|d| d.rule_id != "HYALO001"));
+        let completed = diagnostics
+            .iter()
+            .filter(|d| d.rule_id == "HYALO002")
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].line, 7);
+    }
+
+    #[test]
+    fn inline_code_directive_does_not_suppress_stock_rule() {
+        let config = LintConfig::default();
+        let engine = HyaloLintEngine::create().unwrap();
+        let diagnostics = engine
+            .lint_body(
+                "`<!-- markdownlint-disable MD019 -->`\n#   real violation\n",
+                "test.md",
+                None,
+                false,
+                &config,
+                &["MD019".to_owned()],
+            )
+            .unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.rule_id == "MD019" && d.line == 2)
+        );
     }
 
     /// Apply a `DiagFix` to `body`, as `apply_body_fixes` in the CLI would.

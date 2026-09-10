@@ -32,13 +32,34 @@ pub fn parse_atx_heading(line: &str) -> Option<(u8, &str)> {
     let text = if rest.is_empty() {
         ""
     } else if rest.starts_with(' ') || rest.starts_with('\t') {
-        rest[1..].trim_end_matches('#').trim()
+        strip_atx_closing_sequence(&rest[1..])
     } else {
         return None;
     };
 
     #[allow(clippy::cast_possible_truncation)]
     Some((level as u8, text))
+}
+
+/// Strip a syntactic ATX closing sequence. A trailing run of `#` is closing
+/// markup only when separated from heading text by whitespace (or when it is
+/// the complete content after the required opener separator). Thus `# C#`
+/// and `# escaped \#` retain their final hash.
+fn strip_atx_closing_sequence(text: &str) -> &str {
+    let trimmed = text.trim_end_matches([' ', '\t']);
+    let hash_start = trimmed.trim_end_matches('#').len();
+    if hash_start == trimmed.len() {
+        return trimmed.trim();
+    }
+    if hash_start == 0
+        || trimmed.as_bytes()[..hash_start]
+            .last()
+            .is_some_and(u8::is_ascii_whitespace)
+    {
+        trimmed[..hash_start].trim()
+    } else {
+        trimmed.trim()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +141,7 @@ impl SectionFilter {
             match parse_atx_heading(input) {
                 Some((level, text)) => Ok(Self {
                     level: Some(level),
-                    mode: SectionMatchMode::Substring(text.to_ascii_lowercase()),
+                    mode: SectionMatchMode::Substring(text.to_lowercase()),
                 }),
                 None => Err(format!(
                     "invalid section filter: {input:?} (starts with '#' but is not a valid heading)"
@@ -133,7 +154,7 @@ impl SectionFilter {
             }
             Ok(Self {
                 level: None,
-                mode: SectionMatchMode::Substring(trimmed.to_ascii_lowercase()),
+                mode: SectionMatchMode::Substring(trimmed.to_lowercase()),
             })
         }
     }
@@ -151,41 +172,24 @@ impl SectionFilter {
         }
         match &self.mode {
             SectionMatchMode::Substring(needle) => {
-                // Non-allocating case-insensitive ASCII substring search.
-                // Markdown headings are ASCII in practice; needle is already
-                // lowercased at parse time.
-                ascii_contains_ignore_case(heading_text, needle)
+                unicode_contains_case_folded(heading_text, needle)
             }
             SectionMatchMode::Regex(re) => re.is_match(heading_text),
         }
     }
 }
 
-/// Non-allocating case-insensitive ASCII substring search.
-///
-/// Both `haystack` and `needle` are compared byte-by-byte with ASCII
-/// lowercasing.  `needle` must be ASCII and already lowercased at the call site.
-fn ascii_contains_ignore_case(haystack: &str, needle: &str) -> bool {
-    debug_assert!(needle.is_ascii(), "needle must be ASCII");
+fn unicode_contains_case_folded(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    let n = needle.len();
-    let h = haystack.len();
-    if n > h {
-        return false;
+    if haystack.is_ascii() && needle.is_ascii() {
+        return haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()));
     }
-    let needle_bytes = needle.as_bytes();
-    let hay_bytes = haystack.as_bytes();
-    'outer: for start in 0..=(h - n) {
-        for i in 0..n {
-            if hay_bytes[start + i].to_ascii_lowercase() != needle_bytes[i] {
-                continue 'outer;
-            }
-        }
-        return true;
-    }
-    false
+    haystack.to_lowercase().contains(needle)
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +319,19 @@ mod tests {
         let (level, text) = parse_atx_heading("## Section ##").unwrap();
         assert_eq!(level, 2);
         assert_eq!(text, "Section");
+    }
+
+    #[test]
+    fn heading_keeps_non_closing_hashes() {
+        assert_eq!(parse_atx_heading("# C#"), Some((1, "C#")));
+        assert_eq!(parse_atx_heading("# escaped \\#"), Some((1, "escaped \\#")));
+        assert_eq!(parse_atx_heading("# C# ##  "), Some((1, "C#")));
+    }
+
+    #[test]
+    fn unicode_section_filter_is_supported() {
+        let filter = SectionFilter::parse("Résumé").unwrap();
+        assert!(filter.matches(2, "Mon RÉSUMÉ"));
     }
 
     #[test]

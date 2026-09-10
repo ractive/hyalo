@@ -4,7 +4,7 @@ use crate::output::{CommandOutcome, Format, user_diagnostic};
 use anyhow::{Context, Result};
 use hyalo_core::frontmatter;
 use hyalo_core::heading::{SectionFilter, parse_atx_heading};
-use hyalo_core::scanner;
+use hyalo_core::{body_syntax::BodySyntax, scanner};
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -76,18 +76,13 @@ fn parse_line_range(s: &str) -> Result<LineRange, String> {
 fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<String>> {
     let mut sections: Vec<Vec<String>> = Vec::new();
     let mut current_section: Option<(u8, Vec<String>)> = None;
-    let mut fence = scanner::FenceTracker::new();
+    let syntax = BodySyntax::new(&body_lines.join("\n"));
 
-    for line in body_lines {
-        // Track code fences — headings inside code blocks are not real headings
-        if fence.process_line(line) {
-            if let Some((_, ref mut lines)) = current_section {
-                lines.push(line.clone());
-            }
-            continue;
-        }
+    for (index, line) in body_lines.iter().enumerate() {
+        let visible = syntax.visible_line(index + 1).unwrap_or(line);
 
-        if let Some((level, text)) = parse_atx_heading(line) {
+        if let Some((level, _)) = parse_atx_heading(visible) {
+            let text = parse_atx_heading(line).map_or("", |(_, text)| text);
             // Flush current section if a heading of equal or higher level is encountered
             if let Some((sec_level, sec_lines)) = current_section.take() {
                 if level <= sec_level {
@@ -119,13 +114,12 @@ fn extract_sections(body_lines: &[String], filter: &SectionFilter) -> Vec<Vec<St
 
 /// Collect all heading texts from body lines (for error messages).
 fn collect_headings(body_lines: &[String]) -> Vec<String> {
-    let mut fence = scanner::FenceTracker::new();
+    let syntax = BodySyntax::new(&body_lines.join("\n"));
     let mut headings = Vec::new();
-    for line in body_lines {
-        if fence.process_line(line) {
-            continue;
-        }
-        if let Some((level, text)) = parse_atx_heading(line) {
+    for (index, line) in body_lines.iter().enumerate() {
+        let visible = syntax.visible_line(index + 1).unwrap_or(line);
+        if let Some((level, _)) = parse_atx_heading(visible) {
+            let text = parse_atx_heading(line).map_or("", |(_, text)| text);
             let hashes = "#".repeat(level as usize);
             headings.push(format!("{hashes} {text}"));
         }
@@ -216,14 +210,14 @@ fn invalid_utf8_line_placeholder() -> String {
 /// trailing newlines stripped, plus how many leading lines the frontmatter
 /// block occupied (0 when the file has none).
 ///
-/// The frontmatter line count is a by-product of [`frontmatter::skip_frontmatter`]
+/// The frontmatter line count is a by-product of [`frontmatter::read_frame_for_body`]
 /// — returning it costs no extra I/O and lets the caller derive the whole
 /// file's line count (`fm_lines + body_lines.len()`, identical to
 /// [`scanner::count_lines`] over the same bytes) without a second full read
 /// of the file (iteration 253).  This holds because
 /// [`scanner::read_line_capped`] consumes exactly one logical line per call —
 /// skipped lines are drained to the next `\n` and still occupy one slot — and
-/// `skip_frontmatter` counts the opening and closing `---` delimiters plus
+/// the shared frame counts the opening and closing `---` delimiters plus
 /// everything between them.
 ///
 /// Uses [`scanner::read_line_capped`] rather than `BufRead::lines()` so a
@@ -235,34 +229,25 @@ fn read_body_lines(path: &Path) -> Result<(Vec<String>, usize)> {
         std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let mut reader = std::io::BufReader::new(file);
 
-    // Read first line (capped) to check for frontmatter.
-    let mut first_line = String::new();
-    let (n, first_outcome) =
-        scanner::read_line_capped(&mut reader, &mut first_line, scanner::MAX_BODY_LINE_BYTES)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-    if n == 0 {
+    let framed = frontmatter::read_frame_for_body(&mut reader, scanner::MAX_BODY_LINE_BYTES)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if framed.bytes().is_empty() {
         return Ok((Vec::new(), 0));
     }
 
     let mut lines = Vec::new();
-    let mut frontmatter_lines = 0usize;
-
-    if first_outcome.is_skipped() {
-        // A real `---` frontmatter delimiter is 3 bytes, so a line this long
-        // can only be body content.
-        lines.push(match first_outcome {
-            scanner::LineOutcome::InvalidUtf8 => invalid_utf8_line_placeholder(),
-            _ => oversized_line_placeholder(),
-        });
+    let frontmatter_lines;
+    if framed.frame().frontmatter().is_some() {
+        frontmatter_lines = scanner::count_lines(framed.bytes());
+    } else if !framed.first_line_complete() {
+        frontmatter_lines = 0;
+        lines.push(oversized_line_placeholder());
+    } else if let Ok(first_line) = std::str::from_utf8(framed.bytes()) {
+        frontmatter_lines = 0;
+        lines.push(first_line.trim_end_matches(['\n', '\r']).to_owned());
     } else {
-        let first_trimmed = first_line.trim_end_matches(['\n', '\r']);
-        let fm_lines = frontmatter::skip_frontmatter(&mut reader, first_trimmed)?;
-        if fm_lines == 0 {
-            // No frontmatter — first line is body content
-            lines.push(first_trimmed.to_owned());
-        } else {
-            frontmatter_lines = fm_lines;
-        }
+        frontmatter_lines = 0;
+        lines.push(invalid_utf8_line_placeholder());
     }
 
     loop {

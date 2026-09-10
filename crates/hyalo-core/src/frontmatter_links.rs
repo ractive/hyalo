@@ -30,12 +30,59 @@
 //! property it was written under and to honour a property allow-list.
 
 use crate::links::{Link, LinkKind, extract_link_spans_with_original};
+use std::borrow::Cow;
+
+/// Stateful YAML line masker shared by graph extraction and source rewrites.
+/// It blanks ordinary YAML comments while leaving literal/folded scalar bodies
+/// byte-for-byte visible, so returned link spans remain source offsets.
+pub(crate) struct FrontmatterValueLines {
+    block: Option<(usize, Option<usize>)>,
+}
+
+impl FrontmatterValueLines {
+    pub(crate) fn new() -> Self {
+        Self { block: None }
+    }
+
+    pub(crate) fn visible<'a>(&mut self, raw: &'a str) -> Cow<'a, str> {
+        if let Some((header_indent, content_indent)) = self.block.as_mut() {
+            let indent = raw.len() - raw.trim_start_matches(' ').len();
+            if raw.trim().is_empty() {
+                return Cow::Borrowed(raw);
+            }
+            let required = *content_indent.get_or_insert(indent);
+            if indent >= required && indent > *header_indent {
+                return Cow::Borrowed(raw);
+            }
+            self.block = None;
+        }
+        let visible = strip_comment(raw);
+        if let Some(explicit) = block_scalar_header(visible) {
+            let indent = raw.len() - raw.trim_start_matches(' ').len();
+            self.block = Some((indent, explicit.map(|amount| indent + amount)));
+        }
+        if visible.len() == raw.len() {
+            Cow::Borrowed(raw)
+        } else {
+            let mut masked = String::with_capacity(raw.len());
+            masked.push_str(visible);
+            masked.extend(std::iter::repeat_n(' ', raw.len() - visible.len()));
+            Cow::Owned(masked)
+        }
+    }
+}
 
 /// One entry of the key stack: the indentation column a key was written at and
 /// the key itself.
 struct KeyFrame {
     indent: usize,
     key: String,
+}
+
+struct BlockScalar {
+    key: String,
+    header_indent: usize,
+    content_indent: Option<usize>,
 }
 
 /// Byte offset of the first `:` that terminates a YAML key on `line`, if any.
@@ -176,29 +223,97 @@ pub fn extract_frontmatter_links(
         return;
     }
     let mut stack: Vec<KeyFrame> = Vec::new();
+    let mut block_scalar: Option<BlockScalar> = None;
     for (offset, raw_line) in yaml.lines().enumerate() {
+        if let Some(block) = block_scalar.as_mut() {
+            let indent = raw_line.len() - raw_line.trim_start_matches(' ').len();
+            if raw_line.trim().is_empty() {
+                continue;
+            }
+            let required = *block.content_indent.get_or_insert(indent);
+            if indent >= required && indent > block.header_indent {
+                collect_links_for_key(raw_line, &block.key, first_line + offset, only, out);
+                continue;
+            }
+            block_scalar = None;
+        }
+
         let line = strip_comment(raw_line);
         let Some(key) = key_for_line(&mut stack, line) else {
             continue;
         };
-        if !line.contains("[[") {
-            continue;
+        if let Some(explicit_indent) = block_scalar_header(line) {
+            let header_indent = raw_line.len() - raw_line.trim_start_matches(' ').len();
+            block_scalar = Some(BlockScalar {
+                key: key.clone(),
+                header_indent,
+                content_indent: explicit_indent.map(|amount| header_indent + amount),
+            });
         }
-        if let Some(allowed) = only {
-            let top = key.split('.').next().unwrap_or(&key);
-            if !allowed.iter().any(|p| p == top) {
-                continue;
-            }
-        }
-        for span in extract_link_spans_with_original(line, line) {
-            if span.kind != LinkKind::Wikilink {
-                continue;
-            }
-            let mut found = span.link;
-            found.property = Some(key.clone());
-            out.push((first_line + offset, found));
+        collect_links_for_key(line, &key, first_line + offset, only, out);
+    }
+}
+
+fn collect_links_for_key(
+    line: &str,
+    key: &str,
+    file_line: usize,
+    only: Option<&[String]>,
+    out: &mut Vec<(usize, Link)>,
+) {
+    if !line.contains("[[") {
+        return;
+    }
+    if let Some(allowed) = only {
+        let top = key.split('.').next().unwrap_or(key);
+        if !allowed.iter().any(|property| property == top) {
+            return;
         }
     }
+    for span in extract_link_spans_with_original(line, line) {
+        if span.kind != LinkKind::Wikilink {
+            continue;
+        }
+        let mut found = span.link;
+        found.property = Some(key.to_owned());
+        out.push((file_line, found));
+    }
+}
+
+/// Recognize a YAML literal/folded block scalar header and return its optional
+/// explicit indentation indicator. Comments after the header are allowed.
+#[allow(clippy::option_option)]
+fn block_scalar_header(line: &str) -> Option<Option<usize>> {
+    let trimmed = line.trim_start();
+    let mut rest = if let Some(colon) = key_colon(trimmed) {
+        trimmed[colon + 1..].trim_start()
+    } else {
+        trimmed
+    };
+    let mut sequence = false;
+    while let Some(after) = rest.strip_prefix("- ") {
+        sequence = true;
+        rest = after.trim_start();
+    }
+    if !sequence && key_colon(trimmed).is_none() {
+        return None;
+    }
+    let marker = *rest.as_bytes().first()?;
+    if !matches!(marker, b'|' | b'>') {
+        return None;
+    }
+    let token = rest[1..]
+        .split_once(char::is_whitespace)
+        .map_or(&rest[1..], |(head, _)| head);
+    let mut indent = None;
+    for byte in token.bytes() {
+        match byte {
+            b'+' | b'-' => {}
+            b'1'..=b'9' if indent.is_none() => indent = Some(usize::from(byte - b'0')),
+            _ => return None,
+        }
+    }
+    Some(indent)
 }
 
 #[cfg(test)]
@@ -255,6 +370,30 @@ mod tests {
             vec![
                 (4, "related".to_owned(), "One".to_owned()),
                 (5, "related".to_owned(), "Two".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_scalar_hash_text_is_value_content() {
+        let yaml = "description: |\n  # [[Target]]\n  prose [[Other]]\nafter: ok\n";
+        assert_eq!(
+            targets(yaml),
+            vec![
+                (3, "description".to_owned(), "Target".to_owned()),
+                (4, "description".to_owned(), "Other".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn block_scalar_chomping_and_indent_are_tracked_but_yaml_comments_are_not() {
+        let yaml = "description: |+2\n  # [[Scalar]]\n# [[Comment]]\nquoted: \"# [[Quoted]]\"\n";
+        assert_eq!(
+            targets(yaml),
+            vec![
+                (3, "description".to_owned(), "Scalar".to_owned()),
+                (5, "quoted".to_owned(), "Quoted".to_owned()),
             ]
         );
     }
@@ -382,6 +521,29 @@ mod tests {
         assert_eq!(
             targets(yaml),
             vec![(3, "summary".to_owned(), "Books".to_owned())]
+        );
+    }
+
+    #[test]
+    fn sequence_block_scalar_hash_content_stays_under_parent_key() {
+        let yaml = "description:\n  - |-\n    # [[Target]]\n# [[CommentOnly]]\n";
+        assert_eq!(
+            targets(yaml),
+            vec![(4, "description".to_owned(), "Target".to_owned())]
+        );
+    }
+
+    #[test]
+    fn nested_sequence_block_scalar_hash_content_stays_under_parent_key() {
+        assert_eq!(
+            targets("description:\n  - - |-\n      # [[Target]]\n"),
+            vec![(4, "description".to_owned(), "Target".to_owned())]
+        );
+        let mut visible = FrontmatterValueLines::new();
+        assert_eq!(visible.visible("  - - |-").as_ref(), "  - - |-");
+        assert_eq!(
+            visible.visible("      # [[Target]]").as_ref(),
+            "      # [[Target]]"
         );
     }
 

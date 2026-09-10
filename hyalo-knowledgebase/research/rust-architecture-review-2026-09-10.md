@@ -605,3 +605,29 @@ across named disk and indexed paths, with timeout termination and reaping. The
 check closes the static-input regression; it does not promise nonblocking I/O for
 every filesystem or protection against an entry replaced between system calls.
 Final review and checkpoint evidence remain supervisor-owned in the run ledger.
+
+
+## Iteration 291 verified document-syntax handoff — 2026-09-10
+
+At final 42-file manifest 291-review-attempt-5-manifest.json (base
+9f398379b75d17556140c8a9214c3eb02c903bf6), DocumentFrame/read_frame/read_frame_for_body own
+bounded BOM/newline/delimiter/body framing; BodySyntax owns shared code/comment/protected-range
+visibility; parse_atx_heading/SectionFilter and FilenameTemplate own structural heading and
+exact template matching.
+
+Frontmatter writers check exact rendered YAML against normal reader budgets, validate the
+complete final document, and refuse before publication when final-property removal would expose
+a frontmatter-shaped body. Preserve these interfaces and refusal semantics in 292–295; do not
+create parallel parsers or publish bytes later readers reject.
+
+Expected authored inputs include damaged frontmatter, missing or incomplete delimiters,
+incomplete edits and common Markdown mistakes. Diagnose and refuse safely without corruption
+when processing cannot continue. Exhaustive random-gibberish/fuzz syntax compatibility is
+outside scope; crash, data-loss, security, confinement, resource-bound and partial-write
+protections remain mandatory.
+
+Ownership remains: 292 catalog/graph/index/query coherence consumes shared syntax facts; 293
+migrates remaining writers while preserving validation/effects; 294 aligns CLI/Pi/npm/docs
+diagnostics and guarantees; 295 runs controlled final platform/resource/behavioral gates.
+Review attempt 5 is ready with no findings; the supervisor's final ordered Rust and
+release-safety checks passed.
