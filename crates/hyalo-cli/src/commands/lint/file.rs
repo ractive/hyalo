@@ -10,7 +10,7 @@ use super::{
     find_body_start, push_fix_write_error_violation,
 };
 use anyhow::{Context, Result};
-use hyalo_core::frontmatter::{check_mtime, read_mtime, write_frontmatter_within};
+use hyalo_core::frontmatter::{check_mtime, read_mtime};
 use hyalo_core::scanner;
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
 use hyalo_mdlint::schema::{
@@ -41,6 +41,69 @@ fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
     )
 }
 
+fn publish_exact_fix(
+    captured: hyalo_core::rooted::CapturedInput,
+    rel_path: &str,
+    replacement: &[u8],
+) -> Result<(
+    crate::commands::apply::PathEffect,
+    hyalo_core::rooted::OwnedPublication,
+)> {
+    use hyalo_core::rooted::{Durability, WriteSession};
+    let session = WriteSession::new(Durability::PerFile);
+    publish_exact_fix_with_session(captured, rel_path, replacement, session)
+}
+
+fn publish_exact_fix_with_session(
+    captured: hyalo_core::rooted::CapturedInput,
+    rel_path: &str,
+    replacement: &[u8],
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<(
+    crate::commands::apply::PathEffect,
+    hyalo_core::rooted::OwnedPublication,
+)> {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    let (effect, receipt) = captured
+        .prepare(replacement, &session)?
+        .commit_with_receipt(&mut session)?;
+    let error = effect
+        .finalization_error()
+        .map(str::to_owned)
+        .or_else(|| session.finish().err().map(|error| error.to_string()));
+    let category = error.as_ref().map(|_| EffectFailure::Finalization);
+    Ok((
+        PathEffect {
+            file: rel_path.to_owned(),
+            state: if error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            error,
+            category,
+        },
+        receipt,
+    ))
+}
+
+fn publish_frontmatter_fix(
+    captured: hyalo_core::rooted::CapturedInput,
+    rel_path: &str,
+    properties: &indexmap::IndexMap<String, serde_json::Value>,
+) -> Result<(
+    crate::commands::apply::PathEffect,
+    Vec<u8>,
+    hyalo_core::rooted::OwnedPublication,
+)> {
+    let mut reader = captured.reader()?;
+    let replacement =
+        hyalo_core::frontmatter::render_frontmatter(&mut reader, Path::new(rel_path), properties)?;
+    drop(reader);
+    let (effect, receipt) = publish_exact_fix(captured, rel_path, &replacement)?;
+    Ok((effect, replacement, receipt))
+}
+
 /// Whether `token` has the shape of a markdownlint rule id or alias: ASCII
 /// alphanumeric, optionally with `-` or `_` inside. Anything else was never
 /// meant as a rule name (see [`warn_unknown_directive_rules`]).
@@ -50,6 +113,31 @@ fn token_could_name_a_rule(token: &str) -> bool {
         && token
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+#[derive(Debug)]
+pub(super) struct ObservedLintWorkerError {
+    detail: String,
+    pub(super) effects: Vec<crate::commands::apply::PathEffect>,
+}
+
+impl std::fmt::Display for ObservedLintWorkerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for ObservedLintWorkerError {}
+
+fn observed_lint_worker_error(
+    error: &anyhow::Error,
+    effects: Vec<crate::commands::apply::PathEffect>,
+) -> anyhow::Error {
+    ObservedLintWorkerError {
+        detail: format!("{error:#}"),
+        effects,
+    }
+    .into()
 }
 
 /// Report a `<!-- markdownlint-… -->` comment that names a rule hyalo does not
@@ -118,6 +206,51 @@ pub(super) fn lint_one_file_extended(
     case_insensitive: bool,
     link_ctx: Option<&hyalo_mdlint::profiles::link::LinkLintContext>,
 ) -> Result<PerFileLintResult> {
+    lint_one_file_extended_with_after_frontmatter(
+        full_path,
+        rel_path,
+        schema,
+        engine,
+        md_lint_config,
+        rule_filter,
+        schema_has_completed,
+        fix,
+        fix_rules,
+        max_per_rule,
+        strict,
+        okf_profile,
+        madr_profile,
+        skills_profile,
+        changelog_profile,
+        vault_dir,
+        case_insensitive,
+        link_ctx,
+        || Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+fn lint_one_file_extended_with_after_frontmatter(
+    full_path: &Path,
+    rel_path: &str,
+    schema: &SchemaConfig,
+    engine: &hyalo_mdlint::HyaloLintEngine,
+    md_lint_config: &hyalo_mdlint::LintConfig,
+    rule_filter: &[String],
+    schema_has_completed: bool,
+    fix: FixMode,
+    fix_rules: &[String],
+    max_per_rule: usize,
+    strict: bool,
+    okf_profile: bool,
+    madr_profile: bool,
+    skills_profile: bool,
+    changelog_profile: bool,
+    vault_dir: &Path,
+    case_insensitive: bool,
+    link_ctx: Option<&hyalo_mdlint::profiles::link::LinkLintContext>,
+    mut after_frontmatter: impl FnMut() -> Result<()>,
+) -> Result<PerFileLintResult> {
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
     // single lint→fix pass over the body does not always converge. Bounds
@@ -157,6 +290,7 @@ pub(super) fn lint_one_file_extended(
             violations_by_rule,
             total_violations: 1,
             body_modified: false,
+            mutation_effects: Vec::new(),
             fix_actions: Vec::new(),
             body_fix_outcomes: Vec::new(),
             post_fix_schema_remaining: None,
@@ -179,7 +313,44 @@ pub(super) fn lint_one_file_extended(
     // adversarial-review-2026-08-23.md). Report it once and skip just this
     // file, mirroring the size-limit skip above and the lossy-decode
     // skip+warn precedent in `scanner/mod.rs`.
-    let content = match std::fs::read_to_string(full_path) {
+    let lint_root = hyalo_core::rooted::VaultRoot::new(vault_dir)?;
+    let lint_name = hyalo_core::rooted::RelativeName::new(rel_path)?;
+    let mut captured_source = match lint_root.capture(&lint_name) {
+        Ok(captured) => Some(captured),
+        Err(e) => {
+            eprintln!("warning: skipping {} ({e})", full_path.display());
+            let mut violations_by_rule = indexmap::IndexMap::new();
+            violations_by_rule.insert(
+                "FILE".to_owned(),
+                vec![InternalViolation {
+                    line: 1,
+                    column: 1,
+                    message: format!("could not read file ({e}) — skipped, not linted"),
+                    severity: "error".to_owned(),
+                    fix: None,
+                    fixed: false,
+                    autofixable: None,
+                }],
+            );
+            return Ok(PerFileLintResult {
+                rel_path: rel_path.to_owned(),
+                doc_type: None,
+                violations_by_rule,
+                total_violations: 1,
+                body_modified: false,
+                mutation_effects: Vec::new(),
+                fix_actions: Vec::new(),
+                body_fix_outcomes: Vec::new(),
+                post_fix_schema_remaining: None,
+            });
+        }
+    };
+    let content = match captured_source
+        .as_ref()
+        .context("lint source capture missing")?
+        .bytes()
+        .and_then(|bytes| String::from_utf8(bytes).map_err(Into::into))
+    {
         Ok(content) => content,
         Err(e) => {
             eprintln!("warning: skipping {} ({e})", full_path.display());
@@ -202,6 +373,7 @@ pub(super) fn lint_one_file_extended(
                 violations_by_rule,
                 total_violations: 1,
                 body_modified: false,
+                mutation_effects: Vec::new(),
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
@@ -241,6 +413,7 @@ pub(super) fn lint_one_file_extended(
                     violations_by_rule: indexmap::IndexMap::new(),
                     total_violations: 0,
                     body_modified: false,
+                    mutation_effects: Vec::new(),
                     fix_actions: Vec::new(),
                     body_fix_outcomes: Vec::new(),
                     post_fix_schema_remaining: None,
@@ -284,6 +457,7 @@ pub(super) fn lint_one_file_extended(
                 violations_by_rule,
                 total_violations: 1,
                 body_modified: false,
+                mutation_effects: Vec::new(),
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
@@ -462,6 +636,7 @@ pub(super) fn lint_one_file_extended(
 
     // Apply frontmatter fixes if requested.
     let mut body_modified = false;
+    let mut mutation_effects = Vec::new();
     let mut fix_actions: Vec<FixAction> = Vec::new();
     let mut post_fix_schema_remaining: Option<Vec<InternalViolation>> = None;
     // Post-fix type (used for required_sections validation below). Defaults to the
@@ -492,11 +667,28 @@ pub(super) fn lint_one_file_extended(
                     // Catch it, report it as a diagnostic on this file, and
                     // skip fixing (this file only) instead.
                     let write_result = check_mtime(full_path, mtime0).and_then(|()| {
-                        write_frontmatter_within(vault_dir, full_path, &mutable)
+                        let source = captured_source
+                            .take()
+                            .context("original lint source capture unavailable")?;
+                        publish_frontmatter_fix(source, rel_path, &mutable)
                             .with_context(|| format!("writing fixed frontmatter to {rel_path}"))
                     });
                     match write_result {
-                        Ok(()) => {
+                        Ok((effect, expected, receipt)) => {
+                            body_modified = true;
+                            let finalization_failed = effect.error.is_some();
+                            if let Some(error) = effect.error.as_deref() {
+                                push_fix_write_error_violation(
+                                    &mut violations_by_rule,
+                                    &format!(
+                                        "fixed frontmatter committed to {rel_path}, but finalization failed: {error}"
+                                    ),
+                                );
+                            }
+                            mutation_effects.push(effect);
+                            if let Err(error) = after_frontmatter() {
+                                return Err(observed_lint_worker_error(&error, mutation_effects));
+                            }
                             // Re-baseline: the write above legitimately
                             // changed the file's mtime, and a later
                             // body-fix write in this same call must not
@@ -506,10 +698,41 @@ pub(super) fn lint_one_file_extended(
                             // fix as applied, but skip attempting the body
                             // fix below (no trustworthy baseline for its
                             // own TOCTOU check).
-                            match read_mtime(full_path) {
-                                Ok(fresh) => mtime0 = fresh,
+                            match receipt.capture_verified().and_then(|fresh| {
+                                if fresh.bytes()? != expected {
+                                    anyhow::bail!(hyalo_core::rooted::SourceConflict(
+                                        "lint source changed after frontmatter publication"
+                                    ));
+                                }
+                                Ok(fresh)
+                            }) {
+                                Ok(fresh) if !finalization_failed => match read_mtime(full_path) {
+                                    Ok(fingerprint) => {
+                                        mtime0 = fingerprint;
+                                        captured_source = Some(fresh);
+                                    }
+                                    Err(error) => {
+                                        frontmatter_write_failed = true;
+                                        push_fix_write_error_violation(
+                                            &mut violations_by_rule,
+                                            &format!(
+                                                "fixed frontmatter written to {rel_path}, but could not re-read its mtime: {error}"
+                                            ),
+                                        );
+                                    }
+                                },
+                                Ok(_) => frontmatter_write_failed = true,
                                 Err(e) => {
                                     frontmatter_write_failed = true;
+                                    mutation_effects.push(crate::commands::apply::PathEffect {
+                                        file: rel_path.to_owned(),
+                                        state:
+                                            crate::commands::apply::EffectState::FailedBeforeCommit,
+                                        error: Some(e.to_string()),
+                                        category: Some(
+                                            crate::commands::apply::EffectFailure::SourceConflict,
+                                        ),
+                                    });
                                     push_fix_write_error_violation(
                                         &mut violations_by_rule,
                                         &format!(
@@ -524,6 +747,20 @@ pub(super) fn lint_one_file_extended(
                         Err(e) => {
                             applied = false;
                             frontmatter_write_failed = true;
+                            mutation_effects.push(crate::commands::apply::PathEffect {
+                                file: rel_path.to_owned(),
+                                state: crate::commands::apply::EffectState::FailedBeforeCommit,
+                                error: Some(e.to_string()),
+                                category: Some(
+                                    if e.downcast_ref::<hyalo_core::rooted::SourceConflict>()
+                                        .is_some()
+                                    {
+                                        crate::commands::apply::EffectFailure::SourceConflict
+                                    } else {
+                                        crate::commands::apply::EffectFailure::Io
+                                    },
+                                ),
+                            });
                             push_fix_write_error_violation(
                                 &mut violations_by_rule,
                                 &format!("could not write fixed frontmatter to {rel_path}: {e}"),
@@ -580,11 +817,16 @@ pub(super) fn lint_one_file_extended(
             None => schema.default_schema().clone(),
         };
         if !effective_schema.required_sections.is_empty() {
-            let section_violations = validate_required_sections(
+            let section_violations = match validate_required_sections(
                 full_path,
                 rel_path,
                 &effective_schema.required_sections,
-            )?;
+            ) {
+                Ok(violations) => violations,
+                Err(error) => {
+                    return Err(observed_lint_worker_error(&error, mutation_effects));
+                }
+            };
             for v in section_violations {
                 let sev = match v.severity {
                     Severity::Error => "error",
@@ -627,14 +869,17 @@ pub(super) fn lint_one_file_extended(
     // and DryRun both run this same in-memory loop; only `FixMode::Apply`
     // writes the result to disk (below), so DryRun still previews the
     // fully-converged outcome.
-    let mut current_diagnostics = engine.lint_body(
+    let mut current_diagnostics = match engine.lint_body(
         &working_body,
         rel_path,
         frontmatter_status.as_deref(),
         schema_has_completed,
         md_lint_config,
         rule_filter,
-    )?;
+    ) {
+        Ok(diagnostics) => diagnostics,
+        Err(error) => return Err(observed_lint_worker_error(&error, mutation_effects)),
+    };
 
     if matches!(fix, FixMode::Apply | FixMode::DryRun) {
         let fix_all_rules = fix_rules.is_empty();
@@ -706,14 +951,17 @@ pub(super) fn lint_one_file_extended(
             }
 
             working_body = new_body;
-            current_diagnostics = engine.lint_body(
+            current_diagnostics = match engine.lint_body(
                 &working_body,
                 rel_path,
                 frontmatter_status.as_deref(),
                 schema_has_completed,
                 md_lint_config,
                 rule_filter,
-            )?;
+            ) {
+                Ok(diagnostics) => diagnostics,
+                Err(error) => return Err(observed_lint_worker_error(&error, mutation_effects)),
+            };
         }
     }
 
@@ -729,30 +977,58 @@ pub(super) fn lint_one_file_extended(
     // frontmatter failure's own diagnostic already covers it.
     let mut body_write_failed = false;
     if matches!(fix, FixMode::Apply) && working_body != body_content && !frontmatter_write_failed {
-        // Re-derive the frontmatter bytes fresh from disk when a
-        // frontmatter fix already landed above — `content[..body_start]` is
-        // a snapshot from before that write and would silently revert it if
-        // reused here.
-        let frontmatter_part: Result<Cow<'_, str>> = if fix_actions.is_empty() {
-            Ok(Cow::Borrowed(&content[..body_start]))
-        } else {
-            std::fs::read_to_string(full_path)
-                .with_context(|| format!("re-reading {rel_path} after frontmatter fix"))
-                .map(|fresh| {
-                    let fresh_body_start = find_body_start(&fresh);
-                    Cow::Owned(fresh[..fresh_body_start].to_owned())
-                })
-        };
+        // Derive the frontmatter from the exact source capture that will
+        // authorize publication. After a frontmatter write this is a
+        // receipt-checked recapture of Hyalo's own output, never an unrelated
+        // editor version accepted after rendering.
+        let frontmatter_part: Result<Cow<'_, str>> = captured_source
+            .as_ref()
+            .context("captured lint source unavailable")
+            .and_then(hyalo_core::rooted::CapturedInput::bytes)
+            .and_then(|bytes| String::from_utf8(bytes).map_err(Into::into))
+            .map(|fresh| {
+                let fresh_body_start = find_body_start(&fresh);
+                Cow::Owned(fresh[..fresh_body_start].to_owned())
+            });
         let write_result = frontmatter_part.and_then(|frontmatter_part| {
             check_mtime(full_path, mtime0)?;
             let new_content = format!("{frontmatter_part}{working_body}");
-            hyalo_core::atomic_write_within(vault_dir, full_path, new_content.as_bytes())
+            let source = captured_source
+                .take()
+                .context("captured lint source unavailable")?;
+            publish_exact_fix(source, rel_path, new_content.as_bytes())
+                .map(|(effect, _)| effect)
                 .with_context(|| format!("writing fixed body to {rel_path}"))
         });
         match write_result {
-            Ok(()) => body_modified = true,
+            Ok(effect) => {
+                body_modified = true;
+                if let Some(error) = effect.error.as_deref() {
+                    push_fix_write_error_violation(
+                        &mut violations_by_rule,
+                        &format!(
+                            "fixed body committed to {rel_path}, but finalization failed: {error}"
+                        ),
+                    );
+                }
+                mutation_effects.push(effect);
+            }
             Err(e) => {
                 body_write_failed = true;
+                mutation_effects.push(crate::commands::apply::PathEffect {
+                    file: rel_path.to_owned(),
+                    state: crate::commands::apply::EffectState::FailedBeforeCommit,
+                    error: Some(e.to_string()),
+                    category: Some(
+                        if e.downcast_ref::<hyalo_core::rooted::SourceConflict>()
+                            .is_some()
+                        {
+                            crate::commands::apply::EffectFailure::SourceConflict
+                        } else {
+                            crate::commands::apply::EffectFailure::Io
+                        },
+                    ),
+                });
                 push_fix_write_error_violation(
                     &mut violations_by_rule,
                     &format!("could not write fixed body to {rel_path}: {e}"),
@@ -1095,8 +1371,119 @@ pub(super) fn lint_one_file_extended(
         violations_by_rule,
         total_violations,
         body_modified,
+        mutation_effects,
         fix_actions,
         body_fix_outcomes,
         post_fix_schema_remaining,
     })
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use hyalo_core::rooted::{Durability, FaultPoint, RelativeName, VaultRoot, WriteSession};
+
+    #[test]
+    fn body_fix_refuses_editor_change_from_original_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), b"original\n").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
+        std::fs::write(dir.path().join("a.md"), b"EDITOR!!\n").unwrap();
+        let Err(error) = publish_exact_fix(source, "a.md", b"fixed\n") else {
+            panic!("editor change must refuse publication")
+        };
+        assert!(
+            error
+                .downcast_ref::<hyalo_core::rooted::SourceConflict>()
+                .is_some()
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("a.md")).unwrap(),
+            b"EDITOR!!\n"
+        );
+    }
+
+    #[test]
+    fn body_fix_retains_committed_finalization_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), b"original\n").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
+        let (effect, _) = publish_exact_fix_with_session(
+            source,
+            "a.md",
+            b"fixed\n",
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(dir.path().join("a.md")).unwrap(), b"fixed\n");
+        assert_eq!(
+            effect.state,
+            crate::commands::apply::EffectState::CommittedWithFinalizationError
+        );
+        assert!(effect.error.is_some());
+    }
+
+    #[test]
+    fn required_section_scan_failure_retains_frontmatter_publication_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.md");
+        std::fs::write(&path, b"---\n---\nbody\n").unwrap();
+        let mut schema = SchemaConfig::default();
+        schema.default.required.push("title".to_owned());
+        schema
+            .default
+            .defaults
+            .insert("title".to_owned(), "Added".to_owned());
+        schema
+            .default
+            .required_sections
+            .push("## Required".to_owned());
+        let engine = hyalo_mdlint::HyaloLintEngine::create().unwrap();
+        let config = hyalo_mdlint::LintConfig::default();
+
+        let result = lint_one_file_extended_with_after_frontmatter(
+            &path,
+            "a.md",
+            &schema,
+            &engine,
+            &config,
+            &[],
+            false,
+            FixMode::Apply,
+            &[],
+            100,
+            false,
+            false,
+            false,
+            false,
+            false,
+            dir.path(),
+            false,
+            None,
+            || {
+                std::fs::remove_file(&path)?;
+                std::fs::create_dir(&path)?;
+                Ok(())
+            },
+        );
+        let Err(error) = result else {
+            panic!("post-publication required-section scan must fail")
+        };
+        let observed = error
+            .downcast_ref::<ObservedLintWorkerError>()
+            .expect("post-publication scan failure must carry worker effects");
+        assert!(observed.effects.iter().any(|effect| {
+            effect.file == "a.md" && effect.state == crate::commands::apply::EffectState::Committed
+        }));
+        assert!(
+            observed.effects.iter().any(|effect| {
+                effect.file == "a.md"
+                    && effect.state == crate::commands::apply::EffectState::FailedBeforeCommit
+            }),
+            "receipt recheck failure should also mark the path unsafe: {:?}",
+            observed.effects
+        );
+    }
 }

@@ -4,6 +4,7 @@ pub mod apply;
 pub mod backlinks;
 pub mod changelog;
 pub(crate) mod config;
+mod config_write;
 pub mod create_index;
 pub mod drop_index;
 pub mod files_from;

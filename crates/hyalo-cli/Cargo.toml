@@ -41,6 +41,7 @@ toml = { workspace = true }
 rayon = { workspace = true }
 toml_edit = { workspace = true }
 tempfile = { workspace = true }
+same-file = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

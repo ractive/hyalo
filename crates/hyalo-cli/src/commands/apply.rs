@@ -18,6 +18,9 @@ pub enum EffectState {
     NotAttempted,
     FailedBeforeCommit,
     CommittedWithFinalizationError,
+    Restored,
+    RestoreFailed,
+    Kept,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -30,7 +33,7 @@ pub enum EffectFailure {
     Finalization,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 #[cfg_attr(test, ts(optional_fields))]
@@ -43,7 +46,7 @@ pub struct PathEffect {
     pub category: Option<EffectFailure>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +73,9 @@ impl ApplyReport {
         self.paths.iter().any(|p| {
             matches!(
                 p.state,
-                EffectState::FailedBeforeCommit | EffectState::CommittedWithFinalizationError
+                EffectState::FailedBeforeCommit
+                    | EffectState::CommittedWithFinalizationError
+                    | EffectState::RestoreFailed
             )
         }) || self.index_error.is_some()
     }
@@ -80,7 +85,10 @@ impl ApplyReport {
             .filter(|p| {
                 matches!(
                     p.state,
-                    EffectState::Committed | EffectState::CommittedWithFinalizationError
+                    EffectState::Committed
+                        | EffectState::CommittedWithFinalizationError
+                        | EffectState::Restored
+                        | EffectState::Kept
                 )
             })
             .map(|p| p.file.clone())
@@ -258,7 +266,7 @@ impl PreparedChangeSet {
         emit_progress(progress.finish());
         report
     }
-    fn apply_with(
+    pub(crate) fn apply_with(
         mut self,
         journal: &mut super::journal::MutationJournal<'_>,
         mut before: impl FnMut(usize, &str) -> Result<()>,

@@ -134,6 +134,9 @@ pub(crate) struct GeneratePlan {
     pub(crate) new_content: String,
     /// The current on-disk content (empty when the file is absent).
     pub(crate) old_content: String,
+    /// Whether an entry existed when the transform was planned. Empty files
+    /// remain replacements and never lose the exclusive-create guard.
+    pub(crate) existed: bool,
 }
 
 impl GeneratePlan {
@@ -141,7 +144,7 @@ impl GeneratePlan {
         self.new_content != self.old_content
     }
     pub(crate) fn is_new(&self) -> bool {
-        self.old_content.is_empty()
+        !self.existed
     }
 
     /// The change kind for reporting: `create` (new file), `adopt` (existing
@@ -168,11 +171,98 @@ pub(crate) fn read_old_content(dir: &Path, rel_path: &str) -> Result<String> {
     }
 }
 
-/// Write a changed plan to disk atomically.
-pub(crate) fn apply_plan(dir: &Path, plan: &GeneratePlan) -> Result<()> {
-    let full = dir.join(&plan.rel_path);
-    hyalo_core::atomic_write_within(dir, &full, plan.new_content.as_bytes())
-        .with_context(|| format!("failed to write {}", plan.rel_path))
+/// Publish a generated file through an exact captured replacement or an
+/// exclusive new entry, with an invocation-owned durability session.
+pub(crate) fn apply_plan(
+    dir: &Path,
+    plan: &GeneratePlan,
+) -> Result<crate::commands::apply::ApplyReport> {
+    apply_content(
+        dir,
+        &plan.rel_path,
+        &plan.old_content,
+        plan.existed,
+        plan.new_content.as_bytes(),
+    )
+}
+
+pub(crate) fn apply_content(
+    root_path: &Path,
+    rel_path: &str,
+    old_content: &str,
+    existed: bool,
+    new_content: &[u8],
+) -> Result<crate::commands::apply::ApplyReport> {
+    use crate::commands::apply::{
+        ApplyReport, EffectFailure, EffectState, IndexDisposition, PathEffect,
+    };
+    use hyalo_core::rooted::{Durability, RelativeName, VaultRoot, WriteSession};
+    let root = VaultRoot::new(root_path)?;
+    let name = RelativeName::new(rel_path)?;
+    let mut session = WriteSession::new(Durability::PerFile);
+    let effect = if existed {
+        let captured = root.capture(&name)?;
+        if captured.bytes()? != old_content.as_bytes() {
+            anyhow::bail!(hyalo_core::rooted::SourceConflict(
+                "generated file bytes changed"
+            ));
+        }
+        captured
+            .prepare(new_content, &session)?
+            .commit(&mut session)?
+    } else {
+        root.destination(name)?.create(new_content, &mut session)?
+    };
+    let effect_error = effect.finalization_error().map(str::to_owned);
+    let finish_error = session.finish().err().map(|error| error.to_string());
+    let error = effect_error.or(finish_error);
+    Ok(ApplyReport {
+        paths: vec![PathEffect {
+            file: rel_path.to_owned(),
+            state: if error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            category: error.as_ref().map(|_| EffectFailure::Finalization),
+            error,
+        }],
+        index: IndexDisposition::NotUsed,
+        index_error: None,
+    })
+}
+
+pub(crate) fn reconcile_generated_notes(
+    dir: &Path,
+    report: &mut crate::commands::apply::ApplyReport,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) {
+    use crate::commands::apply::{EffectState, IndexDisposition};
+    let observed: Vec<_> = report
+        .paths
+        .iter()
+        .filter(|path| {
+            matches!(
+                path.state,
+                EffectState::Unchanged
+                    | EffectState::Committed
+                    | EffectState::CommittedWithFinalizationError
+            )
+        })
+        .map(|path| path.file.clone())
+        .collect();
+    let unsafe_paths: Vec<_> = report
+        .paths
+        .iter()
+        .filter(|path| path.state == EffectState::FailedBeforeCommit)
+        .map(|path| path.file.clone())
+        .collect();
+    let (index, error) = journal.finalize_observed(dir, &observed, &unsafe_paths);
+    report.index = index;
+    report.index_error = error;
+    if !journal.has_index() {
+        report.index = IndexDisposition::NotUsed;
+    }
 }
 
 #[cfg(test)]

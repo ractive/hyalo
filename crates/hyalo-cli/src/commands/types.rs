@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use hyalo_core::discovery;
-use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter_within};
+use hyalo_core::frontmatter::read_frontmatter;
 use hyalo_core::schema::{SchemaConfig, expand_default};
 
 use crate::output::{CommandOutcome, Format, output_value, user_diagnostic};
@@ -181,6 +181,7 @@ pub(crate) fn set_type(
     property_type_args: &[String],
     property_values_args: &[String],
     filename_template: Option<&str>,
+    journal: &mut super::journal::MutationJournal<'_>,
     dry_run: bool,
     format: Format,
     case_insensitive_mode: hyalo_core::CaseInsensitiveMode,
@@ -429,6 +430,65 @@ pub(crate) fn set_type(
         }
     }
 
+    // Capture and render every note default update before publishing the
+    // configuration. This makes malformed input, aliases, output limits and
+    // source conflicts deterministic preflight failures for the whole
+    // config+notes operation.
+    let mut default_changes = if defaults_map.is_empty() {
+        None
+    } else {
+        Some(super::apply::PreparedChangeSet::new(dir, 0)?)
+    };
+    let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(changes) = &mut default_changes {
+        let all_vault_files = discovery::discover_files(dir)?;
+        for full_path in &all_vault_files {
+            let rel = discovery::relative_path(dir, full_path);
+            let captured = changes.capture(&rel)?;
+            let Ok(props) = hyalo_core::frontmatter::read_frontmatter_from_reader(
+                std::io::BufReader::new(captured.reader()?),
+            ) else {
+                continue;
+            };
+            let file_type = props
+                .get("type")
+                .and_then(hyalo_core::schema::normalize_type_value)
+                .unwrap_or_default();
+            if file_type != type_name {
+                continue;
+            }
+            let mut file_needs: HashMap<String, String> = HashMap::new();
+            for key in defaults_map.keys() {
+                if !props.contains_key(key.as_str()) {
+                    let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
+                    file_needs.insert(key.clone(), expanded);
+                    per_default_files
+                        .entry(key.clone())
+                        .or_default()
+                        .push(rel.clone());
+                }
+            }
+            if file_needs.is_empty() {
+                changes.push(captured, None)?;
+                continue;
+            }
+            let mut new_props = props;
+            for (key, expanded) in &file_needs {
+                let typed = coerce_default_for_prop(
+                    expanded,
+                    prop_type_map.get(key.as_str()).copied(),
+                    prop_values_map.contains_key(key.as_str()),
+                );
+                new_props.insert(key.clone(), typed);
+            }
+            let mut reader = captured.reader()?;
+            let replacement =
+                hyalo_core::frontmatter::render_frontmatter(&mut reader, full_path, &new_props)?;
+            drop(reader);
+            changes.push(captured, Some(&replacement))?;
+        }
+    }
+
     // Write TOML to disk (unless dry-run).
     let mut effects = if dry_run {
         None
@@ -447,59 +507,15 @@ pub(crate) fn set_type(
         let mut defaults_applied: Vec<DefaultAppliedOwned> = Vec::new();
 
         if !defaults_map.is_empty() {
-            let all_vault_files = discovery::discover_files(dir)?;
-            let mut per_default_files: HashMap<String, Vec<String>> = HashMap::new();
-
-            for full_path in &all_vault_files {
-                let Ok(props) = read_frontmatter(full_path) else {
-                    continue;
-                };
-                let file_type = props
-                    .get("type")
-                    .and_then(hyalo_core::schema::normalize_type_value)
-                    .unwrap_or_default();
-                if file_type != type_name {
-                    continue;
-                }
-                let rel = discovery::relative_path(dir, full_path);
-
-                // Find which defaults this file is missing.
-                let mut file_needs: HashMap<String, String> = HashMap::new();
-                for key in defaults_map.keys() {
-                    if !props.contains_key(key.as_str()) {
-                        let expanded = expanded_defaults.get(key).cloned().unwrap_or_default();
-                        file_needs.insert(key.clone(), expanded);
-                        per_default_files
-                            .entry(key.clone())
-                            .or_default()
-                            .push(rel.clone());
-                    }
-                }
-
-                if !dry_run && !file_needs.is_empty() {
-                    let mut new_props = props.clone();
-                    for (key, expanded) in &file_needs {
-                        // If the user declared a non-string property-type in this
-                        // same invocation, coerce the default to the matching
-                        // JSON type so we don't write `archived: "true"` when the
-                        // user intended `archived: true`.
-                        let typed = coerce_default_for_prop(
-                            expanded,
-                            prop_type_map.get(key.as_str()).copied(),
-                            prop_values_map.contains_key(key.as_str()),
-                        );
-                        new_props.insert(key.clone(), typed);
-                    }
-                    write_frontmatter_within(dir, full_path, &new_props)
-                        .with_context(|| format!("writing defaults to {rel}"))?;
-                    if let Some(report) = &mut effects {
-                        report.paths.push(super::apply::PathEffect {
-                            file: rel,
-                            state: super::apply::EffectState::Committed,
-                            error: None,
-                            category: None,
-                        });
-                    }
+            if !dry_run {
+                let note_report = default_changes
+                    .take()
+                    .expect("default plan prepared")
+                    .apply(journal, "types defaults");
+                if let Some(report) = &mut effects {
+                    report.paths.extend(note_report.paths);
+                    report.index = note_report.index;
+                    report.index_error = note_report.index_error;
                 }
             }
 
@@ -604,95 +620,23 @@ fn resolve_toml_path(dir: &Path) -> PathBuf {
 }
 
 /// Read `.hyalo.toml` as a `DocumentMut`, or return an empty doc if not found.
-struct CapturedToml {
-    doc: toml_edit::DocumentMut,
-    source: Option<hyalo_core::rooted::CapturedInput>,
-}
-impl std::ops::Deref for CapturedToml {
-    type Target = toml_edit::DocumentMut;
-    fn deref(&self) -> &Self::Target {
-        &self.doc
-    }
-}
-impl std::ops::DerefMut for CapturedToml {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.doc
-    }
-}
+type CapturedToml = super::config_write::CapturedToml;
 fn read_toml_doc(toml_path: &Path) -> Result<CapturedToml> {
-    let root =
-        hyalo_core::rooted::ConfigRoot::new(toml_path.parent().context("config has no parent")?)?;
-    let name = hyalo_core::rooted::RelativeName::new(
-        toml_path.file_name().context("config has no name")?,
-    )?;
-    match root.capture(&name) {
-        Ok(source) => {
-            let contents = String::from_utf8(source.bytes()?).context("config is not UTF-8")?;
-            let doc = contents.parse().context("failed to parse .hyalo.toml")?;
-            Ok(CapturedToml {
-                doc,
-                source: Some(source),
-            })
-        }
-        Err(e)
-            if e.downcast_ref::<std::io::Error>()
-                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            Ok(CapturedToml {
-                doc: toml_edit::DocumentMut::new(),
-                source: None,
-            })
-        }
-        Err(e) => Err(e).context("failed to read .hyalo.toml"),
-    }
+    super::config_write::capture(toml_path)
 }
 
 /// Publish only the config whose bytes supplied this transformed document.
 fn write_toml_doc(toml_path: &Path, doc: &mut CapturedToml) -> Result<super::apply::ApplyReport> {
-    write_toml_doc_with_session(
-        toml_path,
-        doc,
-        hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile),
-    )
+    super::config_write::publish(toml_path, doc)
 }
 
+#[cfg(test)]
 fn write_toml_doc_with_session(
     toml_path: &Path,
     doc: &mut CapturedToml,
-    mut session: hyalo_core::rooted::WriteSession,
+    session: hyalo_core::rooted::WriteSession,
 ) -> Result<super::apply::ApplyReport> {
-    use super::apply::{ApplyReport, EffectFailure, EffectState, IndexDisposition, PathEffect};
-    use hyalo_core::rooted::{ConfigRoot, RelativeName};
-    let root = ConfigRoot::new(toml_path.parent().context("config has no parent")?)?;
-    let name = RelativeName::new(toml_path.file_name().context("config has no name")?)?;
-    let bytes = doc.to_string();
-    let effect = if let Some(source) = doc.source.take() {
-        source
-            .prepare(bytes.as_bytes(), &session)?
-            .commit(&mut session)?
-    } else {
-        root.destination(name)?
-            .create(bytes.as_bytes(), &mut session)?
-    };
-    let finish_error = session.finish().err().map(|error| error.to_string());
-    let error = effect
-        .finalization_error()
-        .map(str::to_owned)
-        .or(finish_error);
-    Ok(ApplyReport {
-        paths: vec![PathEffect {
-            file: toml_path.display().to_string(),
-            state: if error.is_some() {
-                EffectState::CommittedWithFinalizationError
-            } else {
-                EffectState::Committed
-            },
-            category: error.as_ref().map(|_| EffectFailure::Finalization),
-            error,
-        }],
-        index: IndexDisposition::NotUsed,
-        index_error: None,
-    })
+    super::config_write::publish_with_session(toml_path, doc, session)
 }
 
 /// Returns `true` when `[schema.types.<name>]` exists in the doc.
@@ -1119,7 +1063,7 @@ mod tests {
         let path = dir.path().join(".hyalo.toml");
         std::fs::write(&path, "dir = \".\"\n").unwrap();
         let mut doc = super::read_toml_doc(&path).unwrap();
-        doc.doc["format"] = toml_edit::value("json");
+        doc["format"] = toml_edit::value("json");
         let report = super::write_toml_doc_with_session(
             &path,
             &mut doc,
@@ -1155,7 +1099,7 @@ mod tests {
         let path = dir.path().join(".hyalo.toml");
         std::fs::write(&path, "dir = \".\"\n").unwrap();
         let mut document = super::read_toml_doc(&path).unwrap();
-        document.doc["format"] = toml_edit::value("json");
+        document["format"] = toml_edit::value("json");
         std::fs::write(&path, "dir = \"other\"\n").unwrap();
         let error = super::write_toml_doc(&path, &mut document).unwrap_err();
         assert!(
@@ -1374,6 +1318,7 @@ mod tests {
             &[],
             &[],
             None,
+            &mut crate::commands::journal::MutationJournal::new(&mut None, None),
             false,
             Format::Json,
             hyalo_core::CaseInsensitiveMode::Off,
@@ -1468,6 +1413,7 @@ mod tests {
             &[],
             &[],
             None,
+            &mut crate::commands::journal::MutationJournal::new(&mut None, None),
             false,
             Format::Json,
             hyalo_core::CaseInsensitiveMode::Off,
@@ -1496,6 +1442,7 @@ mod tests {
             &[],
             &[],
             None,
+            &mut crate::commands::journal::MutationJournal::new(&mut None, None),
             false,
             Format::Json,
             hyalo_core::CaseInsensitiveMode::Off,
@@ -1557,6 +1504,7 @@ mod tests {
             &[],
             &[],
             None,
+            &mut crate::commands::journal::MutationJournal::new(&mut None, None),
             false,
             Format::Json,
             hyalo_core::CaseInsensitiveMode::Off,
@@ -1609,6 +1557,7 @@ pub(crate) fn run(
             &property_type,
             &property_values,
             filename_template.as_deref(),
+            &mut super::journal::MutationJournal::new(&mut *ctx.snapshot_index, ctx.index_path),
             dry_run,
             effective_format,
             ctx.case_insensitive_mode,

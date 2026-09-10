@@ -126,7 +126,7 @@ pub fn create_index(
     let attachments = discovery::discover_attachments(dir).unwrap_or_default();
 
     // Save the snapshot (with the persisted BM25 index when available).
-    SnapshotIndex::save_with_attachments(
+    let publication = SnapshotIndex::save_with_attachments_observed(
         &build.index,
         &index_path,
         &vault_dir_str,
@@ -134,6 +134,20 @@ pub fn create_index(
         bm25_index.as_ref(),
         &attachments,
     )?;
+
+    if let Some(error) = publication.finalization_error {
+        let report = crate::commands::apply::ApplyReport {
+            paths: vec![crate::commands::apply::PathEffect {
+                file: index_path.display().to_string(),
+                state: crate::commands::apply::EffectState::CommittedWithFinalizationError,
+                error: Some(error),
+                category: Some(crate::commands::apply::EffectFailure::Finalization),
+            }],
+            index: crate::commands::apply::IndexDisposition::NotUsed,
+            index_error: None,
+        };
+        return Ok(CommandOutcome::success(serde_json::Value::Null).with_apply_report(report));
+    }
 
     // Check for stale indexes in the same directory.
     // Only run this check when we wrote to the default location; if the caller
@@ -172,7 +186,17 @@ pub fn create_index(
         note: replacing_existing.then_some("replaced existing index"),
     };
 
-    Ok(CommandOutcome::success(output_value(&result)))
+    let report = crate::commands::apply::ApplyReport {
+        paths: vec![crate::commands::apply::PathEffect {
+            file: index_path.display().to_string(),
+            state: crate::commands::apply::EffectState::Committed,
+            error: None,
+            category: None,
+        }],
+        index: crate::commands::apply::IndexDisposition::NotUsed,
+        index_error: None,
+    };
+    Ok(CommandOutcome::success(output_value(&result)).with_apply_report(report))
 }
 
 /// Serialized CreateIndexResult command contract.

@@ -253,3 +253,43 @@ normal authored Markdown, including broken frontmatter, missing delimiters and i
 edits, with useful diagnostics and safe refusal without corruption where processing cannot
 continue; preserve crash, security, confinement, resource and partial-write protections without
 exhaustive random-gibberish/fuzz exploration.
+
+## Iteration 293 reconciliation — 2026-09-10
+
+Final behavioral gates consume `CapturedInput`, `PreparedReplacement`,
+`OwnedPublication`, explicit `WriteSession` and the observed apply/index reports.
+Captures copy exact platform identity (Unix device/inode; Windows volume serial
+and file index) and stage source bytes without retaining one descriptor per note.
+Compensation receipts retain live handles only for compensable moved entries and
+moved self-files, and verify exact identity plus the last published bytes.
+Retain descriptor-budget coverage without expanding it into an exotic-filesystem
+campaign.
+
+Carry real property/tag rename callers' forced full-map editor and Hyalo-writer
+interleavings, including same-length changes with restored timestamps, into the
+existing prepared-write gates. Preserve exact-source and publication-receipt
+checks, two-stage lint partial effects, init/deinit directory effects and
+receipt-verified case-only temporary-leg compensation. Independent backlink
+rewrites already committed are `Kept`; compensation may be `Restored` or
+`RestoreFailed`. Final index maintenance follows observed surviving paths and
+retains publication/finalization errors. Published frontmatter/task wrappers now
+capture and finalize explicitly with signatures preserved; low-level atomic-write
+wrappers accept already-final bytes and do not supply transformation authority.
+
+Require native evidence of the actual case-sensitive existing-destination and
+missing-destination batch branches and Windows runtime behavior. OS labels,
+cross-compilation and early-return tests do not prove those branches. Windows
+directory sync remains unavailable. These checks provide neither kernel
+compare-and-swap, arbitrary directory-swap protection nor whole-vault crash
+transactions. The final 293 review reports no findings; supplied local evidence
+records 5,123 passes, two ignored tests and 35 release-bound npm passes. Ignored
+tests, stub gates and the unexercised MADR recipe are excluded from coverage.
+
+Astra retains A04 resource implementation; after its writer freezes, Sol retains
+remaining gates, docs and the actual held-out model comparison. Keep
+`291-ci-resource-observation.json` solely as existing A04 diagnostic-ordering
+input. All 26 original checkbox texts, A04/R16 ownership, the 294 dependency and
+the 50-row/49-group ledger remain unchanged. Live model unavailability leaves its
+acceptance pending. Cover normal authored Markdown mistakes with useful
+diagnostics and safe refusal; no exhaustive gibberish/fuzz or exotic-file campaign
+is added. Iteration 287's external consumer task remains deferred.

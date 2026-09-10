@@ -1,9 +1,7 @@
 /// `hyalo new` — create a new markdown file scaffolded from a schema type.
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::Context;
 use indexmap::IndexMap;
 
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, expand_default};
@@ -97,20 +95,6 @@ pub(crate) fn create_new(
     }
 
     // ------------------------------------------------------------------
-    // Step 3: ensure parent directory exists (create if needed)
-    // ------------------------------------------------------------------
-    // A dry run must not fabricate directories either — `--dry-run` on a path
-    // under a not-yet-existing folder used to be impossible to preview without
-    // leaving the folder behind (iter-267, UX-17).
-    if !dry_run
-        && let Some(parent) = full_path.parent()
-        && !parent.is_dir()
-    {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent directories for {}", full_path.display()))?;
-    }
-
-    // ------------------------------------------------------------------
     // Step 4 & 6: synthesise and atomically create the file
     // ------------------------------------------------------------------
     let merged = schema.merged_schema_for_type(type_name);
@@ -178,37 +162,7 @@ pub(crate) fn create_new(
         return Ok(CommandOutcome::success(out));
     }
 
-    let mut file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&full_path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Ok(CommandOutcome::UserError(user_diagnostic(
-                format,
-                "file already exists; remove it first if you mean to re-create",
-                Some(file_arg),
-                None,
-                None,
-            )));
-        }
-        Err(e) => {
-            return Err(e).with_context(|| format!("creating new file at {}", full_path.display()));
-        }
-    };
-    file.write_all(content.as_bytes())
-        .with_context(|| format!("writing new file to {}", full_path.display()))?;
-    // Drop the file handle so the subsequent index scan sees the final state
-    // on platforms (notably Windows) where open writers can interfere with
-    // readers, and so mtime reflects the completed write.
-    drop(file);
-
-    // ------------------------------------------------------------------
-    // Step 6.5: keep the snapshot index in sync (no-op when no index loaded)
-    // ------------------------------------------------------------------
-    journal.add_entry(rel_path, &full_path)?;
-    journal.flush()?;
+    let effects = publish_new(dir, rel_path, content.as_bytes(), journal)?;
 
     // ------------------------------------------------------------------
     // Step 7: output
@@ -227,7 +181,255 @@ pub(crate) fn create_new(
             output_value(&val)
         }
     };
-    Ok(CommandOutcome::success(out))
+    Ok(CommandOutcome::success(out).with_apply_report(effects))
+}
+
+fn publish_new(
+    dir: &Path,
+    rel_path: &str,
+    content: &[u8],
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<crate::commands::apply::ApplyReport> {
+    publish_new_with_session(
+        dir,
+        rel_path,
+        content,
+        journal,
+        hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile),
+    )
+}
+
+fn publish_new_with_session(
+    dir: &Path,
+    rel_path: &str,
+    content: &[u8],
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<crate::commands::apply::ApplyReport> {
+    use crate::commands::apply::{ApplyReport, EffectFailure, EffectState, PathEffect};
+    use hyalo_core::rooted::{RelativeName, VaultRoot};
+
+    let root = VaultRoot::new(dir)?;
+    let relative = Path::new(rel_path);
+    let mut manifest = Vec::new();
+    let mut current = PathBuf::new();
+    if let Some(parent) = relative.parent() {
+        for component in parent.components() {
+            current.push(component.as_os_str());
+            match std::fs::symlink_metadata(dir.join(&current)) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    anyhow::bail!("new file parent is a symlink: {}", current.display())
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    anyhow::bail!("new file parent is not a directory: {}", current.display())
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    manifest.push(current.clone());
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    let manifest: Vec<(PathBuf, RelativeName)> = manifest
+        .into_iter()
+        .map(|directory| Ok((directory.clone(), RelativeName::new(&directory)?)))
+        .collect::<Result<_>>()?;
+    let mut paths = Vec::new();
+    let mut owned_directories = Vec::new();
+    let mut preparation_failed = false;
+    for (position, (directory, name)) in manifest.iter().enumerate() {
+        let effect = match root.create_directory(name, &mut session) {
+            Ok(effect) => effect,
+            Err(error) => {
+                paths.push(PathEffect {
+                    file: format!("{}/", directory.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::FailedBeforeCommit,
+                    error: Some(error.to_string()),
+                    category: Some(EffectFailure::Io),
+                });
+                preparation_failed = true;
+                for (remaining, _) in manifest.iter().skip(position + 1) {
+                    paths.push(PathEffect {
+                        file: format!("{}/", remaining.to_string_lossy().replace('\\', "/")),
+                        state: EffectState::NotAttempted,
+                        error: None,
+                        category: None,
+                    });
+                }
+                break;
+            }
+        };
+        let finalization_error = effect.finalization_error().map(str::to_owned);
+        paths.push(PathEffect {
+            file: format!("{}/", directory.to_string_lossy().replace('\\', "/")),
+            state: if finalization_error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            error: finalization_error.clone(),
+            category: finalization_error
+                .as_ref()
+                .map(|_| EffectFailure::Finalization),
+        });
+        match same_file::Handle::from_path(dir.join(directory)) {
+            Ok(identity) => owned_directories.push(NewOwnedDirectory {
+                relative: directory.clone(),
+                identity,
+            }),
+            Err(error) => {
+                paths.push(PathEffect {
+                    file: format!("{}/", directory.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::Kept,
+                    error: Some(format!(
+                        "created directory ownership could not be recorded; keeping it: {error}"
+                    )),
+                    category: Some(EffectFailure::Io),
+                });
+                preparation_failed = true;
+            }
+        }
+        if finalization_error.is_some() {
+            preparation_failed = true;
+        }
+        if preparation_failed {
+            for (remaining, _) in manifest.iter().skip(position + 1) {
+                paths.push(PathEffect {
+                    file: format!("{}/", remaining.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::NotAttempted,
+                    error: None,
+                    category: None,
+                });
+            }
+            break;
+        }
+    }
+    if preparation_failed {
+        paths.push(PathEffect {
+            file: rel_path.to_owned(),
+            state: EffectState::NotAttempted,
+            error: None,
+            category: None,
+        });
+        cleanup_new_directories(dir, &owned_directories, &mut paths);
+        if let Err(error) = session.finish() {
+            paths.push(PathEffect {
+                file: rel_path.to_owned(),
+                state: EffectState::NotAttempted,
+                error: Some(format!("write session finalization failed: {error}")),
+                category: Some(EffectFailure::Finalization),
+            });
+        }
+        return Ok(ApplyReport {
+            paths,
+            index: crate::commands::apply::IndexDisposition::NotUsed,
+            index_error: None,
+        });
+    }
+    let creation = (|| -> Result<_> {
+        root.destination(RelativeName::new(rel_path)?)?
+            .create(content, &mut session)
+    })();
+    match creation {
+        Ok(effect) => paths.push(PathEffect {
+            file: rel_path.to_owned(),
+            state: if effect.finalization_error().is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            error: effect.finalization_error().map(str::to_owned),
+            category: effect
+                .finalization_error()
+                .map(|_| EffectFailure::Finalization),
+        }),
+        Err(error) => {
+            paths.push(PathEffect {
+                file: rel_path.to_owned(),
+                state: EffectState::FailedBeforeCommit,
+                error: Some(error.to_string()),
+                category: Some(EffectFailure::Io),
+            });
+            cleanup_new_directories(dir, &owned_directories, &mut paths);
+        }
+    }
+    if let Err(error) = session.finish() {
+        if let Some(effect) = paths.iter_mut().rev().find(|effect| {
+            effect.file == rel_path
+                && matches!(
+                    effect.state,
+                    EffectState::Committed | EffectState::CommittedWithFinalizationError
+                )
+        }) {
+            effect.state = EffectState::CommittedWithFinalizationError;
+            effect.category = Some(EffectFailure::Finalization);
+            effect.error = Some(match effect.error.take() {
+                Some(existing) => format!("{existing}; write session finalization failed: {error}"),
+                None => format!("write session finalization failed: {error}"),
+            });
+        } else {
+            paths.push(PathEffect {
+                file: rel_path.to_owned(),
+                state: EffectState::NotAttempted,
+                error: Some(format!("write session finalization failed: {error}")),
+                category: Some(EffectFailure::Finalization),
+            });
+        }
+    }
+    let committed = paths.iter().any(|effect| {
+        effect.file == rel_path
+            && matches!(
+                effect.state,
+                EffectState::Committed | EffectState::CommittedWithFinalizationError
+            )
+    });
+    let (index, index_error) = if committed {
+        journal.finalize_observed(dir, &[rel_path.to_owned()], &[])
+    } else {
+        (crate::commands::apply::IndexDisposition::NotUsed, None)
+    };
+    Ok(ApplyReport {
+        paths,
+        index,
+        index_error,
+    })
+}
+
+struct NewOwnedDirectory {
+    relative: PathBuf,
+    identity: same_file::Handle,
+}
+
+fn cleanup_new_directories(
+    dir: &Path,
+    owned: &[NewOwnedDirectory],
+    paths: &mut Vec<crate::commands::apply::PathEffect>,
+) {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    for directory in owned.iter().rev() {
+        let full = dir.join(&directory.relative);
+        let cleanup = (|| -> Result<()> {
+            if same_file::Handle::from_path(&full)? != directory.identity {
+                anyhow::bail!("directory identity changed; keeping it");
+            }
+            std::fs::remove_dir(&full)?;
+            Ok(())
+        })();
+        paths.push(PathEffect {
+            file: format!(
+                "{}/",
+                directory.relative.to_string_lossy().replace('\\', "/")
+            ),
+            state: if cleanup.is_ok() {
+                EffectState::Restored
+            } else {
+                EffectState::Kept
+            },
+            error: cleanup.as_ref().err().map(ToString::to_string),
+            category: cleanup.err().map(|_| EffectFailure::Io),
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -469,4 +671,62 @@ struct NewResult<'a> {
     /// Scaffold source included only in a preview.
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<&'a str>,
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use crate::commands::apply::EffectState;
+    use hyalo_core::rooted::{Durability, FaultPoint, WriteSession};
+
+    #[test]
+    fn directory_finalization_failure_retains_create_cleanup_and_target_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = None;
+        let mut journal = crate::commands::journal::MutationJournal::new(&mut index, None);
+        let report = publish_new_with_session(
+            dir.path(),
+            "one/two/note.md",
+            b"body\n",
+            &mut journal,
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap();
+
+        assert!(report.paths.iter().any(|effect| {
+            effect.file == "one/" && effect.state == EffectState::CommittedWithFinalizationError
+        }));
+        assert!(
+            report
+                .paths
+                .iter()
+                .any(|effect| effect.file == "one/" && effect.state == EffectState::Restored)
+        );
+        assert!(report.paths.iter().any(|effect| {
+            effect.file == "one/two/note.md" && effect.state == EffectState::NotAttempted
+        }));
+        assert!(!dir.path().join("one").exists());
+        assert!(!dir.path().join("one/two/note.md").exists());
+    }
+
+    #[test]
+    fn ordinary_nested_new_still_creates_all_missing_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = None;
+        let mut journal = crate::commands::journal::MutationJournal::new(&mut index, None);
+        let report = publish_new_with_session(
+            dir.path(),
+            "one/two/note.md",
+            b"body\n",
+            &mut journal,
+            WriteSession::new(Durability::PerFile),
+        )
+        .unwrap();
+
+        assert!(!report.failed());
+        assert_eq!(
+            std::fs::read(dir.path().join("one/two/note.md")).unwrap(),
+            b"body\n"
+        );
+    }
 }

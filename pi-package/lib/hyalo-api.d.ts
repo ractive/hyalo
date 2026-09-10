@@ -62,7 +62,7 @@ type IndexDisposition = "not_used" | "updated" | "invalidated" | "update_failed"
 
 type EffectFailure = "source_conflict" | "io" | "finalization";
 
-type EffectState = "unchanged" | "committed" | "not_attempted" | "failed_before_commit" | "committed_with_finalization_error";
+type EffectState = "unchanged" | "committed" | "not_attempted" | "failed_before_commit" | "committed_with_finalization_error" | "restored" | "restore_failed" | "kept";
 
 type PathEffect = {
     file: string;

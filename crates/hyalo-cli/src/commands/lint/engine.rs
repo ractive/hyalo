@@ -97,40 +97,69 @@ pub fn lint_files_extended(
             link_ctx,
         )
     };
-    // BUG-14 (iter-277): `--fix` rewrites every file it fixes, and each of
-    // those writes used to pay its own `F_FULLFSYNC` — 5.5 ms apiece on APFS,
-    // 49 s over the Obsidian Hub. One phase for the whole run pays the
-    // durability fsync once per directory instead (DEC-317) and reports
-    // progress so a long run does not read as a hang.
-    let write_phase = matches!(opts.fix, FixMode::Apply)
-        .then(|| hyalo_core::WritePhase::begin(files.len(), "applying fixes"));
     #[cfg(not(miri))]
     let per_file: Vec<Result<PerFileLintResult>> = files.par_iter().map(lint_file).collect();
     #[cfg(miri)]
     let per_file: Vec<Result<PerFileLintResult>> = files.iter().map(lint_file).collect();
-    drop(write_phase);
 
     // Merge results serially.
     let mut all_results: Vec<PerFileLintResult> = Vec::with_capacity(files.len());
-    let mut modified_files: Vec<String> = Vec::new();
+    let mut mutation_effects: Vec<crate::commands::apply::PathEffect> = Vec::new();
 
     for result in per_file {
-        let mut r = result?;
-        if r.body_modified {
-            modified_files.push(r.rel_path.clone());
-            r.body_modified = false;
+        match result {
+            Ok(mut r) => {
+                mutation_effects.append(&mut r.mutation_effects);
+                r.body_modified = false;
+                all_results.push(r);
+            }
+            Err(error) => {
+                // Rayon has already completed every worker. Retain their
+                // effects and report this independent failure rather than
+                // discarding completed publications with `?`.
+                if let Some(observed) = error.downcast_ref::<super::file::ObservedLintWorkerError>()
+                {
+                    mutation_effects.extend(observed.effects.iter().cloned());
+                }
+                crate::warn::warn(format!("lint worker failed: {error:#}"));
+            }
         }
-        all_results.push(r);
     }
 
     // Patch index for body-modified files (ARCH-3, iter-226): through the
     // MutationJournal so entry AND link graph stay current, flushed once.
-    if !modified_files.is_empty() {
+    let apply_report = if mutation_effects.is_empty() {
+        None
+    } else {
+        use crate::commands::apply::EffectState;
+        let mut modified_files = Vec::new();
+        let mut unsafe_files = Vec::new();
+        for effect in &mutation_effects {
+            match effect.state {
+                EffectState::Committed
+                | EffectState::CommittedWithFinalizationError
+                | EffectState::Restored
+                | EffectState::Kept => modified_files.push(effect.file.clone()),
+                EffectState::FailedBeforeCommit | EffectState::RestoreFailed => {
+                    unsafe_files.push(effect.file.clone());
+                }
+                EffectState::Unchanged | EffectState::NotAttempted => {}
+            }
+        }
+        modified_files.sort();
+        modified_files.dedup();
+        unsafe_files.sort();
+        unsafe_files.dedup();
         let mut journal =
             crate::commands::journal::MutationJournal::new(opts.snapshot_index, opts.index_path);
-        journal.rescan_modified(opts.vault_dir, &modified_files)?;
-        journal.flush()?;
-    }
+        let (index, index_error) =
+            journal.finalize_observed(opts.vault_dir, &modified_files, &unsafe_files);
+        Some(crate::commands::apply::ApplyReport {
+            paths: mutation_effects,
+            index,
+            index_error,
+        })
+    };
 
     let is_fix_mode = matches!(opts.fix, FixMode::Apply | FixMode::DryRun);
 
@@ -565,6 +594,10 @@ pub fn lint_files_extended(
     };
 
     let outcome = CommandOutcome::success_with_total(val, total_files_with_violations as u64);
+    let outcome = match apply_report {
+        Some(report) => outcome.with_observed_report(report),
+        None => outcome,
+    };
 
     Ok((outcome, counts))
 }
@@ -628,6 +661,9 @@ pub(super) struct PerFileLintResult {
     pub(super) violations_by_rule: indexmap::IndexMap<String, Vec<InternalViolation>>,
     pub(super) total_violations: usize,
     pub(super) body_modified: bool,
+    /// Exact publication outcomes retained even when durability or a later
+    /// file fails. The engine owns index reconciliation for these effects.
+    pub(super) mutation_effects: Vec<crate::commands::apply::PathEffect>,
     /// Frontmatter fix actions applied or previewed.
     pub(super) fix_actions: Vec<FixAction>,
     /// One `(rule_id, line, outcome)` per fixable diagnostic the fix loop

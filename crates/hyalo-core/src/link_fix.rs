@@ -1380,7 +1380,7 @@ pub fn apply_fixes(
                 replacements,
                 rewritten_content,
                 mtime: file_mtime,
-                original_content: None,
+                original_content: Some(content.clone()),
             });
         }
     }

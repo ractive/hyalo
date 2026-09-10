@@ -1168,3 +1168,106 @@ fn mv_batch_symlink_escape_rejected() {
     assert!(!outside.path().join("note.md").exists());
     assert!(!outside.path().join("note2.md").exists());
 }
+
+fn destination_namespace_is_case_insensitive(dir: &std::path::Path) -> bool {
+    let lower = dir.join(".hyalo-case-policy-probe-a");
+    let upper = dir.join(".HYALO-CASE-POLICY-PROBE-A");
+    fs::write(&lower, b"probe").unwrap();
+    let insensitive = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&upper)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::AlreadyExists);
+    let _ = fs::remove_file(&lower);
+    let _ = fs::remove_file(&upper);
+    insensitive
+}
+
+fn run_equivalent_name_batch(tmp: &TempDir, destination: &str) -> std::process::Output {
+    write_md(tmp.path(), "a/Foo.md", "# upper\n");
+    write_md(tmp.path(), "b/foo.md", "# lower\n");
+    hyalo_no_hints()
+        .args(["--dir", tmp.path().to_str().unwrap()])
+        .args([
+            "mv",
+            "--glob",
+            "a/*.md",
+            "--glob",
+            "b/*.md",
+            "--to",
+            destination,
+            "--apply",
+        ])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn mv_batch_equivalent_names_follow_existing_destination_case_policy() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join("out")).unwrap();
+    let insensitive = destination_namespace_is_case_insensitive(&tmp.path().join("out"));
+    let output = run_equivalent_name_batch(&tmp, "out/");
+
+    if insensitive {
+        eprintln!("HYALO_CASE_MATRIX=case_insensitive_existing_parent_exercised");
+        assert!(
+            !output.status.success(),
+            "equivalent destinations must collide"
+        );
+        assert!(tmp.path().join("a/Foo.md").exists());
+        assert!(tmp.path().join("b/foo.md").exists());
+        assert_eq!(fs::read_dir(tmp.path().join("out")).unwrap().count(), 0);
+    } else {
+        eprintln!("HYALO_CASE_MATRIX=case_sensitive_existing_parent_exercised");
+        assert!(
+            output.status.success(),
+            "distinct destinations must succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read(tmp.path().join("out/Foo.md")).unwrap(),
+            b"# upper\n"
+        );
+        assert_eq!(
+            fs::read(tmp.path().join("out/foo.md")).unwrap(),
+            b"# lower\n"
+        );
+    }
+}
+
+#[test]
+fn mv_batch_equivalent_names_follow_new_destination_case_policy() {
+    let tmp = TempDir::new().unwrap();
+    let insensitive = destination_namespace_is_case_insensitive(tmp.path());
+    let output = run_equivalent_name_batch(&tmp, "new/out/");
+
+    if insensitive {
+        eprintln!("HYALO_CASE_MATRIX=case_insensitive_missing_parent_exercised");
+        assert!(
+            !output.status.success(),
+            "equivalent destinations must collide"
+        );
+        assert!(tmp.path().join("a/Foo.md").exists());
+        assert!(tmp.path().join("b/foo.md").exists());
+        assert!(
+            !tmp.path().join("new").exists(),
+            "owned empty parents must be cleaned after probe refusal"
+        );
+    } else {
+        eprintln!("HYALO_CASE_MATRIX=case_sensitive_missing_parent_exercised");
+        assert!(
+            output.status.success(),
+            "distinct destinations must succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read(tmp.path().join("new/out/Foo.md")).unwrap(),
+            b"# upper\n"
+        );
+        assert_eq!(
+            fs::read(tmp.path().join("new/out/foo.md")).unwrap(),
+            b"# lower\n"
+        );
+    }
+}

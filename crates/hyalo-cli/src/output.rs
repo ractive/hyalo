@@ -124,6 +124,21 @@ impl CommandOutcome {
         }
         self
     }
+
+    /// Attach an observed mutation report while preserving the command's
+    /// primary result payload. Batch diagnostics such as `lint --fix` already
+    /// encode per-file failures in that payload and must keep reporting the
+    /// successfully processed files alongside partial effects.
+    #[must_use]
+    pub(crate) fn with_observed_report(
+        mut self,
+        report: crate::commands::apply::ApplyReport,
+    ) -> Self {
+        if let Self::Success { effects, .. } = &mut self {
+            *effects = Some(report);
+        }
+        self
+    }
     #[must_use]
     pub fn with_status(mut self, code: i32) -> Self {
         if let Self::Success { status, .. } = &mut self {

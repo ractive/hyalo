@@ -1,10 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::cli::args::ConflictPolicy;
@@ -181,9 +181,9 @@ pub fn mv(
         Err(outcome) => return Ok(*outcome),
     };
 
-    // 3. Capture source fingerprint BEFORE planning so any concurrent edit
-    //    during plan_mv is detected before the actual fs::rename.
-    let src_mtime = hyalo_core::frontmatter::read_mtime(&dir.join(&old_rel))?;
+    // 3. Capture exact source bytes and identity before planning. The prepared
+    // move re-verifies this receipt immediately before publication.
+    let sources = capture_move_sources(dir, std::slice::from_ref(&old_rel))?;
 
     // 4. Plan all rewrites
     let mv_plan = link_rewrite::plan_mv(dir, &old_rel, &new_rel, site_prefix, allow_ambiguous)?;
@@ -260,13 +260,19 @@ pub fn mv(
             }
             return Err(err);
         }
-        execute_mv(dir, &old_rel, &new_rel, &mv_plan.plans, src_mtime)?;
-
-        // Patch index: rename the entry, re-scan files with rewritten links,
-        // and update the link graph so backlink queries stay accurate.
-        let rewritten: Vec<&str> = mv_plan.plans.iter().map(|p| p.rel_path.as_str()).collect();
-        journal.rename_entry(dir, &old_rel, &new_rel, &rewritten)?;
-        journal.flush()?;
+        let execution = execute_batch_mv(
+            dir,
+            &[(old_rel.clone(), new_rel.clone())],
+            sources,
+            &mv_plan.plans,
+            journal,
+        )?;
+        let outcome =
+            CommandOutcome::success(serde_json::to_value(&result).context("failed to serialize")?);
+        return Ok(match execution.error {
+            Some(error) => mutation_failure(error, execution.report),
+            None => outcome.with_apply_report(execution.report),
+        });
     }
 
     Ok(CommandOutcome::success(
@@ -341,6 +347,11 @@ pub fn mv_batch(
         ));
     }
 
+    // Capture every selected physical source before planning. Aliases and hard
+    // links cannot authorize two publications in one batch.
+    let source_names: Vec<String> = renames.iter().map(|(source, _)| source.clone()).collect();
+    let captured_sources = capture_move_sources(dir, &source_names)?;
+
     // 5. Plan rewrites (build link graph once).
     let mut plan_result = if renames.is_empty() {
         link_rewrite::BatchMvPlanResult::default()
@@ -408,15 +419,13 @@ pub fn mv_batch(
             }
             return Err(err);
         }
-        execute_batch_mv(dir, &renames, &plans)?;
-        // Update index if present.
-        if journal.has_index() {
-            let rewritten_paths: Vec<&str> = plans.iter().map(|p| p.rel_path.as_str()).collect();
-            for (old_rel, new_rel) in &renames {
-                journal.rename_entry(dir, old_rel, new_rel, &rewritten_paths)?;
-            }
-            journal.flush()?;
-        }
+        let execution = execute_batch_mv(dir, &renames, captured_sources, &plans, journal)?;
+        let outcome =
+            CommandOutcome::success(serde_json::to_value(&result).context("failed to serialize")?);
+        return Ok(match execution.error {
+            Some(error) => mutation_failure(error, execution.report),
+            None => outcome.with_apply_report(execution.report),
+        });
     }
 
     Ok(CommandOutcome::success(
@@ -727,10 +736,54 @@ fn build_rename_map(
 // Execution
 // ---------------------------------------------------------------------------
 
-/// Execute a batch move: apply all renames, then write all rewrite plans.
-/// On failure of any rename, roll back already-applied renames.
-/// If link rewrite fails after renames succeeded, also rolls back renames.
-fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePlan]) -> Result<()> {
+/// Execute prepared moves and rewrites. Every exit carries the observed
+/// effects; compensation is guarded and best effort.
+struct MoveExecution {
+    report: crate::commands::apply::ApplyReport,
+    error: Option<String>,
+}
+
+struct AppliedMove {
+    old_rel: String,
+    new_rel: String,
+    receipt: hyalo_core::rooted::OwnedPublication,
+}
+
+fn execute_batch_mv(
+    dir: &Path,
+    renames: &[(String, String)],
+    sources: Vec<hyalo_core::rooted::CapturedInput>,
+    plans: &[RewritePlan],
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<MoveExecution> {
+    use hyalo_core::rooted::{Durability, WriteSession};
+    execute_batch_mv_with_session(
+        dir,
+        renames,
+        sources,
+        plans,
+        journal,
+        WriteSession::new(if renames.len() > 8 {
+            Durability::PerDirectory
+        } else {
+            Durability::PerFile
+        }),
+    )
+}
+
+fn execute_batch_mv_with_session(
+    dir: &Path,
+    renames: &[(String, String)],
+    sources: Vec<hyalo_core::rooted::CapturedInput>,
+    plans: &[RewritePlan],
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<MoveExecution> {
+    use crate::commands::apply::{
+        ApplyReport, EffectFailure, EffectState, IndexDisposition, PathEffect,
+    };
+    use hyalo_core::rooted::{RelativeName, VaultRoot};
+
     // H-3 defense-in-depth: re-verify every destination stays within the
     // vault right before mutating the filesystem. `build_rename_map` already
     // rejects escaping destinations, but this guard makes the invariant
@@ -743,206 +796,870 @@ fn execute_batch_mv(dir: &Path, renames: &[(String, String)], plans: &[RewritePl
             .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
     }
 
-    // Link rewrites and moves form one user operation. Reject an output that
-    // exceeds the normal frontmatter budgets before creating directories or
-    // renaming any source.
+    // Link rewrites and moves form one user operation. Reject every
+    // deterministic transformation before creating directories or notes.
     link_rewrite::validate_rewrite_plans(plans)?;
+    let root = VaultRoot::new(dir)?;
+    let mut paths = Vec::new();
 
-    // Capture source mtimes upfront to detect concurrent modifications.
-    let mut src_mtimes: Vec<(String, String, (std::time::SystemTime, u64))> = Vec::new();
-    for (old_rel, new_rel) in renames {
-        let src = dir.join(old_rel);
-        let mtime = hyalo_core::frontmatter::read_mtime(&src)
-            .with_context(|| format!("failed to read mtime for {}", src.display()))?;
-        src_mtimes.push((old_rel.clone(), new_rel.clone(), mtime));
+    // Materialize the complete parent manifest before probing or moving.
+    let mut needed = BTreeSet::new();
+    for (_, destination) in renames {
+        let mut relative = PathBuf::new();
+        if let Some(parent) = Path::new(destination).parent() {
+            for component in parent.components() {
+                relative.push(component.as_os_str());
+                let full = dir.join(&relative);
+                match fs::symlink_metadata(&full) {
+                    Ok(meta) if meta.file_type().is_symlink() => {
+                        bail!("move destination parent is a symlink: {}", full.display())
+                    }
+                    Ok(meta) if !meta.is_dir() => {
+                        bail!(
+                            "move destination parent is not a directory: {}",
+                            full.display()
+                        )
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        needed.insert(relative.clone());
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
     }
-
-    let mut applied: Vec<(PathBuf, PathBuf)> = Vec::new();
-
-    for (old_rel, new_rel, mtime) in &src_mtimes {
-        let src = dir.join(old_rel);
-        let dst = dir.join(new_rel);
-
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create directory {}", parent.display()))?;
-        }
-
-        // Check for concurrent modification before renaming.
-        if let Err(e) = hyalo_core::frontmatter::check_mtime(&src, *mtime) {
-            // Roll back already-applied renames.
-            for (was_dst, was_src) in applied.iter().rev() {
-                if let Err(rb_err) = fs::rename(was_dst, was_src) {
-                    eprintln!(
-                        "warning: rollback failed for {} -> {}: {rb_err}",
-                        was_dst.display(),
-                        was_src.display()
-                    );
+    // Validate every lexical directory name before the first filesystem
+    // effect. From this point onward all failures flow through the reporting
+    // epilogue below.
+    let manifest: Vec<(PathBuf, RelativeName)> = needed
+        .into_iter()
+        .map(|relative| Ok((relative.clone(), RelativeName::new(&relative)?)))
+        .collect::<Result<_>>()?;
+    let mut created = Vec::new();
+    let mut preparation_error = None;
+    for (position, (relative, name)) in manifest.iter().enumerate() {
+        let effect = match root.create_directory(name, &mut session) {
+            Ok(effect) => effect,
+            Err(error) => {
+                paths.push(PathEffect {
+                    file: format!("{}/", relative.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::FailedBeforeCommit,
+                    category: Some(EffectFailure::Io),
+                    error: Some(error.to_string()),
+                });
+                for (remaining, _) in manifest.iter().skip(position + 1) {
+                    paths.push(PathEffect {
+                        file: format!("{}/", remaining.to_string_lossy().replace('\\', "/")),
+                        state: EffectState::NotAttempted,
+                        category: None,
+                        error: None,
+                    });
                 }
+                preparation_error = Some(error.to_string());
+                break;
             }
-            return Err(e);
+        };
+        let error = effect.finalization_error().map(str::to_owned);
+        paths.push(PathEffect {
+            file: format!("{}/", relative.to_string_lossy().replace('\\', "/")),
+            state: if error.is_some() {
+                EffectState::CommittedWithFinalizationError
+            } else {
+                EffectState::Committed
+            },
+            category: error.as_ref().map(|_| EffectFailure::Finalization),
+            error: error.clone(),
+        });
+        match same_file::Handle::from_path(dir.join(relative)) {
+            Ok(identity) => created.push(OwnedDirectory {
+                identity,
+                relative: relative.clone(),
+            }),
+            Err(identity_error) => {
+                paths.push(PathEffect {
+                    file: format!("{}/", relative.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::Kept,
+                    category: Some(EffectFailure::Io),
+                    error: Some(format!(
+                        "created directory ownership could not be recorded; keeping it: {identity_error}"
+                    )),
+                });
+                preparation_error = Some(format!(
+                    "created directory ownership could not be recorded: {identity_error}"
+                ));
+            }
         }
-
-        if let Err(e) = fs::rename(&src, &dst) {
-            // Roll back already-applied renames.
-            for (was_dst, was_src) in applied.iter().rev() {
-                if let Err(rb_err) = fs::rename(was_dst, was_src) {
-                    eprintln!(
-                        "warning: rollback failed for {} -> {}: {rb_err}",
-                        was_dst.display(),
-                        was_src.display()
-                    );
-                }
-            }
-            return Err(anyhow::anyhow!(
-                "failed to move {} to {}: {e}",
-                src.display(),
-                dst.display()
+        if let Some(finalization_error) = error {
+            preparation_error = Some(format!(
+                "directory creation published only partially: {finalization_error}"
             ));
         }
-
-        applied.push((dst, src));
+        if preparation_error.is_some() {
+            for (remaining, _) in manifest.iter().skip(position + 1) {
+                paths.push(PathEffect {
+                    file: format!("{}/", remaining.to_string_lossy().replace('\\', "/")),
+                    state: EffectState::NotAttempted,
+                    category: None,
+                    error: None,
+                });
+            }
+            break;
+        }
+    }
+    if let Some(mut primary) = preparation_error {
+        for (_, destination) in renames {
+            paths.push(PathEffect {
+                file: destination.clone(),
+                state: EffectState::NotAttempted,
+                category: None,
+                error: None,
+            });
+        }
+        cleanup_created_directories(dir, &created, &mut paths);
+        if let Err(finish_error) = session.finish() {
+            primary = format!("{primary}; finalization failed: {finish_error}");
+        }
+        return Ok(MoveExecution {
+            report: ApplyReport {
+                paths,
+                index: IndexDisposition::NotUsed,
+                index_error: None,
+            },
+            error: Some(primary),
+        });
+    }
+    if let Err(error) = probe_destination_equivalence(dir, renames) {
+        cleanup_created_directories(dir, &created, &mut paths);
+        let mut primary = error.to_string();
+        if let Err(finish_error) = session.finish() {
+            primary = format!("{primary}; finalization failed: {finish_error}");
+        }
+        return Ok(MoveExecution {
+            report: ApplyReport {
+                paths,
+                index: IndexDisposition::NotUsed,
+                index_error: None,
+            },
+            error: Some(primary),
+        });
     }
 
-    // All renames succeeded — apply link rewrites.
-    //
-    // L-11 / DEC-056: completed link-rewrite `atomic_write`s are only rolled
-    // back for "self-rewrite" plans — plans whose `path` coincides with one
-    // of this batch's own rename destinations (the moved file's own inbound
-    // and/or outbound rewrites). For those, undoing the rename without also
-    // undoing the content would strand the file at its old path with content
-    // that references the new (post-rename) layout — a dangling link. Plans
-    // on files that were never renamed (pure external "linker" files) keep
-    // the original DEC-056 behavior: kept and honestly reported, since a
-    // faithful rollback for arbitrary linker files would need capturing
-    // pre-images for every plan, not just the ones this batch renames.
-    let report = match link_rewrite::execute_plans_partial(dir, plans) {
-        Ok(r) => r,
-        Err(e) => {
-            // Fatal (vault-boundary) failure: roll back renames and abort.
-            rollback_renames(&applied);
-            return Err(e);
-        }
-    };
-
-    if report.has_failures() {
-        // Roll back renames so the directory layout is consistent.
-        rollback_renames(&applied);
-
-        // Map each rename destination (a self-rewrite plan's `path`) back to
-        // its now-restored old path, so a successfully-applied self-rewrite
-        // plan's content can be restored to match.
-        let dst_to_src: HashMap<PathBuf, PathBuf> = renames
-            .iter()
-            .map(|(old_rel, new_rel)| (dir.join(new_rel), dir.join(old_rel)))
-            .collect();
-
-        let plan_by_rel: HashMap<&str, &RewritePlan> =
-            plans.iter().map(|p| (p.rel_path.as_str(), p)).collect();
-
-        let mut self_rewrites_restored: Vec<String> = Vec::new();
-        let mut self_rewrites_restore_failed: Vec<String> = Vec::new();
-        let mut external_kept: Vec<String> = Vec::new();
-
-        for outcome in report.outcomes.iter().filter(|o| o.applied) {
-            let Some(plan) = plan_by_rel.get(outcome.rel_path.as_str()) else {
-                continue;
-            };
-            if let Some(old_path) = dst_to_src.get(&plan.path) {
-                // Self-rewrite: the rename was just rolled back, so this
-                // file now lives at `old_path` but still holds the rewritten
-                // (post-rename) content. Restore its pre-batch content so the
-                // file ends up byte-for-byte as it was before the batch.
-                match &plan.original_content {
-                    Some(original) => {
-                        match hyalo_core::atomic_write_within(dir, old_path, original.as_bytes()) {
-                            Ok(()) => self_rewrites_restored.push(outcome.rel_path.clone()),
-                            Err(restore_err) => {
-                                eprintln!(
-                                    "warning: failed to restore original content for {}: {restore_err:#}",
-                                    old_path.display()
-                                );
-                                self_rewrites_restore_failed.push(outcome.rel_path.clone());
-                            }
-                        }
+    let mut applied = Vec::new();
+    let mut error = None;
+    for (((old_rel, new_rel), source), position) in renames.iter().zip(sources).zip(0usize..) {
+        match move_one(
+            dir,
+            &root,
+            source,
+            old_rel,
+            new_rel,
+            &mut session,
+            &mut paths,
+        ) {
+            Ok(outcome) => {
+                let finalization_error = outcome.finalization_error.clone();
+                paths.push(PathEffect {
+                    file: old_rel.clone(),
+                    state: if finalization_error.is_some() {
+                        EffectState::CommittedWithFinalizationError
+                    } else {
+                        EffectState::Committed
+                    },
+                    error: finalization_error.clone(),
+                    category: finalization_error
+                        .as_ref()
+                        .map(|_| EffectFailure::Finalization),
+                });
+                paths.push(PathEffect {
+                    file: new_rel.clone(),
+                    state: if finalization_error.is_some() {
+                        EffectState::CommittedWithFinalizationError
+                    } else {
+                        EffectState::Committed
+                    },
+                    error: finalization_error.clone(),
+                    category: finalization_error
+                        .as_ref()
+                        .map(|_| EffectFailure::Finalization),
+                });
+                applied.push(AppliedMove {
+                    old_rel: old_rel.clone(),
+                    new_rel: new_rel.clone(),
+                    receipt: outcome.receipt,
+                });
+                if let Some(finalization_error) = finalization_error {
+                    for (_, destination) in renames.iter().skip(position + 1) {
+                        paths.push(PathEffect {
+                            file: destination.clone(),
+                            state: EffectState::NotAttempted,
+                            error: None,
+                            category: None,
+                        });
                     }
-                    None => {
-                        // Should not happen: every plan keyed to a rename
-                        // destination is built with `original_content` set
-                        // (see `plan_batch_mv`). Report it as kept rather than
-                        // silently mislabeling it as rolled back.
-                        external_kept.push(outcome.rel_path.clone());
+                    error = Some(format!(
+                        "move committed but finalization failed: {finalization_error}"
+                    ));
+                    break;
+                }
+            }
+            Err(move_error) => {
+                paths.push(PathEffect {
+                    file: new_rel.clone(),
+                    state: EffectState::FailedBeforeCommit,
+                    error: Some(move_error.to_string()),
+                    category: Some(EffectFailure::Io),
+                });
+                for (_, destination) in renames.iter().skip(position + 1) {
+                    paths.push(PathEffect {
+                        file: destination.clone(),
+                        state: EffectState::NotAttempted,
+                        error: None,
+                        category: None,
+                    });
+                }
+                error = Some(move_error.to_string());
+                break;
+            }
+        }
+    }
+
+    let mut rewrite_report = None;
+    let mut rewrite_receipts = std::collections::HashMap::new();
+    if error.is_none() {
+        let moved_destinations: Vec<String> = renames.iter().map(|(_, new)| new.clone()).collect();
+        let report = match link_rewrite::execute_plans_partial_with_receipts(
+            dir,
+            plans,
+            &moved_destinations,
+        ) {
+            Ok(execution) => {
+                rewrite_receipts = execution.receipts;
+                execution.report
+            }
+            Err(rewrite_error) => {
+                error = Some(format!("link rewrite preparation failed: {rewrite_error}"));
+                link_rewrite::PartialExecuteReport::default()
+            }
+        };
+        for outcome in &report.outcomes {
+            paths.push(PathEffect {
+                file: outcome.rel_path.clone(),
+                state: if outcome.applied {
+                    if outcome.error.is_some() {
+                        EffectState::CommittedWithFinalizationError
+                    } else {
+                        EffectState::Committed
+                    }
+                } else {
+                    EffectState::FailedBeforeCommit
+                },
+                error: outcome.error.clone(),
+                category: outcome.error.as_ref().map(|_| {
+                    if outcome.applied {
+                        EffectFailure::Finalization
+                    } else {
+                        EffectFailure::Io
+                    }
+                }),
+            });
+        }
+        if report.has_failures() {
+            error = Some("one or more link rewrites failed".to_owned());
+        }
+        rewrite_report = Some(report);
+    }
+
+    if error.is_some() {
+        let rewritten: HashSet<&str> = rewrite_report
+            .as_ref()
+            .into_iter()
+            .flat_map(|report| report.outcomes.iter())
+            .filter(|outcome| outcome.applied)
+            .map(|outcome| outcome.rel_path.as_str())
+            .collect();
+        // Restore moved entries only when both their name and, for a rewritten
+        // self-file, their exact prepared bytes still match this operation.
+        for applied_move in applied.iter_mut().rev() {
+            let old_rel = &applied_move.old_rel;
+            let new_rel = &applied_move.new_rel;
+            let self_plan = plans.iter().find(|plan| {
+                plan.rel_path == *new_rel && rewritten.contains(plan.rel_path.as_str())
+            });
+            if let Some(receipt) = rewrite_receipts.remove(new_rel) {
+                applied_move.receipt = receipt;
+            }
+            let restored_content = if let Some(plan) = self_plan {
+                match restore_plan_bytes(&applied_move.receipt, plan, true, &mut session) {
+                    Ok(receipt) => {
+                        applied_move.receipt = receipt;
+                        true
+                    }
+                    Err(restore_error) => {
+                        paths.push(PathEffect {
+                            file: new_rel.clone(),
+                            state: EffectState::RestoreFailed,
+                            error: Some(format!("self-rewrite restore refused: {restore_error}")),
+                            category: Some(EffectFailure::SourceConflict),
+                        });
+                        continue;
                     }
                 }
             } else {
-                // Genuinely external linker file — untouched by any rename.
-                // Kept and reported per DEC-056.
-                external_kept.push(outcome.rel_path.clone());
+                false
+            };
+            let restore = (|| -> Result<()> {
+                let captured = applied_move.receipt.capture_verified()?;
+                let (effect, _) = hyalo_core::rooted::move_no_replace_with_receipt(
+                    captured,
+                    root.destination(RelativeName::new(old_rel)?)?,
+                    &mut session,
+                )?;
+                if let Some(error) = effect.finalization_error() {
+                    bail!("restore published only partially: {error}");
+                }
+                Ok(())
+            })();
+            if restore.is_err()
+                && restored_content
+                && let Some(plan) = self_plan
+            {
+                let reapplied =
+                    restore_plan_bytes(&applied_move.receipt, plan, false, &mut session);
+                paths.push(PathEffect {
+                    file: new_rel.clone(),
+                    state: if reapplied.is_ok() {
+                        EffectState::Kept
+                    } else {
+                        EffectState::RestoreFailed
+                    },
+                    error: reapplied.err().map(|e| {
+                        format!(
+                            "inverse move failed and forward content could not be restored: {e}"
+                        )
+                    }),
+                    category: Some(EffectFailure::Io),
+                });
+            }
+            paths.push(PathEffect {
+                file: old_rel.clone(),
+                state: if restore.is_ok() {
+                    EffectState::Restored
+                } else {
+                    EffectState::RestoreFailed
+                },
+                error: restore.as_ref().err().map(ToString::to_string),
+                category: restore.err().map(|_| EffectFailure::Io),
+            });
+        }
+        for outcome in rewrite_report
+            .as_ref()
+            .into_iter()
+            .flat_map(|report| report.outcomes.iter())
+            .filter(|outcome| outcome.applied)
+        {
+            if !renames.iter().any(|(_, new)| new == &outcome.rel_path) {
+                paths.push(PathEffect {
+                    file: outcome.rel_path.clone(),
+                    state: EffectState::Kept,
+                    error: None,
+                    category: None,
+                });
             }
         }
-
-        let failed: Vec<String> = report
-            .outcomes
-            .iter()
-            .filter(|o| !o.applied)
-            .map(|o| {
-                format!(
-                    "{}: {}",
-                    o.rel_path,
-                    o.error.as_deref().unwrap_or("write failed")
-                )
-            })
-            .collect();
-
-        let mut msg = format!(
-            "batch mv aborted: {} link rewrite(s) failed [{}]; renames were rolled back",
-            failed.len(),
-            failed.join("; "),
-        );
-        if !self_rewrites_restored.is_empty() {
-            let _ = write!(
-                msg,
-                "; {} self-rewritten file(s) had their original content restored \
-                 (rolled back along with their rename) [{}]",
-                self_rewrites_restored.len(),
-                self_rewrites_restored.join(", "),
-            );
-        }
-        if !self_rewrites_restore_failed.is_empty() {
-            let _ = write!(
-                msg,
-                "; WARNING: {} self-rewritten file(s) could not have their original \
-                 content restored — they may contain dangling links [{}]",
-                self_rewrites_restore_failed.len(),
-                self_rewrites_restore_failed.join(", "),
-            );
-        }
-        if !external_kept.is_empty() {
-            let _ = write!(
-                msg,
-                "; {} external file(s) were durably rewritten before the abort and \
-                 were NOT rolled back [{}]",
-                external_kept.len(),
-                external_kept.join(", "),
-            );
-        }
-        return Err(anyhow::anyhow!(msg));
+        cleanup_created_directories(dir, &created, &mut paths);
     }
 
+    if let Err(finish_error) = session.finish() {
+        error = Some(match error {
+            Some(existing) => format!("{existing}; finalization failed: {finish_error}"),
+            None => format!("finalization failed: {finish_error}"),
+        });
+    }
+    let mut safe: Vec<String> = renames
+        .iter()
+        .flat_map(|(old, new)| [old.clone(), new.clone()])
+        .collect();
+    safe.extend(
+        paths
+            .iter()
+            .filter(|path| !path.file.ends_with('/'))
+            .filter(|path| {
+                !matches!(
+                    path.state,
+                    EffectState::RestoreFailed | EffectState::NotAttempted
+                )
+            })
+            .map(|path| path.file.clone()),
+    );
+    safe.sort();
+    safe.dedup();
+    let unsafe_paths: Vec<String> = paths
+        .iter()
+        .filter(|path| matches!(path.state, EffectState::RestoreFailed))
+        .map(|path| path.file.clone())
+        .collect();
+    let (index, index_error) = journal.finalize_observed(dir, &safe, &unsafe_paths);
+    Ok(MoveExecution {
+        report: ApplyReport {
+            paths,
+            index,
+            index_error,
+        },
+        error,
+    })
+}
+
+fn mutation_failure(error: String, report: crate::commands::apply::ApplyReport) -> CommandOutcome {
+    let mut diagnostic = crate::output::UserDiagnostic::new(error);
+    diagnostic.category = Some("mutation_failure");
+    diagnostic.hint =
+        Some("inspect the reported committed, restored, and kept effects before retrying".into());
+    diagnostic.effects = Some(report);
+    CommandOutcome::UserError(diagnostic)
+}
+
+fn capture_move_sources(
+    dir: &Path,
+    sources: &[String],
+) -> Result<Vec<hyalo_core::rooted::CapturedInput>> {
+    use hyalo_core::rooted::{RelativeName, VaultRoot};
+    let root = VaultRoot::new(dir)?;
+    let mut identities = HashSet::new();
+    let mut captured = Vec::with_capacity(sources.len());
+    let mut bytes = 0u64;
+    for source in sources {
+        if fs::symlink_metadata(dir.join(source))?
+            .file_type()
+            .is_symlink()
+        {
+            bail!(hyalo_core::UserFacingError {
+                message: format!("refusing to move symlink source: {source}"),
+                hint: Some(
+                    "move the regular file itself; symlink entry moves are unsupported".into()
+                ),
+                cause: None,
+            });
+        }
+        let input = root.capture(&RelativeName::new(source)?)?;
+        if !identities.insert(input.physical_identity()) {
+            bail!(hyalo_core::UserFacingError {
+                message: format!("duplicate physical move source: {source}"),
+                hint: Some(
+                    "select each file once; aliases and hard links cannot be moved together".into()
+                ),
+                cause: None,
+            });
+        }
+        bytes = bytes
+            .checked_add(input.size())
+            .context("move staging size overflow")?;
+        if bytes > 8 * 1024 * 1024 * 1024 {
+            bail!("move preparation exceeds 8 GiB staging budget");
+        }
+        captured.push(input);
+    }
+    Ok(captured)
+}
+
+struct OwnedDirectory {
+    relative: PathBuf,
+    identity: same_file::Handle,
+}
+
+fn cleanup_created_directories(
+    dir: &Path,
+    created: &[OwnedDirectory],
+    paths: &mut Vec<crate::commands::apply::PathEffect>,
+) {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    for owned in created.iter().rev() {
+        let full = dir.join(&owned.relative);
+        let cleanup = (|| -> Result<()> {
+            let current = same_file::Handle::from_path(&full)?;
+            if current != owned.identity {
+                bail!("directory identity changed; keeping it");
+            }
+            fs::remove_dir(&full)?;
+            Ok(())
+        })();
+        paths.push(PathEffect {
+            file: format!("{}/", owned.relative.to_string_lossy().replace('\\', "/")),
+            state: if cleanup.is_ok() {
+                EffectState::Restored
+            } else {
+                EffectState::Kept
+            },
+            error: cleanup.as_ref().err().map(ToString::to_string),
+            category: cleanup.err().map(|_| EffectFailure::Io),
+        });
+    }
+}
+
+struct ProbeReceipt {
+    path: PathBuf,
+    identity: same_file::Handle,
+}
+
+fn cleanup_probes(receipts: &[ProbeReceipt]) -> Result<()> {
+    let mut failures = Vec::new();
+    for receipt in receipts.iter().rev() {
+        let result = (|| -> Result<()> {
+            let current = same_file::Handle::from_path(&receipt.path)?;
+            if current != receipt.identity {
+                bail!("probe identity changed; refusing cleanup");
+            }
+            fs::remove_file(&receipt.path)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            failures.push(format!("{}: {error}", receipt.path.display()));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("move probe cleanup failed: {}", failures.join("; "))
+    }
+}
+
+/// Test requested destination spellings in their actual parent namespace.
+/// A common random prefix preserves each requested leaf's equivalence while
+/// preventing collisions with user entries.
+fn probe_destination_equivalence(dir: &Path, renames: &[(String, String)]) -> Result<()> {
+    let mut groups: HashMap<PathBuf, Vec<std::ffi::OsString>> = HashMap::new();
+    for (_, destination) in renames {
+        let destination = Path::new(destination);
+        let parent = destination.parent().unwrap_or_else(|| Path::new(""));
+        let actual_parent = dunce::canonicalize(dir.join(parent))?;
+        let leaf = destination
+            .file_name()
+            .context("move destination has no file name")?
+            .to_os_string();
+        groups.entry(actual_parent).or_default().push(leaf);
+    }
+    for (parent, leaves) in groups {
+        let seed_file = tempfile::Builder::new()
+            .prefix(".hyalo-move-probe-")
+            .tempfile_in(&parent)?;
+        let seed = seed_file
+            .path()
+            .file_name()
+            .context("move probe has no file name")?
+            .to_os_string();
+        seed_file.close()?;
+        let mut receipts = Vec::new();
+        let mut collision = None;
+        for leaf in leaves {
+            let mut probe_leaf = seed.clone();
+            probe_leaf.push("--");
+            probe_leaf.push(&leaf);
+            let path = parent.join(probe_leaf);
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => match same_file::Handle::from_file(file) {
+                    Ok(identity) => receipts.push(ProbeReceipt { path, identity }),
+                    Err(error) => {
+                        collision = Some(format!(
+                            "could not record ownership of destination-name probe {}; \
+                             leaving that probe untouched for safe inspection: {error}",
+                            path.display()
+                        ));
+                        break;
+                    }
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    collision = Some(format!(
+                        "destination names are equivalent on this filesystem near {}: {}",
+                        parent.display(),
+                        leaf.to_string_lossy()
+                    ));
+                    break;
+                }
+                Err(error) => {
+                    collision = Some(format!(
+                        "could not verify destination name equivalence in {}: {error}",
+                        parent.display()
+                    ));
+                    break;
+                }
+            }
+        }
+        let cleanup = cleanup_probes(&receipts);
+        if let Some(collision) = collision {
+            cleanup?;
+            bail!(collision);
+        }
+        cleanup?;
+    }
     Ok(())
 }
 
-/// Roll back a set of already-applied renames (best effort; logs failures).
-fn rollback_renames(applied: &[(PathBuf, PathBuf)]) {
-    for (was_dst, was_src) in applied.iter().rev() {
-        if let Err(rb_err) = fs::rename(was_dst, was_src) {
-            eprintln!(
-                "warning: rollback failed for {} -> {}: {rb_err}",
-                was_dst.display(),
-                was_src.display()
-            );
+fn exact_entry_exists(parent: &Path, leaf: &std::ffi::OsStr) -> Result<bool> {
+    for entry in fs::read_dir(parent)? {
+        if entry?.file_name() == leaf {
+            return Ok(true);
         }
     }
+    Ok(false)
+}
+
+fn case_only_move(dir: &Path, old_rel: &str, new_rel: &str) -> Result<bool> {
+    let old = Path::new(old_rel);
+    let new = Path::new(new_rel);
+    if old.parent() != new.parent() || old.file_name() == new.file_name() {
+        return Ok(false);
+    }
+    let old_full = dir.join(old);
+    let new_full = dir.join(new);
+    if fs::symlink_metadata(&new_full).is_err() || !same_file::is_same_file(&old_full, &new_full)? {
+        return Ok(false);
+    }
+    let parent = old_full.parent().context("move source has no parent")?;
+    Ok(
+        exact_entry_exists(parent, old.file_name().context("move source has no name")?)?
+            && !exact_entry_exists(
+                parent,
+                new.file_name().context("move destination has no name")?,
+            )?,
+    )
+}
+
+fn cleanup_partial_link(receipt: &hyalo_core::rooted::OwnedPublication) -> Result<()> {
+    let mut session =
+        hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile);
+    let effect = receipt.capture_verified()?.remove(&mut session)?;
+    if let Some(error) = effect.finalization_error() {
+        bail!("partial move cleanup finalization failed: {error}");
+    }
+    session.finish()?;
+    Ok(())
+}
+
+struct MoveLeg {
+    receipt: hyalo_core::rooted::OwnedPublication,
+    finalization_error: Option<String>,
+}
+
+fn no_replace_leg(
+    root: &hyalo_core::rooted::VaultRoot,
+    source: hyalo_core::rooted::CapturedInput,
+    _source_name: &str,
+    destination_name: &str,
+    session: &mut hyalo_core::rooted::WriteSession,
+    paths: &mut Vec<crate::commands::apply::PathEffect>,
+) -> Result<MoveLeg> {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    use hyalo_core::rooted::{RelativeName, move_no_replace_with_receipt};
+    let (effect, receipt) = move_no_replace_with_receipt(
+        source,
+        root.destination(RelativeName::new(destination_name)?)?,
+        session,
+    )?;
+    if effect.operation() != hyalo_core::rooted::Operation::Moved
+        && let Some(error) = effect.finalization_error()
+    {
+        let cleanup = cleanup_partial_link(&receipt);
+        paths.push(PathEffect {
+            file: destination_name.to_owned(),
+            state: if cleanup.is_ok() {
+                EffectState::Restored
+            } else {
+                EffectState::Kept
+            },
+            error: cleanup
+                .as_ref()
+                .err()
+                .map(|cleanup| format!("{error}; destination cleanup failed: {cleanup}")),
+            category: cleanup.err().map(|_| EffectFailure::Io),
+        });
+        if paths
+            .last()
+            .is_some_and(|path| path.state == EffectState::Kept)
+        {
+            bail!("{error}; destination cleanup after partial move failed");
+        }
+        bail!("move was not published: {error}");
+    }
+    Ok(MoveLeg {
+        receipt,
+        finalization_error: effect.finalization_error().map(str::to_owned),
+    })
+}
+
+struct MoveOneOutcome {
+    receipt: hyalo_core::rooted::OwnedPublication,
+    finalization_error: Option<String>,
+}
+
+fn move_one(
+    dir: &Path,
+    root: &hyalo_core::rooted::VaultRoot,
+    source: hyalo_core::rooted::CapturedInput,
+    old_rel: &str,
+    new_rel: &str,
+    session: &mut hyalo_core::rooted::WriteSession,
+    paths: &mut Vec<crate::commands::apply::PathEffect>,
+) -> Result<MoveOneOutcome> {
+    move_one_with_temporary_capture(
+        dir,
+        root,
+        source,
+        old_rel,
+        new_rel,
+        session,
+        paths,
+        hyalo_core::rooted::OwnedPublication::capture_verified,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_one_with_temporary_capture(
+    dir: &Path,
+    root: &hyalo_core::rooted::VaultRoot,
+    source: hyalo_core::rooted::CapturedInput,
+    old_rel: &str,
+    new_rel: &str,
+    session: &mut hyalo_core::rooted::WriteSession,
+    paths: &mut Vec<crate::commands::apply::PathEffect>,
+    capture_temporary: impl FnOnce(
+        &hyalo_core::rooted::OwnedPublication,
+    ) -> Result<hyalo_core::rooted::CapturedInput>,
+) -> Result<MoveOneOutcome> {
+    use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
+    if !case_only_move(dir, old_rel, new_rel)? {
+        return no_replace_leg(root, source, old_rel, new_rel, session, paths).map(|leg| {
+            MoveOneOutcome {
+                receipt: leg.receipt,
+                finalization_error: leg.finalization_error,
+            }
+        });
+    }
+
+    let parent = Path::new(old_rel).parent().unwrap_or_else(|| Path::new(""));
+    let temp_file = tempfile::Builder::new()
+        .prefix(".hyalo-case-move-")
+        .tempfile_in(dir.join(parent))?;
+    let temp_leaf = temp_file
+        .path()
+        .file_name()
+        .context("case move temporary entry has no name")?
+        .to_string_lossy()
+        .into_owned();
+    temp_file.close()?;
+    let temp_rel = if parent.as_os_str().is_empty() {
+        temp_leaf
+    } else {
+        parent.join(temp_leaf).to_string_lossy().replace('\\', "/")
+    };
+    let temporary_leg = no_replace_leg(root, source, old_rel, &temp_rel, session, paths)?;
+    if let Some(error) = temporary_leg.finalization_error {
+        let restore = temporary_leg
+            .receipt
+            .capture_verified()
+            .and_then(|temporary| {
+                no_replace_leg(root, temporary, &temp_rel, old_rel, session, paths).map(|_| ())
+            });
+        paths.push(PathEffect {
+            file: old_rel.to_owned(),
+            state: if restore.is_ok() {
+                EffectState::Restored
+            } else {
+                EffectState::RestoreFailed
+            },
+            error: restore.as_ref().err().map(ToString::to_string),
+            category: Some(EffectFailure::Finalization),
+        });
+        bail!("case-only move first leg finalization failed: {error}");
+    }
+    let second = match capture_temporary(&temporary_leg.receipt) {
+        Ok(second) => second,
+        Err(error) => {
+            let restore = temporary_leg
+                .receipt
+                .capture_verified()
+                .and_then(|temporary| {
+                    no_replace_leg(root, temporary, &temp_rel, old_rel, session, paths).and_then(
+                        |leg| {
+                            if let Some(error) = leg.finalization_error {
+                                bail!("temporary move restoration finalization failed: {error}");
+                            }
+                            Ok(())
+                        },
+                    )
+                });
+            paths.push(PathEffect {
+                file: temp_rel.clone(),
+                state: if restore.is_ok() {
+                    EffectState::Restored
+                } else {
+                    EffectState::Kept
+                },
+                error: restore.as_ref().err().map(ToString::to_string),
+                category: restore.as_ref().err().map(|_| EffectFailure::Io),
+            });
+            paths.push(PathEffect {
+                file: old_rel.to_owned(),
+                state: if restore.is_ok() {
+                    EffectState::Restored
+                } else {
+                    EffectState::RestoreFailed
+                },
+                error: restore.as_ref().err().map(ToString::to_string),
+                category: restore.err().map(|_| EffectFailure::Io),
+            });
+            return Err(error.context(
+                "case-only move could not verify its temporary publication; compensation was attempted",
+            ));
+        }
+    };
+    let final_receipt = match no_replace_leg(root, second, &temp_rel, new_rel, session, paths) {
+        Ok(leg) => leg,
+        Err(error) => {
+            let restore = (|| -> Result<()> {
+                let temporary = temporary_leg.receipt.capture_verified()?;
+                no_replace_leg(root, temporary, &temp_rel, old_rel, session, paths).map(|_| ())
+            })();
+            paths.push(PathEffect {
+                file: old_rel.to_owned(),
+                state: if restore.is_ok() {
+                    EffectState::Restored
+                } else {
+                    EffectState::RestoreFailed
+                },
+                error: restore.as_ref().err().map(ToString::to_string),
+                category: restore.err().map(|_| EffectFailure::Io),
+            });
+            return Err(error);
+        }
+    };
+    Ok(MoveOneOutcome {
+        receipt: final_receipt.receipt,
+        finalization_error: final_receipt.finalization_error,
+    })
+}
+
+fn restore_plan_bytes(
+    receipt: &hyalo_core::rooted::OwnedPublication,
+    plan: &RewritePlan,
+    reverse: bool,
+    session: &mut hyalo_core::rooted::WriteSession,
+) -> Result<hyalo_core::rooted::OwnedPublication> {
+    let replacement = if reverse {
+        plan.original_content
+            .as_deref()
+            .context("self-rewrite plan has no original content")?
+            .as_bytes()
+    } else {
+        plan.rewritten_content.as_bytes()
+    };
+    let captured = receipt.capture_verified()?;
+    let (effect, replacement_receipt) = captured
+        .prepare(replacement, session)?
+        .commit_with_receipt(session)?;
+    if let Some(error) = effect.finalization_error() {
+        bail!("self-rewrite restoration finalization failed: {error}");
+    }
+    Ok(replacement_receipt)
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,48 +2030,6 @@ fn validate_batch_target(
 }
 
 // ---------------------------------------------------------------------------
-// Old execute_mv (single-file)
-// ---------------------------------------------------------------------------
-
-fn execute_mv(
-    dir: &Path,
-    old_rel: &str,
-    new_rel: &str,
-    plans: &[RewritePlan],
-    src_mtime: (std::time::SystemTime, u64),
-) -> Result<()> {
-    let src = dir.join(old_rel);
-    let dst = dir.join(new_rel);
-
-    // H-3 defense-in-depth: re-verify the destination stays within the vault
-    // right before mutating the filesystem. `validate_target_single` already
-    // rejects escaping destinations, but this guard makes the invariant
-    // explicit here too and survives future refactors (mirrors the same
-    // check in `link_rewrite::execute_plans`).
-    let canonical_vault = canonicalize_vault_dir(dir)
-        .context("failed to canonicalize vault directory for write safety check")?;
-    ensure_dest_within_vault(&canonical_vault, dir, new_rel)
-        .map_err(|(msg, _)| anyhow::Error::msg(msg))?;
-
-    // Validate every rewritten document before the first filesystem effect.
-    link_rewrite::validate_rewrite_plans(plans)?;
-
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-
-    hyalo_core::frontmatter::check_mtime(&src, src_mtime)?;
-
-    fs::rename(&src, &dst)
-        .with_context(|| format!("failed to move {} to {}", src.display(), dst.display()))?;
-
-    link_rewrite::execute_plans(dir, plans)?;
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1559,5 +2234,164 @@ pub(crate) fn run(
             allow_ambiguous,
             on_conflict,
         )
+    }
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use hyalo_core::rooted::{Durability, FaultPoint, RelativeName, VaultRoot, WriteSession};
+
+    #[test]
+    fn partial_no_replace_source_removal_failure_reports_restored_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), b"source").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
+        let mut session = WriteSession::with_fault(Durability::PerFile, FaultPoint::Remove);
+        let mut paths = Vec::new();
+        let Err(error) = no_replace_leg(&root, source, "a.md", "b.md", &mut session, &mut paths)
+        else {
+            panic!("injected source-removal failure must fail the move")
+        };
+        assert!(error.to_string().contains("not published"), "{error:#}");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0].state,
+            crate::commands::apply::EffectState::Restored
+        );
+        assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), b"source");
+        assert!(!dir.path().join("b.md").exists());
+    }
+
+    #[test]
+    fn competing_source_entry_survives_no_replace_compensation() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("old.md"), b"competitor").unwrap();
+        fs::write(dir.path().join("new.md"), b"owned move").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("new.md").unwrap()).unwrap();
+        let mut session = WriteSession::new(Durability::PerFile);
+        let mut paths = Vec::new();
+        assert!(
+            no_replace_leg(&root, source, "new.md", "old.md", &mut session, &mut paths,).is_err()
+        );
+        assert_eq!(fs::read(dir.path().join("old.md")).unwrap(), b"competitor");
+        assert_eq!(fs::read(dir.path().join("new.md")).unwrap(), b"owned move");
+    }
+
+    #[test]
+    fn directory_finalization_failure_reports_cleanup_and_unattempted_move() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), b"source").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
+        let renames = vec![("a.md".to_owned(), "one/two/a.md".to_owned())];
+        let mut index = None;
+        let mut journal = crate::commands::journal::MutationJournal::new(&mut index, None);
+        let execution = execute_batch_mv_with_session(
+            dir.path(),
+            &renames,
+            vec![source],
+            &[],
+            &mut journal,
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap();
+
+        assert!(execution.error.is_some());
+        assert!(execution.report.paths.iter().any(|effect| {
+            effect.file == "one/"
+                && effect.state
+                    == crate::commands::apply::EffectState::CommittedWithFinalizationError
+        }));
+        assert!(execution.report.paths.iter().any(|effect| {
+            effect.file == "one/" && effect.state == crate::commands::apply::EffectState::Restored
+        }));
+        assert!(execution.report.paths.iter().any(|effect| {
+            effect.file == "one/two/a.md"
+                && effect.state == crate::commands::apply::EffectState::NotAttempted
+        }));
+        assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), b"source");
+        assert!(!dir.path().join("one").exists());
+    }
+
+    #[test]
+    fn completed_move_finalization_failure_keeps_effect_and_compensates_owned_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), b"source").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
+        let renames = vec![("a.md".to_owned(), "b.md".to_owned())];
+        let mut index = None;
+        let mut journal = crate::commands::journal::MutationJournal::new(&mut index, None);
+        let execution = execute_batch_mv_with_session(
+            dir.path(),
+            &renames,
+            vec![source],
+            &[],
+            &mut journal,
+            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
+        )
+        .unwrap();
+
+        assert!(execution.error.is_some());
+        assert!(execution.report.paths.iter().any(|effect| {
+            effect.file == "b.md"
+                && effect.state
+                    == crate::commands::apply::EffectState::CommittedWithFinalizationError
+        }));
+        assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), b"source");
+        assert!(!dir.path().join("b.md").exists());
+    }
+
+    #[test]
+    fn case_only_temporary_capture_failure_reports_and_restores_both_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Source.md"), b"source").unwrap();
+        if !case_only_move(dir.path(), "Source.md", "source.md").unwrap() {
+            eprintln!("HYALO_CASE_MATRIX=case_only_temporary_capture_unsupported");
+            return;
+        }
+        eprintln!("HYALO_CASE_MATRIX=case_only_temporary_capture_exercised");
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root
+            .capture(&RelativeName::new("Source.md").unwrap())
+            .unwrap();
+        let mut session = WriteSession::new(Durability::PerFile);
+        let mut paths = Vec::new();
+        let result = move_one_with_temporary_capture(
+            dir.path(),
+            &root,
+            source,
+            "Source.md",
+            "source.md",
+            &mut session,
+            &mut paths,
+            |_| anyhow::bail!("injected temporary capture failure"),
+        );
+        let Err(error) = result else {
+            panic!("injected temporary capture failure must fail the move")
+        };
+
+        assert!(error.to_string().contains("temporary publication"));
+        assert!(exact_entry_exists(dir.path(), std::ffi::OsStr::new("Source.md")).unwrap());
+        assert!(!exact_entry_exists(dir.path(), std::ffi::OsStr::new("source.md")).unwrap());
+        assert_eq!(fs::read(dir.path().join("Source.md")).unwrap(), b"source");
+        assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".hyalo-case-move-")
+        }));
+        assert!(paths.iter().any(|effect| {
+            effect.file.starts_with(".hyalo-case-move-")
+                && effect.state == crate::commands::apply::EffectState::Restored
+        }));
+        assert!(paths.iter().any(|effect| {
+            effect.file == "Source.md"
+                && effect.state == crate::commands::apply::EffectState::Restored
+        }));
     }
 }

@@ -104,9 +104,31 @@ pub fn drop_index(
         }
     }
 
-    match std::fs::remove_file(&index_path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let parent = index_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = index_path.file_name().unwrap_or_default();
+    let removal = (|| -> Result<_> {
+        let root = hyalo_core::rooted::ConfigRoot::new(parent)?;
+        let name = hyalo_core::rooted::RelativeName::new(name)?;
+        let metadata = std::fs::symlink_metadata(&index_path)?;
+        anyhow::ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "index destination is not a regular file"
+        );
+        let mut session =
+            hyalo_core::rooted::WriteSession::new(hyalo_core::rooted::Durability::PerFile);
+        let effect = root.remove_artifact(&name, &mut session)?;
+        let finalization = effect.finalization_error().map(str::to_owned);
+        let finish = session.finish().err().map(|error| error.to_string());
+        Ok(finalization.or(finish))
+    })();
+    let finalization_error = match removal {
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) =>
+        {
             return Ok(CommandOutcome::UserError(index_not_found_error(
                 format,
                 &index_path,
@@ -116,7 +138,8 @@ pub fn drop_index(
             return Err(e)
                 .with_context(|| format!("failed to delete index file: {}", index_path.display()));
         }
-    }
+        Ok(finalization) => finalization,
+    };
 
     let result = crate::output::output_value(
         &(DropIndexResult {
@@ -124,7 +147,23 @@ pub fn drop_index(
         }),
     );
 
-    Ok(CommandOutcome::success(output_value(&result)))
+    let report = crate::commands::apply::ApplyReport {
+        paths: vec![crate::commands::apply::PathEffect {
+            file: index_path.display().to_string(),
+            state: if finalization_error.is_some() {
+                crate::commands::apply::EffectState::CommittedWithFinalizationError
+            } else {
+                crate::commands::apply::EffectState::Committed
+            },
+            category: finalization_error
+                .as_ref()
+                .map(|_| crate::commands::apply::EffectFailure::Finalization),
+            error: finalization_error,
+        }],
+        index: crate::commands::apply::IndexDisposition::NotUsed,
+        index_error: None,
+    };
+    Ok(CommandOutcome::success(output_value(&result)).with_apply_report(report))
 }
 
 /// The "there is no index at this path" user error, shared by the boundary

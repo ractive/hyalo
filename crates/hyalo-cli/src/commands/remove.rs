@@ -256,6 +256,11 @@ pub fn remove(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
     let scanned = files.len();
+    let mut preparation = super::apply::PreparedChangeSet::new(dir, files.len())?;
+    let captures: Vec<_> = files
+        .iter()
+        .map(|(_, rel)| preparation.capture(rel))
+        .collect::<Result<_>>()?;
 
     // Per-property result accumulators: (modified, skipped)
     let mut prop_results: Vec<(Vec<String>, Vec<String>)> =
@@ -270,15 +275,11 @@ pub fn remove(
     // in the error envelope's `cause` instead of a bare stderr line.
     let mut unparseable_cause: Option<String> = None;
 
-    // BUG-14 (iter-277): one write phase for the whole batch, so the
-    // durability fsync is paid once per directory instead of once per file
-    // (DEC-317), and a long run reports progress instead of going silent.
-    let _write_phase =
-        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "removing properties"));
-    // Outer loop: one read-modify-write per file
-    for (full_path, rel_path) in &files {
-        let mtime = frontmatter::read_mtime(full_path)?;
-        let mut props = match frontmatter::read_frontmatter(full_path) {
+    // Plan every selected input before the first publication.
+    for ((full_path, rel_path), captured) in files.iter().zip(captures) {
+        let mut props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 if let Some(detail) = super::report_unparseable_skip(files_arg, globs, rel_path, &e)
@@ -290,18 +291,6 @@ pub fn remove(
             }
             Err(e) => return Err(e),
         };
-
-        // BUG-2 (iter-255): the command has just `stat`ed and read this file
-        // while holding the snapshot index open, so a file that changed on
-        // disk since the last `create-index` gets its entry repaired here —
-        // whether or not the mutation below turns out to be a no-op. Without
-        // it, a `set` that finds the property already at its target value
-        // reports `0 modified` and leaves `find --index` describing a body
-        // that is no longer on disk. Costs no extra I/O: the staleness check
-        // reuses the `mtime`/size fingerprint read above.
-        if !dry_run {
-            journal.refresh_if_stale(rel_path, full_path, mtime)?;
-        }
 
         // Apply --where-* filters: skip files that don't match
         if !filter::matches_frontmatter_filters(&props, where_property_filters, where_tag_filters) {
@@ -334,21 +323,16 @@ pub fn remove(
             }
         }
 
-        if file_changed && !dry_run {
-            frontmatter::check_mtime(full_path, mtime)?;
-            match frontmatter::write_frontmatter_within(dir, full_path, &props) {
-                Ok(()) => {}
-                Err(e) => {
-                    if let Some(outcome) =
-                        super::frontmatter_write_error_outcome(&e, format, rel_path)
-                    {
-                        return Ok(outcome);
-                    }
-                    return Err(e);
-                }
-            }
-            journal.update_entry(rel_path, props, full_path)?;
-        }
+        let rendered = if file_changed {
+            Some(frontmatter::render_frontmatter(
+                &mut captured.reader()?,
+                full_path,
+                &props,
+            )?)
+        } else {
+            None
+        };
+        preparation.push(captured, rendered.as_deref())?;
     }
 
     // L-2: the single file the user named by hand was unparseable — report it
@@ -361,10 +345,6 @@ pub fn remove(
         format,
     ) {
         return Ok(outcome);
-    }
-
-    if !dry_run {
-        journal.flush()?;
     }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
@@ -414,9 +394,13 @@ pub fn remove(
 
     let output = mutation::unwrap_single_result(results);
 
-    Ok(CommandOutcome::success(crate::output::output_value(
-        &output,
-    )))
+    preparation.check_output(&output)?;
+    let report = if dry_run {
+        preparation.preview()
+    } else {
+        preparation.apply(journal, "removing properties")
+    };
+    Ok(CommandOutcome::success(crate::output::output_value(&output)).with_apply_report(report))
 }
 
 // ---------------------------------------------------------------------------

@@ -1159,12 +1159,21 @@ impl SnapshotIndex {
         self.validate_before_changes()?;
         let root = crate::rooted::VaultRoot::new(dir)?;
         let mut replacements = Vec::with_capacity(paths.len());
+        let mut removals = Vec::new();
         let mut seen = std::collections::HashSet::with_capacity(paths.len());
         for rel in paths {
             if !seen.insert(rel) {
                 continue;
             }
             let name = crate::rooted::RelativeName::new(rel)?;
+            match std::fs::symlink_metadata(dir.join(rel)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    removals.push(rel.clone());
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
+            }
             let _opened = root.open(&name)?;
             let (tokenize, language) = self.bm25_scan_args(rel);
             let (entry, _) = scan_one_file(
@@ -1176,6 +1185,10 @@ impl SnapshotIndex {
                 self.frontmatter_link_props.as_deref(),
             )?;
             replacements.push(ScannedDocument { entry });
+        }
+        for rel in removals {
+            self.remove_entry(&rel);
+            self.clear_frontmatter_skip(&rel);
         }
         for document in replacements {
             let entry = document.entry;
@@ -1379,7 +1392,8 @@ impl SnapshotIndex {
             self.header.site_prefix.as_deref(),
             self.bm25.get(),
             &self.header.attachments,
-        )
+        )?
+        .finish()
     }
 
     /// The vault's attachment paths as recorded when the snapshot was built
@@ -1679,7 +1693,7 @@ impl SnapshotIndex {
         site_prefix: Option<&str>,
         bm25_index: Option<&Bm25InvertedIndex>,
     ) -> Result<()> {
-        write_snapshot(index, path, vault_dir, site_prefix, bm25_index, &[])
+        write_snapshot(index, path, vault_dir, site_prefix, bm25_index, &[])?.finish()
     }
 
     /// Like [`save`](Self::save) but also records the vault's attachment paths
@@ -1693,6 +1707,27 @@ impl SnapshotIndex {
         bm25_index: Option<&Bm25InvertedIndex>,
         attachments: &[String],
     ) -> Result<()> {
+        Self::save_with_attachments_observed(
+            index,
+            path,
+            vault_dir,
+            site_prefix,
+            bm25_index,
+            attachments,
+        )?
+        .finish()
+    }
+
+    /// Publish a snapshot while retaining a post-commit finalization failure
+    /// for command-level effect reporting.
+    pub fn save_with_attachments_observed(
+        index: &dyn VaultIndex,
+        path: &Path,
+        vault_dir: &str,
+        site_prefix: Option<&str>,
+        bm25_index: Option<&Bm25InvertedIndex>,
+        attachments: &[String],
+    ) -> Result<SnapshotWriteOutcome> {
         write_snapshot(index, path, vault_dir, site_prefix, bm25_index, attachments)
     }
 
@@ -1783,6 +1818,20 @@ fn read_index_bytes(path: &Path, warn: bool) -> Result<Option<Vec<u8>>> {
 /// Shared serialization logic for saving a snapshot index to disk.
 ///
 /// Writes to a temporary file first, then atomically renames into place.
+#[derive(Debug)]
+pub struct SnapshotWriteOutcome {
+    pub finalization_error: Option<String>,
+}
+
+impl SnapshotWriteOutcome {
+    fn finish(self) -> Result<()> {
+        if let Some(error) = self.finalization_error {
+            anyhow::bail!("index committed but finalization failed: {error}");
+        }
+        Ok(())
+    }
+}
+
 fn write_snapshot(
     index: &dyn VaultIndex,
     path: &Path,
@@ -1790,7 +1839,27 @@ fn write_snapshot(
     site_prefix: Option<&str>,
     bm25_index: Option<&Bm25InvertedIndex>,
     attachments: &[String],
-) -> Result<()> {
+) -> Result<SnapshotWriteOutcome> {
+    write_snapshot_with_session(
+        index,
+        path,
+        vault_dir,
+        site_prefix,
+        bm25_index,
+        attachments,
+        crate::rooted::WriteSession::new(crate::rooted::Durability::PerFile),
+    )
+}
+
+fn write_snapshot_with_session(
+    index: &dyn VaultIndex,
+    path: &Path,
+    vault_dir: &str,
+    site_prefix: Option<&str>,
+    bm25_index: Option<&Bm25InvertedIndex>,
+    attachments: &[String],
+    mut session: crate::rooted::WriteSession,
+) -> Result<SnapshotWriteOutcome> {
     let header = SnapshotHeader {
         format_version: SNAPSHOT_FORMAT_VERSION,
         vault_dir: vault_dir.to_owned(),
@@ -1840,41 +1909,56 @@ fn write_snapshot(
         bm25_index,
     };
     let bytes = rmp_serde::to_vec_named(&data).context("failed to serialize index")?;
-    // Route through the shared write policy (DEC-062: when `path` is a
-    // symlink, follow it and replace the *target*, leaving the symlink in
-    // place) instead of a hand-rolled `NamedTempFile` + `persist` pair, so
-    // index writes give the same answer as every other atomic write in
-    // hyalo for the same input (L-1, adversarial-review-2026-08-23.md). This
-    // also picks up the kernel-assigned temp-file name in the same directory
-    // as the target (the same symlink-substitution defense the old code
-    // commented on), permission preservation, and parent-dir fsync for free.
-    //
-    // MUST be `atomic_write_within`, not the unguarded `atomic_write`: the
-    // first cut of this fix used `atomic_write`, which follows a symlink
-    // chain with NO boundary check — `atomic_write`'s own doc comment says
-    // as much ("this entry point has no vault context — so callers must
-    // have already validated the path"). `path` here is never validated
-    // that way (it's an index destination, not a `resolve_file`-checked
-    // vault file), so a symlinked index (`.hyalo-index -> ../../secret.txt`)
-    // let every mutating command that patches the index — `save_to`,
-    // reached from `mutation.rs`/`tasks.rs`/`properties.rs`/`tags.rs` —
-    // silently clobber a file *outside* the vault with MessagePack bytes.
-    // `vault_dir` is the trustworthy boundary to check against here: it is
-    // always a canonicalized path (`create_index.rs`'s
-    // `std::fs::canonicalize(dir)...`), carried unchanged through
-    // `SnapshotHeader` on every subsequent `save_to` of a loaded snapshot.
-    // `atomic_write_within` only re-canonicalizes when `path` actually is a
-    // symlink (the common non-symlink case pays no extra cost and is
-    // unaffected), and an index destination that is legitimately outside
-    // the vault — accepted upfront via `create-index --allow-outside-vault`
-    // — still writes there directly as long as it is not itself a symlink;
-    // a symlink chain redirecting even an allowed-outside destination
-    // somewhere else again is refused with a clear error rather than
-    // silently followed (verified: adversarial review Finding 1 repro no
-    // longer touches the outside target's content).
-    crate::fs_util::atomic_write_within(Path::new(vault_dir), path, &bytes)
-        .context("failed to write index")?;
-    Ok(())
+    // The normalized index intent owns this destination independently of note
+    // index maintenance. Publish beneath its actual parent root with exact
+    // captured replacement or exclusive creation; never follow an index-entry
+    // symlink, including for an explicitly authorized external destination.
+    let publication_path = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = std::fs::read_link(path)?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                path.parent().unwrap_or_else(|| Path::new(".")).join(target)
+            };
+            let vault = dunce::canonicalize(vault_dir)?;
+            anyhow::ensure!(
+                crate::escaping_write_target(&vault, &target)?.is_none(),
+                "index destination symlink resolves outside vault"
+            );
+            target
+        }
+        _ => path.to_path_buf(),
+    };
+    let parent = publication_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = publication_path
+        .file_name()
+        .context("index path has no file name")?;
+    let root = crate::rooted::ConfigRoot::new(parent)?;
+    let name = crate::rooted::RelativeName::new(name)?;
+    let effect = match std::fs::symlink_metadata(&publication_path) {
+        Ok(metadata) => {
+            anyhow::ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "index destination is not a regular file"
+            );
+            root.capture(&name)?
+                .prepare(&bytes, &session)?
+                .commit(&mut session)?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            root.destination(name)?.create(&bytes, &mut session)?
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let finalization_error = effect
+        .finalization_error()
+        .map(str::to_owned)
+        .or_else(|| session.finish().err().map(|error| error.to_string()));
+    Ok(SnapshotWriteOutcome { finalization_error })
 }
 
 impl VaultIndex for SnapshotIndex {
@@ -2791,6 +2875,40 @@ fn format_link_string(link: &links::Link) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn observed_snapshot_write_retains_post_commit_finalization_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "---\ntitle: A\n---\n").unwrap();
+        let files = vec![(tmp.path().join("a.md"), "a.md".to_owned())];
+        let build = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap();
+        let path = tmp.path().join("custom.idx");
+        let outcome = write_snapshot_with_session(
+            &build.index,
+            &path,
+            tmp.path().to_str().unwrap(),
+            None,
+            None,
+            &[],
+            crate::rooted::WriteSession::with_fault(
+                crate::rooted::Durability::PerFile,
+                crate::rooted::FaultPoint::Finalize,
+            ),
+        )
+        .unwrap();
+        assert!(path.is_file());
+        assert!(outcome.finalization_error.is_some());
+    }
 
     macro_rules! md {
         ($s:expr) => {

@@ -219,6 +219,20 @@ pub fn tags_rename(
     format: Format,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<CommandOutcome> {
+    tags_rename_with_before_apply(dir, from, to, globs, dry_run, format, journal, || Ok(()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tags_rename_with_before_apply(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    globs: &[String],
+    dry_run: bool,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    before_apply: impl FnOnce() -> Result<()>,
+) -> Result<CommandOutcome> {
     // Validate both tag names
     if let Err(msg) = validate_tag(from) {
         let out =
@@ -248,20 +262,21 @@ pub fn tags_rename(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
     let scanned = files.len();
+    let mut preparation = crate::commands::apply::PreparedChangeSet::new(dir, files.len())?;
+    let captures: Vec<_> = files
+        .iter()
+        .map(|(_, rel)| preparation.capture(rel))
+        .collect::<Result<_>>()?;
 
     let mut modified = Vec::new();
     let mut skipped_count: usize = 0;
     // lowercase old tag → (old tag as written, new tag, file count)
     let mut renamed_tags: BTreeMap<String, (String, String, usize)> = BTreeMap::new();
 
-    // BUG-14 (iter-277): one write phase for the whole rename, so the
-    // durability fsync is paid once per directory (DEC-317) and a long run
-    // reports progress instead of going silent.
-    let _write_phase =
-        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "renaming tag"));
-
-    for (full_path, rel_path) in &files {
-        let mut props = match frontmatter::read_frontmatter(full_path) {
+    for ((full_path, rel_path), captured) in files.iter().zip(captures) {
+        let mut props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 hyalo_core::warn::record_skip(
@@ -279,6 +294,7 @@ pub fn tags_rename(
         // parent itself need not be present for the children to be renamed.
         if !tags.iter().any(|t| tag_matches(t, from)) {
             skipped_count += 1;
+            preparation.push(captured, None)?;
             continue;
         }
 
@@ -352,17 +368,9 @@ pub fn tags_rename(
             counter.2 += 1;
         }
 
-        if !dry_run {
-            frontmatter::write_frontmatter_within(dir, full_path, &props)?;
-            // Journal refresh covers entry AND link graph — the pre-journal
-            // code only patched the entry (stale-graph bug class, ARCH-3).
-            journal.update_entry(rel_path, props, full_path)?;
-        }
+        let rendered = frontmatter::render_frontmatter(&mut captured.reader()?, full_path, &props)?;
+        preparation.push(captured, Some(&rendered))?;
         modified.push(rel_path.clone());
-    }
-
-    if !dry_run {
-        journal.flush()?;
     }
 
     let total = modified.len() + skipped_count;
@@ -382,9 +390,15 @@ pub fn tags_rename(
         scanned,
     };
 
-    Ok(CommandOutcome::success(crate::output::output_value(
-        &result,
-    )))
+    let output = crate::output::output_value(&result);
+    preparation.check_output(&output)?;
+    let report = if dry_run {
+        preparation.preview()
+    } else {
+        before_apply()?;
+        preparation.apply(journal, "renaming tags")
+    };
+    Ok(CommandOutcome::success(output).with_apply_report(report))
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +850,120 @@ tags:
             tags.iter().any(|t| t["name"] == "rust"),
             "expected 'rust' tag in {parsed}"
         );
+    }
+
+    #[test]
+    fn tag_rename_refuses_same_length_edit_with_restored_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("note.md");
+        fs::write(&path, "---\ntags: [old]\nother: aa\n---\nbody\n").unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let mut changes = crate::commands::apply::PreparedChangeSet::new(tmp.path(), 1).unwrap();
+        let captured = changes.capture("note.md").unwrap();
+        let mut props = frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader().unwrap(),
+        ))
+        .unwrap();
+        props.insert("tags".to_owned(), serde_json::json!(["new"]));
+        let replacement =
+            frontmatter::render_frontmatter(&mut captured.reader().unwrap(), &path, &props)
+                .unwrap();
+        changes.push(captured, Some(&replacement)).unwrap();
+
+        fs::write(&path, "---\ntags: [old]\nother: bb\n---\nbody\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let report = changes.apply(
+            &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+            "tag conflict",
+        );
+        assert_eq!(
+            report.paths[0].state,
+            crate::commands::apply::EffectState::FailedBeforeCommit
+        );
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "---\ntags: [old]\nother: bb\n---\nbody\n"
+        );
+    }
+
+    #[test]
+    fn tags_rename_real_planning_refuses_editor_and_hyalo_writer_interleavings() {
+        #[derive(Clone, Copy, Debug)]
+        enum Interleaver {
+            Editor,
+            HyaloWriter,
+        }
+
+        for interleaver in [Interleaver::Editor, Interleaver::HyaloWriter] {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("note.md");
+            fs::write(&path, "---\ntags: [old]\nother: aa\n---\nbody\n").unwrap();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            let mut first_index = None;
+            let mut first_journal = MutationJournal::new(&mut first_index, None);
+            let outcome = tags_rename_with_before_apply(
+                tmp.path(),
+                "old",
+                "new",
+                &[],
+                false,
+                Format::Json,
+                &mut first_journal,
+                || {
+                    match interleaver {
+                        Interleaver::Editor => {
+                            fs::write(&path, "---\ntags: [old]\nother: bb\n---\nbody\n")?;
+                        }
+                        Interleaver::HyaloWriter => {
+                            let mut second_index = None;
+                            let mut second_journal = MutationJournal::new(&mut second_index, None);
+                            let second = crate::commands::set::set(
+                                tmp.path(),
+                                &["other=bb".to_owned()],
+                                &[],
+                                &["note.md".to_owned()],
+                                &[],
+                                &[],
+                                &[],
+                                Format::Json,
+                                &mut second_journal,
+                                false,
+                                false,
+                                None,
+                                hyalo_core::CaseInsensitiveMode::Off,
+                            )?;
+                            assert!(matches!(second, CommandOutcome::Success { .. }));
+                        }
+                    }
+                    fs::File::options()
+                        .write(true)
+                        .open(&path)?
+                        .set_times(fs::FileTimes::new().set_modified(modified))?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            let CommandOutcome::UserError(diagnostic) = outcome else {
+                panic!("{interleaver:?}: stale rename should report a conflict")
+            };
+            let effects = diagnostic.effects.expect("conflict effects");
+            assert_eq!(
+                effects.paths[0].state,
+                crate::commands::apply::EffectState::FailedBeforeCommit,
+                "{interleaver:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(path).unwrap(),
+                "---\ntags: [old]\nother: bb\n---\nbody\n",
+                "{interleaver:?}: unrelated field must survive"
+            );
+        }
     }
 }
 

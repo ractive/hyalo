@@ -135,6 +135,20 @@ pub fn properties_rename(
     format: Format,
     journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<CommandOutcome> {
+    properties_rename_with_before_apply(dir, from, to, globs, dry_run, format, journal, || Ok(()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn properties_rename_with_before_apply(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    globs: &[String],
+    dry_run: bool,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    before_apply: impl FnOnce() -> Result<()>,
+) -> Result<CommandOutcome> {
     // iter-271 Part B: an empty (or whitespace-only, or control-character)
     // key is not a property name. Renaming *to* one used to exit 0 while
     // giving every file a `"": <value>` key, and because `title` falls back to
@@ -163,19 +177,20 @@ pub fn properties_rename(
         FilesOrOutcome::Outcome(o) => return Ok(o),
     };
     let scanned = files.len();
+    let mut preparation = crate::commands::apply::PreparedChangeSet::new(dir, files.len())?;
+    let captures: Vec<_> = files
+        .iter()
+        .map(|(_, rel)| preparation.capture(rel))
+        .collect::<Result<_>>()?;
 
     let mut modified = Vec::new();
     let mut skipped_count: usize = 0;
     let mut conflicts = Vec::new();
 
-    // BUG-14 (iter-277): one write phase for the whole rename, so the
-    // durability fsync is paid once per directory (DEC-317) and a long run
-    // reports progress instead of going silent.
-    let _write_phase =
-        (!dry_run).then(|| hyalo_core::WritePhase::begin(files.len(), "renaming property"));
-
-    for (full_path, rel_path) in &files {
-        let mut props = match frontmatter::read_frontmatter(full_path) {
+    for ((full_path, rel_path), captured) in files.iter().zip(captures) {
+        let mut props = match frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader()?,
+        )) {
             Ok(p) => p,
             Err(e) if frontmatter::is_parse_error(&e) => {
                 hyalo_core::warn::record_skip(
@@ -191,12 +206,14 @@ pub fn properties_rename(
         // Source key not present -- skip
         if !props.contains_key(from) {
             skipped_count += 1;
+            preparation.push(captured, None)?;
             continue;
         }
 
         // Target key already exists -- conflict
         if props.contains_key(to) {
             conflicts.push(rel_path.clone());
+            preparation.push(captured, None)?;
             continue;
         }
 
@@ -216,23 +233,18 @@ pub fn properties_rename(
             })
             .collect();
 
-        if !dry_run {
-            if !frontmatter::rename_frontmatter_key_within(dir, full_path, from, to)? {
-                // Shapes the text splicer does not model (mixed line endings,
-                // non-UTF-8, YAML it cannot span-map) still get renamed — the
-                // props path warns about the reformatting it causes.
-                frontmatter::write_frontmatter_within(dir, full_path, &props)?;
-            }
-            // Journal refresh covers entry AND link graph (frontmatter link
-            // properties can change in a rename) — the pre-journal code only
-            // patched the entry, leaving the persisted graph stale.
-            journal.update_entry(rel_path, props, full_path)?;
-        }
+        let rendered = frontmatter::render_frontmatter_key_rename(
+            &mut captured.reader()?,
+            full_path,
+            from,
+            to,
+        )?
+        .map_or_else(
+            || frontmatter::render_frontmatter(&mut captured.reader()?, full_path, &props),
+            Ok,
+        )?;
+        preparation.push(captured, Some(&rendered))?;
         modified.push(rel_path.clone());
-    }
-
-    if !dry_run {
-        journal.flush()?;
     }
 
     let total = modified.len() + skipped_count + conflicts.len();
@@ -247,10 +259,16 @@ pub fn properties_rename(
         scanned,
     };
 
+    let output = serde_json::to_value(&result).context("failed to serialize")?;
+    preparation.check_output(&output)?;
+    let report = if dry_run {
+        preparation.preview()
+    } else {
+        before_apply()?;
+        preparation.apply(journal, "renaming properties")
+    };
     let _ = format;
-    Ok(CommandOutcome::success(
-        serde_json::to_value(&result).context("failed to serialize")?,
-    ))
+    Ok(CommandOutcome::success(output).with_apply_report(report))
 }
 
 #[cfg(test)]
@@ -549,6 +567,132 @@ title: Good Note
             title_entry["count"], 1,
             "bare `---` file must not inflate the count: {parsed:?}"
         );
+    }
+
+    #[test]
+    fn full_map_rename_refuses_same_length_edit_with_restored_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("note.md");
+        fs::write(&path, "---\nold: one\nother: aa\n---\nbody\n").unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let mut changes = crate::commands::apply::PreparedChangeSet::new(tmp.path(), 1).unwrap();
+        let captured = changes.capture("note.md").unwrap();
+        let mut props = frontmatter::read_frontmatter_from_reader(std::io::BufReader::new(
+            captured.reader().unwrap(),
+        ))
+        .unwrap();
+        let value = props.shift_remove("old").unwrap();
+        props.insert("new".to_owned(), value);
+        let replacement =
+            frontmatter::render_frontmatter(&mut captured.reader().unwrap(), &path, &props)
+                .unwrap();
+        changes.push(captured, Some(&replacement)).unwrap();
+
+        fs::write(&path, "---\nold: one\nother: bb\n---\nbody\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let report = changes.apply(
+            &mut MutationJournal::new(&mut None, None),
+            "property conflict",
+        );
+        assert_eq!(
+            report.paths[0].state,
+            crate::commands::apply::EffectState::FailedBeforeCommit
+        );
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "---\nold: one\nother: bb\n---\nbody\n"
+        );
+    }
+
+    #[test]
+    fn properties_rename_real_planning_refuses_editor_and_hyalo_writer_interleavings() {
+        #[derive(Clone, Copy, Debug)]
+        enum Interleaver {
+            Editor,
+            HyaloWriter,
+        }
+
+        for interleaver in [Interleaver::Editor, Interleaver::HyaloWriter] {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("note.md");
+            fs::write(&path, "---\n{old: one, other: aa}\n---\nbody\n").unwrap();
+            {
+                let mut source = fs::File::open(&path).unwrap();
+                assert!(
+                    frontmatter::render_frontmatter_key_rename(&mut source, &path, "old", "new")
+                        .unwrap()
+                        .is_none(),
+                    "flow mapping must force the full-map fallback"
+                );
+            }
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            let mut first_index = None;
+            let mut first_journal = MutationJournal::new(&mut first_index, None);
+            let outcome = properties_rename_with_before_apply(
+                tmp.path(),
+                "old",
+                "new",
+                &[],
+                false,
+                Format::Json,
+                &mut first_journal,
+                || {
+                    match interleaver {
+                        Interleaver::Editor => {
+                            fs::write(&path, "---\n{old: one, other: bb}\n---\nbody\n")?;
+                        }
+                        Interleaver::HyaloWriter => {
+                            let mut second_index = None;
+                            let mut second_journal = MutationJournal::new(&mut second_index, None);
+                            let second = crate::commands::set::set(
+                                tmp.path(),
+                                &["other=bb".to_owned()],
+                                &[],
+                                &["note.md".to_owned()],
+                                &[],
+                                &[],
+                                &[],
+                                Format::Json,
+                                &mut second_journal,
+                                false,
+                                false,
+                                None,
+                                hyalo_core::CaseInsensitiveMode::Off,
+                            )?;
+                            assert!(
+                                matches!(&second, CommandOutcome::Success { .. }),
+                                "second Hyalo writer failed: {second:?}"
+                            );
+                        }
+                    }
+                    fs::File::options()
+                        .write(true)
+                        .open(&path)?
+                        .set_times(fs::FileTimes::new().set_modified(modified))?;
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+            let CommandOutcome::UserError(diagnostic) = outcome else {
+                panic!("{interleaver:?}: stale rename should report a conflict")
+            };
+            let effects = diagnostic.effects.expect("conflict effects");
+            assert_eq!(
+                effects.paths[0].state,
+                crate::commands::apply::EffectState::FailedBeforeCommit,
+                "{interleaver:?}"
+            );
+            let properties = frontmatter::read_frontmatter(&path).unwrap();
+            assert_eq!(properties.get("old"), Some(&serde_json::json!("one")));
+            assert_eq!(properties.get("other"), Some(&serde_json::json!("bb")));
+            assert!(!properties.contains_key("new"));
+        }
     }
 }
 

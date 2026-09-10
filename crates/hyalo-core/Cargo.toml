@@ -33,6 +33,9 @@ same-file = { workspace = true }
 toml = { workspace = true }
 rust-stemmers = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+winapi-util = { workspace = true }
+
 [dev-dependencies]
 criterion = { workspace = true }
 ts-rs = { workspace = true }

@@ -93,6 +93,24 @@ fn emit_init_report(
     }
 }
 
+fn emit_init_failure(
+    failure: &crate::commands::init::ReportError,
+    format: Option<Format>,
+    jq: Option<&str>,
+) -> Result<(), AppError> {
+    let format = format.unwrap_or(if jq.is_some() {
+        Format::Json
+    } else {
+        Format::Text
+    });
+    let mut diagnostic = crate::output::UserDiagnostic::new(failure.error.to_string());
+    diagnostic.category = Some("mutation_failure");
+    diagnostic.effects = Some(failure.report.effects());
+    let code =
+        OutputPipeline::plain(format, jq).finalize(Ok(CommandOutcome::UserError(diagnostic)));
+    Err(AppError::Exit(code))
+}
+
 /// Express the resolved vault `dir` as a path relative to `cwd`, using
 /// forward slashes, for `--format github` annotation prefixing.
 ///
@@ -210,10 +228,8 @@ fn effective_index_path_for(
         | Commands::Help { .. }
         | Commands::Config { .. }
         | Commands::Types { .. }
-        | Commands::Okf { .. }
-        | Commands::Madr { .. }
-        | Commands::Changelog { .. }
         | Commands::LintRules { .. } => return None,
+        Commands::Okf { .. } | Commands::Madr { .. } | Commands::Changelog { .. } => None,
         Commands::Views { action } => match action {
             Some(crate::cli::args::ViewsAction::Run { index_flags, .. }) => Some(index_flags),
             _ => return None,
@@ -1019,15 +1035,26 @@ fn run_inner() -> Result<(), AppError> {
         } else {
             init_commands::CodexMode::None
         };
-        let report =
-            init_commands::run_init(init_dir, *claude, *pi, profile.as_deref(), codex_mode)
-                .map_err(AppError::Internal)?;
-        return emit_init_report(&report, cli.format, cli.jq.as_deref());
+        let cwd = std::env::current_dir().map_err(|error| AppError::Internal(error.into()))?;
+        return match init_commands::run_init_observed(
+            init_dir,
+            *claude,
+            *pi,
+            profile.as_deref(),
+            &cwd,
+            codex_mode,
+        ) {
+            Ok(report) => emit_init_report(&report, cli.format, cli.jq.as_deref()),
+            Err(failure) => emit_init_failure(&failure, cli.format, cli.jq.as_deref()),
+        };
     }
     if let Commands::Deinit = &mut cli.command {
         let deinit_dir = cli.dir.as_deref().and_then(|p| p.to_str());
-        let report = init_commands::run_deinit(deinit_dir).map_err(AppError::Internal)?;
-        return emit_init_report(&report, cli.format, cli.jq.as_deref());
+        let cwd = std::env::current_dir().map_err(|error| AppError::Internal(error.into()))?;
+        return match init_commands::run_deinit_observed(deinit_dir, &cwd) {
+            Ok(report) => emit_init_report(&report, cli.format, cli.jq.as_deref()),
+            Err(failure) => emit_init_failure(&failure, cli.format, cli.jq.as_deref()),
+        };
     }
     if let Commands::Completion { shell } = &mut cli.command {
         let mut cmd = Cli::command();

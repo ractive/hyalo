@@ -19,8 +19,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use hyalo_core::filename_template::FilenameTemplate;
-use hyalo_core::frontmatter::{read_frontmatter, write_frontmatter, write_frontmatter_within};
+use hyalo_core::frontmatter::{read_frontmatter, read_frontmatter_from_reader, render_frontmatter};
 use hyalo_core::is_iso8601_date;
+use hyalo_core::rooted::{
+    CapturedInput, ConfigRoot, Durability, RelativeName, VaultRoot, WriteSession,
+};
 use hyalo_core::scanner;
 use hyalo_core::schema::{
     self, PropertyConstraint, SchemaConfig, TypeSchema, parse_required_section_entry,
@@ -262,12 +265,11 @@ pub fn lint_file(
 
 /// Lint a single file, optionally applying auto-fixes.
 ///
-/// `vault_root`, when `Some`, is used to re-check the vault boundary against
-/// the *resolved* write destination via
-/// [`hyalo_core::frontmatter::write_frontmatter_within`] — see that
-/// function's doc comment. Only meaningful when `fix` is `FixMode::Apply`;
-/// `FixMode::Off` and `FixMode::DryRun` never write, so `None` is always safe
-/// there.
+/// `vault_root`, when `Some`, supplies the authority root for a fix. The
+/// source is captured before parsing and the replacement is authorized only
+/// while those exact bytes and that entry identity remain current. Without a
+/// vault root, the containing directory is the compatibility authority for
+/// this one-file API.
 pub fn lint_file_with_fix(
     full_path: &Path,
     rel_path: &str,
@@ -276,7 +278,14 @@ pub fn lint_file_with_fix(
     case_insensitive: bool,
     vault_root: Option<&Path>,
 ) -> Result<(FileLintResult, FileFixResult)> {
-    let properties = match read_frontmatter(full_path) {
+    let mut captured = matches!(fix, FixMode::Apply)
+        .then(|| capture_fix_input(full_path, rel_path, vault_root))
+        .transpose()?;
+    let properties_result = match &captured {
+        Some(source) => read_frontmatter_from_reader(std::io::BufReader::new(source.reader()?)),
+        None => read_frontmatter(full_path),
+    };
+    let properties = match properties_result {
         Ok(props) => props,
         Err(e) if hyalo_core::frontmatter::is_parse_error(&e) => {
             // Malformed frontmatter — report as a single error violation.
@@ -307,11 +316,16 @@ pub fn lint_file_with_fix(
         let mut mutable = properties.clone();
         let actions = apply_fixes(rel_path, &mut mutable, schema);
         if matches!(fix, FixMode::Apply) && !actions.is_empty() {
-            match vault_root {
-                Some(root) => write_frontmatter_within(root, full_path, &mutable),
-                None => write_frontmatter(full_path, &mutable),
-            }
-            .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
+            let source = captured.take().expect("apply captured source");
+            let replacement = render_frontmatter(&mut source.reader()?, full_path, &mutable)?;
+            let mut session = WriteSession::new(Durability::PerFile);
+            source
+                .prepare(&replacement, &session)?
+                .commit(&mut session)
+                .with_context(|| format!("writing fixed frontmatter to {rel_path}"))?;
+            session
+                .finish()
+                .with_context(|| format!("finalizing fixed frontmatter for {rel_path}"))?;
         }
         (mutable, actions)
     } else {
@@ -352,6 +366,23 @@ pub fn lint_file_with_fix(
             actions,
         },
     ))
+}
+
+fn capture_fix_input(
+    full_path: &Path,
+    rel_path: &str,
+    vault_root: Option<&Path>,
+) -> Result<CapturedInput> {
+    if let Some(root) = vault_root {
+        return VaultRoot::new(root)?.capture(&RelativeName::new(rel_path)?);
+    }
+    let parent = full_path
+        .parent()
+        .context("lint target has no containing directory")?;
+    let name = full_path
+        .file_name()
+        .context("lint target has no file name")?;
+    ConfigRoot::new(parent)?.capture(&RelativeName::new(name)?)
 }
 
 // ---------------------------------------------------------------------------

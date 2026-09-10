@@ -194,6 +194,7 @@ struct IndexPlan {
     new_content: String,
     /// The current on-disk content (empty string when the file is absent).
     old_content: String,
+    existed: bool,
     /// The kind of change this plan represents.
     action: IndexAction,
     /// When [`IndexAction::Skip`], the marker problem that caused the skip
@@ -225,6 +226,29 @@ pub fn run_index(
     ignore: &[String],
     case_insensitive: bool,
     format: Format,
+) -> Result<(CommandOutcome, Option<i32>)> {
+    run_index_with_journal(
+        dir,
+        scope,
+        apply,
+        replace,
+        ignore,
+        case_insensitive,
+        format,
+        &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_index_with_journal(
+    dir: &Path,
+    scope: Option<&str>,
+    apply: bool,
+    replace: bool,
+    ignore: &[String],
+    case_insensitive: bool,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
 ) -> Result<(CommandOutcome, Option<i32>)> {
     // Resolve the optional scope directory to a vault-relative prefix.
     let scope_prefix = match resolve_scope(dir, scope) {
@@ -357,18 +381,31 @@ pub fn run_index(
     // record the target, and keep going. The exit code reflects the partial
     // failure without leaving the remaining files unwritten.
     let mut write_failures: Vec<String> = Vec::new();
+    let mut apply_paths = Vec::new();
     if apply {
         for plan in &changed {
-            let full = dir.join(&plan.rel_path);
-            if let Err(err) =
-                hyalo_core::atomic_write_within(dir, &full, plan.new_content.as_bytes())
-            {
-                crate::warn::warn(format!(
-                    "failed to write {}: {} — skipping this file, continuing",
-                    plan.rel_path,
-                    crate::commands::terse_root_cause(&err)
-                ));
-                write_failures.push(plan.rel_path.clone());
+            match crate::commands::managed_region::apply_content(
+                dir,
+                &plan.rel_path,
+                &plan.old_content,
+                plan.existed,
+                plan.new_content.as_bytes(),
+            ) {
+                Ok(report) => apply_paths.extend(report.paths),
+                Err(err) => {
+                    crate::warn::warn(format!(
+                        "failed to write {}: {} — skipping this file, continuing",
+                        plan.rel_path,
+                        crate::commands::terse_root_cause(&err)
+                    ));
+                    apply_paths.push(crate::commands::apply::PathEffect {
+                        file: plan.rel_path.clone(),
+                        state: crate::commands::apply::EffectState::FailedBeforeCommit,
+                        error: Some(err.to_string()),
+                        category: Some(crate::commands::apply::EffectFailure::Io),
+                    });
+                    write_failures.push(plan.rel_path.clone());
+                }
             }
         }
     }
@@ -426,13 +463,22 @@ pub fn run_index(
         None
     };
 
-    Ok((
-        CommandOutcome::success_with_total(
-            crate::output::output_value(&payload),
-            changed.len() as u64,
-        ),
-        exit_override,
-    ))
+    let outcome = CommandOutcome::success_with_total(
+        crate::output::output_value(&payload),
+        changed.len() as u64,
+    );
+    let outcome = if apply {
+        let mut report = crate::commands::apply::ApplyReport {
+            paths: apply_paths,
+            index: crate::commands::apply::IndexDisposition::NotUsed,
+            index_error: None,
+        };
+        crate::commands::managed_region::reconcile_generated_notes(dir, &mut report, journal);
+        outcome.with_apply_report(report)
+    } else {
+        outcome
+    };
+    Ok((outcome, exit_override))
 }
 
 /// Read a concept file's frontmatter into a [`ConceptEntry`].
@@ -522,6 +568,7 @@ fn plan_index(
             rel_path,
             new_content: String::new(),
             old_content: String::new(),
+            existed: true,
             action: IndexAction::Skip,
             skip_reason: "target exists but is not a regular file (a directory named index.md?)",
         });
@@ -532,6 +579,7 @@ fn plan_index(
     } else {
         String::new()
     };
+    let existed = full.exists();
 
     let marker_state = classify_markers(&old_content);
 
@@ -547,12 +595,13 @@ fn plan_index(
             rel_path,
             new_content: old_content.clone(),
             old_content,
+            existed,
             action: IndexAction::Skip,
             skip_reason: marker_state.problem(),
         });
     }
 
-    let action = if old_content.is_empty() {
+    let action = if !existed {
         IndexAction::Create
     } else if matches!(marker_state, MarkerState::Healthy(..)) {
         IndexAction::Update
@@ -575,6 +624,7 @@ fn plan_index(
         rel_path,
         new_content,
         old_content,
+        existed,
         action,
         skip_reason: "",
     })
@@ -926,6 +976,27 @@ pub fn run_log(
     apply: bool,
     format: Format,
 ) -> Result<CommandOutcome> {
+    run_log_with_journal(
+        dir,
+        target,
+        message,
+        action,
+        apply,
+        format,
+        &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_log_with_journal(
+    dir: &Path,
+    target: Option<&str>,
+    message: &str,
+    action: Option<&str>,
+    apply: bool,
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<CommandOutcome> {
     if message.trim().is_empty() {
         return Ok(CommandOutcome::UserError(user_diagnostic(
             format,
@@ -995,6 +1066,7 @@ pub fn run_log(
     } else {
         String::new()
     };
+    let existed = full.exists();
 
     let today = hyalo_core::schema::today_iso8601();
     // Collapse the message onto a single logical bullet: continuation lines are
@@ -1009,9 +1081,19 @@ pub fn run_log(
 
     let new_content = prepend_log_entry(&old_content, &today, &entry_line);
 
-    if apply {
-        hyalo_core::atomic_write_within(dir, &full, new_content.as_bytes())
-            .with_context(|| format!("failed to write {rel_path}"))?;
+    let mut effects = apply
+        .then(|| {
+            crate::commands::managed_region::apply_content(
+                dir,
+                &rel_path,
+                &old_content,
+                existed,
+                new_content.as_bytes(),
+            )
+        })
+        .transpose()?;
+    if let Some(report) = &mut effects {
+        crate::commands::managed_region::reconcile_generated_notes(dir, report, journal);
     }
 
     let payload = OkfLogResult {
@@ -1021,11 +1103,13 @@ pub fn run_log(
         file: &(rel_path),
         date: &(today),
         entry: &(entry_line),
-        created: old_content.is_empty(),
+        created: !existed,
     };
-    Ok(CommandOutcome::success(crate::output::output_value(
-        &payload,
-    )))
+    let outcome = CommandOutcome::success(crate::output::output_value(&payload));
+    Ok(match effects {
+        Some(effects) => outcome.with_apply_report(effects),
+        None => outcome,
+    })
 }
 
 /// Indent the continuation lines of a (possibly multi-line) log message so the
@@ -1816,7 +1900,7 @@ pub(crate) fn run(
             replace,
         } => {
             let case_insensitive = mode_enabled(ctx.case_insensitive_mode, ctx.dir);
-            let (outcome, exit_override) = crate::commands::okf::run_index(
+            let (outcome, exit_override) = crate::commands::okf::run_index_with_journal(
                 ctx.dir,
                 scope.as_deref(),
                 apply,
@@ -1824,6 +1908,10 @@ pub(crate) fn run(
                 ctx.okf_ignore,
                 case_insensitive,
                 effective_format,
+                &mut crate::commands::journal::MutationJournal::new(
+                    &mut *ctx.snapshot_index,
+                    ctx.index_path,
+                ),
             )?;
             Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
@@ -1833,13 +1921,17 @@ pub(crate) fn run(
             action: log_action,
             apply,
             dry_run: _,
-        } => crate::commands::okf::run_log(
+        } => crate::commands::okf::run_log_with_journal(
             ctx.dir,
             target.as_deref(),
             &message,
             log_action.as_deref(),
             apply,
             effective_format,
+            &mut crate::commands::journal::MutationJournal::new(
+                &mut *ctx.snapshot_index,
+                ctx.index_path,
+            ),
         ),
     }
 }

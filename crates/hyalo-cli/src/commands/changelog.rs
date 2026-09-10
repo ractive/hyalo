@@ -331,6 +331,31 @@ pub fn run_release(
     active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
+    run_release_with_journal(
+        changelog_file,
+        boundary_root,
+        boundary_root,
+        version,
+        date,
+        apply,
+        active_profiles,
+        format,
+        &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_release_with_journal(
+    changelog_file: &Path,
+    boundary_root: &Path,
+    vault_dir: &Path,
+    version: &str,
+    date: Option<&str>,
+    apply: bool,
+    active_profiles: &[String],
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<(CommandOutcome, Option<i32>)> {
     let display = changelog_display(changelog_file);
     if let Some(outcome) = boundary_refusal(boundary_root, changelog_file, &display, format)? {
         return Ok((outcome, None));
@@ -415,13 +440,24 @@ pub fn run_release(
 
     let new_content = cl.render();
     let changed = new_content != old_content;
-    if apply && changed {
-        // Defense in depth: the early `boundary_refusal` gate already ran, but
-        // re-check against the same root right before the write so the
-        // invariant survives future refactors.
-        hyalo_core::atomic_write_within(boundary_root, &full, new_content.as_bytes())
-            .with_context(|| format!("failed to write {display}"))?;
-    }
+    let relative = full.strip_prefix(boundary_root).with_context(|| {
+        format!(
+            "changelog is outside its configured root: {}",
+            full.display()
+        )
+    })?;
+    let mut effects = (apply && changed)
+        .then(|| {
+            crate::commands::managed_region::apply_content(
+                boundary_root,
+                &relative.to_string_lossy().replace('\\', "/"),
+                &old_content,
+                true,
+                new_content.as_bytes(),
+            )
+        })
+        .transpose()?;
+    reconcile_changelog_effect(changelog_file, vault_dir, effects.as_mut(), journal);
 
     let payload = crate::output::output_value(
         &(ChangelogReleaseResult {
@@ -440,10 +476,12 @@ pub fn run_release(
         }),
     );
     let exit_override = if !apply && changed { Some(1) } else { None };
-    Ok((
-        CommandOutcome::success_with_total(payload, u64::from(changed)),
-        exit_override,
-    ))
+    let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
+    let outcome = match effects {
+        Some(effects) => outcome.with_apply_report(effects),
+        None => outcome,
+    };
+    Ok((outcome, exit_override))
 }
 
 /// Rotate the `[Unreleased]` section at `unreleased_idx` into a new dated
@@ -516,6 +554,33 @@ pub fn run_add(
     active_profiles: &[String],
     format: Format,
 ) -> Result<(CommandOutcome, Option<i32>)> {
+    run_add_with_journal(
+        changelog_file,
+        boundary_root,
+        boundary_root,
+        category,
+        message,
+        wrap,
+        apply,
+        active_profiles,
+        format,
+        &mut crate::commands::journal::MutationJournal::new(&mut None, None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_add_with_journal(
+    changelog_file: &Path,
+    boundary_root: &Path,
+    vault_dir: &Path,
+    category: &str,
+    message: &str,
+    wrap: Option<usize>,
+    apply: bool,
+    active_profiles: &[String],
+    format: Format,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) -> Result<(CommandOutcome, Option<i32>)> {
     let display = changelog_display(changelog_file);
     if let Some(outcome) = boundary_refusal(boundary_root, changelog_file, &display, format)? {
         return Ok((outcome, None));
@@ -562,6 +627,7 @@ pub fn run_add(
     }
 
     let full = changelog_file.to_path_buf();
+    let existed = full.exists();
     let old_content = if full.is_file() {
         std::fs::read_to_string(&full).with_context(|| format!("failed to read {display}"))?
     } else {
@@ -586,13 +652,24 @@ pub fn run_add(
 
     let new_content = cl.render();
     let changed = new_content != old_content;
-    if apply && changed {
-        // Defense in depth: the early `boundary_refusal` gate already ran, but
-        // re-check against the same root right before the write so the
-        // invariant survives future refactors.
-        hyalo_core::atomic_write_within(boundary_root, &full, new_content.as_bytes())
-            .with_context(|| format!("failed to write {display}"))?;
-    }
+    let relative = full.strip_prefix(boundary_root).with_context(|| {
+        format!(
+            "changelog is outside its configured root: {}",
+            full.display()
+        )
+    })?;
+    let mut effects = (apply && changed)
+        .then(|| {
+            crate::commands::managed_region::apply_content(
+                boundary_root,
+                &relative.to_string_lossy().replace('\\', "/"),
+                &old_content,
+                existed,
+                new_content.as_bytes(),
+            )
+        })
+        .transpose()?;
+    reconcile_changelog_effect(changelog_file, vault_dir, effects.as_mut(), journal);
 
     let payload = crate::output::output_value(
         &(ChangelogAddResult {
@@ -611,10 +688,29 @@ pub fn run_add(
         }),
     );
     let exit_override = if !apply && changed { Some(1) } else { None };
-    Ok((
-        CommandOutcome::success_with_total(payload, u64::from(changed)),
-        exit_override,
-    ))
+    let outcome = CommandOutcome::success_with_total(payload, u64::from(changed));
+    let outcome = match effects {
+        Some(effects) => outcome.with_apply_report(effects),
+        None => outcome,
+    };
+    Ok((outcome, exit_override))
+}
+
+fn reconcile_changelog_effect(
+    changelog_file: &Path,
+    vault_dir: &Path,
+    report: Option<&mut crate::commands::apply::ApplyReport>,
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+) {
+    let Some(report) = report else { return };
+    let Ok(relative) = changelog_file.strip_prefix(vault_dir) else {
+        return;
+    };
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    for path in &mut report.paths {
+        path.file.clone_from(&relative);
+    }
+    crate::commands::managed_region::reconcile_generated_notes(vault_dir, report, journal);
 }
 
 /// Bullet prefix for a changelog entry line (`- `).
@@ -1436,14 +1532,19 @@ pub(crate) fn run(
                 ctx.config_dir,
                 ctx.changelog_path,
             );
-            let (outcome, exit_override) = crate::commands::changelog::run_release(
+            let (outcome, exit_override) = crate::commands::changelog::run_release_with_journal(
                 &changelog_file,
                 &boundary_root,
+                ctx.dir,
                 &version,
                 date.as_deref(),
                 apply,
                 &ctx.lint_profiles,
                 effective_format,
+                &mut crate::commands::journal::MutationJournal::new(
+                    &mut *ctx.snapshot_index,
+                    ctx.index_path,
+                ),
             )?;
             Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
@@ -1468,15 +1569,20 @@ pub(crate) fn run(
                 ctx.config_dir,
                 ctx.changelog_path,
             );
-            let (outcome, exit_override) = crate::commands::changelog::run_add(
+            let (outcome, exit_override) = crate::commands::changelog::run_add_with_journal(
                 &changelog_file,
                 &boundary_root,
+                ctx.dir,
                 &category,
                 &message,
                 wrap,
                 apply,
                 &ctx.lint_profiles,
                 effective_format,
+                &mut crate::commands::journal::MutationJournal::new(
+                    &mut *ctx.snapshot_index,
+                    ctx.index_path,
+                ),
             )?;
             Ok(outcome.with_status(exit_override.unwrap_or(0)))
         }
