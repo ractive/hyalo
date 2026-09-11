@@ -78,8 +78,9 @@ impl Root {
         while !parent.try_exists()? {
             parent = parent.parent().context("target has no existing parent")?;
         }
-        let resolved_parent = dunce::canonicalize(parent)?;
-        if !resolved_parent.starts_with(&self.0) {
+        // The root was freshly canonicalized above. Root-level entries do not
+        // need a second canonicalization of that same parent in this check.
+        if parent != self.0 && !dunce::canonicalize(parent)?.starts_with(&self.0) {
             bail!("target parent resolves outside root: {}", entry.display());
         }
         match std::fs::symlink_metadata(&entry) {

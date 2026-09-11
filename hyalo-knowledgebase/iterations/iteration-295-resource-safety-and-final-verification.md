@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 295 — Resource safety and final verification
 date: 2026-09-10
-status: completed
+status: in-progress
 tags:
   - iteration
   - rust
@@ -90,7 +90,7 @@ isolation. No general job service or silent audit suppression.
 
 ### Stage 2: Close platform gates and evaluate agent reliability
 
-- [x] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
+- [ ] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
   respecting CARGO_TARGET_DIR and explicit targets. Verify the scale gate on Windows as well as
   Linux/macOS; do not infer runtime success from cross-compilation.
 
@@ -117,7 +117,7 @@ isolation. No general job service or silent audit suppression.
   time. Use blinded or deterministic grading where possible; report failures and uncertainty, no
   promotional score from self-assessment.
 
-- [x] Reconcile every review ID and architecture invariant against final implementation/tests.
+- [ ] Reconcile every review ID and architecture invariant against final implementation/tests.
   All bug closure IDs require passing evidence; static risks need a real fix or explicit
   evidence-backed non-applicability, not an untested completed checkbox. Preserve iteration 287
   external consumer deferral.
@@ -129,13 +129,13 @@ Acceptance for this stage (focused checks):
 
 - [x] No stub or string-presence check is counted as proof of a behavioral invariant.
 
-- [x] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
+- [ ] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
   remains the single duplicate of S13.
 
 - [x] Agent comparison results are reproducible and report limits; if model execution is
   unavailable, that acceptance remains pending rather than being replaced by static review.
 
-- [x] Final gates and independent review apply to the exact finished tree; no
+- [ ] Final gates and independent review apply to the exact finished tree; no
   release/publication or external consumer task is silently included.
 
 Scope: This does not authorize a new release, repository-external migration or shared workflow
@@ -161,7 +161,7 @@ repository tooling.
 
 ## One block completion gate
 
-- [x] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
+- [ ] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
   edits; public API/format changes must be explicit and tested. No whole-vault crash-transaction
   or concurrent-adversary guarantee is implied by the new types.
 
@@ -179,7 +179,7 @@ repository tooling.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -428,3 +428,34 @@ limits, macOS/Windows residual host-OOM risk, forced-parent-death limits, bulk
 power-loss behavior and Windows directory-sync unavailability remain documented.
 Final metadata-head CI and the GitHub merge checkpoint are supervisor-owned;
 no release or external consumer migration is included.
+
+
+## Final-head CI stop — 2026-09-11
+
+The documentation-only final head `34fddf9678d0236eb1cd0baf4ad5edb6e164e1e9`
+passed 13 checks but failed native Windows scale: the same implementation
+measured 5.96 seconds for 2,000 backlinks against the unchanged five-second
+budget. Artifact discovery and observed-counter controls passed. The earlier
+rounded 5.00-second success does not establish consistent performance; runtime
+variation has not been attributed to a measured cause. No retry was launched
+merely to obtain a passing result.
+
+Ralph stopped after the two authorized repair passes. R16 and final checkpoint
+criteria are pending again; jq safety tests and the clean independent reviews
+retain their evidence. PR #351 is open and unmerged. This status correction is
+preserved locally for the next authorized repair, while the remote head and all
+failed/successful logs remain unchanged. The next step is a bounded Windows
+performance repair after an explicit repair-limit extension, followed by affected
+gates, fresh independent review, final-head CI and merge verification.
+
+## User-authorized final performance retry — 2026-09-11
+
+The user authorized one final bounded repair pass. A five-line `Root::check`
+change reuses the immediately preceding root canonicalization only when the
+existing parent is that same validated root; other-parent, nested and escaping
+checks remain fresh. Sixteen rooted tests and core Clippy pass. Release
+`1bf6b0963b854030eb098baf241901bc3314ed92ef7a051fba348b83c0da26ad`
+measured 899.41 ms for 2,000 backlinks on aarch64 macOS against the unchanged
+five-second gate. This makes no Windows speed claim: native CI must try five
+seconds first; the user accepts an eight-second Windows-only fallback if the
+same gate remains insufficient. The historical stop record above is retained.
