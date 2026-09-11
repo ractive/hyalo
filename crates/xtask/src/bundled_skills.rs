@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::artifact::{ArtifactArgs, build_hyalo};
 use crate::workspace::workspace_root;
 
 /// Run the gate: `Ok(true)` when every bundled skill passes, `Ok(false)` when
@@ -66,6 +67,7 @@ pub fn run() -> Result<bool> {
         return Ok(false);
     }
 
+    let artifact = build_hyalo(&root, &ArtifactArgs::default(), false)?;
     let mut all_ok = true;
     let mut checked = 0usize;
     for file in &skill_files {
@@ -77,7 +79,7 @@ pub fn run() -> Result<bool> {
         let scratch = tempfile::tempdir().context("creating scratch vault")?;
         let vault = scratch.path();
         // Install the skills profile config (writes .hyalo.toml + [scan] include).
-        init_skills_profile(&root, vault)?;
+        init_skills_profile(&artifact.executable, vault)?;
         // Place the template as installed: `.claude/skills/<name>/SKILL.md`.
         let host = if file.starts_with(&codex_skills) {
             ".agents"
@@ -91,7 +93,7 @@ pub fn run() -> Result<bool> {
             .context("writing SKILL.md into scratch vault")?;
 
         let rel = format!("{host}/skills/{name}/SKILL.md");
-        let (ok, output) = lint_skill(&root, vault, &rel)?;
+        let (ok, output) = lint_skill(&artifact.executable, vault, &rel)?;
         checked += 1;
         if !ok {
             all_ok = false;
@@ -132,29 +134,17 @@ fn frontmatter_name(body: &str) -> Option<String> {
     None
 }
 
-/// Build a `cargo run` command for the `hyalo` CLI that executes *inside*
-/// `vault` (so `init` writes `.hyalo.toml` there and never touches the repo's
-/// own config), while still resolving the workspace via `--manifest-path`
-/// (`cargo run` runs the target binary in the caller's CWD, which we set to the
-/// scratch vault).
-fn hyalo_in_vault(root: &Path, vault: &Path) -> Command {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "run",
-        "-q",
-        "--manifest-path",
-        &root.join("Cargo.toml").to_string_lossy(),
-        "-p",
-        "hyalo-cli",
-        "--",
-    ])
-    .current_dir(vault);
+/// Execute the already-built CLI inside the scratch vault, preserving config
+/// discovery without paying Cargo startup once for every init and lint.
+fn hyalo_in_vault(executable: &Path, vault: &Path) -> Command {
+    let mut cmd = Command::new(executable);
+    cmd.current_dir(vault);
     cmd
 }
 
 /// Initialize the skills profile in `vault` via `hyalo init --profile skills`.
-fn init_skills_profile(root: &Path, vault: &Path) -> Result<()> {
-    let out = hyalo_in_vault(root, vault)
+fn init_skills_profile(executable: &Path, vault: &Path) -> Result<()> {
+    let out = hyalo_in_vault(executable, vault)
         .args(["--dir", ".", "init", "--profile", "skills"])
         .output()
         .context("running hyalo init --profile skills")?;
@@ -168,8 +158,8 @@ fn init_skills_profile(root: &Path, vault: &Path) -> Result<()> {
 }
 
 /// Lint a single skill file with the skills profile. Returns `(passed, output)`.
-fn lint_skill(root: &Path, vault: &Path, rel: &str) -> Result<(bool, String)> {
-    let out = hyalo_in_vault(root, vault)
+fn lint_skill(executable: &Path, vault: &Path, rel: &str) -> Result<(bool, String)> {
+    let out = hyalo_in_vault(executable, vault)
         .args([
             "--dir",
             ".",

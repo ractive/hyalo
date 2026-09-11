@@ -46,28 +46,16 @@ jobs:
           npm --prefix npm/hyalo run build
           npm --prefix npm/hyalo test
 
-  npm-packaging:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
+      # Linux packaging reuses the release binary and API dist built above.
       - name: Pin npm
+        if: runner.os == 'Linux'
         run: npm install --global npm@11.19.1
-      - name: Test generator and build host CLI
-        run: |
-          cargo test -p xtask npm_package
-          cargo run -p xtask -- generate-npm-packages --check
-          cargo build --release -p hyalo-cli
-          npm --prefix npm/hyalo ci --ignore-scripts
-          npm --prefix npm/hyalo run typecheck
-          npm --prefix npm/hyalo run build
+      # Generator unit tests already run in CI's three-OS workspace suite.
+      - name: Check generated package metadata
+        if: runner.os == 'Linux'
+        run: cargo run -p xtask -- generate-npm-packages --check
       - name: Stage all eight packages
+        if: runner.os == 'Linux'
         shell: bash
         env:
           BINARY_INPUT: ${{ runner.temp }}/hyalo-npm-binaries
@@ -86,6 +74,7 @@ jobs:
           cargo run -p xtask -- generate-npm-packages \
             --stage "$STAGE_DIR" --binaries "$BINARY_INPUT"
       - name: Pack, inspect, and dry-run publication
+        if: runner.os == 'Linux'
         shell: bash
         env:
           STAGE_DIR: ${{ runner.temp }}/hyalo-npm-stage
