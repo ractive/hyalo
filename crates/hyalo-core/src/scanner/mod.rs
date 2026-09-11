@@ -186,6 +186,7 @@ pub fn scan_file_multi_stats(
         let mut data = Vec::with_capacity(usize::try_from(file_size).unwrap_or(0));
         file.read_to_end(&mut data)
             .with_context(|| format!("failed to read {}", path.display()))?;
+        crate::internal_metrics::record_source_read(true);
         let lines = count_lines(&data);
         let valid_utf8 = scan_slice_multi_utf8(&data, visitors)?;
         Ok(ScanStats {
@@ -220,6 +221,7 @@ pub fn scan_file_multi_stats(
                 last_byte = chunk[..m].last().copied();
             }
         }
+        crate::internal_metrics::record_source_read(false);
         scan_slice_multi(buf, visitors)?;
         let lines = match last_byte {
             None => 0,

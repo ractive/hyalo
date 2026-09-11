@@ -1040,6 +1040,7 @@ impl SnapshotIndex {
             fm_props.as_deref(),
         )?;
         self.entries[idx] = entry;
+        crate::internal_metrics::record_index_entries_refreshed(1);
         self.clear_frontmatter_skip(rel_path);
         self.live.work.documents += 1;
         Ok(file_links)
@@ -1198,6 +1199,7 @@ impl SnapshotIndex {
             } else {
                 self.entries.push(entry);
             }
+            crate::internal_metrics::record_index_entries_refreshed(1);
             self.live.work.documents += 1;
         }
         self.entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -1270,6 +1272,7 @@ impl SnapshotIndex {
             self.entries.insert(pos, entry);
             self.rebuild_path_index();
         }
+        crate::internal_metrics::record_index_entries_refreshed(1);
         self.clear_frontmatter_skip(rel_path);
         self.live.work.documents += 1;
         Ok(file_links)
@@ -1350,6 +1353,7 @@ impl SnapshotIndex {
             .binary_search_by(|e| e.rel_path.cmp(&entry.rel_path))
             .unwrap_or_else(|i| i);
         self.entries.insert(pos, entry);
+        crate::internal_metrics::record_index_entries_refreshed(1);
 
         // Single rebuild covering both the removal and the insertion.
         self.rebuild_path_index();

@@ -50,6 +50,25 @@ jobs:
       - name: Verify CLI runs
         run: cargo run -p hyalo-cli -- --help
 
+  scale-artifact:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - name: Run scale gate against Cargo-reported native artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          test -n "$host"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/hyalo-scale-target"
+          cargo run -p xtask -- bench-scale --target "$host"
+
   # Dogfood: lint the project's own knowledgebase and surface any schema/body
   # violations as inline PR annotations. `.hyalo.toml` at the repo root sets
   # `dir = "hyalo-knowledgebase"`, so `hyalo lint` targets the vault, and

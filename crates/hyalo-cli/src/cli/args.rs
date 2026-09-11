@@ -389,12 +389,14 @@ pub(crate) struct Cli {
     /// HINTS: --jq computes none, so `.hints` is always [] under a filter (DEC-313) — it is
     /// the machine path, and hint generation is a second pass over the results. Read hints
     /// from plain --format json instead.
-    /// LIMITS: a filter is given 3 seconds of wall-clock time (a pathological filter —
-    /// infinite recursion with no output, or building a huge intermediate array before
-    /// ever yielding a value, e.g. '[range(3e8)]' — errors out instead of hanging or
-    /// exhausting memory), may emit at most 1,000,000 output values, and the total
-    /// emitted text is capped at 10 MiB. Any limit breach exits 1 with a clean error,
-    /// never a hang or an OOM.
+    /// LIMITS: user compilation and evaluation each run in a child with a 3-second
+    /// deadline. Source is capped at 64 KiB, serialized input at 64 MiB, and output at
+    /// 10 MiB / 1,000,000 values. The parent terminates and reaps failed, timed-out or
+    /// cancelled workers. Compilation failure precedes writes (exit 1); evaluation
+    /// failure retains committed effects in the error report (exit 2).
+    /// Linux limits worker address space to 512 MiB. macOS and Windows have no hard
+    /// memory cap: intermediate allocations can still exhaust host memory before
+    /// termination. Process isolation is not a universal OOM guarantee.
     #[arg(long, global = true, value_name = "FILTER")]
     pub jq: Option<String>,
 

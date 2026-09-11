@@ -78,8 +78,9 @@ impl Root {
         while !parent.try_exists()? {
             parent = parent.parent().context("target has no existing parent")?;
         }
-        let resolved_parent = dunce::canonicalize(parent)?;
-        if !resolved_parent.starts_with(&self.0) {
+        // The root was freshly canonicalized above. Root-level entries do not
+        // need a second canonicalization of that same parent in this check.
+        if parent != self.0 && !dunce::canonicalize(parent)?.starts_with(&self.0) {
             bail!("target parent resolves outside root: {}", entry.display());
         }
         match std::fs::symlink_metadata(&entry) {
@@ -312,8 +313,9 @@ impl CapturedInput {
             bail!(SourceConflict("target file identity changed"));
         }
         let mut original = self.reader()?;
-        let mut left = vec![0u8; 64 * 1024].into_boxed_slice();
-        let mut right = vec![0u8; 64 * 1024].into_boxed_slice();
+        let buffer_size = usize::try_from(self.size.clamp(1, 64 * 1024))?;
+        let mut left = vec![0u8; buffer_size].into_boxed_slice();
+        let mut right = vec![0u8; buffer_size].into_boxed_slice();
         loop {
             let n = original.read(&mut left)?;
             if n == 0 {
@@ -343,6 +345,53 @@ impl CapturedInput {
             source: self,
             data: data.into_temp_path(),
         })
+    }
+
+    /// Prepare and publish already-validated final bytes immediately, without
+    /// staging a second copy for a receipt the caller does not need. Only the
+    /// active worker owns the sibling temporary file; no bytes or handles are
+    /// retained beyond this call. Both source checks use the shared path below.
+    pub(crate) fn replace_immediate(
+        self,
+        bytes: &[u8],
+        session: &mut WriteSession,
+    ) -> Result<CommitEffect> {
+        session.fault(FaultPoint::Prepare)?;
+        let (path, temp) = self.stage_replacement(session, |temp| {
+            temp.write_all(bytes)?;
+            Ok(())
+        })?;
+        self.publish_replacement(&path, temp, session)
+    }
+
+    fn stage_replacement(
+        &self,
+        session: &WriteSession,
+        write: impl FnOnce(&mut NamedTempFile) -> Result<()>,
+    ) -> Result<(PathBuf, NamedTempFile)> {
+        self.verify()?;
+        let path = self.root.check(&self.entry, true)?;
+        let parent = path.parent().context("target has no parent")?;
+        let mut temp = NamedTempFile::new_in(parent)?;
+        write(&mut temp)?;
+        temp.as_file().set_permissions(self.permissions.clone())?;
+        if session.durability != Durability::BulkRewrite {
+            session.fault(FaultPoint::SyncFile)?;
+            temp.as_file().sync_all()?;
+        }
+        Ok((path, temp))
+    }
+
+    fn publish_replacement(
+        self,
+        path: &Path,
+        temp: NamedTempFile,
+        session: &mut WriteSession,
+    ) -> Result<CommitEffect> {
+        session.fault(FaultPoint::Persist)?;
+        self.verify()?;
+        temp.persist(path).map_err(|e| e.error)?;
+        Ok(session.record(path, Operation::Replaced))
     }
 
     /// Remove the exact captured entry after rechecking identity and bytes.
@@ -431,15 +480,11 @@ impl PreparedReplacement {
         self,
         session: &mut WriteSession,
     ) -> Result<(CommitEffect, OwnedPublication)> {
-        self.source.verify()?;
-        let path = self.source.root.check(&self.source.entry, true)?;
-        let parent = path.parent().context("target has no parent")?;
-        let mut temp = NamedTempFile::new_in(parent)?;
-        let mut staged = File::open(&self.data)?;
-        std::io::copy(&mut staged, &mut temp)?;
-        temp.as_file()
-            .set_permissions(self.source.permissions.clone())?;
-        temp.as_file().sync_all()?;
+        let (path, temp) = self.source.stage_replacement(session, |temp| {
+            let mut staged = File::open(&self.data)?;
+            std::io::copy(&mut staged, temp)?;
+            Ok(())
+        })?;
         let handle = same_file::Handle::from_file(temp.as_file().try_clone()?)?;
         let receipt = OwnedPublication {
             root: self.source.root.clone(),
@@ -447,10 +492,8 @@ impl PreparedReplacement {
             handle,
             expected: self.data,
         };
-        session.fault(FaultPoint::Persist)?;
-        self.source.verify()?;
-        temp.persist(&path).map_err(|e| e.error)?;
-        Ok((session.record(&path, Operation::Replaced), receipt))
+        let effect = self.source.publish_replacement(&path, temp, session)?;
+        Ok((effect, receipt))
     }
 }
 
@@ -562,11 +605,16 @@ impl CommitEffect {
 pub enum Durability {
     PerFile,
     PerDirectory,
+    /// Atomic replacements without a per-file content flush; directories are
+    /// finalized once by the invocation owner. Bulk rewrites can lose published
+    /// content on power loss or kernel panic (DEC-317). New entries still flush.
+    BulkRewrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultPoint {
     Prepare,
+    SyncFile,
     Persist,
     Remove,
     Finalize,
@@ -597,6 +645,18 @@ impl WriteSession {
             fault: Some(fault),
         }
     }
+    /// A parallel worker inherits policy, but owns its pending directories.
+    pub(crate) fn worker(&self) -> Self {
+        Self {
+            durability: self.durability,
+            directories: BTreeSet::new(),
+            fault: self.fault,
+        }
+    }
+    /// Transfer a worker's pending finalization to the invocation owner.
+    pub(crate) fn absorb(&mut self, mut worker: Self) {
+        self.directories.append(&mut worker.directories);
+    }
     fn fault(&self, point: FaultPoint) -> Result<()> {
         if self.fault == Some(point) {
             bail!("injected {point:?} failure");
@@ -604,16 +664,20 @@ impl WriteSession {
         Ok(())
     }
     fn record(&mut self, path: &Path, operation: Operation) -> CommitEffect {
-        let result = self.fault(FaultPoint::Finalize).and_then(|()| {
+        let result = (|| -> Result<()> {
+            // Bulk workers defer both the fence and its fault seam to finish.
+            if self.durability != Durability::BulkRewrite {
+                self.fault(FaultPoint::Finalize)?;
+            }
             let parent = path.parent().context("target has no parent")?;
             match self.durability {
                 Durability::PerFile => sync_directory(parent),
-                Durability::PerDirectory => {
+                Durability::PerDirectory | Durability::BulkRewrite => {
                     self.directories.insert(parent.to_path_buf());
                     Ok(())
                 }
             }
-        });
+        })();
         CommitEffect {
             operation,
             entries: vec![EntryEffect {
@@ -639,8 +703,9 @@ fn sync_directory(path: &Path) -> Result<()> {
         .context("syncing parent directory")
 }
 /// Windows has no supported per-directory fsync equivalent here. Replacement
-/// files are flushed before publication, but directory-entry crash durability
-/// is explicitly unavailable; atomic/exclusive publication remains supported.
+/// files are flushed before publication except under BulkRewrite policy, but
+/// directory-entry crash durability is explicitly unavailable; atomic/exclusive
+/// publication remains supported.
 #[cfg(windows)]
 fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())

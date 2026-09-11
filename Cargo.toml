@@ -19,6 +19,7 @@ anyhow = "1"
 assert_cmd = "2"
 clap = "4.6.0"
 clap_complete = "4.6.1"
+ctrlc = { version = "3.5", features = ["termination"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 dunce = "1"
 globset = "0.4"

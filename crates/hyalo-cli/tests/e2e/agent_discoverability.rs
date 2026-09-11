@@ -114,7 +114,7 @@ fn subcommand_short_help_replaces_the_global_block_with_one_line() {
         // The pointer stands in for the block, so the block's own prose must
         // be gone — `--jq`'s LIMITS paragraph is the bulkiest part of it.
         assert!(
-            !stdout.contains("LIMITS: a filter is given"),
+            !stdout.contains("LIMITS: user compilation and evaluation"),
             "`hyalo {name} -h` still prints the --jq limits paragraph"
         );
     }
@@ -130,7 +130,7 @@ fn long_help_still_carries_the_full_global_block() {
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("LIMITS: a filter is given"),
+        stdout.contains("LIMITS: user compilation and evaluation"),
         "--help must keep every word the short page dropped"
     );
     assert!(

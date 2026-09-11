@@ -9,157 +9,8 @@ use jaq_core::load::{Arena, File, Loader};
 use jaq_core::{Compiler, Ctx, Native, Vars, load};
 use jaq_json::Val;
 
-/// Compile-only child entrypoint, before configuration or command dispatch.
-/// This is an internal process seam, not a public command or user flag.
-pub(crate) fn compile_worker() -> Option<i32> {
-    use std::io::{Read, Write};
-    if std::env::var_os("HYALO_INTERNAL_JQ_EVALUATE").as_deref() == Some(std::ffi::OsStr::new("1"))
-    {
-        let mut request = Vec::new();
-        let result = std::io::stdin()
-            .take(64 * 1024 * 1024 + 1)
-            .read_to_end(&mut request)
-            .map_err(|e| e.to_string())
-            .and_then(|_| {
-                if request.len() > 64 * 1024 * 1024 {
-                    return Err("jq input exceeds 64 MiB".into());
-                }
-                let (source, value): (String, serde_json::Value) =
-                    serde_json::from_slice(&request).map_err(|e| e.to_string())?;
-                compile_jq_filter(&source)
-                    .and_then(|filter| execute_jq_filter(&filter, &value, &source))
-            });
-        let code = i32::from(result.is_err());
-        let text = result.unwrap_or_else(|error| truncate_diagnostic(&error));
-        let _ = std::io::stdout().write_all(text.as_bytes());
-        return Some(code);
-    }
-    if std::env::var_os("HYALO_INTERNAL_JQ_COMPILE").as_deref() != Some(std::ffi::OsStr::new("1")) {
-        return None;
-    }
-    let mut source = String::new();
-    let result = std::io::stdin()
-        .take(65_537)
-        .read_to_string(&mut source)
-        .map_err(|e| e.to_string())
-        .and_then(|_| {
-            if source.len() > 65_536 {
-                Err("jq source exceeds 64 KiB".into())
-            } else {
-                compile_jq_filter(&source).map(|_| ())
-            }
-        });
-    let code = i32::from(result.is_err());
-    if let Err(error) = result {
-        let _ = std::io::stdout().write_all(truncate_diagnostic(&error).as_bytes());
-    }
-    Some(code)
-}
-
-/// Untrusted compilation never runs in the invoking process. The child is
-/// killed and reaped on timeout, including recursive compiler/stack failures.
-pub(crate) fn preflight_jq(source: &str) -> Result<(), String> {
-    if source.len() > 65_536 {
-        return Err("jq source exceeds 64 KiB".into());
-    }
-    bounded_worker(source.as_bytes(), "HYALO_INTERNAL_JQ_COMPILE").map(|_| ())
-}
-
-/// Evaluation uses the same killable process boundary as compilation so an
-/// abort or allocation failure after publication returns to the effect owner.
-pub(crate) fn evaluate_jq_isolated(
-    source: &str,
-    value: &serde_json::Value,
-) -> Result<String, String> {
-    let request = serde_json::to_vec(&(source, value)).map_err(|e| e.to_string())?;
-    if request.len() > 64 * 1024 * 1024 {
-        return Err("jq input exceeds 64 MiB".into());
-    }
-    bounded_worker(&request, "HYALO_INTERNAL_JQ_EVALUATE")
-}
-
-fn bounded_worker(request: &[u8], mode: &str) -> Result<String, String> {
-    use std::io::{Read, Seek, SeekFrom, Write};
-    use std::process::{Command, Stdio};
-    let mut input = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-    input.write_all(request).map_err(|e| e.to_string())?;
-    input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    let mut output = tempfile::NamedTempFile::new().map_err(|e| e.to_string())?;
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut command = Command::new(executable);
-    command
-        .env(mode, "1")
-        .stdin(Stdio::from(input.reopen().map_err(|e| e.to_string())?))
-        .stdout(Stdio::from(output.reopen().map_err(|e| e.to_string())?))
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: only async-signal-safe setrlimit calls execute after fork.
-        unsafe {
-            command.pre_exec(|| {
-                let limits = [
-                    (libc::RLIMIT_CPU, 3),
-                    (libc::RLIMIT_FSIZE, 16 * 1024 * 1024),
-                ];
-                for (resource, limit) in limits {
-                    let limit = libc::rlimit {
-                        rlim_cur: limit,
-                        rlim_max: limit,
-                    };
-                    if libc::setrlimit(resource, &raw const limit) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                #[cfg(target_os = "linux")]
-                {
-                    let limit = libc::rlimit {
-                        rlim_cur: 512 * 1024 * 1024,
-                        rlim_max: 512 * 1024 * 1024,
-                    };
-                    if libc::setrlimit(libc::RLIMIT_AS, &raw const limit) != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-                Ok(())
-            });
-        }
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("cannot start bounded jq compiler: {e}"))?;
-    let deadline = std::time::Instant::now() + JQ_TIME_LIMIT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut message = String::new();
-                let _ = output.seek(SeekFrom::Start(0));
-                let _ = output
-                    .take(16 * 1024 * 1024 + 1)
-                    .read_to_string(&mut message);
-                if status.success() {
-                    return Ok(message);
-                }
-                return Err(if message.is_empty() {
-                    "jq worker failed or exceeded its resource budget".into()
-                } else {
-                    message
-                });
-            }
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            result => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(match result {
-                    Err(error) => error.to_string(),
-                    _ => "jq filter exceeded the 3s time limit".into(),
-                });
-            }
-        }
-    }
-}
+mod worker;
+pub(crate) use worker::{compile_worker, evaluate_jq_isolated, preflight_jq};
 
 /// Apply a jq filter string to a `serde_json::Value` and return the text output.
 ///
@@ -174,51 +25,14 @@ pub(super) fn apply_jq_filter(
     run_jq_filter_cached(filter_code, value, cache).ok()
 }
 
-/// Wall-clock deadline for evaluating a single user-supplied `--jq` filter
-/// (F3-1, deep-analysis-3-2026-08-23.md).
+/// Per-phase wall-clock deadline for CLI user-jq child processes.
+/// The parent owns bounded pipes, cancellation, termination and reaping.
+/// Linux adds a 512 MiB address-space limit; macOS/Windows have no hard
+/// memory cap. See worker.rs for the versioned protocol and lifecycle.
 ///
-/// `jaq`'s public API (checked jaq-core 3.0.0) has no step counter, fuel
-/// limit, or other cooperative-cancellation hook — a pathological filter's
-/// unbounded work can happen entirely *inside one* internal evaluation step,
-/// with no opportunity for us to check anything in between. `[range(3e8)]`
-/// builds its whole 300M-element intermediate array before the interpreter
-/// ever yields a value back to Rust (verified: 8.7s / 4.8 GB peak RSS to
-/// print a single number), and `def f: f; f` recurses forever without ever
-/// producing a value at all — so neither is reachable by checking a clock
-/// between values pulled from the output iterator inside
-/// [`execute_jq_filter`]'s loop; that loop's body never even runs for the
-/// second case.
-///
-/// The mitigation is therefore necessarily coarse: run the filter on its own
-/// thread and bound how long the *caller* waits via `recv_timeout`. Both
-/// call sites (`output_pipeline.rs`, `run.rs`'s `hyalo config --jq`) format
-/// the returned error and return almost immediately afterward, so — since
-/// the worker thread is deliberately never joined on timeout — the whole
-/// process, worker included, is torn down by the OS shortly after this
-/// function returns. That caps the *actual* resource exposure to roughly one
-/// deadline's worth of runaway work rather than the filter's full
-/// pathological cost: a 3s deadline turns `[range(3e8)]`'s real 8.7s/4.8 GB
-/// into an error after 3s and however much the abandoned thread allocated in
-/// that window, not the full amount.
-///
-/// A single pathological *value* (not a huge intermediate collection) is
-/// additionally checked by raw byte length before it is ever copied out of
-/// the interpreter — see the pre-check in [`execute_jq_filter`] — since that
-/// case (`"x" * 2000000000`, ~4.0 GB peak RSS in ~1.5s, comfortably under
-/// this deadline) would otherwise slip past both output caps by finishing
-/// before either check could catch it, and used to be measured only *after*
-/// being duplicated into a second multi-GB copy just to learn it was too
-/// big.
-///
-/// **Known residual gap, not covered by anything here:** unbounded *native
-/// stack* recursion — `def f: [f]; f` — overflows the OS thread stack and
-/// hits Rust's SIGSEGV-to-`abort()` guard page, killing the whole process
-/// immediately (verified: `exit 134`, well under this deadline) rather than
-/// erroring cleanly through it. This is not a regression from this
-/// mitigation — the same filter would abort a non-threaded evaluator's
-/// stack identically on unpatched jaq — and there is no user-space hook to
-/// catch a native stack overflow before it happens. Documented rather than
-/// silently claimed to be covered; see DEC-093.
+/// The public legacy in-process helper below retains its historical thread
+/// timeout for Rust API compatibility. It is not used for CLI user filters
+/// and is not a process-isolation boundary for library callers.
 pub(super) const JQ_TIME_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Maximum number of output values a `--jq` filter may emit, independent of
@@ -231,7 +45,11 @@ pub(super) const JQ_TIME_LIMIT: std::time::Duration = std::time::Duration::from_
 /// `total_len`, catching that class before the byte cap would.
 pub(super) const JQ_MAX_OUTPUT_VALUES: usize = 1_000_000;
 
-/// Apply a user-supplied jq filter to a `serde_json::Value`.
+/// Legacy in-process jq helper for Rust library callers.
+///
+/// CLI user filters use the isolated worker instead. This compatibility helper
+/// can abort on native stack overflow and leaves timed-out work running until
+/// its host exits; it is suitable only for trusted filters.
 ///
 /// Compiles the filter on every call. For repeated use across many values,
 /// prefer the cached path via [`format_success`] / [`format_value_as_text`].

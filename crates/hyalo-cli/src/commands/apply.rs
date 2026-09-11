@@ -166,6 +166,9 @@ impl PreparedChangeSet {
     }
     pub(crate) fn capture(&mut self, rel: &str) -> Result<CapturedInput> {
         let captured = self.root.capture(&RelativeName::new(rel)?)?;
+        // One successful capture acquires the complete source for mutation
+        // parsing. This opt-in counter is disabled for normal CLI use.
+        hyalo_core::internal_metrics::record_source_read(true);
         if !self.identities.insert(captured.physical_identity()) {
             bail!(hyalo_core::UserFacingError { message: format!("duplicate physical mutation target: {rel}"),
                 hint: Some("select each file once; aliases and hard links cannot be combined in one mutation".into()), cause: None });
