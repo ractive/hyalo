@@ -42,4 +42,3 @@ jobs:
           host=$(rustc -vV | sed -n 's/^host: //p')
           test -n "$host"
           cargo run -p xtask -- bench-scale --target "$host"
-
