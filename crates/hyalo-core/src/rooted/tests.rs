@@ -47,6 +47,148 @@ fn prepare_and_persist_failures_keep_original_and_finalize_retains_effect() {
 }
 
 #[test]
+fn immediate_replacement_keeps_durability_faults_and_cleans_sibling_temps() {
+    for durability in [
+        Durability::PerFile,
+        Durability::PerDirectory,
+        Durability::BulkRewrite,
+    ] {
+        for fault in [
+            None,
+            Some(FaultPoint::Prepare),
+            Some(FaultPoint::SyncFile),
+            Some(FaultPoint::Persist),
+            Some(FaultPoint::Finalize),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("note.md");
+            std::fs::write(&path, b"old").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+            }
+            let root = VaultRoot::new(dir.path()).unwrap();
+            let source = root
+                .capture(&RelativeName::new("note.md").unwrap())
+                .unwrap();
+            let mut session = fault.map_or_else(
+                || WriteSession::new(durability),
+                |fault| WriteSession::with_fault(durability, fault),
+            );
+            let result = source.replace_immediate(b"new", &mut session);
+            let committed = match fault {
+                Some(FaultPoint::Prepare | FaultPoint::Persist) => false,
+                Some(FaultPoint::SyncFile) => durability == Durability::BulkRewrite,
+                _ => true,
+            };
+            assert_eq!(result.is_ok(), committed);
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                if committed { b"new" } else { b"old" }
+            );
+            if let Ok(effect) = result {
+                assert_eq!(effect.operation(), Operation::Replaced);
+                assert_eq!(
+                    effect.finalization_error().is_some(),
+                    fault == Some(FaultPoint::Finalize) && durability != Durability::BulkRewrite
+                );
+            }
+            assert_eq!(
+                session.finish().is_err(),
+                fault == Some(FaultPoint::Finalize)
+            );
+            assert_eq!(
+                std::fs::read_dir(dir.path()).unwrap().count(),
+                1,
+                "sibling temporary file must be cleaned up"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o640
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn immediate_replacement_checks_source_before_staging_and_before_publication() {
+    for change_during_staging in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        std::fs::write(&path, b"old").unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root
+            .capture(&RelativeName::new("note.md").unwrap())
+            .unwrap();
+        let mut session = WriteSession::new(Durability::BulkRewrite);
+        let result = if change_during_staging {
+            // The immediate and receipt paths share these exact two helpers.
+            // Introduce an equal-length editor change after the first verify.
+            let (target, temp) = source
+                .stage_replacement(&session, |temp| {
+                    temp.write_all(b"new")?;
+                    std::fs::write(&path, b"mod")?;
+                    Ok(())
+                })
+                .unwrap();
+            source.publish_replacement(&target, temp, &mut session)
+        } else {
+            std::fs::write(&path, b"mod").unwrap();
+            source.replace_immediate(b"new", &mut session)
+        };
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<SourceConflict>()
+                .is_some()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"mod");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        session.finish().unwrap();
+    }
+}
+
+#[test]
+fn sized_source_comparison_preserves_exact_eof_checks() {
+    for size in [0, 1, 64 * 1024 + 1] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        let bytes = vec![b'a'; size];
+        std::fs::write(&path, &bytes).unwrap();
+        let root = VaultRoot::new(dir.path()).unwrap();
+        let source = root
+            .capture(&RelativeName::new("note.md").unwrap())
+            .unwrap();
+        source.verify().unwrap();
+        let mut extended = bytes;
+        extended.push(b'b');
+        std::fs::write(&path, &extended).unwrap();
+        assert!(
+            source
+                .verify()
+                .unwrap_err()
+                .downcast_ref::<SourceConflict>()
+                .is_some()
+        );
+        if size > 0 {
+            std::fs::write(&path, &extended[..size - 1]).unwrap();
+            assert!(
+                source
+                    .verify()
+                    .unwrap_err()
+                    .downcast_ref::<SourceConflict>()
+                    .is_some()
+            );
+        }
+    }
+}
+
+#[test]
 fn newly_introduced_destination_is_never_replaced() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("a"), b"source").unwrap();
