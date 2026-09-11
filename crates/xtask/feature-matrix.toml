@@ -1,26 +1,40 @@
 # Feature-fanout matrix for hyalo flags.
 #
-# Each entry under [flags."--X"] declares which subcommands MUST expose --X.
-# check-feature-fanout asserts each cell passes `hyalo <cmd> --help | grep --X`.
+# Each entry under [flags."--X"] declares which real Clap invocation MUST
+# expose --X. The gate consumes `hyalo_cli::describe_invocation`; this file is
+# test data, not a second command schema.
 #
 # When adding a new cross-cutting flag, add it here and ensure all listed
 # subcommands implement it before merging.
 
+[invocations]
+find = ["find"]
+lint = ["lint"]
+mv = ["mv", "a.md", "b.md"]
+set = ["set", "a.md", "--property", "status=done"]
+remove = ["remove", "a.md", "--property", "status"]
+append = ["append", "a.md", "--property", "tags=x"]
+read = ["read", "a.md"]
+backlinks = ["backlinks", "a.md"]
+summary = ["summary"]
+"links fix" = ["links", "fix"]
+tags = ["tags"]
+properties = ["properties"]
+"task read" = ["task", "read", "a.md", "--all"]
+"task toggle" = ["task", "toggle", "a.md", "--all"]
+"task set" = ["task", "set", "a.md", "--all", "--status", "done"]
+"views run" = ["views", "run", "saved"]
+
 [flags."--files-from"]
-required_in = ["find", "lint", "mv", "set", "remove", "append", "read", "backlinks"]
+required_in = ["find", "lint", "mv", "set", "remove", "append", "read", "backlinks", "task read", "task toggle", "task set"]
 shape = "selector"
-# Note: task toggle, task set, and task read also accept --files-from (via the
-# unified input resolver), but the xtask checker only handles top-level
-# single-word commands; sub-subcommand coverage is provided by the e2e test
-# suite instead.
 
 [flags."--glob"]
-required_in = ["find", "lint", "mv", "set", "remove", "append"]
+required_in = ["find", "lint", "mv", "set", "remove", "append", "task toggle", "task set"]
 shape = "selector"
-# Note: task toggle and task set also accept --glob; coverage via e2e tests.
 
 [flags."--index-file"]
-required_in = ["find", "lint", "summary", "backlinks", "links", "tags", "properties"]
+required_in = ["find", "lint", "summary", "backlinks", "links fix", "tags", "properties"]
 shape = "read-source"
 
 # Envelope-shape contracts.

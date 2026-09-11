@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::artifact::{ArtifactArgs, build_hyalo};
 use crate::workspace::workspace_root;
 
 /// Subcommands that write. A recipe naming one is run with `--dry-run`.
@@ -253,12 +254,19 @@ fn subcommand_of(argv: &[String]) -> Option<&str> {
         .filter(|t| !t.starts_with('-'))
 }
 
-pub fn run() -> Result<bool> {
+pub fn run(args: &ArtifactArgs) -> Result<bool> {
     let root = workspace_root()?;
-    run_with_root(&root)
+    let artifact = build_hyalo(&root, args, true)?;
+    println!(
+        "check-jq-recipes: Cargo artifact={} host={} target={}",
+        artifact.executable.display(),
+        artifact.host,
+        artifact.requested_target.as_deref().unwrap_or("native")
+    );
+    run_with_root(&root, &artifact.executable)
 }
 
-pub fn run_with_root(root: &Path) -> Result<bool> {
+pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
     let docs = recipe_documents(root);
     if docs.is_empty() {
         eprintln!("check-jq-recipes: no shipped documents found under {root:?}");
@@ -301,7 +309,7 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
                 ));
                 continue;
             }
-            match run_recipe(root, &args) {
+            match run_recipe(executable, root, &args) {
                 Ok(RecipeOutcome::Ran) => checked += 1,
                 Ok(RecipeOutcome::NotApplicable(why)) => {
                     skipped.push(format!("{recipe} ({why})"));
@@ -311,7 +319,7 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
         }
     }
 
-    failures.extend(documentation_contract_failures(root)?);
+    failures.extend(documentation_contract_failures(root, executable)?);
 
     if failures.is_empty() {
         println!(
@@ -334,7 +342,7 @@ pub fn run_with_root(root: &Path) -> Result<bool> {
 
 /// Execute the mutation/CI/view recipes whose contract cannot be established
 /// by merely proving that an embedded jq expression parses.
-fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
+fn documentation_contract_failures(root: &Path, executable: &Path) -> Result<Vec<String>> {
     let mut failures = Vec::new();
     let skill = std::fs::read_to_string(root.join("pi-package/skills/hyalo/SKILL.md"))?;
     let tmp = tempfile::tempdir().context("creating documentation recipe fixture")?;
@@ -365,7 +373,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
                     .push("bulk status recipe must be an executable dry-run hyalo command".into());
             } else {
                 let preview_args: Vec<_> = argv.iter().skip(1).map(String::as_str).collect();
-                let preview = run_hyalo(root, tmp.path(), &preview_args)?;
+                let preview = run_hyalo(executable, tmp.path(), &preview_args)?;
                 if !preview.status.success()
                     || std::fs::read(&selected)? != selected_before
                     || std::fs::read(&sentinel)? != sentinel_before
@@ -380,7 +388,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
                     .copied()
                     .filter(|arg| *arg != "--dry-run")
                     .collect();
-                let applied = run_hyalo(root, tmp.path(), &apply_args)?;
+                let applied = run_hyalo(executable, tmp.path(), &apply_args)?;
                 let selected_after = std::fs::read_to_string(&selected)?;
                 if !applied.status.success()
                     || !selected_after.contains("status: deferred")
@@ -394,7 +402,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
                 // The same shipped preview must be safe when its filter selects
                 // nothing; this is also the state after the apply above.
                 let selected_after = std::fs::read(&selected)?;
-                let empty_preview = run_hyalo(root, tmp.path(), &preview_args)?;
+                let empty_preview = run_hyalo(executable, tmp.path(), &preview_args)?;
                 if !empty_preview.status.success()
                     || std::fs::read(&selected)? != selected_after
                     || std::fs::read(&sentinel)? != sentinel_before
@@ -428,7 +436,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
                     "---\ntitle: Completed\nstatus: completed\n---\nsentinel\n",
                 )?;
                 let negative_before = std::fs::read(&negative_sentinel)?;
-                let broadened = run_hyalo(root, negative.path(), &unfiltered_args)?;
+                let broadened = run_hyalo(executable, negative.path(), &unfiltered_args)?;
                 if !broadened.status.success()
                     || std::fs::read(&negative_sentinel)? == negative_before
                 {
@@ -444,7 +452,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
 
     let config_before = std::fs::read(tmp.path().join(".hyalo.toml"))?;
     let views = run_hyalo(
-        root,
+        executable,
         tmp.path(),
         &["views", "list", "--format", "json", "--no-hints"],
     )?;
@@ -453,12 +461,12 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
     }
 
     let ci = std::fs::read_to_string(root.join("docs/ci.md"))?;
-    failures.extend(okf_ci_contract_failures(root, &ci)?);
+    failures.extend(okf_ci_contract_failures(executable, &ci)?);
     if has_unsafe_hyalo_xargs_pipeline(&skill) {
         failures.push("canonical Pi skill pipes JSON output into xargs filenames".into());
     }
     let empty = run_hyalo(
-        root,
+        executable,
         tmp.path(),
         &[
             "find",
@@ -473,7 +481,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
     let mut unsafe_args = vec!["set"];
     unsafe_args.extend(empty_stdout.split_whitespace());
     unsafe_args.extend(["--property", "status=deferred", "--dry-run"]);
-    let unsafe_consumer = run_hyalo(root, tmp.path(), &unsafe_args)?;
+    let unsafe_consumer = run_hyalo(executable, tmp.path(), &unsafe_args)?;
     if !empty.status.success() || empty_stdout.trim() != "[]" || unsafe_consumer.status.success() {
         failures.push(
             "empty-result control no longer proves that JSON [] is unsafe filename input".into(),
@@ -486,7 +494,7 @@ fn documentation_contract_failures(root: &Path) -> Result<Vec<String>> {
     Ok(failures)
 }
 
-fn okf_ci_contract_failures(root: &Path, ci: &str) -> Result<Vec<String>> {
+fn okf_ci_contract_failures(executable: &Path, ci: &str) -> Result<Vec<String>> {
     let mut failures = Vec::new();
     let Some(script) = okf_ci_shell_block(ci) else {
         return Ok(vec!["OKF CI block has no executable run script".into()]);
@@ -500,7 +508,7 @@ fn okf_ci_contract_failures(root: &Path, ci: &str) -> Result<Vec<String>> {
         "---\ntype: Concept\ntitle: Example\n---\nBody\n",
     )?;
 
-    let drift = run_okf_ci_shell(root, tmp.path(), &script)?;
+    let drift = run_okf_ci_shell(executable, tmp.path(), &script)?;
     if let Some(failure) = shell_status_failure(&drift, false, "actual drift") {
         failures.push(failure);
     }
@@ -509,17 +517,17 @@ fn okf_ci_contract_failures(root: &Path, ci: &str) -> Result<Vec<String>> {
     // failing test ignorable and lets the later successful test overwrite the
     // block status. The same status validator used above must reject it.
     let ignored_check = format!("set +e\n{script}");
-    let ignored = run_okf_ci_shell(root, tmp.path(), &ignored_check)?;
+    let ignored = run_okf_ci_shell(executable, tmp.path(), &ignored_check)?;
     if shell_status_failure(&ignored, false, "ignored-check negative control").is_none() {
         failures.push("OKF shell gate did not reject an ignored drift check".into());
     }
 
     let applied = run_hyalo(
-        root,
+        executable,
         tmp.path(),
         &["okf", "index", "--format", "json", "--no-hints", "--apply"],
     )?;
-    let clean = run_okf_ci_shell(root, tmp.path(), &script)?;
+    let clean = run_okf_ci_shell(executable, tmp.path(), &script)?;
     if !applied.status.success() {
         failures.push("preparing the clean OKF shell fixture failed".into());
     }
@@ -531,13 +539,13 @@ fn okf_ci_contract_failures(root: &Path, ci: &str) -> Result<Vec<String>> {
         vault.join("index.md"),
         "# Index\n\n<!-- okf:index:begin -->\nhand prose\n",
     )?;
-    let skipped = run_okf_ci_shell(root, tmp.path(), &script)?;
+    let skipped = run_okf_ci_shell(executable, tmp.path(), &script)?;
     if let Some(failure) = shell_status_failure(&skipped, false, "skipped marker") {
         failures.push(failure);
     }
 
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \"missing\"\n")?;
-    let failed = run_okf_ci_shell(root, tmp.path(), &script)?;
+    let failed = run_okf_ci_shell(executable, tmp.path(), &script)?;
     if let Some(failure) = shell_status_failure(&failed, false, "configuration failure") {
         failures.push(failure);
     }
@@ -561,18 +569,7 @@ fn shell_status_failure(
     })
 }
 
-fn run_okf_ci_shell(root: &Path, cwd: &Path, script: &str) -> Result<std::process::Output> {
-    let executable = [
-        root.join("target")
-            .join("release")
-            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" }),
-        root.join("target")
-            .join("debug")
-            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" }),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-    .context("check-jq-recipes needs a built hyalo binary")?;
+fn run_okf_ci_shell(executable: &Path, cwd: &Path, script: &str) -> Result<std::process::Output> {
     let binary_dir = executable
         .parent()
         .context("built hyalo binary has no parent directory")?;
@@ -591,27 +588,8 @@ fn run_okf_ci_shell(root: &Path, cwd: &Path, script: &str) -> Result<std::proces
         )
 }
 
-fn run_hyalo(root: &Path, cwd: &Path, args: &[&str]) -> Result<std::process::Output> {
-    let release =
-        root.join("target")
-            .join("release")
-            .join(if cfg!(windows) { "hyalo.exe" } else { "hyalo" });
-    let mut command = if release.is_file() {
-        Command::new(release)
-    } else {
-        let mut cargo = Command::new("cargo");
-        cargo.args([
-            "run",
-            "-q",
-            "--manifest-path",
-            &root.join("Cargo.toml").to_string_lossy(),
-            "-p",
-            "hyalo-cli",
-            "--",
-        ]);
-        cargo
-    };
-    command
+fn run_hyalo(executable: &Path, cwd: &Path, args: &[&str]) -> Result<std::process::Output> {
+    Command::new(executable)
         .args(args)
         .current_dir(cwd)
         .output()
@@ -636,19 +614,13 @@ enum RecipeOutcome {
 }
 
 /// Run one recipe from the workspace root; `Err(detail)` describes the failure.
-fn run_recipe(root: &Path, args: &[String]) -> std::result::Result<RecipeOutcome, String> {
-    let mut cmd = Command::new("cargo");
-    cmd.args([
-        "run",
-        "-q",
-        "--manifest-path",
-        &root.join("Cargo.toml").to_string_lossy(),
-        "-p",
-        "hyalo-cli",
-        "--",
-    ])
-    .args(args)
-    .current_dir(root);
+fn run_recipe(
+    executable: &Path,
+    root: &Path,
+    args: &[String],
+) -> std::result::Result<RecipeOutcome, String> {
+    let mut cmd = Command::new(executable);
+    cmd.args(args).current_dir(root);
 
     let out = match cmd.output() {
         Ok(o) => o,

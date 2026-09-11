@@ -22,6 +22,7 @@ fn capture_detects_equal_size_edit_and_replacement() {
 fn prepare_and_persist_failures_keep_original_and_finalize_retains_effect() {
     for fault in [
         FaultPoint::Prepare,
+        FaultPoint::SyncFile,
         FaultPoint::Persist,
         FaultPoint::Finalize,
     ] {
@@ -75,6 +76,50 @@ fn sessions_have_independent_finalization() {
         .unwrap();
     assert!(healthy.finish().is_ok());
     assert!(failing.finish().is_err());
+}
+
+#[test]
+fn per_directory_replacements_still_flush_file_content() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a"), b"old").unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let mut session = WriteSession::with_fault(Durability::PerDirectory, FaultPoint::SyncFile);
+    let result = root
+        .capture(&RelativeName::new("a").unwrap())
+        .unwrap()
+        .prepare(b"new", &session)
+        .unwrap()
+        .commit(&mut session);
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(dir.path().join("a")).unwrap(), b"old");
+}
+
+#[test]
+fn bulk_workers_transfer_distinct_directories_and_defer_finalization_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
+    let root = VaultRoot::new(dir.path()).unwrap();
+    let mut session = WriteSession::with_fault(Durability::BulkRewrite, FaultPoint::Finalize);
+    for name in ["a", "b", "nested/c"] {
+        std::fs::write(dir.path().join(name), b"old").unwrap();
+        let mut worker = session.worker();
+        let (effect, receipt) = root
+            .capture(&RelativeName::new(name).unwrap())
+            .unwrap()
+            .prepare(b"new", &worker)
+            .unwrap()
+            .commit_with_receipt(&mut worker)
+            .unwrap();
+        assert_eq!(effect.operation(), Operation::Replaced);
+        assert!(effect.finalization_error().is_none());
+        assert_eq!(receipt.capture_verified().unwrap().bytes().unwrap(), b"new");
+        session.absorb(worker);
+    }
+    assert_eq!(session.directories.len(), 2);
+    assert!(session.finish().is_err());
+    for name in ["a", "b", "nested/c"] {
+        assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), b"new");
+    }
 }
 
 #[cfg(unix)]

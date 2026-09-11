@@ -744,3 +744,84 @@ single R05/S13 duplicate and serial dependencies are unchanged. Normal authored
 Markdown, broken frontmatter and common mistakes require useful diagnostics and
 safe refusal without corruption; no exhaustive fuzz/gibberish or exotic-file
 campaign or external Homefinder work is added. Iteration 287 stays deferred.
+
+## Iteration 295 integrated implementation handoff — 2026-09-11
+
+Stage 1 isolates every CLI user jq compile and evaluation in an HJQ1 child
+exchange. The exact source, serialized-input, output, diagnostic and phase
+limits are recorded in [[research/jq-resource-isolation-2026-09-10]]. The
+parent retains mutation effects and index results. macOS focused process,
+cancellation and error regressions pass; native Linux address-space behavior
+and the Windows forced-parent job-close regression remain CI requirements.
+Cross-compilation is compilation evidence only. The public legacy Rust jq
+helper remains trusted-only compatibility code with its documented in-process
+risks.
+
+The stage 2 artifact resolver consumes Cargo JSON compiler-artifact messages
+and checks the host or explicit target together with platform `EXE_SUFFIX`.
+Both the jq recipe gate and scale runner use that resolver. The CI scale matrix
+runs the actual native artifact with an explicit host triple and isolated
+`CARGO_TARGET_DIR` on Linux, macOS and Windows. Feature fanout uses actual Clap
+invocation descriptors and runtime fixtures for nested leaves, output and count
+modes, empty selections and mutation preflight. The two legacy stub commands
+exit nonzero as unsupported and are excluded from coverage.
+
+The focused behavioral command composes 72 existing tests from the owned
+290–294 and graph/index suites. It parses Cargo's executed-test count and fails
+on zero matches. A test-only zero-match invocation proves that the gate itself
+rejects missing coverage. This avoids treating filter exit zero or a lexical
+source check as behavior evidence.
+
+The final deterministic scale fixture contained 14,000 Markdown files, 28,000
+valid edges, 700 broken edges and 1,862,880 source bytes. Separate identical
+copies collected parent allocator-request estimates. The timed CLI processes
+reported their own logical reads and refreshes. Metadata-query medians were
+640.580 ms from disk and 138.475 ms from the index. The disk samples each
+observed 14,000 source reads and zero body reads; the indexed samples observed
+zero of both. Find took 457.57 ms and link-fix 1.10 seconds, within their
+existing budgets. Bulk preview and apply each observed 14,000 complete-source
+and body reads while selecting 3,500 files; they took 4.598 and 33.740 seconds.
+Graph refresh observed 2,500 complete-source and body reads, 500 successfully
+applied index-entry refreshes and 4.452 seconds.
+
+A successful shared-scanner file acquisition is one logical source read. A
+body read means the scanner requested body events or mutation preparation
+captured the complete source; frontmatter line-count tail streaming is excluded.
+An index refresh is a successfully applied in-memory entry replacement or
+insertion after scanning, excluding initial index construction and persistence
+syscalls. A two-file actual CLI control changed source reads from one to two
+when the second `--file` was added and body reads from zero to one when body
+search was enabled. The gate rejects unchanged control counts, zero bulk-read
+observations and a refresh count that differs from the selected update count.
+
+These are process-local logical-operation counters, not filesystem syscalls,
+bytes read, RSS or child-worker observations. The read-report write is included
+in elapsed time. Peak live bytes remain an allocator-request estimate after
+main starts; saturating startup frees are outside that scope. No child workers
+run in these measured scale cases. The earlier fixture-derived read fields were
+rejected by review and are retained only as superseded evidence.
+
+The 2,000-backlink move initially failed its unchanged five-second budget at
+20.11 and 19.64 seconds. The clean rerun disproved allocation instrumentation as
+the cause. The regression came from applying the eight-or-fewer per-file
+durability policy to the bulk path. The final implementation restores the
+DEC-317/323 `BulkRewrite` policy above eight plans, while preserving full
+per-file flushing at eight or fewer and existing `PerDirectory` behavior. Exact
+source and receipt checks, committed outcomes and fallible aggregate
+finalization remain. The repaired-counter run measured a 1.07-second median;
+eight backlinks took 86.03 ms. The existing bulk power-loss and kernel-panic
+content-loss limitation remains, as do Windows directory-sync unavailability
+and the absence of a crash-transaction, arbitrary directory-swap or kernel
+compare-and-swap claim.
+
+The actual held-out model comparison is documented in
+[[research/agent-reliability-evaluation-2026-09-11]]. All final comparison arms
+have byte-exact trees with no unintended edits or identical-command retries.
+The small fixed task set and uncontrolled provider and cache conditions preclude
+a general comparative claim.
+
+Generated TypeScript declarations, Pi runtime and embedded copies, and Codex
+embedded skills were refreshed from final sources. This implementation handoff
+still requires one fresh independent review, the literal final Rust gate
+sequence, final release and strict document checks, and native CI. No release,
+publication, external consumer migration or iteration 287 work is included.

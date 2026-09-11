@@ -439,7 +439,10 @@ impl PreparedReplacement {
         std::io::copy(&mut staged, &mut temp)?;
         temp.as_file()
             .set_permissions(self.source.permissions.clone())?;
-        temp.as_file().sync_all()?;
+        if session.durability != Durability::BulkRewrite {
+            session.fault(FaultPoint::SyncFile)?;
+            temp.as_file().sync_all()?;
+        }
         let handle = same_file::Handle::from_file(temp.as_file().try_clone()?)?;
         let receipt = OwnedPublication {
             root: self.source.root.clone(),
@@ -562,11 +565,16 @@ impl CommitEffect {
 pub enum Durability {
     PerFile,
     PerDirectory,
+    /// Atomic replacements without a per-file content flush; directories are
+    /// finalized once by the invocation owner. Bulk rewrites can lose published
+    /// content on power loss or kernel panic (DEC-317). New entries still flush.
+    BulkRewrite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultPoint {
     Prepare,
+    SyncFile,
     Persist,
     Remove,
     Finalize,
@@ -597,6 +605,18 @@ impl WriteSession {
             fault: Some(fault),
         }
     }
+    /// A parallel worker inherits policy, but owns its pending directories.
+    pub(crate) fn worker(&self) -> Self {
+        Self {
+            durability: self.durability,
+            directories: BTreeSet::new(),
+            fault: self.fault,
+        }
+    }
+    /// Transfer a worker's pending finalization to the invocation owner.
+    pub(crate) fn absorb(&mut self, mut worker: Self) {
+        self.directories.append(&mut worker.directories);
+    }
     fn fault(&self, point: FaultPoint) -> Result<()> {
         if self.fault == Some(point) {
             bail!("injected {point:?} failure");
@@ -604,16 +624,20 @@ impl WriteSession {
         Ok(())
     }
     fn record(&mut self, path: &Path, operation: Operation) -> CommitEffect {
-        let result = self.fault(FaultPoint::Finalize).and_then(|()| {
+        let result = (|| -> Result<()> {
+            // Bulk workers defer both the fence and its fault seam to finish.
+            if self.durability != Durability::BulkRewrite {
+                self.fault(FaultPoint::Finalize)?;
+            }
             let parent = path.parent().context("target has no parent")?;
             match self.durability {
                 Durability::PerFile => sync_directory(parent),
-                Durability::PerDirectory => {
+                Durability::PerDirectory | Durability::BulkRewrite => {
                     self.directories.insert(parent.to_path_buf());
                     Ok(())
                 }
             }
-        });
+        })();
         CommitEffect {
             operation,
             entries: vec![EntryEffect {
@@ -639,8 +663,9 @@ fn sync_directory(path: &Path) -> Result<()> {
         .context("syncing parent directory")
 }
 /// Windows has no supported per-directory fsync equivalent here. Replacement
-/// files are flushed before publication, but directory-entry crash durability
-/// is explicitly unavailable; atomic/exclusive publication remains supported.
+/// files are flushed before publication except under BulkRewrite policy, but
+/// directory-entry crash durability is explicitly unavailable; atomic/exclusive
+/// publication remains supported.
 #[cfg(windows)]
 fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())

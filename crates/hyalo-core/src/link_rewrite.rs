@@ -529,17 +529,15 @@ fn should_rewrite_outbound_target(target: &str) -> bool {
 
 /// Per-file outcome of a partial-failure batch write ([`execute_plans_partial`]).
 ///
-/// Unlike [`execute_plans`] — which aborts the whole batch at the first write
-/// failure and returns a bare `Err` — a partial batch records one of these per
-/// plan so the caller can emit an honest envelope listing exactly which files
-/// were durably rewritten and which failed (L-11).
+/// A partial batch records one outcome per plan, including publications whose
+/// durability finalization failed, so callers can reconcile actual effects.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanOutcome {
     /// Vault-relative path (forward slashes) of the file this plan targeted.
     pub rel_path: String,
-    /// `true` if the rewrite was durably written to disk, `false` on failure.
+    /// `true` if the rewrite was published, including finalization failures.
     pub applied: bool,
-    /// Human-readable failure reason when `applied == false`, else `None`.
+    /// Write or durability-finalization failure, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -561,7 +559,7 @@ impl PartialExecuteReport {
             .any(|o| !o.applied || o.error.is_some())
     }
 
-    /// Vault-relative paths of the plans that were durably written.
+    /// Vault-relative paths of the plans that were published.
     #[must_use]
     pub fn applied_paths(&self) -> Vec<String> {
         self.outcomes
@@ -609,12 +607,23 @@ struct PlanWriteResult {
     applied: bool,
     error: Option<anyhow::Error>,
     receipt: Option<crate::rooted::OwnedPublication>,
+    session: crate::rooted::WriteSession,
+}
+
+fn rewrite_durability(plan_count: usize) -> crate::rooted::Durability {
+    // DEC-317/323: count rewrite plans, not the number of moved source notes.
+    if plan_count > 8 {
+        crate::rooted::Durability::BulkRewrite
+    } else {
+        crate::rooted::Durability::PerFile
+    }
 }
 
 fn write_plans_in_parallel(
     canonical_vault: &Path,
     plans: &[RewritePlan],
     receipt_paths: &[String],
+    session: &crate::rooted::WriteSession,
 ) -> Vec<PlanWriteResult> {
     #[cfg(not(miri))]
     {
@@ -626,6 +635,7 @@ fn write_plans_in_parallel(
                     canonical_vault,
                     plan,
                     receipt_paths.contains(&plan.rel_path),
+                    session.worker(),
                 )
             })
             .collect()
@@ -639,6 +649,7 @@ fn write_plans_in_parallel(
                     canonical_vault,
                     plan,
                     receipt_paths.contains(&plan.rel_path),
+                    session.worker(),
                 )
             })
             .collect()
@@ -647,15 +658,17 @@ fn write_plans_in_parallel(
 
 /// Execute rewrite plans, continuing past per-file failures (L-11).
 ///
-/// Every plan is attempted; a write or mtime-check failure on one file is
+/// Every plan is attempted; a write or captured-source conflict on one file is
 /// recorded (with a warning to stderr) and the remaining files still get their
 /// rewrites. The returned [`PartialExecuteReport`] lists one [`PlanOutcome`] per
 /// input plan so the caller can emit an honest envelope — files written before
 /// a failure are reported as `applied`, not silently kept and unreported.
 ///
-/// The vault-boundary safety check is still fatal: a plan whose path escapes
-/// the vault aborts the whole batch (it indicates a programming error, not a
-/// recoverable per-file condition).
+/// Up to eight plans retain per-file content and directory flushes. Larger
+/// batches retain atomic replacement but defer one directory flush per touched
+/// directory; published content can be lost on power loss or kernel panic.
+/// Finalization is observed before returning and its failures retain `applied`.
+/// A plan outside the vault is refused without preventing other plans' outcomes.
 pub fn execute_plans_partial(
     vault_dir: &Path,
     plans: &[RewritePlan],
@@ -675,14 +688,29 @@ pub fn execute_plans_partial_with_receipts(
     plans: &[RewritePlan],
     receipt_paths: &[String],
 ) -> Result<PartialExecuteWithReceipts> {
+    execute_plans_with_session(
+        vault_dir,
+        plans,
+        receipt_paths,
+        crate::rooted::WriteSession::new(rewrite_durability(plans.len())),
+    )
+}
+
+fn execute_plans_with_session(
+    vault_dir: &Path,
+    plans: &[RewritePlan],
+    receipt_paths: &[String],
+    mut session: crate::rooted::WriteSession,
+) -> Result<PartialExecuteWithReceipts> {
     let canonical_vault = canonicalize_vault_dir(vault_dir)
         .context("failed to canonicalize vault directory for write safety check")?;
 
-    let results = write_plans_in_parallel(&canonical_vault, plans, receipt_paths);
+    let results = write_plans_in_parallel(&canonical_vault, plans, receipt_paths, &session);
 
     let mut outcomes = Vec::with_capacity(plans.len());
     let mut receipts = std::collections::HashMap::new();
     for (plan, result) in plans.iter().zip(results) {
+        session.absorb(result.session);
         if let Some(receipt) = result.receipt {
             receipts.insert(plan.rel_path.clone(), receipt);
         }
@@ -703,6 +731,17 @@ pub fn execute_plans_partial_with_receipts(
             }
         }
     }
+    // Observe finalization after collecting every worker, even after partial
+    // writes. An aggregate failure never erases committed paths or receipts.
+    if let Err(error) = session.finish() {
+        for outcome in outcomes.iter_mut().filter(|outcome| outcome.applied) {
+            let reason = format!("rewrite finalization failed: {error:#}");
+            outcome.error = Some(match outcome.error.take() {
+                Some(existing) => format!("{existing}; {reason}"),
+                None => reason,
+            });
+        }
+    }
     Ok(PartialExecuteWithReceipts {
         report: PartialExecuteReport { outcomes },
         receipts,
@@ -716,6 +755,7 @@ fn write_single_plan(
     canonical_vault: &Path,
     plan: &RewritePlan,
     retain_receipt: bool,
+    mut session: crate::rooted::WriteSession,
 ) -> PlanWriteResult {
     let before_commit = (|| -> Result<_> {
         // Safety assertion: verify the target is inside the vault before
@@ -741,29 +781,29 @@ fn write_single_plan(
         if captured.bytes()? != expected.as_bytes() {
             anyhow::bail!(crate::rooted::SourceConflict("source bytes changed"));
         }
-        let mut session = crate::rooted::WriteSession::new(crate::rooted::Durability::PerFile);
         let (effect, receipt) = captured
             .prepare(plan.rewritten_content.as_bytes(), &session)?
             .commit_with_receipt(&mut session)
             .with_context(|| format!("writing {}", plan.path.display()))?;
-        Ok((effect, receipt, session))
+        Ok((effect, receipt))
     })();
     match before_commit {
-        Ok((effect, receipt, session)) => {
+        Ok((effect, receipt)) => {
             let error = effect
                 .finalization_error()
-                .map(|error| anyhow::Error::msg(error.to_owned()))
-                .or_else(|| session.finish().err());
+                .map(|error| anyhow::Error::msg(error.to_owned()));
             PlanWriteResult {
                 applied: true,
                 error,
                 receipt: retain_receipt.then_some(receipt),
+                session,
             }
         }
         Err(error) => PlanWriteResult {
             applied: false,
             error: Some(error),
             receipt: None,
+            session,
         },
     }
 }
@@ -3447,6 +3487,87 @@ mod tests {
             fs::read_to_string(vault.path().join("b.md")).unwrap(),
             "new-b\n"
         );
+    }
+
+    #[test]
+    fn rewrite_eight_files_flush_content_but_nine_use_bulk_policy() {
+        use crate::rooted::{FaultPoint, WriteSession};
+        for count in [8, 9] {
+            let vault = create_vault(&[]);
+            let plans: Vec<_> = (0..count)
+                .map(|i| {
+                    let name = format!("{i}.md");
+                    fs::write(vault.path().join(&name), "old\n").unwrap();
+                    simple_plan(vault.path(), &name, "new\n")
+                })
+                .collect();
+            let execution = execute_plans_with_session(
+                vault.path(),
+                &plans,
+                &[],
+                WriteSession::with_fault(rewrite_durability(count), FaultPoint::SyncFile),
+            )
+            .unwrap();
+            assert_eq!(execution.report.has_failures(), count == 8);
+            for outcome in execution.report.outcomes {
+                assert_eq!(outcome.applied, count == 9);
+                assert_eq!(
+                    fs::read_to_string(vault.path().join(outcome.rel_path)).unwrap(),
+                    if count == 8 { "old\n" } else { "new\n" }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_finalization_failure_retains_commits_receipts_and_source_conflicts() {
+        use crate::rooted::{FaultPoint, WriteSession};
+        let vault = create_vault(&[]);
+        let plans: Vec<_> = (0..9)
+            .map(|i| {
+                let name = format!("{i}.md");
+                fs::write(vault.path().join(&name), "old\n").unwrap();
+                simple_plan(vault.path(), &name, "new\n")
+            })
+            .collect();
+        fs::write(vault.path().join("4.md"), "concurrent edit\n").unwrap();
+        let receipt_paths: Vec<_> = plans.iter().map(|plan| plan.rel_path.clone()).collect();
+        let execution = execute_plans_with_session(
+            vault.path(),
+            &plans,
+            &receipt_paths,
+            WriteSession::with_fault(rewrite_durability(plans.len()), FaultPoint::Finalize),
+        )
+        .unwrap();
+        assert!(execution.report.has_failures());
+        assert_eq!(execution.report.applied_paths().len(), 8);
+        assert_eq!(execution.receipts.len(), 8);
+        for outcome in execution.report.outcomes {
+            if outcome.rel_path == "4.md" {
+                assert!(!outcome.applied);
+                assert!(outcome.error.unwrap().contains("source bytes changed"));
+                assert_eq!(
+                    fs::read_to_string(vault.path().join("4.md")).unwrap(),
+                    "concurrent edit\n"
+                );
+            } else {
+                assert!(outcome.applied);
+                assert!(
+                    outcome
+                        .error
+                        .unwrap()
+                        .contains("rewrite finalization failed")
+                );
+                assert_eq!(
+                    execution.receipts[&outcome.rel_path]
+                        .capture_verified()
+                        .unwrap()
+                        .bytes()
+                        .unwrap(),
+                    b"new\n"
+                );
+            }
+        }
     }
 
     #[test]

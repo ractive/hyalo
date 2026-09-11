@@ -25,8 +25,9 @@ hyalo-core = { workspace = true }
 hyalo-mdlint = { workspace = true }
 anyhow = { workspace = true }
 indexmap = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "string"] }
 clap_complete = { workspace = true }
+ctrlc = { workspace = true }
 dunce = { workspace = true }
 jaq-core = { workspace = true }
 jaq-json = { workspace = true }
@@ -45,6 +46,12 @@ same-file = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp"] }
 
 [dev-dependencies]
 rmp-serde = { workspace = true }

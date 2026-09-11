@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod artifact;
+mod behavioral_contracts;
 mod bench_scale;
 mod bundled_skills;
 mod codex_package;
@@ -58,18 +60,20 @@ enum Commands {
     SyncCodexPackage,
     /// Gate (iter-274, BUG-29): every `--jq` recipe in a shipped document
     /// executes against this repo's own knowledgebase without a jq error.
-    CheckJqRecipes,
-    /// Stub — not yet implemented (iter-142b).
-    CheckDeadPrimitives(stubs::StubArgs),
-    /// Stub — not yet implemented (iter-142b).
-    CheckTodoAnnotations(stubs::StubArgs),
+    CheckJqRecipes(artifact::ArtifactArgs),
+    /// Unsupported legacy placeholder. Exits non-zero and is not a quality gate.
+    CheckDeadPrimitives(stubs::LegacyGateArgs),
+    /// Unsupported legacy placeholder. Exits non-zero and is not a quality gate.
+    CheckTodoAnnotations(stubs::LegacyGateArgs),
+    /// Run the focused cross-iteration behavioral safety contract suite.
+    CheckBehavioralContracts,
     /// Gate (ARCH-3, iter-226): every mutating command records index
     /// maintenance through MutationJournal; no direct index persistence.
     CheckMutationJournal,
-    /// On-demand scale regression gate: times `find`/`links fix` against a
-    /// generated ~14k-file synthetic vault (iter-224 T-6, DEC-098). Not run
-    /// in CI — see `crates/xtask/src/bench_scale.rs` for why.
-    BenchScale,
+    /// Scale regression gate for a generated ~14k-file synthetic vault.
+    /// CI runs it with an explicit native target and isolated Cargo target
+    /// directory on Linux, macOS and Windows; it is also available on demand.
+    BenchScale(artifact::ArtifactArgs),
 }
 
 fn main() {
@@ -88,11 +92,12 @@ fn main() {
         Commands::GenerateTsTypes => ts_types::generate(),
         Commands::CheckCodexPackage => codex_package::run(false),
         Commands::SyncCodexPackage => codex_package::run(true),
-        Commands::CheckJqRecipes => jq_recipes::run(),
+        Commands::CheckJqRecipes(args) => jq_recipes::run(&args),
         Commands::CheckDeadPrimitives(_) => stubs::check_dead_primitives(),
         Commands::CheckTodoAnnotations(_) => stubs::check_todo_annotations(),
+        Commands::CheckBehavioralContracts => behavioral_contracts::run(),
         Commands::CheckMutationJournal => mutation_journal::run(),
-        Commands::BenchScale => bench_scale::run(),
+        Commands::BenchScale(args) => bench_scale::run(&args),
     };
     match result {
         Ok(true) => {}

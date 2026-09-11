@@ -1,6 +1,89 @@
 use super::common::{hyalo_no_hints, write_md, write_tagged};
 use tempfile::TempDir;
 
+#[cfg(windows)]
+#[test]
+fn jq_worker_windows_npm_forced_parent_termination_closes_worker_job() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+    write_md(tmp.path(), "a.md", "---\ntags: [before]\n---\nBody\n");
+    let mut parent = Command::new(env!("CARGO_BIN_EXE_hyalo"))
+        .current_dir(tmp.path())
+        .args([
+            "--no-hints",
+            "append",
+            "a.md",
+            "--property",
+            "tags=after",
+            "--jq",
+            "def f: f; f",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut worker: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+    while worker.is_null() && Instant::now() < deadline {
+        if std::fs::read_to_string(tmp.path().join("a.md"))
+            .unwrap()
+            .contains("after")
+        {
+            // SAFETY: own snapshot handle and initialize the required structure
+            // size; only open a process whose parent is our disposable CLI.
+            unsafe {
+                let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if snapshot != INVALID_HANDLE_VALUE {
+                    let mut entry = PROCESSENTRY32W {
+                        dwSize: u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap(),
+                        ..Default::default()
+                    };
+                    let mut present = Process32FirstW(snapshot, &raw mut entry);
+                    while present != 0 {
+                        if entry.th32ParentProcessID == parent.id() {
+                            worker = OpenProcess(
+                                PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+                                0,
+                                entry.th32ProcessID,
+                            );
+                            break;
+                        }
+                        present = Process32NextW(snapshot, &raw mut entry);
+                    }
+                    CloseHandle(snapshot);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = parent.kill(); // Node child.kill() also forcibly terminates on Windows.
+    let _ = parent.wait();
+    assert!(
+        !worker.is_null(),
+        "did not observe actual evaluation worker"
+    );
+    // SAFETY: live owned process handle. Clean up even if the assertion fails.
+    let status = unsafe {
+        let status = WaitForSingleObject(worker, 2000);
+        if status != WAIT_OBJECT_0 {
+            TerminateProcess(worker, 1);
+        }
+        CloseHandle(worker);
+        status
+    };
+    assert_eq!(status, WAIT_OBJECT_0, "parent termination left jq running");
+}
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -11,6 +94,130 @@ fn setup_vault() -> TempDir {
     write_tagged(tmp.path(), "b.md", &["rust", "iteration"]);
     write_md(tmp.path(), "c.md", "No frontmatter.\n");
     tmp
+}
+
+#[test]
+fn jq_worker_abort_runtime_timeout_and_oversize_retain_append_effects() {
+    for (filter, diagnostic) in [
+        ("def f: [f]; f", "jq worker"),
+        ("error(\"finite failure\")", "runtime error"),
+        ("def f: f; f", "time limit"),
+        ("\"x\" * 11000000", "10 MiB"),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+        write_md(tmp.path(), "a.md", "---\ntags: [before]\n---\nBody\n");
+        hyalo_no_hints()
+            .current_dir(tmp.path())
+            .arg("create-index")
+            .assert()
+            .success();
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args([
+                "append",
+                "a.md",
+                "--property",
+                "tags=after",
+                "--index",
+                "--jq",
+                filter,
+            ])
+            .timeout(std::time::Duration::from_secs(12))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{filter}: {output:?}");
+        assert!(output.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            text.contains(diagnostic)
+                || (diagnostic == "time limit" && text.contains("resource budget")),
+            "{text}"
+        );
+        assert_eq!(error["category"], "output_failure");
+        assert_eq!(error["effects"]["paths"][0]["state"], "committed");
+        assert_eq!(error["effects"]["index"], "updated");
+        assert!(
+            std::fs::read_to_string(tmp.path().join("a.md"))
+                .unwrap()
+                .contains("after")
+        );
+        hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(["find", "--index", "--tag", "after", "--count"])
+            .assert()
+            .success()
+            .stdout("1\n");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn jq_worker_sigint_and_npm_sigterm_cancellation_preserve_append_effects() {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let tmp = TempDir::new().unwrap();
+        write_md(tmp.path(), ".hyalo.toml", "dir = \".\"\n");
+        write_md(tmp.path(), "a.md", "---\ntags: [before]\n---\nBody\n");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hyalo"))
+            .current_dir(tmp.path())
+            .args([
+                "--no-hints",
+                "append",
+                "a.md",
+                "--property",
+                "tags=after",
+                "--jq",
+                "def f: f; f",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !std::fs::read_to_string(tmp.path().join("a.md"))
+            .unwrap()
+            .contains("after")
+        {
+            if Instant::now() >= deadline || child.try_wait().unwrap().is_some() {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("append did not reach the commit");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        // SAFETY: signal only this live disposable CLI parent.
+        assert_eq!(
+            unsafe { libc::kill(i32::try_from(child.id()).unwrap(), signal) },
+            0
+        );
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("cancellation did not finish");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(status.code(), Some(2));
+        let mut stderr = Vec::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_end(&mut stderr)
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert!(String::from_utf8_lossy(&stderr).contains("cancelled"));
+        assert_eq!(error["effects"]["paths"][0]["state"], "committed");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -450,8 +657,7 @@ fn count_with_jq_exits_one() {
 //
 // `--jq` runs user-supplied input with no interpreter-level step/fuel hook
 // available (jaq-core 3.0.0's public API has none), so both repros below are
-// bounded by a coarse wall-clock deadline on a worker thread rather than a
-// cooperative check — see `JQ_TIME_LIMIT`'s doc comment in `output.rs`.
+// bounded by the parent's deadline on a killable worker process.
 // `.timeout()` here is a CI safety net: if the fix ever regresses, these
 // tests fail cleanly with a timeout error instead of hanging the whole
 // suite (and, for the second test, exhausting CI memory).
@@ -477,8 +683,8 @@ fn jq_infinite_recursion_errors_within_time_limit_instead_of_hanging() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("time limit"),
-        "expected a time-limit error, got: {stderr}"
+        stderr.contains("time limit") || stderr.contains("resource budget"),
+        "expected a deadline or OS resource-limit error, got: {stderr}"
     );
 }
 
@@ -508,8 +714,8 @@ fn jq_unbounded_intermediate_array_errors_within_time_limit_instead_of_oom() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("time limit"),
-        "expected a time-limit error, got: {stderr}"
+        stderr.contains("time limit") || stderr.contains("resource budget"),
+        "expected a deadline or OS resource-limit error, got: {stderr}"
     );
 }
 

@@ -51,6 +51,12 @@ and cannot be combined with text format. Respect reported truncation; narrow the
 or increase `--limit` only when needed. Read diagnostics and exit status before treating
 an empty result as success. Hints marked as writes require the same scope as any mutation.
 
+User jq compilation and evaluation each run in a child with a 3-second deadline;
+source/input/output limits are 64 KiB / 64 MiB / 10 MiB (at most 1,000,000 values).
+Compilation failure precedes writes; evaluation failure retains committed effects.
+Linux caps worker address space at 512 MiB. macOS/Windows have no hard memory cap;
+intermediate allocations can still exhaust host memory before termination.
+
 Prefer Hyalo for structured metadata changes and task toggles. Use normal editing
 tools for body prose and new document bodies; preserve frontmatter and wikilinks.
 Lint the changed files before handoff. This is an instruction, not an automatic hook.

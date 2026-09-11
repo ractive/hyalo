@@ -224,6 +224,13 @@ hyalo find --property status=draft --jq '.results[].file'  # just file paths
 hyalo summary --jq '.results.tasks.total'                  # tasks count from summary
 ```
 
+User `--jq` compilation and evaluation run in separate child processes, each with a
+3-second deadline. Source is capped at 64 KiB, serialized input at 64 MiB, and output
+at 10 MiB / 1,000,000 values. Compilation failure precedes writes; evaluation failure
+reports committed effects, so inspect them before retrying a mutation. Linux limits
+worker address space to 512 MiB. macOS and Windows have no hard memory cap;
+intermediate allocations can still exhaust host memory before termination.
+
 **Conventions inside `results`** (so one query works across commands):
 
 - The envelope owns `total`. Where a command repeats `total` inside `results` it means *the

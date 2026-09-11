@@ -263,6 +263,12 @@ They always request JSON without hints and preserve typed envelopes and errors;
 use the generic `hyalo` tool when text output, `--jq`, or an unsupported command
 is required.
 
+User jq compilation and evaluation each run in a child with a 3-second deadline;
+source/input/output limits are 64 KiB / 64 MiB / 10 MiB (at most 1,000,000 values).
+Compilation failure precedes writes; evaluation failure retains committed effects.
+Linux caps worker address space at 512 MiB. macOS/Windows have no hard memory cap;
+intermediate allocations can still exhaust host memory before termination.
+
 ## Setup Checklist for New Projects
 
 1. **Install hyalo**: Ensure `hyalo` is on PATH (`which hyalo`). Use the
