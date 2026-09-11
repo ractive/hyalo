@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 295 — Resource safety and final verification
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -90,7 +90,7 @@ isolation. No general job service or silent audit suppression.
 
 ### Stage 2: Close platform gates and evaluate agent reliability
 
-- [ ] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
+- [x] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
   respecting CARGO_TARGET_DIR and explicit targets. Verify the scale gate on Windows as well as
   Linux/macOS; do not infer runtime success from cross-compilation.
 
@@ -117,7 +117,7 @@ isolation. No general job service or silent audit suppression.
   time. Use blinded or deterministic grading where possible; report failures and uncertainty, no
   promotional score from self-assessment.
 
-- [ ] Reconcile every review ID and architecture invariant against final implementation/tests.
+- [x] Reconcile every review ID and architecture invariant against final implementation/tests.
   All bug closure IDs require passing evidence; static risks need a real fix or explicit
   evidence-backed non-applicability, not an untested completed checkbox. Preserve iteration 287
   external consumer deferral.
@@ -129,13 +129,13 @@ Acceptance for this stage (focused checks):
 
 - [x] No stub or string-presence check is counted as proof of a behavioral invariant.
 
-- [ ] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
+- [x] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
   remains the single duplicate of S13.
 
 - [x] Agent comparison results are reproducible and report limits; if model execution is
   unavailable, that acceptance remains pending rather than being replaced by static review.
 
-- [ ] Final gates and independent review apply to the exact finished tree; no
+- [x] Final gates and independent review apply to the exact finished tree; no
   release/publication or external consumer task is silently included.
 
 Scope: This does not authorize a new release, repository-external migration or shared workflow
@@ -161,7 +161,7 @@ repository tooling.
 
 ## One block completion gate
 
-- [ ] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
+- [x] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
   edits; public API/format changes must be explicit and tested. No whole-vault crash-transaction
   or concurrent-adversary guarantee is implied by the new types.
 
@@ -179,7 +179,7 @@ repository tooling.
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
@@ -459,3 +459,20 @@ measured 899.41 ms for 2,000 backlinks on aarch64 macOS against the unchanged
 five-second gate. This makes no Windows speed claim: native CI must try five
 seconds first; the user accepts an eight-second Windows-only fallback if the
 same gate remains insufficient. The historical stop record above is retained.
+
+
+## Final retry verification — 2026-09-11
+
+Repair commit `913308bb2a68d282caa2b032f8163113bf1dba0f` passed all 14 native
+CI checks. Windows measured 3.46 seconds for 2,000 backlinks against the original
+five-second budget. All budgets remain unchanged; the authorized Windows
+fallback was not needed. This measured run does not isolate the optimization
+from runner variation. Fresh independent review is clean; 5,153 workspace tests,
+38 npm tests, release build and local scale checks passed. Existing safety,
+resource, durability and evaluation limitations remain unchanged.
+
+The full inventory still has no selected successor; iteration 287 remains
+user-deferred. All 26 original criteria and the 50-row/49-group ledger are
+preserved. Final metadata-head CI and the GitHub merge checkpoint remain
+supervisor-owned. The user separately requested CI-pipeline optimization only
+after this batch lands; that follow-up is outside iterations 290–295.
