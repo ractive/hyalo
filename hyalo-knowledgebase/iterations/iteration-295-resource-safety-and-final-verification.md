@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 295 — Resource safety and final verification
 date: 2026-09-10
-status: in-progress
+status: completed
 tags:
   - iteration
   - rust
@@ -50,17 +50,17 @@ consolidation changes execution granularity, not scope.
 
 ### Stage 1: Bound snapshot expansion and isolate user jq
 
-- [ ] A04: run user-supplied jq compilation/evaluation in a bounded child worker with a narrow
+- [x] A04: run user-supplied jq compilation/evaluation in a bounded child worker with a narrow
   versioned pipe protocol. Reuse the preflight seam from 290; compile-ready precedes mutation,
   evaluation consumes the final envelope. Trusted built-in renderer filters may remain
   in-process.
 
-- [ ] Parent owns timeout, bounded protocol input/output, termination and reaping; map recursion
+- [x] Parent owns timeout, bounded protocol input/output, termination and reaping; map recursion
   abort, runtime failure and timeout to structured errors retaining committed effects. Specify
   tested OS memory limits where available and residual host-OOM risk; a child alone is not a
   universal memory cap.
 
-- [ ] Execute def f: [f]; f in a disposable child and confirm the CLI parent survives. Cover
+- [x] Execute def f: [f]; f in a disposable child and confirm the CLI parent survives. Cover
   finite runtime errors after append, timeout, oversized output, cancellation, worker startup
   failure and Windows/Linux/macOS process behavior.
 
@@ -69,13 +69,13 @@ consolidation changes execution granularity, not scope.
   dated bounded maintenance disposition with owner/revisit trigger. Do not label unmaintained as
   an exploitable advisory, suppress warnings silently, or weaken audits.
 
-- [ ] After isolation passes its platform tests, update the active CLI/help/skill resource
+- [x] After isolation passes its platform tests, update the active CLI/help/skill resource
   guarantees from iteration 294 to the exact supported behavior. This is part of this block, not
   another docs PR.
 
 Acceptance for this stage (focused checks):
 
-- [ ] Recursive jq fails in the child while the CLI returns a structured error; every
+- [x] Recursive jq fails in the child while the CLI returns a structured error; every
   timeout/abort path reaps its worker.
 
 - [x] Preflight jq failure leaves files unchanged; runtime jq failure preserves effect/index
@@ -90,7 +90,7 @@ isolation. No general job service or silent audit suppression.
 
 ### Stage 2: Close platform gates and evaluate agent reliability
 
-- [ ] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
+- [x] R16: locate release artifacts using Cargo-reported paths or platform EXE_SUFFIX,
   respecting CARGO_TARGET_DIR and explicit targets. Verify the scale gate on Windows as well as
   Linux/macOS; do not infer runtime success from cross-compilation.
 
@@ -117,25 +117,25 @@ isolation. No general job service or silent audit suppression.
   time. Use blinded or deterministic grading where possible; report failures and uncertainty, no
   promotional score from self-assessment.
 
-- [ ] Reconcile every review ID and architecture invariant against final implementation/tests.
+- [x] Reconcile every review ID and architecture invariant against final implementation/tests.
   All bug closure IDs require passing evidence; static risks need a real fix or explicit
   evidence-backed non-applicability, not an untested completed checkbox. Preserve iteration 287
   external consumer deferral.
 
 Acceptance for this stage (focused checks):
 
-- [ ] The scale runner finds the actual binary on all supported platforms and reports
+- [x] The scale runner finds the actual binary on all supported platforms and reports
   unavailable runtime checks honestly.
 
 - [x] No stub or string-presence check is counted as proof of a behavioral invariant.
 
-- [ ] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
+- [x] All 49 distinct prior finding groups have final dispositions and regression evidence; R05
   remains the single duplicate of S13.
 
 - [x] Agent comparison results are reproducible and report limits; if model execution is
   unavailable, that acceptance remains pending rather than being replaced by static review.
 
-- [ ] Final gates and independent review apply to the exact finished tree; no
+- [x] Final gates and independent review apply to the exact finished tree; no
   release/publication or external consumer task is silently included.
 
 Scope: This does not authorize a new release, repository-external migration or shared workflow
@@ -161,7 +161,7 @@ repository tooling.
 
 ## One block completion gate
 
-- [ ] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
+- [x] Finish all stage acceptance checks and record per-finding evidence. Preserve unrelated
   edits; public API/format changes must be explicit and tested. No whole-vault crash-transaction
   or concurrent-adversary guarantee is implied by the new types.
 
@@ -169,22 +169,22 @@ repository tooling.
   findings; re-review repaired behavior where necessary. Review stages as one final change
   rather than automatically launching a reviewer for every checklist item.
 
-- [ ] Before the final implementation commit/PR run, in order: cargo fmt; cargo clippy
+- [x] Before the final implementation commit/PR run, in order: cargo fmt; cargo clippy
   --workspace --all-targets -- -D warnings; cargo test --workspace -q. Run affected implemented
   xtask and package gates once for the integrated candidate, using actual dependencies and final
   generated assets.
 
-- [ ] For npm/Pi/assets changes run their typecheck/build/tests and TS/Pi/Codex freshness checks
+- [x] For npm/Pi/assets changes run their typecheck/build/tests and TS/Pi/Codex freshness checks
   against the same final binary. Build cargo build --release once after final asset generation,
   then use target/release/hyalo for changed-document inspection/strict lint and run git diff
   --check. Do not rebuild an unchanged binary between documentation-only internal stages.
 
-- [ ] In an authorized remote run, publish one PR and wait for required CI on its final head;
+- [x] In an authorized remote run, publish one PR and wait for required CI on its final head;
   preserve required multi-platform jobs and GitHub merge checks. Avoid draft pushes merely to
   checkpoint internal stages. This planning request itself authorizes no implementation or
   publication.
 
-- [ ] Reconcile the remaining five-or-fewer block plans once after final review/verification,
+- [x] Reconcile the remaining five-or-fewer block plans once after final review/verification,
   preserving scope and dependencies. Record exact revision, commands, review/CI evidence and
   limits; mark only fulfilled tasks complete. Keep iteration 287 external consumer work
   deferred.
@@ -397,3 +397,34 @@ The 26 original criteria and 50-row/49-group finding ledger are preserved.
 Local fulfilled tasks are marked above; native platform evidence and final
 checkpoint tasks remain pending until the PR checks pass. No release or external
 consumer migration is included.
+
+
+## Final native verification — 2026-09-11
+
+PR #351 implementation `6402b48a20e614df205bc42d45f5a11c90836c88` passed all
+14 native CI checks. Linux, macOS and Windows executed their actual Cargo-reported
+release artifacts with isolated target directories. Native jq cancellation and
+worker cleanup tests passed, including Windows forced-parent termination.
+
+The first Windows scale run measured 5.62 seconds for 2,000 backlinks and failed
+the unchanged five-second budget. Repair pass 2 removes duplicate output staging
+and discarded receipt work for ordinary backlinks, reuses root setup, and bounds
+exact comparison buffers to captured size. Both source verifications, confinement,
+permissions, retained compensation receipts and explicit durability remain intact.
+The fresh independent repair review is clean. The repaired Windows gate passed
+with a rounded 5.00-second median; this is near the threshold, not evidence of a
+large performance margin. Native macOS measured 878.83 milliseconds locally.
+
+The final implementation passed 5,153 workspace tests, strict Clippy, 38 npm tests
+and the affected behavioral and scale gates. Two historical ignored tests, two
+unsupported commands and the unexercised MADR recipe remain excluded. The small
+held-out agent comparison retains its measured binary/source versions and timings;
+models were not rerun for this repair, and its timing is not a final-binary claim.
+
+All 26 original criteria and the complete 50-row/49-group finding ledger retain
+their acceptance text and evidence. The final inventory still has no selected
+successor. Iteration 287's Homefinder task remains deferred. Linux address-space
+limits, macOS/Windows residual host-OOM risk, forced-parent-death limits, bulk
+power-loss behavior and Windows directory-sync unavailability remain documented.
+Final metadata-head CI and the GitHub merge checkpoint are supervisor-owned;
+no release or external consumer migration is included.
