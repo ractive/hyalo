@@ -203,6 +203,32 @@ pub(super) fn hyalo_serializer_options_for<'a>(
     }
 }
 
+/// Serialize ordered scaffold properties with the same safe YAML policy as mutations.
+/// The complete framed output is validated by the caller before publication.
+pub fn emit_properties(props: &IndexMap<String, Value>) -> Result<String> {
+    let mut output = String::new();
+    for (key, value) in props {
+        let property = IndexMap::from([(key, value)]);
+        let yaml = serde_saphyr::to_string_with_options(
+            &property,
+            hyalo_serializer_options_for(false, [value]),
+        )
+        .context("failed to serialize YAML")?;
+        // A deliberately unfilled scaffold value stays visually empty. Keys
+        // (including quoted keys) and every supplied value still use the emitter.
+        if value.is_null() {
+            output.push_str(
+                yaml.strip_suffix(" null\n")
+                    .unwrap_or(yaml.trim_end_matches('\n')),
+            );
+            output.push('\n');
+        } else {
+            output.push_str(&yaml);
+        }
+    }
+    Ok(output)
+}
+
 /// Block-scalar rendering can discard spaces or tabs at physical line ends.
 /// Keep such strings quoted so the value requested by a writer survives the
 /// normal reader exactly.

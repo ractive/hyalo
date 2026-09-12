@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
 mod codex;
+mod pi_manifest;
 pub use codex::CodexMode;
 
 // ---------------------------------------------------------------------------
@@ -495,6 +496,7 @@ fn initialize_observed(
         if root.exists() {
             preflight_installation_manifest(root, claude, pi, profile, codex)?;
         }
+        let pi_manifest = pi.then(|| pi_manifest::prepare(root)).transpose()?;
         // A vault outside CWD becomes its own project root, so create the tree
         // itself before writing `.hyalo.toml` into it.
         if scope.external && !root.exists() {
@@ -917,24 +919,8 @@ fn initialize_observed(
                 report.push("created", ".pi/lib/hyalo-api.d.ts");
             }
 
-            // Step 10: write (overwrite) .pi/package.json
-            let pi_package_path = root.join(".pi").join("package.json");
-            let pi_package_existed = pi_package_path.exists();
-            let pi_package_dir = pi_package_path
-                .parent()
-                .context("pi package.json path has no parent directory")?;
-            ensure_installation_dir(root, pi_package_dir, &mut report).with_context(|| {
-                format!("failed to create directory {}", pi_package_dir.display())
-            })?;
-            publish_installation(root, &pi_package_path, PI_PACKAGE_JSON_CONTENT.as_bytes())
-                .with_context(|| format!("failed to write {}", pi_package_path.display()))?;
-            if pi_package_existed {
-                report.push("updated", ".pi/package.json");
-            } else {
-                report.push("created", ".pi/package.json");
-                // One-time hint: the vendored copy never updates itself. Suggest
-                // the git package source so `pi update` delivers fixes.
-                report.notes.push(PI_INSTALL_HINT.to_owned());
+            if let Some(plan) = pi_manifest {
+                plan.publish(root, &mut report)?;
             }
         }
 
@@ -985,7 +971,9 @@ fn preflight_installation_manifest(
             PathBuf::from(".pi/extensions/hyalo.ts"),
             PathBuf::from(".pi/lib/hyalo-api.js"),
             PathBuf::from(".pi/lib/hyalo-api.d.ts"),
+            PathBuf::from(".pi/lib/package.json"),
             PathBuf::from(".pi/package.json"),
+            PathBuf::from(pi_manifest::RECEIPT),
         ]);
     }
     for artifact in artifacts {
@@ -1379,6 +1367,8 @@ fn deinitialize_observed(
         let claude_dir = root.join(".claude");
         remove_dir_if_empty(&claude_dir, ".claude/", &mut report)?;
 
+        pi_manifest::remove(root, &mut report)?;
+
         // Step 6: Remove pi artifacts
         // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
         let pi_skill_path = root
@@ -1448,14 +1438,6 @@ fn deinitialize_observed(
             .parent()
             .context("pi extension path has no parent directory")?;
         remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut report)?;
-
-        // Remove .pi/package.json
-        let pi_package_path = root.join(".pi").join("package.json");
-        remove_artifact(root, &pi_package_path, ".pi/package.json", &mut report)?;
-        let pi_package_dir = pi_package_path
-            .parent()
-            .context("pi package.json path has no parent directory")?;
-        remove_dir_if_empty(pi_package_dir, ".pi/", &mut report)?;
 
         // Remove .pi/ if empty.
         let pi_dir = root.join(".pi");

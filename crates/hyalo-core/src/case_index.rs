@@ -123,6 +123,29 @@ impl CaseInsensitiveIndex {
         }
     }
 
+    /// A move's complete path/alias inventory after the planned renames.
+    pub(crate) fn project_renames(&self, renames: &[(String, String)]) -> Self {
+        let destination_for = |path: &str| {
+            renames
+                .iter()
+                .find(|(old, _)| old == path)
+                .map(|(_, new)| new.as_str())
+        };
+        let mut projected = Self::with_capacity(self.len());
+        projected.case_insensitive_paths = self.case_insensitive_paths;
+        projected.aliases_enabled = self.aliases_enabled;
+        projected.complete = self.complete;
+        for path in self.map.values().flatten() {
+            projected.insert(destination_for(path).unwrap_or(path));
+        }
+        for (alias, paths) in &self.alias_map {
+            for path in paths {
+                projected.insert_aliases(destination_for(path).unwrap_or(path), [alias]);
+            }
+        }
+        projected
+    }
+
     /// Set the invocation's explicit alias resolution policy.
     pub fn set_aliases_enabled(&mut self, enabled: bool) {
         self.aliases_enabled = enabled;

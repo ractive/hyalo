@@ -691,12 +691,6 @@ const MAX_BM25_POSTINGS: usize = 50_000_000;
 /// treated as absent, which routes text queries to the live-scan fallback
 /// exactly as a snapshot without a BM25 index does.
 fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
-    if !bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES) {
-        if warn {
-            eprintln!("warning: BM25 expanded-token budget exceeded; rebuild the snapshot");
-        }
-        return false;
-    }
     let posting_count = bm25.total_postings();
     if posting_count > MAX_BM25_POSTINGS {
         if warn {
@@ -993,7 +987,22 @@ impl SnapshotIndex {
             self.bm25 = Bm25Section::Absent;
             return;
         }
-        let reconstructed = old.reconstruct_all_tokens();
+        let missing: std::collections::HashSet<&str> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.bm25_tokens.is_none())
+            .map(|entry| entry.rel_path.as_str())
+            .collect();
+        let reconstructed = match old.reconstruct_selected_tokens(&missing) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                eprintln!(
+                    "warning: {error}; refreshed metadata is retained without BM25 postings; ranked queries will read notes from disk"
+                );
+                self.bm25 = Bm25Section::Absent;
+                return;
+            }
+        };
         self.live.work.search_rebuilds += 1;
         let docs: Vec<crate::bm25::PreTokenizedInput> = self
             .entries
@@ -1149,8 +1158,14 @@ impl SnapshotIndex {
     pub fn validate_before_changes(&self) -> Result<()> {
         anyhow::ensure!(
             !self.bm25.is_present() || self.bm25.get().is_some(),
-            "snapshot BM25 data is invalid or exceeds its expansion budget; rebuild the index before modifying notes"
+            "snapshot BM25 data is invalid; rebuild the index before modifying notes"
         );
+        if let Some(bm25) = self.bm25.get() {
+            anyhow::ensure!(
+                bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES),
+                "snapshot BM25 token reconstruction exceeds its expansion budget; compact indexed scoring is available, but run mutations without --index/--index-file and recreate the snapshot afterward"
+            );
+        }
         Ok(())
     }
 

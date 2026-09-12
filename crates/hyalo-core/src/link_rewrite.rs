@@ -390,11 +390,94 @@ pub fn plan_mv(
         }
     }
 
+    validate_move_link_identity(
+        plans.values(),
+        &case_index,
+        &[(old_rel.to_owned(), new_rel.to_owned())],
+        site_prefix,
+        allow_ambiguous,
+    )?;
     Ok(MvPlanResult {
         plans: plans.into_values().collect(),
         skipped_ambiguous: all_skipped_ambiguous,
         skipped_frontmatter: all_skipped_frontmatter,
     })
+}
+
+/// Validate the rendered syntax and resolved identity using the complete planned catalog.
+/// This runs while planning, before either previews or publication can claim updates.
+fn validate_move_link_identity<'a>(
+    plans: impl Iterator<Item = &'a RewritePlan>,
+    before: &CaseInsensitiveIndex,
+    renames: &[(String, String)],
+    site_prefix: Option<&str>,
+    allow_ambiguous: bool,
+) -> Result<()> {
+    let after = before.project_renames(renames);
+    let options = crate::catalog::ResolutionOptions {
+        aliases: before.aliases_enabled(),
+        site_prefix,
+    };
+    for plan in plans {
+        let source_before = renames
+            .iter()
+            .find(|(_, new)| new == &plan.rel_path)
+            .map_or(plan.rel_path.as_str(), |(old, _)| old.as_str());
+        for replacement in &plan.replacements {
+            let old = crate::links::extract_link_spans(&replacement.old_text);
+            let new = crate::links::extract_link_spans(&replacement.new_text);
+            if old.len() != new.len() {
+                anyhow::bail!(crate::user_error(format!(
+                    "cannot safely rewrite link in {}:{}: destination changes link syntax",
+                    plan.rel_path, replacement.line
+                )));
+            }
+            for (old, new) in old.iter().zip(&new) {
+                let resolved = crate::catalog::resolve(
+                    before,
+                    source_before,
+                    old.kind,
+                    &old.link.target,
+                    options,
+                );
+                let permitted_override = if allow_ambiguous && old.kind == LinkKind::Wikilink {
+                    renames
+                        .iter()
+                        .find(|(path, _)| {
+                            ambiguous_self_link_candidates(&old.link.target, path, before).is_some()
+                        })
+                        .map(|(path, _)| path.as_str())
+                } else {
+                    None
+                };
+                let expected = permitted_override.or_else(|| resolved.path());
+                let Some(expected) = expected else {
+                    continue;
+                }; // previously broken/external outbound links retain their existing contract
+                let expected = renames
+                    .iter()
+                    .find(|(old, _)| old == expected)
+                    .map_or(expected, |(_, new)| new.as_str());
+                let actual = crate::catalog::resolve(
+                    &after,
+                    &plan.rel_path,
+                    new.kind,
+                    &new.link.target,
+                    options,
+                );
+                if actual.path() != Some(expected)
+                    || old.link.fragment != new.link.fragment
+                    || old.link.label != new.link.label
+                {
+                    anyhow::bail!(crate::user_error(format!(
+                        "cannot safely rewrite link in {}:{} to {expected}: emitted destination does not resolve uniquely to the planned file",
+                        plan.rel_path, replacement.line
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Split a markdown-link target into its path portion and any trailing
@@ -455,6 +538,7 @@ pub(crate) fn rewrite_frontmatter_wikilink_text(occ_target: &str, new_ref: &str)
         new_basename_stem
     };
 
+    let new_target = crate::link_write::encode_destination(new_target, LinkKind::Wikilink);
     let old_text = format!("[[{occ_target}]]");
     let new_text = format!("[[{new_target}{fragment}{alias}]]");
     (old_text != new_text).then_some(new_text)
@@ -944,12 +1028,13 @@ fn plan_inbound_rewrites(
 
             let mut bare_ambiguous_match = false;
             if dir_index.is_none() && span.kind == LinkKind::Wikilink {
-                let t = &span.link.target;
+                let decoded = crate::discovery::percent_decode_path(&span.link.target);
+                let t = decoded.as_deref().unwrap_or(&span.link.target);
                 // Only bare wikilinks (no path separator) need the ambiguity check.
                 let normalized = if let Some(wo) = t.strip_prefix("./") {
                     std::borrow::Cow::Owned(normalize_target(Path::new(source_rel), wo))
                 } else {
-                    std::borrow::Cow::Borrowed(t.as_str())
+                    std::borrow::Cow::Borrowed(t)
                 };
                 let is_bare = !(normalized.contains('/') || normalized.contains('\\'));
                 if is_bare && case_index.is_some() {
@@ -989,7 +1074,7 @@ fn plan_inbound_rewrites(
                                 skipped_ambiguous.push(SkippedAmbiguous {
                                     source: source_rel.to_string(),
                                     line: line_num,
-                                    target: t.clone(),
+                                    target: span.link.target.clone(),
                                     candidates: candidates.clone(),
                                     property: None,
                                     is_self: false,
@@ -1187,7 +1272,11 @@ fn plan_outbound_rewrites(
             let (target_path, target_fragment) = split_target_fragment(&span.link.target);
 
             // Resolve target relative to the OLD location's directory.
-            let resolved = normalize_target(Path::new(old_rel), target_path);
+            let decoded = crate::discovery::percent_decode_path(target_path);
+            let resolved = normalize_target(
+                Path::new(old_rel),
+                decoded.as_deref().unwrap_or(target_path),
+            );
 
             // Self-links: the file moves to `new_rel`, so the link should
             // continue to refer to the file at its new location.
@@ -1206,7 +1295,10 @@ fn plan_outbound_rewrites(
             // any fragment that was stripped above.
             let new_target = format!(
                 "{}{}",
-                relative_path_between(new_rel, &target_after_move),
+                crate::link_write::encode_destination(
+                    &relative_path_between(new_rel, &target_after_move),
+                    LinkKind::Markdown
+                ),
                 target_fragment
             );
 
@@ -1604,6 +1696,13 @@ pub fn plan_batch_mv(
         &case_index,
     );
 
+    validate_move_link_identity(
+        plans.values(),
+        &case_index,
+        renames,
+        site_prefix,
+        allow_ambiguous,
+    )?;
     Ok(BatchMvPlanResult {
         plans: plans.into_values().collect(),
         skipped_frontmatter,
@@ -1882,6 +1981,8 @@ fn plan_frontmatter_wikilink_rewrites(
         // comparing against the moved file — an anchored frontmatter target like
         // `decision-log#DEC-041` must still match `decision-log` (L-2).
         let (target_path, _, _) = split_frontmatter_target(target);
+        let decoded = crate::discovery::percent_decode_path(target_path);
+        let target_path = decoded.as_deref().unwrap_or(target_path);
 
         let matches = if target_path == old_stem || target_path == old_rel {
             true
@@ -1989,7 +2090,8 @@ fn ambiguous_self_link_candidates(
     old_rel: &str,
     case_index: &CaseInsensitiveIndex,
 ) -> Option<Vec<String>> {
-    let target = target.trim();
+    let decoded = crate::discovery::percent_decode_path(target);
+    let target = decoded.as_deref().unwrap_or(target).trim();
     if target.contains('/') || target.contains('\\') {
         return None;
     }
@@ -2111,7 +2213,11 @@ fn plan_outbound_rewrites_batch(
             }
 
             let (target_path, target_fragment) = split_target_fragment(&span.link.target);
-            let resolved = normalize_target(Path::new(old_rel), target_path);
+            let decoded = crate::discovery::percent_decode_path(target_path);
+            let resolved = normalize_target(
+                Path::new(old_rel),
+                decoded.as_deref().unwrap_or(target_path),
+            );
 
             // Check if the target is itself being moved.
             let target_after_move = if let Some(new_target_rel) = rename_map.get(&resolved) {
@@ -2126,7 +2232,10 @@ fn plan_outbound_rewrites_batch(
 
             let new_target = format!(
                 "{}{}",
-                relative_path_between(new_rel, &target_after_move),
+                crate::link_write::encode_destination(
+                    &relative_path_between(new_rel, &target_after_move),
+                    LinkKind::Markdown
+                ),
                 target_fragment
             );
 

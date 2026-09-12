@@ -14,6 +14,29 @@ use crate::link_graph::relative_path_between;
 use crate::link_resolve::detect_wikilink_form;
 use crate::links::{LinkKind, LinkSpan, PreserveForm, WrittenForm};
 
+/// Encode path bytes before inserting them into a link. The catalog decodes once,
+/// after splitting authored fragment/query delimiters. Wiki spaces and parentheses
+/// stay prose; Markdown destinations additionally encode URL syntax delimiters.
+#[must_use]
+pub(crate) fn encode_destination(path: &str, kind: LinkKind) -> String {
+    use std::fmt::Write as _;
+    let mut encoded = String::with_capacity(path.len());
+    for ch in path.chars() {
+        let reserved = ch.is_control()
+            || matches!(ch, '#' | '?' | '%' | '[' | ']' | '|' | ':' | '\\')
+            || (kind == LinkKind::Markdown
+                && (ch.is_whitespace() || matches!(ch, '(' | ')' | '<' | '>' | '\"' | '\'')));
+        if reserved {
+            for byte in ch.to_string().as_bytes() {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        } else {
+            encoded.push(ch);
+        }
+    }
+    encoded
+}
+
 /// A computed text replacement for a single span within a line.
 ///
 /// This is a thin companion to [`crate::link_rewrite::Replacement`]; the
@@ -120,6 +143,7 @@ impl LinkWriter {
             }
         };
 
+        let new_target = encode_destination(&new_target, span.kind);
         let old_text = line[span.full_start..span.full_end].to_string();
         let new_text = format!(
             "{}{}{}",

@@ -929,18 +929,38 @@ impl Bm25InvertedIndex {
             .sum()
     }
 
-    /// Check the complete allocation amplification before reconstructing owned tokens.
-    /// Counts term bytes, owned String slots, and temporary positional storage.
+    /// Full reconstruction admission, distinct from compact-postings scoring.
     pub(crate) fn expansion_within_budget(&self, budget: usize) -> bool {
+        self.selected_expansion_within_budget(&|_| true, budget)
+    }
+
+    fn selected_expansion_within_budget(
+        &self,
+        include: &impl Fn(&str) -> bool,
+        budget: usize,
+    ) -> bool {
+        let selected = self.doc_paths.iter().filter(|path| include(path)).count();
+        let Some(base) = selected
+            .checked_mul(
+                std::mem::size_of::<(u32, &str)>() + 2 * std::mem::size_of::<Vec<String>>() + 64,
+            )
+            .filter(|base| *base <= budget)
+        else {
+            return false;
+        };
         self.postings
             .iter()
-            .try_fold(0usize, |total, (term, posts)| {
+            .try_fold(base, |total, (term, posts)| {
                 let width = term
                     .len()
                     .checked_add(std::mem::size_of::<String>())?
                     .checked_add(std::mem::size_of::<(u32, &str)>())?;
-                posts.iter().try_fold(total, |sum, p| {
-                    let next = sum.checked_add(width.checked_mul(p.positions.len())?)?;
+                posts.iter().try_fold(total, |sum, posting| {
+                    let path = self.doc_paths.get(posting.doc_id as usize)?;
+                    if !include(path) {
+                        return Some(sum);
+                    }
+                    let next = sum.checked_add(width.checked_mul(posting.positions.len())?)?;
                     (next <= budget).then_some(next)
                 })
             })
@@ -970,29 +990,41 @@ impl Bm25InvertedIndex {
     /// original ordered token list.
     ///
     /// One pass over all postings: O(total postings), no per-document scans.
-    #[must_use]
-    pub fn reconstruct_all_tokens(&self) -> std::collections::HashMap<&str, Vec<String>> {
+    pub fn reconstruct_all_tokens(
+        &self,
+    ) -> anyhow::Result<std::collections::HashMap<&str, Vec<String>>> {
         self.reconstruct_tokens_where(|_| true)
     }
 
     /// Recover only selected documents, preserving token order and duplicates.
     /// Empty selections return without traversing postings. Nonempty selections
     /// use one posting traversal and allocate token storage only for selected docs.
-    #[must_use]
     pub fn reconstruct_selected_tokens(
         &self,
         selected: &HashSet<&str>,
-    ) -> HashMap<&str, Vec<String>> {
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        if selected.is_empty() {
+            return Ok(HashMap::new());
+        }
         self.reconstruct_tokens_where(|path| selected.contains(path))
     }
 
     fn reconstruct_tokens_where(
         &self,
         include: impl Fn(&str) -> bool,
-    ) -> HashMap<&str, Vec<String>> {
-        if !self.expansion_within_budget(MAX_EXPANDED_TOKEN_BYTES) {
-            return HashMap::new();
-        }
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        self.reconstruct_tokens_with_budget(include, MAX_EXPANDED_TOKEN_BYTES)
+    }
+
+    fn reconstruct_tokens_with_budget(
+        &self,
+        include: impl Fn(&str) -> bool,
+        budget: usize,
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        anyhow::ensure!(
+            self.selected_expansion_within_budget(&include, budget),
+            "BM25 token reconstruction exceeds the {budget}-byte allocation budget; compact indexed scoring remains available"
+        );
         let selected: Vec<_> = self
             .doc_paths
             .iter()
@@ -1004,7 +1036,7 @@ impl Bm25InvertedIndex {
             })
             .collect();
         if selected.is_empty() {
-            return HashMap::new();
+            return Ok(HashMap::new());
         }
         let mut by_doc: HashMap<u32, Vec<(u32, &str)>> =
             selected.iter().map(|&(id, _)| (id, Vec::new())).collect();
@@ -1026,7 +1058,7 @@ impl Bm25InvertedIndex {
                 parts.into_iter().map(|(_, term)| term.to_owned()).collect(),
             );
         }
-        out
+        Ok(out)
     }
 
     /// Paths of the documents that contribute to this corpus's statistics.
@@ -1324,7 +1356,7 @@ mod tests {
             },
         ];
         let index = Bm25InvertedIndex::build_from_tokens(docs);
-        let reconstructed = index.reconstruct_all_tokens();
+        let reconstructed = index.reconstruct_all_tokens().unwrap();
         assert_eq!(reconstructed.len(), 3);
         assert_eq!(
             reconstructed.get("a.md").unwrap(),
@@ -1354,7 +1386,7 @@ mod tests {
             },
         ]);
         let selected = HashSet::from(["selected.md", "empty.md", "missing.md"]);
-        let recovered = index.reconstruct_selected_tokens(&selected);
+        let recovered = index.reconstruct_selected_tokens(&selected).unwrap();
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered["selected.md"], ["beta", "alpha", "beta"]);
         assert!(recovered["empty.md"].is_empty());
@@ -1363,14 +1395,16 @@ mod tests {
         assert!(
             index
                 .reconstruct_selected_tokens(&HashSet::new())
+                .unwrap()
                 .is_empty()
         );
         assert!(
             index
                 .reconstruct_selected_tokens(&HashSet::from(["missing.md"]))
+                .unwrap()
                 .is_empty()
         );
-        let all = index.reconstruct_all_tokens();
+        let all = index.reconstruct_all_tokens().unwrap();
         for path in ["selected.md", "empty.md"] {
             assert_eq!(recovered[path], all[path]);
         }
@@ -1395,7 +1429,7 @@ mod tests {
             },
         ];
         let original = Bm25InvertedIndex::build_from_tokens(docs);
-        let reconstructed_tokens = original.reconstruct_all_tokens();
+        let reconstructed_tokens = original.reconstruct_all_tokens().unwrap();
         let rebuilt_docs: Vec<PreTokenizedInput> = ["a.md", "b.md", "c.md"]
             .into_iter()
             .map(|p| PreTokenizedInput {
@@ -2690,6 +2724,34 @@ mod iteration292_tests {
         );
         assert!(!corpus.expansion_within_budget(1024));
         assert!(corpus.expansion_within_budget(8192));
-        assert_eq!(corpus.reconstruct_all_tokens()["a.md"].len(), 32);
+        assert_eq!(corpus.reconstruct_all_tokens().unwrap()["a.md"].len(), 32);
+    }
+    #[test]
+    fn compact_scoring_and_selected_reconstruction_have_separate_budgets() {
+        let long = "x".repeat(128);
+        let corpus = Bm25InvertedIndex::build_from_tokens(vec![
+            PreTokenizedInput {
+                rel_path: "large.md".into(),
+                tokens: vec![long.clone(); 32],
+            },
+            PreTokenizedInput {
+                rel_path: "small.md".into(),
+                tokens: vec!["small".into()],
+            },
+        ]);
+        assert!(!corpus.expansion_within_budget(1024));
+        assert!(
+            corpus
+                .reconstruct_tokens_with_budget(|_| true, 1024)
+                .is_err()
+        );
+        let selected = corpus
+            .reconstruct_tokens_with_budget(|path| path == "small.md", 1024)
+            .unwrap();
+        assert_eq!(selected["small.md"], vec!["small"]);
+        let stemmer = Stemmer::create(rust_stemmers::Algorithm::English);
+        let scored = corpus.score(&long, &stemmer);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].rel_path, "large.md");
     }
 }

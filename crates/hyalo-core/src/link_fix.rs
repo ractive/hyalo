@@ -1588,6 +1588,18 @@ fn emit_markdown_fix_target(
     source_rel: &str,
     site_prefix: Option<&str>,
 ) -> String {
+    crate::link_write::encode_destination(
+        &raw_markdown_fix_target(raw_target, new_vault_rel, source_rel, site_prefix),
+        LinkKind::Markdown,
+    )
+}
+
+fn raw_markdown_fix_target(
+    raw_target: &str,
+    new_vault_rel: &str,
+    source_rel: &str,
+    site_prefix: Option<&str>,
+) -> String {
     let had_md = raw_target.len() > 3
         && raw_target.as_bytes()[raw_target.len() - 3..].eq_ignore_ascii_case(b".md");
     // iter-271 CASE-1: never *add* a `/index` segment the author did not
@@ -1671,6 +1683,8 @@ fn markdown_fix_round_trips(
     source_rel: &str,
     site_prefix: Option<&str>,
 ) -> bool {
+    let decoded = crate::discovery::percent_decode_path(emitted);
+    let emitted = decoded.as_deref().unwrap_or(emitted);
     let normalized = if emitted.starts_with('/') {
         strip_site_prefix(emitted, site_prefix)
     } else {
@@ -1697,6 +1711,8 @@ fn markdown_fix_round_trips(
 /// target (Obsidian short-form, which detection only proposes for stems that
 /// are unique in the vault).
 fn wikilink_fix_round_trips(emitted: &str, new_vault_rel: &str) -> bool {
+    let decoded = crate::discovery::percent_decode_path(emitted);
+    let emitted = decoded.as_deref().unwrap_or(emitted);
     let emitted = strip_md_suffix(emitted);
     let target = strip_md_suffix(new_vault_rel);
     emitted == target
@@ -1872,7 +1888,10 @@ fn build_replacements_for_file(
                     // Use stem (without .md) for wikilinks; wikilink targets
                     // are vault-relative as written, so the plan's target is
                     // already in the right coordinate system.
-                    let path_text = strip_md_suffix(&fix.new_target).to_string();
+                    let path_text = crate::link_write::encode_destination(
+                        strip_md_suffix(&fix.new_target),
+                        LinkKind::Wikilink,
+                    );
                     let ok = wikilink_fix_round_trips(&path_text, &fix.new_target);
                     // ALIAS-2 (iter-275, DEC-308): an alias fix writes what
                     // Obsidian's own link suggester writes — the note over the
@@ -4477,5 +4496,58 @@ See [broken](old-name.md) here.
         );
         assert_eq!(unapplied.len(), 1, "the fix must be reported unapplied");
         assert_eq!(unapplied[0].old_target, "wrongname");
+    }
+    #[test]
+    fn encoded_fix_destinations_resolve_with_preserved_labels_and_fragments() {
+        for name in ["C#.md", "Release (final).md", "literal%23.md"] {
+            let tmp = vault_with_files(&[
+                (
+                    "source.md",
+                    "[Shown](wrong.md#Intro) [[wrong#Intro|Alias]]\n",
+                ),
+                (name, "# Intro\n"),
+            ]);
+            let fixes: Vec<_> = ["wrong.md", "wrong"]
+                .into_iter()
+                .map(|old| FixPlan {
+                    source: "source.md".into(),
+                    line: 1,
+                    old_target: old.into(),
+                    new_target: name.into(),
+                    strategy: FixStrategy::ShortestPath,
+                    confidence: 1.0,
+                    emitted_target: None,
+                })
+                .collect();
+            let (_, unapplied, failed, rejected, _) =
+                apply_fixes(tmp.path(), &fixes, None).unwrap();
+            assert!(unapplied.is_empty() && failed.is_empty() && rejected.is_empty());
+            let written = fs::read_to_string(tmp.path().join("source.md")).unwrap();
+            let spans = crate::links::extract_link_spans(&written);
+            assert_eq!(spans.len(), 2);
+            let mut catalog = crate::CaseInsensitiveIndex::new();
+            catalog.insert(name);
+            for span in spans {
+                assert_eq!(span.link.fragment.as_deref(), Some("Intro"));
+                assert!(matches!(
+                    span.link.label.as_deref(),
+                    Some("Shown" | "Alias")
+                ));
+                assert_eq!(
+                    crate::catalog::resolve(
+                        &catalog,
+                        "source.md",
+                        span.kind,
+                        &span.link.target,
+                        crate::catalog::ResolutionOptions {
+                            aliases: false,
+                            site_prefix: None
+                        }
+                    )
+                    .path(),
+                    Some(name)
+                );
+            }
+        }
     }
 }
