@@ -414,15 +414,23 @@ fn validate_move_link_identity<'a>(
     allow_ambiguous: bool,
 ) -> Result<()> {
     let after = before.project_renames(renames);
+    // Keep the first exact-key mapping, including its input order for the
+    // explicit ambiguous-link override, without rescanning the move batch.
+    let mut forward = HashMap::with_capacity(renames.len());
+    let mut reverse = HashMap::with_capacity(renames.len());
+    for (order, (old, new)) in renames.iter().enumerate() {
+        forward.entry(old.as_str()).or_insert((new.as_str(), order));
+        reverse.entry(new.as_str()).or_insert(old.as_str());
+    }
     let options = crate::catalog::ResolutionOptions {
         aliases: before.aliases_enabled(),
         site_prefix,
     };
     for plan in plans {
-        let source_before = renames
-            .iter()
-            .find(|(_, new)| new == &plan.rel_path)
-            .map_or(plan.rel_path.as_str(), |(old, _)| old.as_str());
+        let source_before = reverse
+            .get(plan.rel_path.as_str())
+            .copied()
+            .unwrap_or(plan.rel_path.as_str());
         for replacement in &plan.replacements {
             let old = crate::links::extract_link_spans(&replacement.old_text);
             let new = crate::links::extract_link_spans(&replacement.new_text);
@@ -441,12 +449,17 @@ fn validate_move_link_identity<'a>(
                     options,
                 );
                 let permitted_override = if allow_ambiguous && old.kind == LinkKind::Wikilink {
-                    renames
-                        .iter()
-                        .find(|(path, _)| {
-                            ambiguous_self_link_candidates(&old.link.target, path, before).is_some()
-                        })
-                        .map(|(path, _)| path.as_str())
+                    ambiguous_bare_link_candidates(&old.link.target, before).and_then(|paths| {
+                        paths
+                            .iter()
+                            .filter_map(|path| {
+                                forward
+                                    .get(path.as_str())
+                                    .map(|(_, order)| (path.as_str(), *order))
+                            })
+                            .min_by_key(|(_, order)| *order)
+                            .map(|(path, _)| path)
+                    })
                 } else {
                     None
                 };
@@ -454,10 +467,7 @@ fn validate_move_link_identity<'a>(
                 let Some(expected) = expected else {
                     continue;
                 }; // previously broken/external outbound links retain their existing contract
-                let expected = renames
-                    .iter()
-                    .find(|(old, _)| old == expected)
-                    .map_or(expected, |(_, new)| new.as_str());
+                let expected = forward.get(expected).map_or(expected, |(new, _)| *new);
                 let actual = crate::catalog::resolve(
                     &after,
                     &plan.rel_path,
@@ -2090,6 +2100,15 @@ fn ambiguous_self_link_candidates(
     old_rel: &str,
     case_index: &CaseInsensitiveIndex,
 ) -> Option<Vec<String>> {
+    ambiguous_bare_link_candidates(target, case_index)
+        .filter(|candidates| candidates.iter().any(|c| c == old_rel))
+        .map(<[String]>::to_vec)
+}
+
+fn ambiguous_bare_link_candidates<'a>(
+    target: &str,
+    case_index: &'a CaseInsensitiveIndex,
+) -> Option<&'a [String]> {
     let decoded = crate::discovery::percent_decode_path(target);
     let target = decoded.as_deref().unwrap_or(target).trim();
     if target.contains('/') || target.contains('\\') {
@@ -2101,7 +2120,7 @@ fn ambiguous_self_link_candidates(
         return None;
     }
     let candidates = case_index.lookup_stem_all(stem);
-    (candidates.len() > 1 && candidates.iter().any(|c| c == old_rel)).then(|| candidates.to_vec())
+    (candidates.len() > 1).then_some(candidates)
 }
 
 /// Whether `t_norm` (a lower-cased, forward-slashed frontmatter target) is a
@@ -2296,6 +2315,92 @@ mod tests {
             fs::write(&path, content).unwrap();
         }
         dir
+    }
+
+    fn identity_plan(source: &str, old: &str, new: &str) -> RewritePlan {
+        RewritePlan {
+            path: PathBuf::from(source),
+            rel_path: source.to_owned(),
+            replacements: vec![Replacement {
+                line: 1,
+                byte_offset: 0,
+                old_text: old.to_owned(),
+                new_text: new.to_owned(),
+            }],
+            rewritten_content: new.to_owned(),
+            mtime: None,
+            original_content: Some(old.to_owned()),
+        }
+    }
+
+    #[test]
+    fn move_identity_lookup_preserves_exact_keys_and_first_mapping() {
+        let mut index = CaseInsensitiveIndex::new();
+        for path in ["old/source.md", "old/target.md", "Old/target.md"] {
+            index.insert(path);
+        }
+        let renames = vec![
+            ("old/source.md".into(), "new/source.md".into()),
+            ("old/target.md".into(), "new/first.md".into()),
+            ("old/target.md".into(), "new/ignored.md".into()),
+            // Reverse lookup must also retain the first source mapping.
+            ("absent/source.md".into(), "new/source.md".into()),
+        ];
+        let plans = [
+            identity_plan(
+                "new/source.md",
+                "[label](target.md#part)",
+                "[label](first.md#part)",
+            ),
+            identity_plan(
+                "reader.md",
+                "[case](Old/target.md)",
+                "[case](Old/target.md)",
+            ),
+        ];
+        validate_move_link_identity(plans.iter(), &index, &renames, None, false).unwrap();
+        let wrong = identity_plan(
+            "new/source.md",
+            "[label](target.md#part)",
+            "[label](ignored.md#part)",
+        );
+        assert!(
+            validate_move_link_identity(std::iter::once(&wrong), &index, &renames, None, false)
+                .is_err()
+        );
+        let wrong_label = identity_plan(
+            "new/source.md",
+            "[label](target.md#part)",
+            "[changed](first.md#part)",
+        );
+        assert!(
+            validate_move_link_identity(
+                std::iter::once(&wrong_label),
+                &index,
+                &renames,
+                None,
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn move_identity_ambiguous_override_keeps_rename_order() {
+        let mut index = CaseInsensitiveIndex::new();
+        index.insert("a/shared.md");
+        index.insert("z/shared.md");
+        let renames = vec![
+            ("z/shared.md".into(), "moved/first.md".into()),
+            ("a/shared.md".into(), "moved/second.md".into()),
+        ];
+        let first = identity_plan("reader.md", "[[shared]]", "[[moved/first]]");
+        validate_move_link_identity(std::iter::once(&first), &index, &renames, None, true).unwrap();
+        let second = identity_plan("reader.md", "[[shared]]", "[[moved/second]]");
+        assert!(
+            validate_move_link_identity(std::iter::once(&second), &index, &renames, None, true)
+                .is_err()
+        );
     }
 
     #[test]

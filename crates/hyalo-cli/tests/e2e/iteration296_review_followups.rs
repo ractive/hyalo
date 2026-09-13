@@ -264,6 +264,38 @@ fn iteration296_partial_and_invalid_postings_fall_back_to_correct_disk_results()
 }
 
 #[test]
+fn iteration296_initial_bom_managed_regions_preview_apply_and_repeat() {
+    for (command, namespace, path) in [
+        (["madr", "toc"], "madr:toc", "kb/docs/decisions/README.md"),
+        (["okf", "index"], "okf:index", "kb/index.md"),
+    ] {
+        for eol in ["\n", "\r\n"] {
+            let tmp = TempDir::new().unwrap();
+            write_md(tmp.path(), ".hyalo.toml", "dir = 'kb'\n");
+            write_md(
+                tmp.path(),
+                "kb/docs/decisions/0001-choice.md",
+                "---\ntitle: Choice\nstatus: accepted\n---\n# Choice\n",
+            );
+            let begin = format!("\u{feff}<!-- {namespace}:begin -->");
+            let suffix = format!("<!-- {namespace}:end -->{eol}KEEP FOOTER{eol}");
+            let old = format!("{begin}{eol}OLD TABLE{eol}{suffix}");
+            write_md(tmp.path(), path, &old);
+            let preview = run(tmp.path(), &command);
+            assert_eq!(preview.status.code(), Some(i32::from(command[0] == "madr")));
+            assert_eq!(fs::read_to_string(tmp.path().join(path)).unwrap(), old);
+            ok(tmp.path(), &[command[0], command[1], "--apply"]);
+            let first = fs::read_to_string(tmp.path().join(path)).unwrap();
+            assert!(first.starts_with(&begin), "{first:?}");
+            assert!(first.ends_with(&suffix), "{first:?}");
+            assert!(!first.contains("OLD TABLE"), "{first:?}");
+            ok(tmp.path(), &[command[0], command[1], "--apply"]);
+            assert_eq!(fs::read_to_string(tmp.path().join(path)).unwrap(), first);
+        }
+    }
+}
+
+#[test]
 fn iteration296_madr_only_changes_the_real_region_and_refuses_malformed_pairs() {
     for eol in ["\n", "\r\n"] {
         let tmp = TempDir::new().unwrap();

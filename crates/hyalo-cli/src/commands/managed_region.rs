@@ -117,6 +117,13 @@ pub(crate) fn marker_offsets(
 ) -> Result<(Vec<usize>, Vec<usize>)> {
     let frame = hyalo_core::frontmatter::DocumentFrame::parse(content)?;
     let body_offset = frame.body_offset();
+    // A document signature is outside Markdown syntax. Exclude it before
+    // classifying literal code too, while keeping absolute splice offsets.
+    let body_offset = if body_offset == 0 && content.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        body_offset
+    };
     let content = &content[body_offset..];
     let syntax = hyalo_core::body_syntax::BodySyntax::new(content);
     let mut begins = Vec::new();
@@ -304,6 +311,49 @@ pub(crate) fn reconcile_generated_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_bom_markers_preserve_signature_and_exact_suffix() {
+        for namespace in ["madr:toc", "okf:index"] {
+            for eol in ["\n", "\r\n"] {
+                let m = Markers::new(namespace);
+                let old = format!("\u{feff}{}{eol}OLD{eol}{}{eol}Footer", m.begin, m.end);
+                assert_eq!(
+                    m.classify(&old).unwrap(),
+                    Some((3, old.find(&m.end).unwrap()))
+                );
+                let out = m.splice(&old, "New table", "# Index", AdoptMode::Adopt);
+                assert!(out.starts_with(&format!("\u{feff}{}", m.begin)));
+                assert!(out.ends_with(&format!("{}{eol}Footer", m.end)));
+                assert!(!out.contains("OLD"));
+                assert_eq!(
+                    m.splice(&out, "New table", "# Index", AdoptMode::Adopt),
+                    out
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bom_is_only_a_signature_at_document_start() {
+        let m = Markers::new("madr:toc");
+        for prefix in [
+            "\n\u{feff}",
+            " \u{feff}",
+            "\u{feff}prose ",
+            "---\ntitle: X\n---\n\u{feff}",
+        ] {
+            let old = format!("{prefix}{}\nOLD\n{}\n", m.begin, m.end);
+            assert!(m.classify(&old).is_err(), "{old:?}");
+        }
+        for literal in [
+            format!("\u{feff}    {}\n    {}\n", m.begin, m.end),
+            format!("\u{feff}```md\n{}\n{}\n```\n", m.begin, m.end),
+            format!("\u{feff}`{}` and `{}`\n", m.begin, m.end),
+        ] {
+            assert_eq!(m.classify(&literal).unwrap(), None, "{literal:?}");
+        }
+    }
 
     #[test]
     fn splice_fresh_file_uses_title() {
