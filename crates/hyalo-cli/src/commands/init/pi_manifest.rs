@@ -634,7 +634,7 @@ fn retained_registration_needs_artifact(manifest: &Value) -> bool {
                     // that deleting these fixed paths leaves the registration safe.
                     if entry.is_empty()
                         || entry == "."
-                        || Path::new(entry).is_absolute()
+                        || entry.starts_with('/')
                         || entry.contains(':')
                         || entry.split('/').any(|part| part == "..")
                     {
@@ -788,6 +788,10 @@ mod tests {
     fn unknown_registration_spellings_conservatively_retain_targets() {
         for entry in [
             "/local/.pi/extensions/hyalo.ts",
+            r"\local\.pi\extensions\hyalo.ts",
+            r"\\server\share\.pi\extensions\hyalo.ts",
+            "//server/share/.pi/extensions/hyalo.ts",
+            "C:/local/.pi/extensions/hyalo.ts",
             "../.pi/extensions/hyalo.ts",
             "C:extensions/hyalo.ts",
             "[unclosed",
