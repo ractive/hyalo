@@ -670,6 +670,81 @@ fn iteration296_move_encoding_round_trips_identity_and_index_backlinks() {
 }
 
 #[test]
+fn iteration296_move_preserves_inline_code_link_labels_and_resolves_outer_target() {
+    for batch in [false, true] {
+        for eol in ["\n", "\r\n"] {
+            let tmp = TempDir::new().unwrap();
+            write_md(tmp.path(), ".hyalo.toml", "dir = '.'\n");
+            write_md(tmp.path(), "note.md", "# Target\n");
+            write_md(tmp.path(), "untouched/note.md", "# Other note\n");
+            let authored = format!(
+                "[See `[x](note.md)`](note.md){eol}[Target `[x](note.md)`](note.md#Target){eol}"
+            );
+            write_md(tmp.path(), "source.md", &authored);
+            ok(tmp.path(), &["create-index"]);
+            let (preview, apply, destination) = if batch {
+                (
+                    vec!["mv", "--glob", "note.md", "--to", "archive", "--index"],
+                    vec![
+                        "mv", "--glob", "note.md", "--to", "archive", "--apply", "--index",
+                    ],
+                    "archive/note.md",
+                )
+            } else {
+                (
+                    vec!["mv", "note.md", "renamed.md", "--dry-run", "--index"],
+                    vec!["mv", "note.md", "renamed.md", "--index"],
+                    "renamed.md",
+                )
+            };
+            let planned = ok(tmp.path(), &preview);
+            assert_eq!(planned["results"]["total_links_updated"], 2);
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("source.md")).unwrap(),
+                authored
+            );
+            assert!(tmp.path().join("note.md").exists());
+            assert!(!tmp.path().join(destination).exists());
+            let applied = ok(tmp.path(), &apply);
+            assert_eq!(applied["results"]["total_links_updated"], 2);
+            let expected = format!(
+                "[See `[x](note.md)`]({destination}){eol}[Target `[x](note.md)`]({destination}#Target){eol}"
+            );
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("source.md")).unwrap(),
+                expected
+            );
+            let disk = ok(
+                tmp.path(),
+                &["find", "--file", "source.md", "--fields", "links"],
+            );
+            let indexed = ok(
+                tmp.path(),
+                &[
+                    "find",
+                    "--file",
+                    "source.md",
+                    "--fields",
+                    "links",
+                    "--index",
+                ],
+            );
+            assert_eq!(disk["results"], indexed["results"]);
+            let links = disk["results"][0]["links"].as_array().unwrap();
+            assert_eq!(links.len(), 2);
+            for link in links {
+                assert_eq!(link["path"], destination, "{link}");
+                assert_ne!(link["broken_anchor"], true);
+            }
+            assert_eq!(
+                fs::read_to_string(tmp.path().join("untouched/note.md")).unwrap(),
+                "# Other note\n"
+            );
+        }
+    }
+}
+
+#[test]
 fn iteration296_batch_directory_index_overlap_reports_effective_edits_and_identity() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), ".hyalo.toml", "dir = '.'\n");

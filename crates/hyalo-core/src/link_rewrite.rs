@@ -451,8 +451,8 @@ fn validate_move_link_identity<'a>(
             if !applied {
                 continue;
             }
-            let old = crate::links::extract_link_spans(&replacement.old_text);
-            let new = crate::links::extract_link_spans(&replacement.new_text);
+            let old = replacement_link_spans(&replacement.old_text);
+            let new = replacement_link_spans(&replacement.new_text);
             if old.len() != new.len() {
                 anyhow::bail!(crate::user_error(format!(
                     "cannot safely rewrite link in {}:{}: destination changes link syntax",
@@ -514,6 +514,18 @@ fn validate_move_link_identity<'a>(
             .collect();
     }
     Ok(())
+}
+
+fn replacement_link_spans(text: &str) -> Vec<crate::links::LinkSpan> {
+    // Frontmatter and body wikilinks retain their literal validation contract.
+    // Markdown labels use the same visibility facts and original label bytes
+    // as planning, so an inline-code example cannot become the destination.
+    if text.starts_with("[[") || text.starts_with("![[") {
+        extract_link_spans_with_original(text, text)
+    } else {
+        let syntax = crate::body_syntax::BodySyntax::new(text);
+        extract_link_spans_with_original(syntax.visible_body(), text)
+    }
 }
 
 /// Split a markdown-link target into its path portion and any trailing
@@ -2367,6 +2379,38 @@ mod tests {
             rewritten_content: new.to_owned(),
             mtime: None,
             original_content: Some(old.to_owned()),
+        }
+    }
+
+    #[test]
+    fn move_identity_markdown_code_labels_use_planner_visibility() {
+        let mut index = CaseInsensitiveIndex::new();
+        for path in ["note.md", "other.md"] {
+            index.insert(path);
+        }
+        let renames = vec![("note.md".into(), "renamed.md".into())];
+        let old = "[See `[x](note.md)`](note.md#Target)";
+        let new = "[See `[x](note.md)`](renamed.md#Target)";
+        let mut plan = identity_plan("source.md", old, new);
+        validate_move_link_identity(std::iter::once(&mut plan), &index, &renames, None, false)
+            .unwrap();
+        for wrong in [
+            "[See `[x](note.md)`](other.md#Target)",
+            "[See `[x](edited.md)`](renamed.md#Target)",
+            "[See `[x](note.md)`](renamed.md#Other)",
+        ] {
+            let mut plan = identity_plan("source.md", old, wrong);
+            assert!(
+                validate_move_link_identity(
+                    std::iter::once(&mut plan),
+                    &index,
+                    &renames,
+                    None,
+                    false
+                )
+                .is_err(),
+                "{wrong}"
+            );
         }
     }
 
