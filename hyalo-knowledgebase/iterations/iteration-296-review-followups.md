@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 296 — Review follow-ups: document safety, Pi ownership, and indexed search"
 date: 2026-09-12
-status: in-progress
+status: completed
 tags:
   - iteration
   - review
@@ -187,8 +187,8 @@ read-only external corpora; write temporary indexes outside them explicitly.
 - [x] Run the repository's commit/PR gates in order: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo test --workspace -q`; address failures.
 - [x] Run the npm typecheck and test suite against the final native binary and the relevant existing embedded/generated-asset drift checks. Exercise the affected Pi installation behavior, not only source-string checks.
 - [x] Build the final release binary and dogfood the repaired examples, own KB, and MDN indexed query. Record which checks actually ran and which platform paths remain CI-only.
-- [ ] Obtain a fresh review of the final changes through the repository's review workflow; address verified issues and complete applicable native CI before landing under the repository's normal PR process.
-- [ ] Write a concise follow-up dogfood report, update the five finding dispositions with evidence, and mark this plan completed only after its acceptance checks pass. Keep the historical review's original baseline and findings intact.
+- [x] Obtain a fresh review of the final changes through the repository's review workflow; address verified issues and complete applicable native CI before landing under the repository's normal PR process.
+- [x] Write a concise follow-up dogfood report, update the five finding dispositions with evidence, and mark this plan completed only after its acceptance checks pass. Keep the historical review's original baseline and findings intact.
 
 ## Explicit dispositions for other review observations
 
@@ -222,7 +222,29 @@ external consumer remains deferred and unchanged. Historical review findings
 and their original baseline remain intact. No resource cap or promised
 acceptance criterion was weakened.
 
-Native Linux/Windows CI, PR publication and merge remain pending authorization.
-The two final workflow/completion rows remain open and status stays
-`in-progress`; the report portion of the last row is fulfilled. This local
-checkpoint does not claim remote landing or full iteration completion.
+At this 12 September checkpoint, native Linux/Windows CI, PR publication and
+merge awaited authorization. The two final workflow/completion rows remained
+open and status stayed `in-progress`; the report portion was fulfilled.
+That local checkpoint did not claim remote landing or full completion.
+
+## PR completion — 2026-09-13
+
+The authorized workflow produced [PR 353](https://github.com/ractive/hyalo/pull/353).
+Its final product revision is `c2e3992b0d4620aaec27dc005542144b550401b9`.
+All seventeen distinct PR findings are accounted for: fifteen fixed and two
+answered with baseline evidence and the plan's explicit scope. Full PR review
+through `edd5af8f` and a fresh read-only review of the final repair delta leave
+no verified findings unresolved. All ten applicable CI jobs passed on the final
+product revision, including native macOS, Linux and Windows coverage.
+
+The verified release artifact passed 131 CLI dogfood commands, three separate
+Node helper checks and all 40 npm tests. Ordered formatting, strict Clippy and
+5,194 Rust tests passed, with zero failures and two historical ignored doctests.
+The follow-up report records the final artifact, repairs, exact MDN parity,
+timings, CI failures and dispositions, and unchanged resource limitations.
+
+The full 289-plan inventory has no upcoming pending successor. Iteration 287's
+external consumer remains deferred and unchanged; the historical review and
+dogfood baseline retain their original bytes. Acceptance work is complete.
+The completion-only commit still receives its own checks and review before
+the authorized GitHub merge; this note does not claim remote landing.
