@@ -408,6 +408,51 @@ type = "list"
     }
 }
 
+#[test]
+fn iteration296_scaffold_preserves_accepted_integer_default_spellings() {
+    for (default, expected) in [("+1", 1), ("007", 7), ("-007", -7), ("+0", 0)] {
+        let tmp = TempDir::new().unwrap();
+        write_md(
+            tmp.path(),
+            ".hyalo.toml",
+            &format!(
+                "dir = '.'\n[schema.types.note.defaults]\nnumber = '{default}'\n[schema.types.note.properties.number]\ntype = 'number'\n"
+            ),
+        );
+        let preview = ok(
+            tmp.path(),
+            &[
+                "new",
+                "--type",
+                "note",
+                "--file",
+                "nested/note.md",
+                "--dry-run",
+            ],
+        );
+        assert!(!tmp.path().join("nested").exists());
+        ok(
+            tmp.path(),
+            &["new", "--type", "note", "--file", "nested/note.md"],
+        );
+        let content = fs::read_to_string(tmp.path().join("nested/note.md")).unwrap();
+        assert_eq!(content, preview["results"]["content"]);
+        assert!(
+            content.contains(&format!("number: {expected}\n")),
+            "{default}: {content}"
+        );
+        let found = ok(
+            tmp.path(),
+            &["find", "--file", "nested/note.md", "--fields", "properties"],
+        );
+        assert_eq!(
+            found["results"][0]["properties"]["number"].as_i64(),
+            Some(expected),
+            "{default}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn iteration296_scaffold_symlink_parent_has_same_preview_apply_refusal() {

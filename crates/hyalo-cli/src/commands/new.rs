@@ -541,9 +541,16 @@ fn synthesise_content(
                 default_val.map_or(PropValue::Null, PropValue::Str)
             }
             Some(PropertyConstraint::Number { .. }) => match default_val {
-                Some(s) => PropValue::Number(s.parse::<serde_json::Number>().map_err(|_| {
-                    anyhow::anyhow!("default for {prop_name} must be a finite number")
-                })?),
+                Some(s) => PropValue::Number(
+                    // Preserve accepted integer spellings such as +1 and 007
+                    // before parsing the additional JSON fractional forms.
+                    s.parse::<i64>()
+                        .map(serde_json::Number::from)
+                        .or_else(|_| s.parse::<serde_json::Number>())
+                        .map_err(|_| {
+                            anyhow::anyhow!("default for {prop_name} must be a finite number")
+                        })?,
+                ),
                 None => PropValue::Null,
             },
             Some(PropertyConstraint::Boolean) => match default_val {
