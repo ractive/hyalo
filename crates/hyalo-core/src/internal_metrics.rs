@@ -6,6 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+static DIRECT_INDEXED_SCORING: AtomicU64 = AtomicU64::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static LOGICAL_SOURCE_READS: AtomicU64 = AtomicU64::new(0);
 static LOGICAL_BODY_READS: AtomicU64 = AtomicU64::new(0);
@@ -14,6 +15,7 @@ static INDEX_ENTRIES_REFRESHED: AtomicU64 = AtomicU64::new(0);
 /// A process-local snapshot of repository measurement counters.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Snapshot {
+    pub direct_indexed_scoring: u64,
     pub logical_source_reads: u64,
     pub logical_body_reads: u64,
     pub index_entries_refreshed: u64,
@@ -30,6 +32,7 @@ pub fn enable() {
 #[doc(hidden)]
 pub fn snapshot() -> Snapshot {
     Snapshot {
+        direct_indexed_scoring: DIRECT_INDEXED_SCORING.load(Ordering::Relaxed),
         logical_source_reads: LOGICAL_SOURCE_READS.load(Ordering::Relaxed),
         logical_body_reads: LOGICAL_BODY_READS.load(Ordering::Relaxed),
         index_entries_refreshed: INDEX_ENTRIES_REFRESHED.load(Ordering::Relaxed),
@@ -52,5 +55,13 @@ pub fn record_source_read(body: bool) {
 pub(crate) fn record_index_entries_refreshed(count: usize) {
     if ENABLED.load(Ordering::Relaxed) {
         INDEX_ENTRIES_REFRESHED.fetch_add(count as u64, Ordering::Relaxed);
+    }
+}
+
+/// Record a ranked query executed directly against persisted postings.
+#[doc(hidden)]
+pub fn record_direct_indexed_scoring() {
+    if ENABLED.load(Ordering::Relaxed) {
+        DIRECT_INDEXED_SCORING.fetch_add(1, Ordering::Relaxed);
     }
 }

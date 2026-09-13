@@ -834,32 +834,22 @@ pub(crate) fn strip_site_prefix(target: &str, site_prefix: Option<&str>) -> Stri
 /// owning wrapper above keeps every caller that stores the result unchanged.
 pub(crate) fn strip_site_prefix_ref<'a>(target: &'a str, site_prefix: Option<&str>) -> &'a str {
     let without_slash = target.strip_prefix('/').unwrap_or(target);
-    if let Some(prefix) = site_prefix {
-        // Try stripping "prefix/" from the front.
-        //
-        // iter-204: the comparison is case-insensitive. The prefix is usually
-        // auto-derived from the vault directory name, and directory casing
-        // rarely matches the URL casing an author writes: MDN checked out into
-        // `en-us/` publishes its links as `/en-US/docs/...`, so a
-        // case-sensitive strip left every single site-absolute link
-        // unresolved. Only the ASCII case is folded, which is all URL path
-        // prefixes use in practice.
-        //
-        // `get` rather than slicing: the prefix length is a byte count, and a
-        // multibyte target could put it mid-character. The separator is tested
-        // as a single byte *after* that guard, so it can never split a
-        // character either (a continuation byte is never `/`).
-        let plen = prefix.len();
-        if without_slash.len() > plen
-            && without_slash.as_bytes()[plen] == b'/'
-            && without_slash
-                .get(..plen)
-                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-        {
-            return &without_slash[plen + 1..];
-        }
+    if let Some(prefix) = matching_site_prefix(without_slash, site_prefix) {
+        return &without_slash[prefix.len() + 1..];
     }
     without_slash
+}
+
+/// Borrow the authored prefix spelling using the resolver's ASCII-case and
+/// segment-boundary rules. Writers retain this slice instead of config casing.
+pub(crate) fn matching_site_prefix<'a>(
+    without_slash: &'a str,
+    site_prefix: Option<&str>,
+) -> Option<&'a str> {
+    let prefix = site_prefix?;
+    let head = without_slash.get(..prefix.len())?;
+    (without_slash.as_bytes().get(prefix.len()) == Some(&b'/') && head.eq_ignore_ascii_case(prefix))
+        .then_some(head)
 }
 
 /// Resolve a relative markdown link target against the source file's directory,

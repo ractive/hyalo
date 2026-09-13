@@ -128,62 +128,19 @@ impl MarkerState {
     }
 }
 
-/// Classify the `okf:index` markers in `content`.
-///
-/// The check is anchored on the first *ordered* BEGIN→END pair, so a stray
-/// mention of a marker in prose or a code fence above the real region does not
-/// make an otherwise-healthy file look malformed (that tolerance is the whole
-/// reason the splice is position-anchored). Given the first ordered pair:
-///
-/// - a genuine *second* region — a BEGIN that starts after the first END — is a
-///   [`MarkerState::Duplicate`];
-/// - a *second* BEGIN nested between the first BEGIN and its paired END is also
-///   a [`MarkerState::Duplicate`] — without this check the splice would
-///   silently discard the extra BEGIN as if it were ordinary managed-region
-///   content, disagreeing with the `OKF-INDEX-MARKERS` lint rule, which counts
-///   any extra begin/end marker as malformed;
-/// - otherwise the pair is [`MarkerState::Healthy`].
-///
-/// With no ordered pair, a lone BEGIN is [`MarkerState::DanglingBegin`], a lone
-/// END (including the reversed `end … begin` case) is
-/// [`MarkerState::DanglingEnd`], and nothing at all is [`MarkerState::None`].
+/// Share literal/standalone recognition with MADR, preserving OKF's skip policy.
 fn classify_markers(content: &str) -> MarkerState {
-    match find_ordered_pair(content) {
-        Some((begin, end)) => {
-            // A BEGIN starting after the first END is a second managed region —
-            // a real duplicate, not a stray prose mention before the region.
-            let after_region = end + INDEX_END.len();
-            // A BEGIN nested strictly between the first BEGIN and its paired END
-            // is also a duplicate: the region is ambiguous and must not be
-            // silently spliced (it would delete the extra marker text).
-            let nested_begin = content[begin + INDEX_BEGIN.len()..end].contains(INDEX_BEGIN);
-            if nested_begin || content[after_region..].contains(INDEX_BEGIN) {
-                MarkerState::Duplicate
-            } else {
-                MarkerState::Healthy(begin, end)
-            }
-        }
-        None => {
-            if content.contains(INDEX_BEGIN) {
-                MarkerState::DanglingBegin
-            } else if content.contains(INDEX_END) {
-                MarkerState::DanglingEnd
-            } else {
-                MarkerState::None
-            }
-        }
+    let Ok((begins, ends)) = super::managed_region::marker_offsets(content, INDEX_BEGIN, INDEX_END)
+    else {
+        return MarkerState::DanglingBegin;
+    };
+    match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => MarkerState::None,
+        ([begin], [end]) if begin < end => MarkerState::Healthy(*begin, *end),
+        (_, _) if begins.len() > 1 || ends.len() > 1 => MarkerState::Duplicate,
+        (_, []) | ([_], [_]) => MarkerState::DanglingBegin,
+        _ => MarkerState::DanglingEnd,
     }
-}
-
-/// Find the first BEGIN and the first END that appears strictly after it,
-/// returning `(begin_offset, end_offset)` where `end_offset` is the start of
-/// the end marker. `None` when there is no such ordered pair.
-fn find_ordered_pair(content: &str) -> Option<(usize, usize)> {
-    content.find(INDEX_BEGIN).and_then(|begin| {
-        content[begin + INDEX_BEGIN.len()..]
-            .find(INDEX_END)
-            .map(|rel_end| (begin, begin + INDEX_BEGIN.len() + rel_end))
-    })
 }
 
 /// Result of planning a single `index.md` regeneration.

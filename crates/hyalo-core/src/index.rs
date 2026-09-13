@@ -691,12 +691,6 @@ const MAX_BM25_POSTINGS: usize = 50_000_000;
 /// treated as absent, which routes text queries to the live-scan fallback
 /// exactly as a snapshot without a BM25 index does.
 fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
-    if !bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES) {
-        if warn {
-            eprintln!("warning: BM25 expanded-token budget exceeded; rebuild the snapshot");
-        }
-        return false;
-    }
     let posting_count = bm25.total_postings();
     if posting_count > MAX_BM25_POSTINGS {
         if warn {
@@ -709,7 +703,7 @@ fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
     if !bm25.validate_doc_ids() {
         if warn {
             eprintln!(
-                "warning: index file contains out-of-bounds BM25 doc_id; ignoring the BM25 section"
+                "warning: index file contains invalid BM25 scoring structure (document IDs, lengths, postings or positions); ignoring the BM25 section"
             );
         }
         return false;
@@ -993,7 +987,22 @@ impl SnapshotIndex {
             self.bm25 = Bm25Section::Absent;
             return;
         }
-        let reconstructed = old.reconstruct_all_tokens();
+        let missing: std::collections::HashSet<&str> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.bm25_tokens.is_none())
+            .map(|entry| entry.rel_path.as_str())
+            .collect();
+        let reconstructed = match old.reconstruct_selected_tokens(&missing) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                eprintln!(
+                    "warning: {error}; refreshed metadata is retained without BM25 postings; ranked queries will read notes from disk"
+                );
+                self.bm25 = Bm25Section::Absent;
+                return;
+            }
+        };
         self.live.work.search_rebuilds += 1;
         let docs: Vec<crate::bm25::PreTokenizedInput> = self
             .entries
@@ -1149,8 +1158,14 @@ impl SnapshotIndex {
     pub fn validate_before_changes(&self) -> Result<()> {
         anyhow::ensure!(
             !self.bm25.is_present() || self.bm25.get().is_some(),
-            "snapshot BM25 data is invalid or exceeds its expansion budget; rebuild the index before modifying notes"
+            "snapshot BM25 data is invalid; rebuild the index before modifying notes"
         );
+        if let Some(bm25) = self.bm25.get() {
+            anyhow::ensure!(
+                bm25.expansion_within_budget(crate::bm25::MAX_EXPANDED_TOKEN_BYTES),
+                "snapshot BM25 token reconstruction exceeds its expansion budget; compact indexed scoring is available, but run mutations without --index/--index-file and recreate the snapshot afterward"
+            );
+        }
         Ok(())
     }
 
@@ -3631,6 +3646,67 @@ Content.
         );
 
         assert_bm25_section_refused(&bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
+    }
+
+    #[test]
+    fn load_refuses_invalid_compact_scoring_structure_and_accepts_empty_corpus() {
+        let valid = Bm25InvertedIndex::build_from_tokens(vec![crate::bm25::PreTokenizedInput {
+            rel_path: "doc.md".into(),
+            tokens: vec!["one".into(), "one".into()],
+        }]);
+        let original = serde_json::to_value(&valid).unwrap();
+        for (field, value) in [
+            ("positions", serde_json::json!([0, u32::MAX])),
+            ("positions", serde_json::json!([1, 0])),
+            ("positions", serde_json::json!([0, 0])),
+            ("term_freq", serde_json::json!(1)),
+        ] {
+            let mut data = original.clone();
+            data["postings"]["one"][0][field] = value;
+            let invalid = serde_json::from_value(data).unwrap();
+            assert_bm25_section_refused(&invalid, field);
+        }
+        let mut duplicates = original.clone();
+        duplicates["doc_paths"] = serde_json::json!(["doc.md", "doc.md"]);
+        duplicates["doc_lengths"] = serde_json::json!([2, 2]);
+        assert_bm25_section_refused(
+            &serde_json::from_value(duplicates).unwrap(),
+            "duplicate document paths",
+        );
+        let mut unordered = original.clone();
+        unordered["doc_paths"] = serde_json::json!(["doc.md", "other.md"]);
+        unordered["doc_lengths"] = serde_json::json!([2, 2]);
+        let mut second = unordered["postings"]["one"][0].clone();
+        second["doc_id"] = serde_json::json!(1);
+        let first = unordered["postings"]["one"][0].clone();
+        unordered["postings"]["one"] = serde_json::json!([second, first]);
+        assert_bm25_section_refused(
+            &serde_json::from_value(unordered).unwrap(),
+            "unordered document IDs",
+        );
+        for avgdl in [f64::NAN, f64::INFINITY, -1.0, 3.0] {
+            let invalid = Bm25InvertedIndex::new_for_test(
+                std::collections::HashMap::from([(
+                    "one".into(),
+                    vec![crate::bm25::Posting {
+                        doc_id: 0,
+                        term_freq: 2,
+                        positions: vec![0, 1],
+                    }],
+                )]),
+                vec![2],
+                vec!["doc.md".into()],
+                avgdl,
+            );
+            assert_bm25_section_refused(&invalid, "invalid average document length");
+        }
+        let empty = Bm25InvertedIndex::build_from_tokens(Vec::new());
+        let loaded = SnapshotIndex::load_inner(snapshot_bytes(&[], Some(&empty)), false).unwrap();
+        assert_eq!(loaded.bm25_index().unwrap().doc_count(), 0);
+        let loaded =
+            SnapshotIndex::load_inner(snapshot_bytes(&[test_entry("doc.md")], Some(&valid)), false)
+                .unwrap();
+        assert!(loaded.bm25_index().is_some());
     }
 
     // -------------------------------------------------------------------------

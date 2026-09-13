@@ -84,6 +84,7 @@ pub fn write_report() {
         "allocations": allocation_enabled.then(|| ALLOCATIONS.load(Ordering::Relaxed)),
         "allocated_bytes": allocation_enabled.then(|| ALLOCATED_BYTES.load(Ordering::Relaxed)),
         "peak_live_bytes": allocation_enabled.then(|| PEAK_LIVE_BYTES.load(Ordering::Relaxed)),
+        "direct_indexed_scoring": reads.direct_indexed_scoring,
         "logical_source_reads": reads.logical_source_reads,
         "logical_body_reads": reads.logical_body_reads,
         "index_entries_refreshed": reads.index_entries_refreshed,

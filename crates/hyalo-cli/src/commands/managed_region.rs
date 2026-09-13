@@ -9,11 +9,6 @@
 //! every profile can reuse the same drift-safe splice and the same
 //! "dry-run exits non-zero on drift" plan/apply shape.
 //!
-//! The splice is anchored on structural position — the closing marker is
-//! searched for strictly *after* the opening marker — so a stray mention of the
-//! marker text in prose above the real region cannot corrupt the splice (the
-//! same class of bug iter-165/166 hit in the OKF code).
-
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -32,6 +27,22 @@ impl Markers {
         }
     }
 
+    /// Only standalone comments recognized by the shared Markdown syntax own bytes.
+    pub(crate) fn classify(&self, content: &str) -> Result<Option<(usize, usize)>> {
+        let (begins, ends) = marker_offsets(content, &self.begin, &self.end)?;
+        match (begins.as_slice(), ends.as_slice()) {
+            ([], []) => Ok(None),
+            ([begin], [end]) if begin < end => Ok(Some((*begin, *end))),
+            _ => anyhow::bail!(
+                "malformed managed markers: expected one standalone {} followed by one {}; found {} opening and {} closing markers",
+                self.begin,
+                self.end,
+                begins.len(),
+                ends.len()
+            ),
+        }
+    }
+
     /// Splice `generated` into `old_content`'s managed region, preserving prose
     /// outside the markers.
     ///
@@ -44,10 +55,12 @@ impl Markers {
     ///
     /// The managed block is wrapped as `<begin>\n\n<generated>\n\n<end>` so the
     /// heading/table `generated` starts and ends with keeps blank lines around
-    /// it (MD022). Always ends with a single trailing newline.
-    pub(crate) fn splice(
+    /// it (MD022). An existing suffix is preserved byte for byte; new files
+    /// end with a trailing newline.
+    pub(crate) fn splice_validated(
         &self,
         old_content: &str,
+        markers: Option<(usize, usize)>,
         generated: &str,
         title: &str,
         mode: AdoptMode,
@@ -57,13 +70,6 @@ impl Markers {
         let body = generated.trim_matches('\n');
         let managed = format!("{}\n\n{body}\n\n{}", self.begin, self.end);
 
-        // Find END strictly after BEGIN so a stray marker mention in prose (or a
-        // code block) above the region can't be mistaken for the real closer.
-        let markers = old_content.find(&self.begin).and_then(|begin| {
-            old_content[begin + self.begin.len()..]
-                .find(&self.end)
-                .map(|rel_end| (begin, begin + self.begin.len() + rel_end))
-        });
         if let Some((begin, end)) = markers {
             let before = &old_content[..begin];
             let after = &old_content[end + self.end.len()..];
@@ -71,7 +77,7 @@ impl Markers {
             result.push_str(before);
             result.push_str(&managed);
             result.push_str(after);
-            return ensure_trailing_newline(&result);
+            return result;
         }
 
         // No markers. Non-destructive adopt: keep the existing body and append
@@ -97,14 +103,51 @@ impl Markers {
         ensure_trailing_newline(&result)
     }
 
-    /// Whether `old_content` already carries a valid marker pair.
-    pub(crate) fn has_markers(&self, old_content: &str) -> bool {
-        old_content.find(&self.begin).is_some_and(|begin| {
-            old_content[begin + self.begin.len()..]
-                .find(&self.end)
-                .is_some()
-        })
+    #[cfg(test)]
+    fn splice(&self, old: &str, generated: &str, title: &str, mode: AdoptMode) -> String {
+        self.splice_validated(old, self.classify(old).unwrap(), generated, title, mode)
     }
+}
+
+/// Byte offsets of real standalone marker comments, excluding literal examples.
+pub(crate) fn marker_offsets(
+    content: &str,
+    begin: &str,
+    end: &str,
+) -> Result<(Vec<usize>, Vec<usize>)> {
+    let frame = hyalo_core::frontmatter::DocumentFrame::parse(content)?;
+    let body_offset = frame.body_offset();
+    // A document signature is outside Markdown syntax. Exclude it before
+    // classifying literal code too, while keeping absolute splice offsets.
+    let body_offset = if body_offset == 0 && content.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        body_offset
+    };
+    let content = &content[body_offset..];
+    let syntax = hyalo_core::body_syntax::BodySyntax::new(content);
+    let mut begins = Vec::new();
+    let mut ends = Vec::new();
+    for comment in syntax.html_comments() {
+        let span = comment.content_span();
+        let start = span.start - 4;
+        let finish = span.end + 3;
+        let line_start = syntax.line_start(comment.line()).unwrap_or(start);
+        let line_end = content[finish..]
+            .find('\n')
+            .map_or(content.len(), |n| finish + n);
+        if !content[line_start..start].trim().is_empty()
+            || !content[finish..line_end].trim().is_empty()
+        {
+            continue;
+        }
+        match &content[start..finish] {
+            marker if marker == begin => begins.push(body_offset + start),
+            marker if marker == end => ends.push(body_offset + start),
+            _ => {}
+        }
+    }
+    Ok((begins, ends))
 }
 
 /// How a marker-less existing file is handled when regenerating its managed
@@ -268,6 +311,49 @@ pub(crate) fn reconcile_generated_notes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_bom_markers_preserve_signature_and_exact_suffix() {
+        for namespace in ["madr:toc", "okf:index"] {
+            for eol in ["\n", "\r\n"] {
+                let m = Markers::new(namespace);
+                let old = format!("\u{feff}{}{eol}OLD{eol}{}{eol}Footer", m.begin, m.end);
+                assert_eq!(
+                    m.classify(&old).unwrap(),
+                    Some((3, old.find(&m.end).unwrap()))
+                );
+                let out = m.splice(&old, "New table", "# Index", AdoptMode::Adopt);
+                assert!(out.starts_with(&format!("\u{feff}{}", m.begin)));
+                assert!(out.ends_with(&format!("{}{eol}Footer", m.end)));
+                assert!(!out.contains("OLD"));
+                assert_eq!(
+                    m.splice(&out, "New table", "# Index", AdoptMode::Adopt),
+                    out
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bom_is_only_a_signature_at_document_start() {
+        let m = Markers::new("madr:toc");
+        for prefix in [
+            "\n\u{feff}",
+            " \u{feff}",
+            "\u{feff}prose ",
+            "---\ntitle: X\n---\n\u{feff}",
+        ] {
+            let old = format!("{prefix}{}\nOLD\n{}\n", m.begin, m.end);
+            assert!(m.classify(&old).is_err(), "{old:?}");
+        }
+        for literal in [
+            format!("\u{feff}    {}\n    {}\n", m.begin, m.end),
+            format!("\u{feff}```md\n{}\n{}\n```\n", m.begin, m.end),
+            format!("\u{feff}`{}` and `{}`\n", m.begin, m.end),
+        ] {
+            assert_eq!(m.classify(&literal).unwrap(), None, "{literal:?}");
+        }
+    }
 
     #[test]
     fn splice_fresh_file_uses_title() {

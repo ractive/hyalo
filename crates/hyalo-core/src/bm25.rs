@@ -925,22 +925,43 @@ impl Bm25InvertedIndex {
         self.postings
             .values()
             .flat_map(|posts| posts.iter())
-            .map(|p| 1 + p.positions.len())
-            .sum()
+            .fold(0_usize, |total, p| {
+                total.saturating_add(1).saturating_add(p.positions.len())
+            })
     }
 
-    /// Check the complete allocation amplification before reconstructing owned tokens.
-    /// Counts term bytes, owned String slots, and temporary positional storage.
+    /// Full reconstruction admission, distinct from compact-postings scoring.
     pub(crate) fn expansion_within_budget(&self, budget: usize) -> bool {
+        self.selected_expansion_within_budget(&|_| true, budget)
+    }
+
+    fn selected_expansion_within_budget(
+        &self,
+        include: &impl Fn(&str) -> bool,
+        budget: usize,
+    ) -> bool {
+        let selected = self.doc_paths.iter().filter(|path| include(path)).count();
+        let Some(base) = selected
+            .checked_mul(
+                std::mem::size_of::<(u32, &str)>() + 2 * std::mem::size_of::<Vec<String>>() + 64,
+            )
+            .filter(|base| *base <= budget)
+        else {
+            return false;
+        };
         self.postings
             .iter()
-            .try_fold(0usize, |total, (term, posts)| {
+            .try_fold(base, |total, (term, posts)| {
                 let width = term
                     .len()
                     .checked_add(std::mem::size_of::<String>())?
                     .checked_add(std::mem::size_of::<(u32, &str)>())?;
-                posts.iter().try_fold(total, |sum, p| {
-                    let next = sum.checked_add(width.checked_mul(p.positions.len())?)?;
+                posts.iter().try_fold(total, |sum, posting| {
+                    let path = self.doc_paths.get(posting.doc_id as usize)?;
+                    if !include(path) {
+                        return Some(sum);
+                    }
+                    let next = sum.checked_add(width.checked_mul(posting.positions.len())?)?;
                     (next <= budget).then_some(next)
                 })
             })
@@ -970,29 +991,41 @@ impl Bm25InvertedIndex {
     /// original ordered token list.
     ///
     /// One pass over all postings: O(total postings), no per-document scans.
-    #[must_use]
-    pub fn reconstruct_all_tokens(&self) -> std::collections::HashMap<&str, Vec<String>> {
+    pub fn reconstruct_all_tokens(
+        &self,
+    ) -> anyhow::Result<std::collections::HashMap<&str, Vec<String>>> {
         self.reconstruct_tokens_where(|_| true)
     }
 
     /// Recover only selected documents, preserving token order and duplicates.
     /// Empty selections return without traversing postings. Nonempty selections
     /// use one posting traversal and allocate token storage only for selected docs.
-    #[must_use]
     pub fn reconstruct_selected_tokens(
         &self,
         selected: &HashSet<&str>,
-    ) -> HashMap<&str, Vec<String>> {
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        if selected.is_empty() {
+            return Ok(HashMap::new());
+        }
         self.reconstruct_tokens_where(|path| selected.contains(path))
     }
 
     fn reconstruct_tokens_where(
         &self,
         include: impl Fn(&str) -> bool,
-    ) -> HashMap<&str, Vec<String>> {
-        if !self.expansion_within_budget(MAX_EXPANDED_TOKEN_BYTES) {
-            return HashMap::new();
-        }
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        self.reconstruct_tokens_with_budget(include, MAX_EXPANDED_TOKEN_BYTES)
+    }
+
+    fn reconstruct_tokens_with_budget(
+        &self,
+        include: impl Fn(&str) -> bool,
+        budget: usize,
+    ) -> anyhow::Result<HashMap<&str, Vec<String>>> {
+        anyhow::ensure!(
+            self.selected_expansion_within_budget(&include, budget),
+            "BM25 token reconstruction exceeds the {budget}-byte allocation budget; compact indexed scoring remains available"
+        );
         let selected: Vec<_> = self
             .doc_paths
             .iter()
@@ -1004,7 +1037,7 @@ impl Bm25InvertedIndex {
             })
             .collect();
         if selected.is_empty() {
-            return HashMap::new();
+            return Ok(HashMap::new());
         }
         let mut by_doc: HashMap<u32, Vec<(u32, &str)>> =
             selected.iter().map(|&(id, _)| (id, Vec::new())).collect();
@@ -1026,7 +1059,7 @@ impl Bm25InvertedIndex {
                 parts.into_iter().map(|(_, term)| term.to_owned()).collect(),
             );
         }
-        out
+        Ok(out)
     }
 
     /// Paths of the documents that contribute to this corpus's statistics.
@@ -1049,7 +1082,8 @@ impl Bm25InvertedIndex {
         self.tokenizer_version
     }
 
-    /// Validate that all `doc_id` values in posting lists are within bounds.
+    /// Validate compact scoring structure: unique documents, coherent finite
+    /// length metadata, and strictly ordered, bounded postings and positions.
     ///
     /// A crafted snapshot could contain `doc_id` values that exceed the length of
     /// `doc_paths` or `doc_lengths`, causing an out-of-bounds panic in [`score`](Self::score).
@@ -1061,9 +1095,39 @@ impl Bm25InvertedIndex {
         if self.doc_lengths.len() != max_id {
             return false;
         }
-        self.postings
-            .values()
-            .all(|posts| posts.iter().all(|p| (p.doc_id as usize) < max_id))
+        if !self.avgdl.is_finite()
+            || self.avgdl < 0.0
+            || self.doc_paths.iter().collect::<HashSet<_>>().len() != max_id
+        {
+            return false;
+        }
+        if max_id > 0 {
+            let Some(total) = self
+                .doc_lengths
+                .iter()
+                .try_fold(0_u64, |total, length| total.checked_add(u64::from(*length)))
+            else {
+                return false;
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let expected = total as f64 / max_id as f64;
+            if (self.avgdl - expected).abs() > f64::EPSILON * expected.max(1.0) * 4.0 {
+                return false;
+            }
+        }
+        self.postings.values().all(|posts| {
+            !posts.is_empty()
+                && posts.windows(2).all(|pair| pair[0].doc_id < pair[1].doc_id)
+                && posts.iter().all(|p| {
+                    let Some(length) = self.doc_lengths.get(p.doc_id as usize) else {
+                        return false;
+                    };
+                    !p.positions.is_empty()
+                        && p.term_freq as usize == p.positions.len()
+                        && p.positions.iter().all(|position| position < length)
+                        && p.positions.windows(2).all(|pair| pair[0] < pair[1])
+                })
+        })
     }
 
     // ------------------------------------------------------------------
@@ -1249,9 +1313,10 @@ impl Bm25InvertedIndex {
         // For each starting position of the first term, check for consecutive hits.
         for &start_pos in positions[0] {
             let found = positions.iter().enumerate().skip(1).all(|(i, pos_list)| {
-                #[allow(clippy::cast_possible_truncation)]
-                let target = start_pos + i as u32;
-                pos_list.binary_search(&target).is_ok()
+                u32::try_from(i)
+                    .ok()
+                    .and_then(|offset| start_pos.checked_add(offset))
+                    .is_some_and(|target| pos_list.binary_search(&target).is_ok())
             });
             if found {
                 return true;
@@ -1303,6 +1368,36 @@ pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn malformed_phrase_offsets_never_wrap_even_before_admission() {
+        let forged = Bm25InvertedIndex::new_for_test(
+            HashMap::from([
+                (
+                    "foo".into(),
+                    vec![Posting {
+                        doc_id: 0,
+                        term_freq: 1,
+                        positions: vec![u32::MAX],
+                    }],
+                ),
+                (
+                    "bar".into(),
+                    vec![Posting {
+                        doc_id: 0,
+                        term_freq: 1,
+                        positions: vec![0],
+                    }],
+                ),
+            ]),
+            vec![2],
+            vec!["doc.md".into()],
+            2.0,
+        );
+        assert!(!forged.validate_doc_ids());
+        let stemmer = Stemmer::create(rust_stemmers::Algorithm::English);
+        assert!(forged.score("\"foo bar\"", &stemmer).is_empty());
+    }
+
     /// BUG-4 (iter-244): token lists reconstructed from postings must be
     /// identical to the tokens that built the index — snapshot entries have
     /// their `bm25_tokens` stripped at write time, so a post-mutation rebuild
@@ -1324,7 +1419,7 @@ mod tests {
             },
         ];
         let index = Bm25InvertedIndex::build_from_tokens(docs);
-        let reconstructed = index.reconstruct_all_tokens();
+        let reconstructed = index.reconstruct_all_tokens().unwrap();
         assert_eq!(reconstructed.len(), 3);
         assert_eq!(
             reconstructed.get("a.md").unwrap(),
@@ -1354,7 +1449,7 @@ mod tests {
             },
         ]);
         let selected = HashSet::from(["selected.md", "empty.md", "missing.md"]);
-        let recovered = index.reconstruct_selected_tokens(&selected);
+        let recovered = index.reconstruct_selected_tokens(&selected).unwrap();
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered["selected.md"], ["beta", "alpha", "beta"]);
         assert!(recovered["empty.md"].is_empty());
@@ -1363,14 +1458,16 @@ mod tests {
         assert!(
             index
                 .reconstruct_selected_tokens(&HashSet::new())
+                .unwrap()
                 .is_empty()
         );
         assert!(
             index
                 .reconstruct_selected_tokens(&HashSet::from(["missing.md"]))
+                .unwrap()
                 .is_empty()
         );
-        let all = index.reconstruct_all_tokens();
+        let all = index.reconstruct_all_tokens().unwrap();
         for path in ["selected.md", "empty.md"] {
             assert_eq!(recovered[path], all[path]);
         }
@@ -1395,7 +1492,7 @@ mod tests {
             },
         ];
         let original = Bm25InvertedIndex::build_from_tokens(docs);
-        let reconstructed_tokens = original.reconstruct_all_tokens();
+        let reconstructed_tokens = original.reconstruct_all_tokens().unwrap();
         let rebuilt_docs: Vec<PreTokenizedInput> = ["a.md", "b.md", "c.md"]
             .into_iter()
             .map(|p| PreTokenizedInput {
@@ -2690,6 +2787,34 @@ mod iteration292_tests {
         );
         assert!(!corpus.expansion_within_budget(1024));
         assert!(corpus.expansion_within_budget(8192));
-        assert_eq!(corpus.reconstruct_all_tokens()["a.md"].len(), 32);
+        assert_eq!(corpus.reconstruct_all_tokens().unwrap()["a.md"].len(), 32);
+    }
+    #[test]
+    fn compact_scoring_and_selected_reconstruction_have_separate_budgets() {
+        let long = "x".repeat(128);
+        let corpus = Bm25InvertedIndex::build_from_tokens(vec![
+            PreTokenizedInput {
+                rel_path: "large.md".into(),
+                tokens: vec![long.clone(); 32],
+            },
+            PreTokenizedInput {
+                rel_path: "small.md".into(),
+                tokens: vec!["small".into()],
+            },
+        ]);
+        assert!(!corpus.expansion_within_budget(1024));
+        assert!(
+            corpus
+                .reconstruct_tokens_with_budget(|_| true, 1024)
+                .is_err()
+        );
+        let selected = corpus
+            .reconstruct_tokens_with_budget(|path| path == "small.md", 1024)
+            .unwrap();
+        assert_eq!(selected["small.md"], vec!["small"]);
+        let stemmer = Stemmer::create(rust_stemmers::Algorithm::English);
+        let scored = corpus.score(&long, &stemmer);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].rel_path, "large.md");
     }
 }

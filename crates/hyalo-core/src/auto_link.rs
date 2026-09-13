@@ -1022,10 +1022,12 @@ fn scan_file_for_matches(
 /// what the page renders, so the original surface text is preserved as an
 /// explicit alias instead: `[[link_target|matched_text]]`.
 fn wikilink_replacement_text(matched_text: &str, link_target: &str) -> String {
-    if matched_text == link_target {
-        format!("[[{link_target}]]")
+    let encoded =
+        crate::link_write::encode_destination(link_target, crate::links::LinkKind::Wikilink);
+    if matched_text == link_target && encoded == link_target {
+        format!("[[{encoded}]]")
     } else {
-        format!("[[{link_target}|{matched_text}]]")
+        format!("[[{encoded}|{matched_text}]]")
     }
 }
 
@@ -3500,5 +3502,33 @@ mod tests {
         );
         let written = std::fs::read_to_string(tmp.path().join("notes.md")).unwrap();
         assert_eq!(written, body, "the file must be byte-identical after apply");
+    }
+    #[test]
+    fn encoded_auto_destinations_keep_display_text_and_resolve_once() {
+        for name in ["C#", "Release (final)", "literal%23"] {
+            let emitted = wikilink_replacement_text(name, name);
+            let spans = crate::links::extract_link_spans(&emitted);
+            assert_eq!(spans.len(), 1);
+            let mut catalog = crate::CaseInsensitiveIndex::new();
+            let path = format!("{name}.md");
+            catalog.insert(&path);
+            assert_eq!(
+                crate::catalog::resolve(
+                    &catalog,
+                    "source.md",
+                    spans[0].kind,
+                    &spans[0].link.target,
+                    crate::catalog::ResolutionOptions {
+                        aliases: false,
+                        site_prefix: None
+                    }
+                )
+                .path(),
+                Some(path.as_str())
+            );
+            if name.contains(['#', '%']) {
+                assert_eq!(spans[0].link.label.as_deref(), Some(name));
+            }
+        }
     }
 }

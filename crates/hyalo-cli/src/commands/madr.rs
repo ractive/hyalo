@@ -123,8 +123,29 @@ fn run_toc_with_journal(
     } else {
         AdoptMode::Adopt
     };
-    let had_markers = markers.has_markers(&old_content);
-    let new_content = markers.splice(&old_content, &body, "# Architecture Decision Records", mode);
+    let classification = match markers.classify(&old_content) {
+        Ok(classification) => classification,
+        Err(error) => {
+            return Ok((
+                CommandOutcome::UserError(user_diagnostic(
+                    format,
+                    &error.to_string(),
+                    Some(&toc_rel),
+                    Some("repair the standalone managed marker pair before regenerating"),
+                    None,
+                )),
+                None,
+            ));
+        }
+    };
+    let had_markers = classification.is_some();
+    let new_content = markers.splice_validated(
+        &old_content,
+        classification,
+        &body,
+        "# Architecture Decision Records",
+        mode,
+    );
 
     let existed = dir.join(&toc_rel).exists();
     let plan = GeneratePlan {

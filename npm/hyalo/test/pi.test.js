@@ -254,3 +254,53 @@ test('Pi typed diagnostics and set guardrail use the real hyalo binary', async (
     assert.match(await fs.readFile(path.join(scratch, 'note.md'), 'utf8'), /status: completed/);
   } finally { await fs.rm(scratch, { recursive: true, force: true }); }
 });
+
+test('Pi shared manifest keeps CommonJS scripts while the owned runtime imports as ESM', async () => {
+  for (const type of [undefined, 'commonjs']) {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'hyalo-pi-ownership-'));
+    try {
+      await fs.mkdir(path.join(scratch, '.pi'));
+      const original = { private: true, ...(type ? { type } : {}), dependencies: { custom: '1' }, scripts: { check: 'node user.js' } };
+      const manifest = path.join(scratch, '.pi/package.json');
+      await fs.writeFile(manifest, JSON.stringify(original));
+      const userScript = path.join(scratch, '.pi/user.js');
+      await fs.writeFile(userScript, "const p = require('node:path'); console.log(p.basename('/user/kept')); module.exports = 42;\n");
+      const before = await execFileAsync(process.execPath, [userScript]);
+      await execFileAsync(binary, ['init', '--pi', '--dir', 'vault'], { cwd: scratch });
+      const after = await execFileAsync(process.execPath, [userScript]);
+      assert.equal(after.stdout, before.stdout);
+      const installed = JSON.parse(await fs.readFile(manifest, 'utf8'));
+      assert.equal(installed.type, type);
+      assert.deepEqual(installed.dependencies, original.dependencies);
+      const runtime = await import(pathToFileURL(path.join(scratch, '.pi/lib/hyalo-api.js')).href);
+      assert.equal(typeof runtime.configForPi, 'function');
+      await execFileAsync(binary, ['deinit'], { cwd: scratch });
+      assert.deepEqual(JSON.parse(await fs.readFile(manifest, 'utf8')), original);
+      assert.equal((await execFileAsync(process.execPath, [userScript])).stdout, before.stdout);
+    } finally { await fs.rm(scratch, { recursive: true, force: true }); }
+  }
+});
+
+test('Pi init preserves a helper that already inherits the shared ESM scope', async () => {
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'hyalo-pi-inherited-esm-'));
+  try {
+    await fs.mkdir(path.join(scratch, '.pi/lib'), { recursive: true });
+    const original = { type: 'module', private: true, dependencies: { custom: '1' } };
+    const manifest = path.join(scratch, '.pi/package.json');
+    await fs.writeFile(manifest, JSON.stringify(original));
+    const helper = path.join(scratch, '.pi/lib/helper.js');
+    const helperSource = "import { basename } from 'node:path'; export const answer = 42; console.log(basename(import.meta.filename));\n";
+    await fs.writeFile(helper, helperSource);
+    const before = await execFileAsync(process.execPath, [helper]);
+    assert.equal(before.stdout.trim(), 'helper.js');
+    await execFileAsync(binary, ['init', '--pi', '--dir', 'vault'], { cwd: scratch });
+    assert.equal((await execFileAsync(process.execPath, [helper])).stdout, before.stdout);
+    const runtime = await import(pathToFileURL(path.join(scratch, '.pi/lib/hyalo-api.js')).href);
+    assert.equal(typeof runtime.configForPi, 'function');
+    await execFileAsync(binary, ['deinit'], { cwd: scratch });
+    assert.deepEqual(JSON.parse(await fs.readFile(manifest, 'utf8')), original);
+    assert.equal(await fs.readFile(helper, 'utf8'), helperSource);
+    assert.equal((await execFileAsync(process.execPath, [helper])).stdout, before.stdout);
+    await assert.rejects(fs.access(path.join(scratch, '.pi/lib/package.json')), { code: 'ENOENT' });
+  } finally { await fs.rm(scratch, { recursive: true, force: true }); }
+});

@@ -12,8 +12,8 @@ pub use frame::{
     read_frame_for_body,
 };
 pub use parse::{
-    FrontmatterBudgetError, body_only, check_frontmatter_size_budget, hyalo_options,
-    read_frontmatter, read_frontmatter_from_reader, read_frontmatter_raw,
+    FrontmatterBudgetError, body_only, check_frontmatter_size_budget, emit_properties,
+    hyalo_options, read_frontmatter, read_frontmatter_from_reader, read_frontmatter_raw,
     rename_frontmatter_key_within, render_frontmatter, render_frontmatter_key_rename,
     skip_frontmatter, write_frontmatter, write_frontmatter_within,
 };

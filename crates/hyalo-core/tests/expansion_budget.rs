@@ -44,9 +44,12 @@ fn compact_snapshot_refuses_expansion_before_effect_refresh_with_measured_alloca
     std::fs::write(&path, &bytes).unwrap();
     BYTES.store(0, Ordering::Relaxed);
     MEASURE.store(true, Ordering::Relaxed);
-    assert!(index.reconstruct_all_tokens().is_empty());
+    assert!(index.reconstruct_all_tokens().is_err());
     let mut snapshot = SnapshotIndex::load(&path).unwrap().unwrap();
-    assert!(snapshot.bm25_index().is_none());
+    assert!(
+        snapshot.bm25_index().is_some(),
+        "compact scoring remains available"
+    );
     assert!(snapshot.validate_before_changes().is_err());
     assert!(
         snapshot

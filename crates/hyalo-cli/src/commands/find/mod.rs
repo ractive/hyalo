@@ -556,10 +556,12 @@ pub(crate) fn find_prepared(
                 && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
+                && bm25_idx.doc_count() == index.entries().len()
                 && bm25_idx
                     .document_paths()
                     .all(|path| index.get(path).is_some_and(cached_language_matches))
             {
+                hyalo_core::internal_metrics::record_direct_indexed_scoring();
                 let all_scored = bm25_idx.score_compiled(query);
                 let map: HashMap<String, f64> = all_scored
                     .into_iter()
@@ -616,7 +618,17 @@ pub(crate) fn find_prepared(
                 index
                     .bm25_index()
                     .filter(|bm25| bm25.tokenizer_version() == TOKENIZER_VERSION)
-                    .map(|bm25| bm25.reconstruct_selected_tokens(&recovery_paths))
+                    .and_then(
+                        |bm25| match bm25.reconstruct_selected_tokens(&recovery_paths) {
+                            Ok(tokens) => Some(tokens),
+                            Err(error) => {
+                                crate::warn::warn(format!(
+                                    "{error}; reading selected notes from disk"
+                                ));
+                                None
+                            }
+                        },
+                    )
                     .unwrap_or_default()
             };
             let mut pre_tok_inputs: Vec<PreTokenizedInput> = Vec::new();

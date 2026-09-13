@@ -1,5 +1,4 @@
 /// `hyalo new` — create a new markdown file scaffolded from a schema type.
-use std::fmt::Write as _;
 use std::path::{Component, Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -103,7 +102,43 @@ pub(crate) fn create_new(
     // `type:` key (the bind already types the file).
     let rel_for_bind = file_arg.replace('\\', "/");
     let bound_here = schema.bound_type_for(&rel_for_bind) == Some(type_name);
-    let content = synthesise_content(type_name, &merged, bound_here);
+    let content = match synthesise_content(type_name, &merged, bound_here) {
+        Ok(content) => content,
+        Err(error) => {
+            return Ok(CommandOutcome::UserError(user_diagnostic(
+                format,
+                &format!("invalid generated document: {error}"),
+                Some(file_arg),
+                Some("check schema defaults and property names"),
+                None,
+            )));
+        }
+    };
+    if let Err(error) = preflight_new_parents(dir, Path::new(file_arg)) {
+        return Ok(CommandOutcome::UserError(user_diagnostic(
+            format,
+            &error.to_string(),
+            Some(file_arg),
+            Some("use a real in-vault parent directory, without symlinks"),
+            None,
+        )));
+    }
+    if let Err(error) = hyalo_core::frontmatter::read_frontmatter_from_reader(std::io::Cursor::new(
+        content.as_bytes(),
+    )) {
+        if let Some(budget) = hyalo_core::frontmatter::as_budget_error(&error) {
+            return Ok(CommandOutcome::UserError(crate::output::budget_diagnostic(
+                format, budget,
+            )));
+        }
+        return Ok(CommandOutcome::UserError(user_diagnostic(
+            format,
+            &format!("invalid generated document: {error}"),
+            Some(file_arg),
+            None,
+            None,
+        )));
+    }
 
     // Pre-flight budget check: reject before touching the filesystem.
     // Extract the YAML content between the --- delimiters.
@@ -199,18 +234,8 @@ fn publish_new(
     )
 }
 
-fn publish_new_with_session(
-    dir: &Path,
-    rel_path: &str,
-    content: &[u8],
-    journal: &mut crate::commands::journal::MutationJournal<'_>,
-    mut session: hyalo_core::rooted::WriteSession,
-) -> Result<crate::commands::apply::ApplyReport> {
-    use crate::commands::apply::{ApplyReport, EffectFailure, EffectState, PathEffect};
-    use hyalo_core::rooted::{RelativeName, VaultRoot};
-
-    let root = VaultRoot::new(dir)?;
-    let relative = Path::new(rel_path);
+/// Both preview and publication use this same predictable path policy.
+fn preflight_new_parents(dir: &Path, relative: &Path) -> Result<Vec<PathBuf>> {
     let mut manifest = Vec::new();
     let mut current = PathBuf::new();
     if let Some(parent) = relative.parent() {
@@ -231,6 +256,22 @@ fn publish_new_with_session(
             }
         }
     }
+    Ok(manifest)
+}
+
+fn publish_new_with_session(
+    dir: &Path,
+    rel_path: &str,
+    content: &[u8],
+    journal: &mut crate::commands::journal::MutationJournal<'_>,
+    mut session: hyalo_core::rooted::WriteSession,
+) -> Result<crate::commands::apply::ApplyReport> {
+    use crate::commands::apply::{ApplyReport, EffectFailure, EffectState, PathEffect};
+    use hyalo_core::rooted::{RelativeName, VaultRoot};
+
+    let root = VaultRoot::new(dir)?;
+    let relative = Path::new(rel_path);
+    let manifest = preflight_new_parents(dir, relative)?;
     let manifest: Vec<(PathBuf, RelativeName)> = manifest
         .into_iter()
         .map(|directory| Ok((directory.clone(), RelativeName::new(&directory)?)))
@@ -440,7 +481,7 @@ fn synthesise_content(
     type_name: &str,
     merged: &hyalo_core::schema::TypeSchema,
     omit_type: bool,
-) -> String {
+) -> Result<String> {
     // Build an ordered map of frontmatter properties.
     // `type` comes first — unless a `[[schema.bind]]` already types this file,
     // in which case the explicit key is redundant (and non-spec for formats like
@@ -462,7 +503,9 @@ fn synthesise_content(
         }
         emit_order.push(prop_name.clone());
     }
-    for prop_name in merged.defaults.keys() {
+    let mut default_keys: Vec<_> = merged.defaults.keys().collect();
+    default_keys.sort_unstable();
+    for prop_name in default_keys {
         if prop_name != "type" && !emit_order.iter().any(|p| p == prop_name) {
             emit_order.push(prop_name.clone());
         }
@@ -498,16 +541,23 @@ fn synthesise_content(
                 default_val.map_or(PropValue::Null, PropValue::Str)
             }
             Some(PropertyConstraint::Number { .. }) => match default_val {
-                Some(s) => s
-                    .parse::<i64>()
-                    .map_or_else(|_| PropValue::Str(s), PropValue::Int),
+                Some(s) => PropValue::Number(
+                    // Preserve accepted integer spellings such as +1 and 007
+                    // before parsing the additional JSON fractional forms.
+                    s.parse::<i64>()
+                        .map(serde_json::Number::from)
+                        .or_else(|_| s.parse::<serde_json::Number>())
+                        .map_err(|_| {
+                            anyhow::anyhow!("default for {prop_name} must be a finite number")
+                        })?,
+                ),
                 None => PropValue::Null,
             },
             Some(PropertyConstraint::Boolean) => match default_val {
                 Some(s) => match s.as_str() {
                     "true" => PropValue::Bool(true),
                     "false" => PropValue::Bool(false),
-                    _ => PropValue::Str(s),
+                    _ => anyhow::bail!("default for {prop_name} must be true or false"),
                 },
                 None => PropValue::Null,
             },
@@ -515,11 +565,20 @@ fn synthesise_content(
                 PropertyConstraint::List
                 | PropertyConstraint::StringList { .. }
                 | PropertyConstraint::ObjectList { .. },
-            ) => {
-                // A default for list properties is uncommon; treat unparseable
-                // values as a scalar string fallback rather than fabricating items.
-                default_val.map_or(PropValue::EmptyList, PropValue::Str)
-            }
+            ) => match default_val {
+                None => PropValue::EmptyList,
+                Some(value) => {
+                    let parsed: serde_json::Value = serde_saphyr::from_str_with_options(
+                        &value,
+                        hyalo_core::frontmatter::hyalo_options(),
+                    )?;
+                    anyhow::ensure!(
+                        parsed.is_array(),
+                        "default for {prop_name} must be a YAML list"
+                    );
+                    PropValue::List(parsed)
+                }
+            },
             Some(PropertyConstraint::Enum { values }) => {
                 if let Some(d) = default_val {
                     PropValue::Str(d)
@@ -535,27 +594,23 @@ fn synthesise_content(
         props.insert(prop_name.clone(), value);
     }
 
-    // Build YAML lines manually for precise control over output format.
-    let mut yaml_lines = String::new();
-    for (k, v) in &props {
-        match v {
-            PropValue::Str(s) => {
-                let _ = writeln!(yaml_lines, "{k}: {}", yaml_scalar(s));
-            }
-            PropValue::Bool(b) => {
-                let _ = writeln!(yaml_lines, "{k}: {b}");
-            }
-            PropValue::Int(n) => {
-                let _ = writeln!(yaml_lines, "{k}: {n}");
-            }
-            PropValue::EmptyList => {
-                let _ = writeln!(yaml_lines, "{k}: []");
-            }
-            PropValue::Null => {
-                let _ = writeln!(yaml_lines, "{k}:");
-            }
-        }
-    }
+    let values = props
+        .into_iter()
+        .map(|(key, value)| {
+            (
+                key,
+                match value {
+                    PropValue::Str(value) => serde_json::Value::String(value),
+                    PropValue::Bool(value) => serde_json::Value::Bool(value),
+                    PropValue::Number(value) => serde_json::Value::Number(value),
+                    PropValue::List(value) => value,
+                    PropValue::EmptyList => serde_json::Value::Array(Vec::new()),
+                    PropValue::Null => serde_json::Value::Null,
+                },
+            )
+        })
+        .collect();
+    let yaml_lines = hyalo_core::frontmatter::emit_properties(&values)?;
 
     // Build frontmatter block.
     let mut content = String::from("---\n");
@@ -579,7 +634,7 @@ fn synthesise_content(
     let mut content = trimmed.to_owned();
     content.push('\n');
 
-    content
+    Ok(content)
 }
 
 /// The generic scaffold placeholder used for un-defaulted string properties.
@@ -618,7 +673,8 @@ fn placeholder_violates(constraint: &PropertyConstraint) -> bool {
 enum PropValue {
     Str(String),
     Bool(bool),
-    Int(i64),
+    Number(serde_json::Number),
+    List(serde_json::Value),
     EmptyList,
     /// An un-filled required property: the key is emitted with no value, which
     /// YAML reads as null.
@@ -631,29 +687,6 @@ enum PropValue {
     /// empty"), so `hyalo lint` names exactly the fields the scaffold could
     /// not know. A schema-declared `default` is still emitted verbatim.
     Null,
-}
-
-/// Produce a YAML scalar string value. Quotes the string if needed.
-fn yaml_scalar(s: &str) -> String {
-    // Strings that need quoting: empty, contain leading/trailing whitespace,
-    // look like YAML keywords, or contain characters that change YAML meaning.
-    let needs_quoting = s.is_empty()
-        || s.trim() != s
-        || matches!(s, "true" | "false" | "yes" | "no" | "null" | "~")
-        || s.starts_with(['#', '&', '*', '?', '|', '-', '<', '>', '!', '%', '@', '`'])
-        || s.starts_with('"')
-        || s.starts_with('\'')
-        || s.contains(": ")
-        || s.contains(" #")
-        || s.contains('\n')
-        || s.parse::<f64>().is_ok(); // looks like a number
-
-    if needs_quoting {
-        // Simple double-quote with minimal escaping.
-        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        s.to_owned()
-    }
 }
 
 /// Serialized NewResult command contract.
