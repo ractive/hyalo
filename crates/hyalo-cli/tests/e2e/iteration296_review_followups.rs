@@ -217,6 +217,38 @@ fn iteration296_pi_invalid_and_runtime_conflicts_fail_before_artifacts() {
         assert!(!tmp.path().join(".pi/extensions").exists());
         assert!(!tmp.path().join(".pi/.hyalo-manifest.json").exists());
     }
+    for (parent, nested) in [
+        (r#"{"type":"module"}"#, Some("{}")),
+        (r#"{"type":"module"}"#, Some(r#"{"type":"commonjs"}"#)),
+        (r#"{"type":"commonjs"}"#, None),
+        ("{}", None),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        write_md(tmp.path(), ".pi/package.json", parent);
+        if let Some(nested) = nested {
+            write_md(tmp.path(), ".pi/lib/package.json", nested);
+        }
+        let helper = "module.exports = 42;\n";
+        write_md(tmp.path(), ".pi/lib/helper.js", helper);
+        assert!(!run(tmp.path(), &["init", "--pi"]).status.success());
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".pi/package.json")).unwrap(),
+            parent
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".pi/lib/helper.js")).unwrap(),
+            helper
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".pi/lib/package.json"))
+                .ok()
+                .as_deref(),
+            nested
+        );
+        assert!(!tmp.path().join(".hyalo.toml").exists());
+        assert!(!tmp.path().join(".pi/extensions").exists());
+        assert!(!tmp.path().join(".pi/.hyalo-manifest.json").exists());
+    }
 }
 
 #[test]

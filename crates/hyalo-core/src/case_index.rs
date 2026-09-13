@@ -125,12 +125,13 @@ impl CaseInsensitiveIndex {
 
     /// A move's complete path/alias inventory after the planned renames.
     pub(crate) fn project_renames(&self, renames: &[(String, String)]) -> Self {
-        let destination_for = |path: &str| {
-            renames
-                .iter()
-                .find(|(old, _)| old == path)
-                .map(|(_, new)| new.as_str())
-        };
+        let mut destinations = HashMap::with_capacity(renames.len());
+        for (old, new) in renames {
+            // Match exact path spelling and retain the first mapping, as the
+            // previous linear search did, even for duplicate input keys.
+            destinations.entry(old.as_str()).or_insert(new.as_str());
+        }
+        let destination_for = |path: &str| destinations.get(path).copied();
         let mut projected = Self::with_capacity(self.len());
         projected.case_insensitive_paths = self.case_insensitive_paths;
         projected.aliases_enabled = self.aliases_enabled;
@@ -1386,5 +1387,41 @@ mod tests {
         assert_eq!(all, ["Notes/Foo.md", "Notes/foo.md"]);
         assert_eq!(idx.lookup_unique("notes/foo.md"), None, "ambiguous by case");
         assert_eq!(idx.lookup_stem_all("Foo").len(), 2);
+    }
+
+    #[test]
+    fn projected_renames_preserve_exact_paths_aliases_and_first_mapping() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.set_case_insensitive_paths(true);
+        idx.set_aliases_enabled(true);
+        idx.set_complete(true);
+        for path in ["Notes/Foo.md", "Notes/foo.md", "Other.md", "Untouched.md"] {
+            idx.insert(path);
+        }
+        idx.insert_aliases("Notes/Foo.md", ["first", "shared"]);
+        idx.insert_aliases("Notes/foo.md", ["lower"]);
+        idx.insert_aliases("Other.md", ["shared"]);
+        idx.insert_aliases("Untouched.md", ["kept"]);
+        let projected = idx.project_renames(&[
+            ("Notes/Foo.md".into(), "Moved/First.md".into()),
+            ("Notes/Foo.md".into(), "Ignored.md".into()),
+            ("Other.md".into(), "Moved/Second.md".into()),
+        ]);
+        assert!(projected.is_complete());
+        assert!(projected.aliases_enabled());
+        assert_eq!(
+            projected.lookup_unique("moved/first.md"),
+            Some("Moved/First.md")
+        );
+        assert_eq!(projected.lookup_alias("first"), Some("Moved/First.md"));
+        assert_eq!(projected.lookup_alias("lower"), Some("Notes/foo.md"));
+        assert_eq!(projected.lookup_alias("kept"), Some("Untouched.md"));
+        let mut shared = projected.lookup_alias_all("shared").to_vec();
+        shared.sort();
+        assert_eq!(shared, ["Moved/First.md", "Moved/Second.md"]);
+        assert_eq!(projected.lookup_alias("shared"), None);
+        assert!(!projected.contains_path("Notes/Foo.md"));
+        assert!(!projected.contains_path("Ignored.md"));
+        assert!(idx.contains_path("Notes/Foo.md"));
     }
 }

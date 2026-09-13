@@ -280,3 +280,27 @@ test('Pi shared manifest keeps CommonJS scripts while the owned runtime imports 
     } finally { await fs.rm(scratch, { recursive: true, force: true }); }
   }
 });
+
+test('Pi init preserves a helper that already inherits the shared ESM scope', async () => {
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'hyalo-pi-inherited-esm-'));
+  try {
+    await fs.mkdir(path.join(scratch, '.pi/lib'), { recursive: true });
+    const original = { type: 'module', private: true, dependencies: { custom: '1' } };
+    const manifest = path.join(scratch, '.pi/package.json');
+    await fs.writeFile(manifest, JSON.stringify(original));
+    const helper = path.join(scratch, '.pi/lib/helper.js');
+    const helperSource = "import { basename } from 'node:path'; export const answer = 42; console.log(basename(import.meta.filename));\n";
+    await fs.writeFile(helper, helperSource);
+    const before = await execFileAsync(process.execPath, [helper]);
+    assert.equal(before.stdout.trim(), 'helper.js');
+    await execFileAsync(binary, ['init', '--pi', '--dir', 'vault'], { cwd: scratch });
+    assert.equal((await execFileAsync(process.execPath, [helper])).stdout, before.stdout);
+    const runtime = await import(pathToFileURL(path.join(scratch, '.pi/lib/hyalo-api.js')).href);
+    assert.equal(typeof runtime.configForPi, 'function');
+    await execFileAsync(binary, ['deinit'], { cwd: scratch });
+    assert.deepEqual(JSON.parse(await fs.readFile(manifest, 'utf8')), original);
+    assert.equal(await fs.readFile(helper, 'utf8'), helperSource);
+    assert.equal((await execFileAsync(process.execPath, [helper])).stdout, before.stdout);
+    await assert.rejects(fs.access(path.join(scratch, '.pi/lib/package.json')), { code: 'ENOENT' });
+  } finally { await fs.rm(scratch, { recursive: true, force: true }); }
+});

@@ -281,9 +281,16 @@ pub(super) fn prepare(root: &Path) -> Result<Plan> {
             ".pi/lib/package.json type conflicts with Hyalo's ES module runtime; use a separate Pi package or relocate the existing runtime configuration"
         );
     } else {
-        // Module metadata may only change the runtime's own files. An
-        // existing shared lib directory may contain CommonJS scripts.
-        if root.join(".pi/lib").is_dir() {
+        // Without a nested package boundary, the captured parent's explicit
+        // module type already applies to every script in lib. Otherwise adding
+        // module metadata must not change unrelated scripts' interpretation.
+        let inherits_esm = runtime_original.is_none()
+            && original
+                .as_ref()
+                .and_then(|value| value.get("type"))
+                .and_then(Value::as_str)
+                == Some("module");
+        if !inherits_esm && root.join(".pi/lib").is_dir() {
             for entry in std::fs::read_dir(root.join(".pi/lib"))? {
                 let entry = entry?;
                 anyhow::ensure!(
