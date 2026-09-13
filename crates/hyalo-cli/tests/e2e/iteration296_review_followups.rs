@@ -347,9 +347,81 @@ fn iteration296_madr_only_changes_the_real_region_and_refuses_malformed_pairs() 
 }
 
 #[test]
+fn iteration296_pi_retained_registrations_keep_artifacts_and_receipt() {
+    for (field, registration, duplicate) in [
+        ("extensions", "./extensions/hyalo.ts", true),
+        ("extensions", "./extensions/hyalo.ts", false),
+        ("extensions", "./extensions", false),
+        ("skills", "./skills", false),
+        ("skills", "./skills/hyalo/SKILL.md", false),
+        ("extensions", "./extensions/*.ts", false),
+        ("extensions", "./extensions//./hyalo.ts", false),
+        ("extensions", "./EXTENSIONS/HYALO.TS", false),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let mut original = json!({"private":true,"dependencies":{"custom":"1"},"pi":{"extensions":["./other"],"skills":["./custom"]}});
+        if !duplicate {
+            original["pi"][field]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(registration));
+        }
+        write_md(tmp.path(), ".pi/package.json", &original.to_string());
+        ok(tmp.path(), &["init", "--pi"]);
+        if duplicate {
+            let mut edited = manifest(tmp.path());
+            edited["pi"][field]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(registration));
+            write_md(tmp.path(), ".pi/package.json", &edited.to_string());
+        }
+        let shared = fs::read(tmp.path().join(".pi/package.json")).unwrap();
+        let receipt = fs::read(tmp.path().join(".pi/.hyalo-manifest.json")).unwrap();
+        let artifacts: Vec<_> = PI_ARTIFACTS
+            .iter()
+            .map(|path| fs::read(tmp.path().join(path)).unwrap())
+            .collect();
+        let outcome = ok(tmp.path(), &["deinit"]);
+        assert!(
+            outcome.to_string().contains("retains registrations"),
+            "{outcome}"
+        );
+        assert_eq!(
+            fs::read(tmp.path().join(".pi/package.json")).unwrap(),
+            shared
+        );
+        assert_eq!(
+            fs::read(tmp.path().join(".pi/.hyalo-manifest.json")).unwrap(),
+            receipt
+        );
+        for (path, bytes) in PI_ARTIFACTS.iter().zip(artifacts) {
+            assert_eq!(fs::read(tmp.path().join(path)).unwrap(), bytes);
+        }
+        // Removing the user-owned reference makes normal cleanup possible.
+        let mut edited = manifest(tmp.path());
+        edited["pi"][field]
+            .as_array_mut()
+            .unwrap()
+            .retain(|entry| entry != registration);
+        write_md(tmp.path(), ".pi/package.json", &edited.to_string());
+        ok(tmp.path(), &["deinit"]);
+        for path in PI_ARTIFACTS.into_iter().chain([".pi/.hyalo-manifest.json"]) {
+            assert!(!tmp.path().join(path).exists(), "{registration}: {path}");
+        }
+        assert_eq!(
+            manifest(tmp.path())["dependencies"],
+            original["dependencies"]
+        );
+        assert_eq!(manifest(tmp.path())["pi"]["extensions"], json!(["./other"]));
+        assert_eq!(manifest(tmp.path())["pi"]["skills"], json!(["./custom"]));
+    }
+}
+
+#[test]
 fn iteration296_pi_shared_manifest_round_trip_and_repeat_install() {
     let tmp = TempDir::new().unwrap();
-    let original = json!({"private":true,"dependencies":{"custom-extension":"1.0.0"},"scripts":{"test":"custom"},"pi":{"extensions":["./other", "./extensions"],"skills":["./custom"]},"unknown":{"preserve":42}});
+    let original = json!({"private":true,"dependencies":{"custom-extension":"1.0.0"},"scripts":{"test":"custom"},"pi":{"extensions":["./other"],"skills":["./custom"]},"unknown":{"preserve":42}});
     write_md(tmp.path(), ".pi/package.json", &original.to_string());
     ok(tmp.path(), &["init", "--pi"]);
     let first = manifest(tmp.path());
@@ -371,7 +443,10 @@ fn iteration296_pi_shared_manifest_round_trip_and_repeat_install() {
 
     assert_eq!(first["dependencies"], original["dependencies"]);
     assert_eq!(first["scripts"], original["scripts"]);
-    assert_eq!(first["pi"]["extensions"], original["pi"]["extensions"]);
+    assert_eq!(
+        first["pi"]["extensions"],
+        json!(["./other", "./extensions/hyalo.ts"])
+    );
     assert!(first.get("type").is_none());
     assert_eq!(
         serde_json::from_slice::<Value>(
@@ -401,6 +476,7 @@ fn iteration296_pi_reinit_records_new_additions_and_preserves_user_edits() {
     ok(tmp.path(), &["init", "--pi"]);
     let mut edited = original;
     edited["pi"]["extensions"] = json!(["./user-extension"]);
+    edited["pi"]["skills"] = json!(["./user-skills"]);
     edited["dependencies"]["custom"] = json!("2");
     write_md(tmp.path(), ".pi/package.json", &edited.to_string());
     let runtime_edited = json!({"private":true,"user":{"keep":42}});
@@ -926,7 +1002,7 @@ fn iteration296_duplicate_receipt_keys_preserve_ownership_and_shared_manifests()
                 r#""runtime_installed":{"type":"module","type":"module"}"#,
             )
         } else {
-            receipt.replace(r#""version":2"#, r#""version":2,"version":2"#)
+            receipt.replace(r#""version":3"#, r#""version":3,"version":3"#)
         };
         assert_ne!(ambiguous, receipt);
         fs::write(&receipt_path, &ambiguous).unwrap();
