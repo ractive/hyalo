@@ -496,7 +496,9 @@ fn initialize_observed(
         if root.exists() {
             preflight_installation_manifest(root, claude, pi, profile, codex)?;
         }
-        let pi_manifest = pi.then(|| pi_manifest::prepare(root)).transpose()?;
+        let pi_manifest = pi
+            .then(|| pi_manifest::prepare(root, &dir_value))
+            .transpose()?;
         // A vault outside CWD becomes its own project root, so create the tree
         // itself before writing `.hyalo.toml` into it.
         if scope.external && !root.exists() {
@@ -811,117 +813,8 @@ fn initialize_observed(
             }
         }
 
-        // ------------------------------------------------------------------
-        // pi integration steps
-        // ------------------------------------------------------------------
-        if pi {
-            // Step 6: write (overwrite) .pi/skills/hyalo/SKILL.md
-            let pi_skill_path = root
-                .join(".pi")
-                .join("skills")
-                .join("hyalo")
-                .join("SKILL.md");
-            let pi_skill_existed = pi_skill_path.exists();
-            let pi_skill_dir = pi_skill_path
-                .parent()
-                .context("pi skill path has no parent directory")?;
-            ensure_installation_dir(root, pi_skill_dir, &mut report).with_context(|| {
-                format!("failed to create directory {}", pi_skill_dir.display())
-            })?;
-            publish_installation(
-                root,
-                &pi_skill_path,
-                parameterize_template(PI_SKILL_CONTENT, &dir_value).as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", pi_skill_path.display()))?;
-            if pi_skill_existed {
-                report.push("updated", ".pi/skills/hyalo/SKILL.md");
-            } else {
-                report.push("created", ".pi/skills/hyalo/SKILL.md");
-            }
-
-            // Step 7: write (overwrite) .pi/skills/hyalo-tidy/SKILL.md
-            let pi_tidy_skill_path = root
-                .join(".pi")
-                .join("skills")
-                .join("hyalo-tidy")
-                .join("SKILL.md");
-            let pi_tidy_skill_existed = pi_tidy_skill_path.exists();
-            let pi_tidy_skill_dir = pi_tidy_skill_path
-                .parent()
-                .context("pi tidy skill path has no parent directory")?;
-            ensure_installation_dir(root, pi_tidy_skill_dir, &mut report).with_context(|| {
-                format!("failed to create directory {}", pi_tidy_skill_dir.display())
-            })?;
-            publish_installation(
-                root,
-                &pi_tidy_skill_path,
-                parameterize_template(PI_TIDY_SKILL_CONTENT, &dir_value).as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", pi_tidy_skill_path.display()))?;
-            if pi_tidy_skill_existed {
-                report.push("updated", ".pi/skills/hyalo-tidy/SKILL.md");
-            } else {
-                report.push("created", ".pi/skills/hyalo-tidy/SKILL.md");
-            }
-
-            // Step 8: write (overwrite) .pi/extensions/hyalo.ts
-            let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
-            let pi_extension_existed = pi_extension_path.exists();
-            let pi_extension_dir = pi_extension_path
-                .parent()
-                .context("pi extension path has no parent directory")?;
-            ensure_installation_dir(root, pi_extension_dir, &mut report).with_context(|| {
-                format!("failed to create directory {}", pi_extension_dir.display())
-            })?;
-            publish_installation(root, &pi_extension_path, PI_EXTENSION_CONTENT.as_bytes())
-                .with_context(|| format!("failed to write {}", pi_extension_path.display()))?;
-            if pi_extension_existed {
-                report.push("updated", ".pi/extensions/hyalo.ts");
-            } else {
-                report.push("created", ".pi/extensions/hyalo.ts");
-            }
-
-            // Step 9: write (overwrite) the self-contained API runtime used by the extension.
-            let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
-            let pi_api_runtime_existed = pi_api_runtime_path.exists();
-            let pi_api_runtime_dir = pi_api_runtime_path
-                .parent()
-                .context("pi API runtime path has no parent directory")?;
-            ensure_installation_dir(root, pi_api_runtime_dir, &mut report).with_context(|| {
-                format!(
-                    "failed to create directory {}",
-                    pi_api_runtime_dir.display()
-                )
-            })?;
-            publish_installation(
-                root,
-                &pi_api_runtime_path,
-                PI_API_RUNTIME_CONTENT.as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", pi_api_runtime_path.display()))?;
-            if pi_api_runtime_existed {
-                report.push("updated", ".pi/lib/hyalo-api.js");
-            } else {
-                report.push("created", ".pi/lib/hyalo-api.js");
-            }
-            let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
-            let pi_api_declaration_existed = pi_api_declaration_path.exists();
-            publish_installation(
-                root,
-                &pi_api_declaration_path,
-                PI_API_DECLARATION_CONTENT.as_bytes(),
-            )
-            .with_context(|| format!("failed to write {}", pi_api_declaration_path.display()))?;
-            if pi_api_declaration_existed {
-                report.push("updated", ".pi/lib/hyalo-api.d.ts");
-            } else {
-                report.push("created", ".pi/lib/hyalo-api.d.ts");
-            }
-
-            if let Some(plan) = pi_manifest {
-                plan.publish(root, &mut report)?;
-            }
+        if let Some(plan) = pi_manifest {
+            plan.publish(root, &mut report)?;
         }
 
         Ok(())
@@ -1369,75 +1262,16 @@ fn deinitialize_observed(
 
         pi_manifest::remove(root, &mut report)?;
 
-        // Step 6: Remove pi artifacts
-        // Remove .pi/skills/hyalo/SKILL.md and parent dir if empty.
-        let pi_skill_path = root
-            .join(".pi")
-            .join("skills")
-            .join("hyalo")
-            .join("SKILL.md");
-        remove_artifact(
-            root,
-            &pi_skill_path,
-            ".pi/skills/hyalo/SKILL.md",
-            &mut report,
-        )?;
-        let pi_skill_dir = pi_skill_path
-            .parent()
-            .context("pi skill path has no parent directory")?;
-        remove_dir_if_empty(pi_skill_dir, ".pi/skills/hyalo/", &mut report)?;
-
-        // Remove .pi/skills/hyalo-tidy/SKILL.md and parent dir if empty.
-        let pi_tidy_skill_path = root
-            .join(".pi")
-            .join("skills")
-            .join("hyalo-tidy")
-            .join("SKILL.md");
-        remove_artifact(
-            root,
-            &pi_tidy_skill_path,
-            ".pi/skills/hyalo-tidy/SKILL.md",
-            &mut report,
-        )?;
-        let pi_tidy_skill_dir = pi_tidy_skill_path
-            .parent()
-            .context("pi tidy skill path has no parent directory")?;
-        remove_dir_if_empty(pi_tidy_skill_dir, ".pi/skills/hyalo-tidy/", &mut report)?;
-
-        // Remove .pi/skills/ if empty (after removing hyalo and hyalo-tidy subdirectories)
-        let pi_skills_parent_dir = root.join(".pi").join("skills");
-        remove_dir_if_empty(&pi_skills_parent_dir, ".pi/skills/", &mut report)?;
-
-        // Remove the Pi extension and its generated API runtime.
-        let pi_extension_path = root.join(".pi").join("extensions").join("hyalo.ts");
-        remove_artifact(
-            root,
-            &pi_extension_path,
-            ".pi/extensions/hyalo.ts",
-            &mut report,
-        )?;
-        let pi_api_runtime_path = root.join(".pi").join("lib").join("hyalo-api.js");
-        remove_artifact(
-            root,
-            &pi_api_runtime_path,
-            ".pi/lib/hyalo-api.js",
-            &mut report,
-        )?;
-        let pi_api_declaration_path = root.join(".pi").join("lib").join("hyalo-api.d.ts");
-        remove_artifact(
-            root,
-            &pi_api_declaration_path,
-            ".pi/lib/hyalo-api.d.ts",
-            &mut report,
-        )?;
-        let pi_api_runtime_dir = pi_api_runtime_path
-            .parent()
-            .context("pi API runtime path has no parent directory")?;
-        remove_dir_if_empty(pi_api_runtime_dir, ".pi/lib/", &mut report)?;
-        let pi_extension_dir = pi_extension_path
-            .parent()
-            .context("pi extension path has no parent directory")?;
-        remove_dir_if_empty(pi_extension_dir, ".pi/extensions/", &mut report)?;
+        // Only empty directories are cleaned after ownership-aware removal.
+        for relative in [
+            ".pi/skills/hyalo",
+            ".pi/skills/hyalo-tidy",
+            ".pi/skills",
+            ".pi/extensions",
+            ".pi/lib",
+        ] {
+            remove_dir_if_empty(&root.join(relative), relative, &mut report)?;
+        }
 
         // Remove .pi/ if empty.
         let pi_dir = root.join(".pi");

@@ -556,6 +556,7 @@ pub(crate) fn find_prepared(
                 && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
+                && bm25_idx.doc_count() == index.entries().len()
                 && bm25_idx
                     .document_paths()
                     .all(|path| index.get(path).is_some_and(cached_language_matches))

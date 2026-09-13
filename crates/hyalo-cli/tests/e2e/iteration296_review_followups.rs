@@ -26,6 +26,243 @@ fn manifest(root: &Path) -> Value {
     serde_json::from_slice(&fs::read(root.join(".pi/package.json")).unwrap()).unwrap()
 }
 
+const PI_ARTIFACTS: [&str; 5] = [
+    ".pi/skills/hyalo/SKILL.md",
+    ".pi/skills/hyalo-tidy/SKILL.md",
+    ".pi/extensions/hyalo.ts",
+    ".pi/lib/hyalo-api.js",
+    ".pi/lib/hyalo-api.d.ts",
+];
+
+#[test]
+fn iteration296_pi_artifact_collisions_and_unrecognized_ownership_preserve_files() {
+    for receipt in [None, Some("{}"), Some(r#"{"version":99}"#)] {
+        let tmp = TempDir::new().unwrap();
+        let shared = r#"{"type":"module","pi":{"extensions":["./extensions/hyalo.ts"]}}"#;
+        write_md(tmp.path(), ".pi/package.json", shared);
+        for path in PI_ARTIFACTS {
+            write_md(tmp.path(), path, "User authored bytes\n");
+        }
+        if let Some(receipt) = receipt {
+            write_md(tmp.path(), ".pi/.hyalo-manifest.json", receipt);
+        }
+        assert!(!run(tmp.path(), &["init", "--pi"]).status.success());
+        assert!(!tmp.path().join(".hyalo.toml").exists());
+        ok(tmp.path(), &["deinit"]);
+        for path in PI_ARTIFACTS {
+            assert_eq!(
+                fs::read_to_string(tmp.path().join(path)).unwrap(),
+                "User authored bytes\n"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".pi/package.json")).unwrap(),
+            shared
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".pi/.hyalo-manifest.json"))
+                .ok()
+                .as_deref(),
+            receipt
+        );
+    }
+}
+
+#[test]
+fn iteration296_pi_changed_artifacts_preserve_registration_and_receipt_but_owned_upgrade_works() {
+    for path in PI_ARTIFACTS {
+        let tmp = TempDir::new().unwrap();
+        ok(tmp.path(), &["init", "--pi"]);
+        let installed = fs::read_to_string(tmp.path().join(path)).unwrap();
+        let receipt_path = tmp.path().join(".pi/.hyalo-manifest.json");
+        let receipt = fs::read(&receipt_path).unwrap();
+        let shared = fs::read(tmp.path().join(".pi/package.json")).unwrap();
+        write_md(tmp.path(), path, "Edited after install\n");
+        assert!(!run(tmp.path(), &["init", "--pi"]).status.success());
+        let outcome = ok(tmp.path(), &["deinit"]);
+        assert!(outcome.to_string().contains("unowned or changed"));
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(path)).unwrap(),
+            "Edited after install\n"
+        );
+        assert_eq!(fs::read(&receipt_path).unwrap(), receipt);
+        assert_eq!(
+            fs::read(tmp.path().join(".pi/package.json")).unwrap(),
+            shared
+        );
+        // Model an unchanged older vendored artifact: the receipt and file agree.
+        let mut old: Value = serde_json::from_slice(&receipt).unwrap();
+        old["artifacts"][path] = json!("Previous shipped version\n");
+        fs::write(&receipt_path, old.to_string()).unwrap();
+        write_md(tmp.path(), path, "Previous shipped version\n");
+        ok(tmp.path(), &["init", "--pi"]);
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(path)).unwrap(),
+            installed
+        );
+        ok(tmp.path(), &["deinit"]);
+        for artifact in PI_ARTIFACTS {
+            assert!(!tmp.path().join(artifact).exists());
+        }
+        assert!(!receipt_path.exists());
+    }
+}
+
+#[test]
+fn iteration296_manifest_only_legacy_receipt_cannot_own_artifacts() {
+    let tmp = TempDir::new().unwrap();
+    ok(tmp.path(), &["init", "--pi"]);
+    let receipt_path = tmp.path().join(".pi/.hyalo-manifest.json");
+    let mut receipt: Value = serde_json::from_slice(&fs::read(&receipt_path).unwrap()).unwrap();
+    receipt["version"] = json!(1);
+    receipt.as_object_mut().unwrap().remove("artifacts");
+    fs::write(&receipt_path, receipt.to_string()).unwrap();
+    let before = fs::read(tmp.path().join(".pi/extensions/hyalo.ts")).unwrap();
+    assert!(!run(tmp.path(), &["init", "--pi"]).status.success());
+    ok(tmp.path(), &["deinit"]);
+    assert_eq!(
+        fs::read(tmp.path().join(".pi/extensions/hyalo.ts")).unwrap(),
+        before
+    );
+    assert!(receipt_path.exists());
+    assert!(tmp.path().join(".pi/package.json").exists());
+}
+
+#[test]
+fn iteration296_conflicting_manifest_preserves_pi_artifacts_and_receipt() {
+    for (path, conflicting) in [
+        (".pi/package.json", r#"{"pi":{"extensions":42}}"#),
+        (".pi/lib/package.json", r#"{"type":"commonjs"}"#),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        ok(tmp.path(), &["init", "--pi"]);
+        let receipt = fs::read(tmp.path().join(".pi/.hyalo-manifest.json")).unwrap();
+        write_md(tmp.path(), path, conflicting);
+        let outcome = ok(tmp.path(), &["deinit"]);
+        assert!(outcome.to_string().contains("conflicting"));
+        for artifact in PI_ARTIFACTS {
+            assert!(tmp.path().join(artifact).is_file());
+        }
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(path)).unwrap(),
+            conflicting
+        );
+        assert_eq!(
+            fs::read(tmp.path().join(".pi/.hyalo-manifest.json")).unwrap(),
+            receipt
+        );
+    }
+}
+
+#[test]
+fn iteration296_link_emission_preserves_alias_and_authored_prefix_and_refuses_wrong_identity() {
+    let alias = TempDir::new().unwrap();
+    write_md(alias.path(), ".hyalo.toml", "dir = '.'\n");
+    write_md(
+        alias.path(),
+        "C#.md",
+        "---\naliases: ['C%23']\n---\n# C sharp\n",
+    );
+    write_md(alias.path(), "source.md", "Use C%23 here.\n");
+    ok(
+        alias.path(),
+        &["links", "auto", "--apply", "--no-warn-common-titles"],
+    );
+    assert_eq!(
+        fs::read_to_string(alias.path().join("source.md")).unwrap(),
+        "Use [[C%23|C%23]] here.\n"
+    );
+
+    let collision = TempDir::new().unwrap();
+    write_md(collision.path(), ".hyalo.toml", "dir = '.'\n");
+    write_md(collision.path(), "new.md", "# Other\n");
+    write_md(collision.path(), "new/index.md", "# Intended\n");
+    write_md(collision.path(), "source.md", "[x](new/indx)\n");
+    for apply in [false, true] {
+        let mut args = vec!["links", "fix", "--apply-fuzzy", "--min-confidence", "0"];
+        if apply {
+            args.push("--apply");
+        }
+        let result = ok(collision.path(), &args);
+        assert!(result.to_string().contains("new/index.md"));
+        assert_eq!(
+            fs::read_to_string(collision.path().join("source.md")).unwrap(),
+            "[x](new/indx)\n"
+        );
+    }
+
+    let prefix = TempDir::new().unwrap();
+    write_md(prefix.path(), ".hyalo.toml", "dir = '.'\n");
+    write_md(prefix.path(), "page.md", "# Page\n");
+    write_md(
+        prefix.path(),
+        "source.md",
+        "[x](/en-us/docs/paeg.md#Page)\n",
+    );
+    ok(
+        prefix.path(),
+        &[
+            "--site-prefix",
+            "en-US/docs",
+            "links",
+            "fix",
+            "--apply",
+            "--apply-fuzzy",
+            "--min-confidence",
+            "0",
+        ],
+    );
+    assert_eq!(
+        fs::read_to_string(prefix.path().join("source.md")).unwrap(),
+        "[x](/en-us/docs/page.md#Page)\n"
+    );
+    ok(
+        prefix.path(),
+        &["--site-prefix", "en-US/docs", "mv", "page.md", "renamed.md"],
+    );
+    assert_eq!(
+        fs::read_to_string(prefix.path().join("source.md")).unwrap(),
+        "[x](/en-us/docs/renamed.md#Page)\n"
+    );
+    let found = ok(
+        prefix.path(),
+        &[
+            "--site-prefix",
+            "en-US/docs",
+            "find",
+            "--file",
+            "source.md",
+            "--fields",
+            "links",
+        ],
+    );
+    assert_eq!(found["results"][0]["links"][0]["path"], "renamed.md");
+}
+
+#[test]
+fn iteration296_partial_and_invalid_postings_fall_back_to_correct_disk_results() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = '.'\n");
+    write_md(tmp.path(), "a.md", "needle adjacent\n");
+    write_md(tmp.path(), "b.md", "needle adjacent\n");
+    ok(tmp.path(), &["create-index"]);
+    let path = tmp.path().join(".hyalo-index");
+    let mut snapshot: Value = rmp_serde::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let version = snapshot["bm25_index"]["tokenizer_version"].clone();
+    snapshot["bm25_index"] = json!({"postings":{"needl":[{"doc_id":0,"term_freq":1,"positions":[0]}],"adjac":[{"doc_id":0,"term_freq":1,"positions":[1]}]},"doc_lengths":[2],"doc_paths":["a.md"],"avgdl":2.0,"tokenizer_version":version});
+    fs::write(&path, rmp_serde::to_vec_named(&snapshot).unwrap()).unwrap();
+    let disk = ok(tmp.path(), &["find", "needle"]);
+    let indexed = ok(tmp.path(), &["find", "needle", "--index"]);
+    assert_eq!(disk["results"].as_array().unwrap().len(), 2);
+    assert_eq!(indexed["results"], disk["results"]);
+    // A tiny malformed phrase position must never reach wrapping arithmetic.
+    snapshot["bm25_index"]["postings"]["needl"][0]["positions"][0] = json!(u32::MAX);
+    fs::write(&path, rmp_serde::to_vec_named(&snapshot).unwrap()).unwrap();
+    let disk = ok(tmp.path(), &["find", "\"needle adjacent\""]);
+    let indexed = ok(tmp.path(), &["find", "\"needle adjacent\"", "--index"]);
+    assert_eq!(indexed["results"], disk["results"]);
+}
+
 #[test]
 fn iteration296_madr_only_changes_the_real_region_and_refuses_malformed_pairs() {
     for eol in ["\n", "\r\n"] {
@@ -85,7 +322,16 @@ fn iteration296_pi_shared_manifest_round_trip_and_repeat_install() {
     ok(tmp.path(), &["init", "--pi"]);
     let first = manifest(tmp.path());
     let receipt = fs::read_to_string(tmp.path().join(".pi/.hyalo-manifest.json")).unwrap();
-    assert!(!receipt.contains("custom-extension") && !receipt.contains("preserve"));
+    let manifest_receipt: Value = serde_json::from_str(&receipt).unwrap();
+    for key in [
+        "original",
+        "installed",
+        "runtime_original",
+        "runtime_installed",
+    ] {
+        let projected = manifest_receipt[key].to_string();
+        assert!(!projected.contains("custom-extension") && !projected.contains("preserve"));
+    }
     assert_eq!(
         first["pi"]["skills"],
         json!(["./custom", "./skills/hyalo", "./skills/hyalo-tidy"])
@@ -648,7 +894,7 @@ fn iteration296_duplicate_receipt_keys_preserve_ownership_and_shared_manifests()
                 r#""runtime_installed":{"type":"module","type":"module"}"#,
             )
         } else {
-            receipt.replace(r#""version":1"#, r#""version":1,"version":1"#)
+            receipt.replace(r#""version":2"#, r#""version":2,"version":2"#)
         };
         assert_ne!(ambiguous, receipt);
         fs::write(&receipt_path, &ambiguous).unwrap();

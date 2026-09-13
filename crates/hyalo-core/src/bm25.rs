@@ -925,8 +925,9 @@ impl Bm25InvertedIndex {
         self.postings
             .values()
             .flat_map(|posts| posts.iter())
-            .map(|p| 1 + p.positions.len())
-            .sum()
+            .fold(0_usize, |total, p| {
+                total.saturating_add(1).saturating_add(p.positions.len())
+            })
     }
 
     /// Full reconstruction admission, distinct from compact-postings scoring.
@@ -1081,7 +1082,8 @@ impl Bm25InvertedIndex {
         self.tokenizer_version
     }
 
-    /// Validate that all `doc_id` values in posting lists are within bounds.
+    /// Validate compact scoring structure: unique documents, coherent finite
+    /// length metadata, and strictly ordered, bounded postings and positions.
     ///
     /// A crafted snapshot could contain `doc_id` values that exceed the length of
     /// `doc_paths` or `doc_lengths`, causing an out-of-bounds panic in [`score`](Self::score).
@@ -1093,9 +1095,39 @@ impl Bm25InvertedIndex {
         if self.doc_lengths.len() != max_id {
             return false;
         }
-        self.postings
-            .values()
-            .all(|posts| posts.iter().all(|p| (p.doc_id as usize) < max_id))
+        if !self.avgdl.is_finite()
+            || self.avgdl < 0.0
+            || self.doc_paths.iter().collect::<HashSet<_>>().len() != max_id
+        {
+            return false;
+        }
+        if max_id > 0 {
+            let Some(total) = self
+                .doc_lengths
+                .iter()
+                .try_fold(0_u64, |total, length| total.checked_add(u64::from(*length)))
+            else {
+                return false;
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let expected = total as f64 / max_id as f64;
+            if (self.avgdl - expected).abs() > f64::EPSILON * expected.max(1.0) * 4.0 {
+                return false;
+            }
+        }
+        self.postings.values().all(|posts| {
+            !posts.is_empty()
+                && posts.windows(2).all(|pair| pair[0].doc_id < pair[1].doc_id)
+                && posts.iter().all(|p| {
+                    let Some(length) = self.doc_lengths.get(p.doc_id as usize) else {
+                        return false;
+                    };
+                    !p.positions.is_empty()
+                        && p.term_freq as usize == p.positions.len()
+                        && p.positions.iter().all(|position| position < length)
+                        && p.positions.windows(2).all(|pair| pair[0] < pair[1])
+                })
+        })
     }
 
     // ------------------------------------------------------------------
@@ -1281,9 +1313,10 @@ impl Bm25InvertedIndex {
         // For each starting position of the first term, check for consecutive hits.
         for &start_pos in positions[0] {
             let found = positions.iter().enumerate().skip(1).all(|(i, pos_list)| {
-                #[allow(clippy::cast_possible_truncation)]
-                let target = start_pos + i as u32;
-                pos_list.binary_search(&target).is_ok()
+                u32::try_from(i)
+                    .ok()
+                    .and_then(|offset| start_pos.checked_add(offset))
+                    .is_some_and(|target| pos_list.binary_search(&target).is_ok())
             });
             if found {
                 return true;
@@ -1334,6 +1367,36 @@ pub fn is_low_discriminative(matches: &[Bm25Match], total_docs: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_phrase_offsets_never_wrap_even_before_admission() {
+        let forged = Bm25InvertedIndex::new_for_test(
+            HashMap::from([
+                (
+                    "foo".into(),
+                    vec![Posting {
+                        doc_id: 0,
+                        term_freq: 1,
+                        positions: vec![u32::MAX],
+                    }],
+                ),
+                (
+                    "bar".into(),
+                    vec![Posting {
+                        doc_id: 0,
+                        term_freq: 1,
+                        positions: vec![0],
+                    }],
+                ),
+            ]),
+            vec![2],
+            vec!["doc.md".into()],
+            2.0,
+        );
+        assert!(!forged.validate_doc_ids());
+        let stemmer = Stemmer::create(rust_stemmers::Algorithm::English);
+        assert!(forged.score("\"foo bar\"", &stemmer).is_empty());
+    }
 
     /// BUG-4 (iter-244): token lists reconstructed from postings must be
     /// identical to the tokens that built the index — snapshot entries have

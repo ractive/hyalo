@@ -7,11 +7,32 @@ use anyhow::{Context, Result};
 use hyalo_core::rooted::CapturedInput;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 const RUNTIME_MANIFEST: &str = ".pi/lib/package.json";
 const MANIFEST: &str = ".pi/package.json";
 pub(super) const RECEIPT: &str = ".pi/.hyalo-manifest.json";
+const ARTIFACT_PATHS: [&str; 5] = [
+    ".pi/skills/hyalo/SKILL.md",
+    ".pi/skills/hyalo-tidy/SKILL.md",
+    ".pi/extensions/hyalo.ts",
+    ".pi/lib/hyalo-api.js",
+    ".pi/lib/hyalo-api.d.ts",
+];
+// Exact installed bytes avoid hash collisions and remain bounded independently
+// of the general JSON decoder. The five shipped files currently total < 200 KiB.
+const MAX_ARTIFACT_RECEIPT_BYTES: usize = 2 * 1024 * 1024;
+
+fn valid_artifact_receipts(artifacts: &BTreeMap<String, String>, budget: usize) -> bool {
+    artifacts
+        .keys()
+        .all(|path| ARTIFACT_PATHS.contains(&path.as_str()))
+        && artifacts
+            .values()
+            .try_fold(0_usize, |total, content| total.checked_add(content.len()))
+            .is_some_and(|total| total <= budget)
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -21,6 +42,14 @@ struct Ownership {
     installed: Value,
     runtime_original: Option<Value>,
     runtime_installed: Value,
+    #[serde(default)]
+    artifacts: BTreeMap<String, String>,
+}
+
+struct ArtifactPlan {
+    path: &'static str,
+    source: Option<CapturedInput>,
+    content: String,
 }
 
 pub(super) struct Plan {
@@ -30,6 +59,7 @@ pub(super) struct Plan {
     receipt_source: Option<CapturedInput>,
     manifest: Value,
     ownership: Ownership,
+    artifacts: Vec<ArtifactPlan>,
 }
 
 /// serde_json's ordinary Value decoder keeps the last duplicate object key.
@@ -135,7 +165,8 @@ fn read_ownership(source: &CapturedInput) -> Result<Ownership> {
         "unrecognized Pi ownership receipt; retain it and inspect .pi/.hyalo-manifest.json",
     )?;
     anyhow::ensure!(
-        ownership.version == 1
+        matches!(ownership.version, 1 | 2)
+            && (ownership.version == 2 || ownership.artifacts.is_empty())
             && ownership.installed.is_object()
             && ownership.original.as_ref().is_none_or(Value::is_object)
             && ownership.runtime_installed.is_object()
@@ -144,6 +175,10 @@ fn read_ownership(source: &CapturedInput) -> Result<Ownership> {
                 .as_ref()
                 .is_none_or(Value::is_object),
         "unsupported Pi ownership receipt"
+    );
+    anyhow::ensure!(
+        valid_artifact_receipts(&ownership.artifacts, MAX_ARTIFACT_RECEIPT_BYTES),
+        "unsupported or oversized Pi artifact ownership receipt"
     );
     Ok(ownership)
 }
@@ -206,7 +241,7 @@ fn refreshed_projection(
     ownership_projection(baseline, installed)
 }
 
-pub(super) fn prepare(root: &Path) -> Result<Plan> {
+pub(super) fn prepare(root: &Path, dir_value: &str) -> Result<Plan> {
     let source = if root.exists() {
         capture_installation(root, &root.join(MANIFEST))?
     } else {
@@ -305,6 +340,40 @@ pub(super) fn prepare(root: &Path) -> Result<Plan> {
         runtime.insert("type".into(), Value::String("module".into()));
     }
     let previous = receipt_source.as_ref().map(read_ownership).transpose()?;
+    let contents = [
+        super::parameterize_template(super::PI_SKILL_CONTENT, dir_value),
+        super::parameterize_template(super::PI_TIDY_SKILL_CONTENT, dir_value),
+        super::PI_EXTENSION_CONTENT.to_owned(),
+        super::PI_API_RUNTIME_CONTENT.to_owned(),
+        super::PI_API_DECLARATION_CONTENT.to_owned(),
+    ];
+    anyhow::ensure!(
+        contents.iter().map(String::len).sum::<usize>() <= MAX_ARTIFACT_RECEIPT_BYTES,
+        "Pi artifact content exceeds ownership receipt limit"
+    );
+    let mut artifacts = Vec::with_capacity(ARTIFACT_PATHS.len());
+    let mut artifact_receipts = BTreeMap::new();
+    for (path, content) in ARTIFACT_PATHS.into_iter().zip(contents) {
+        let source = if root.exists() {
+            capture_installation(root, &root.join(path))?
+        } else {
+            None
+        };
+        if let Some(source) = &source {
+            let expected = previous.as_ref().and_then(|old| old.artifacts.get(path));
+            let bytes = source.bytes()?;
+            anyhow::ensure!(
+                expected.is_some_and(|expected| bytes == expected.as_bytes()),
+                "Pi artifact {path} is unowned or changed; preserve or relocate it before init"
+            );
+        }
+        artifact_receipts.insert(path.to_owned(), content.clone());
+        artifacts.push(ArtifactPlan {
+            path,
+            source,
+            content,
+        });
+    }
     let (original, installed) = refreshed_projection(
         original.as_ref(),
         &manifest,
@@ -320,11 +389,12 @@ pub(super) fn prepare(root: &Path) -> Result<Plan> {
             .map(|old| (old.runtime_original.as_ref(), &old.runtime_installed)),
     );
     let ownership = Ownership {
-        version: 1,
+        version: 2,
         original,
         installed,
         runtime_original,
         runtime_installed,
+        artifacts: artifact_receipts,
     };
     Ok(Plan {
         source,
@@ -333,11 +403,21 @@ pub(super) fn prepare(root: &Path) -> Result<Plan> {
         receipt_source,
         manifest,
         ownership,
+        artifacts,
     })
 }
 
 impl Plan {
     pub(super) fn publish(self, root: &Path, report: &mut Report) -> Result<()> {
+        for relative in [
+            ".pi",
+            ".pi/skills/hyalo",
+            ".pi/skills/hyalo-tidy",
+            ".pi/extensions",
+            ".pi/lib",
+        ] {
+            super::ensure_installation_dir(root, &root.join(relative), report)?;
+        }
         // Publish ownership first: a later manifest failure leaves a conservative receipt,
         // whose three-way cleanup still requires the recorded additions to be present.
         let receipt_existed = self.receipt_source.is_some();
@@ -355,6 +435,16 @@ impl Plan {
             },
             RECEIPT,
         );
+        for artifact in self.artifacts {
+            let existed = artifact.source.is_some();
+            publish_captured_installation(
+                root,
+                &root.join(artifact.path),
+                artifact.source,
+                artifact.content.as_bytes(),
+            )?;
+            report.push(if existed { "updated" } else { "created" }, artifact.path);
+        }
         let existed = self.source.is_some();
         publish_captured_installation(
             root,
@@ -433,11 +523,12 @@ fn subtract(current: &mut Value, original: Option<&Value>, installed: &Value) ->
 fn remove_owned_manifest(
     root: &Path,
     manifest_path: &str,
+    source: Option<CapturedInput>,
     original: Option<&Value>,
     installed: &Value,
     report: &mut Report,
 ) -> Result<bool> {
-    if let Some(source) = capture_installation(root, &root.join(manifest_path))? {
+    if let Some(source) = source {
         let mut current = match read_json(&source, manifest_path) {
             Ok(value) => value,
             Err(error) => {
@@ -470,11 +561,11 @@ fn remove_owned_manifest(
 
 pub(super) fn remove(root: &Path, report: &mut Report) -> Result<()> {
     let Some(receipt) = capture_installation(root, &root.join(RECEIPT))? else {
-        if root.join(MANIFEST).exists() {
+        if root.join(".pi").exists() {
             report.push_detail(
                 "skipped",
                 MANIFEST,
-                "no ownership receipt; shared or legacy manifest preserved",
+                "no ownership receipt; shared configuration and legacy Pi artifacts preserved",
             );
         }
         return Ok(());
@@ -486,9 +577,67 @@ pub(super) fn remove(root: &Path, report: &mut Report) -> Result<()> {
             return Ok(());
         }
     };
+    // Refuse the whole Pi group before deleting a target of a retained user
+    // registration. Benign unrelated metadata edits still use subtraction below.
+    let mut artifacts = Vec::new();
+    for path in ARTIFACT_PATHS {
+        if let Some(source) = capture_installation(root, &root.join(path))? {
+            let bytes = source.bytes()?;
+            if ownership
+                .artifacts
+                .get(path)
+                .is_none_or(|expected| bytes != expected.as_bytes())
+            {
+                report.notes.push(format!("Pi artifact {path} is unowned or changed; Pi artifacts, registrations and ownership receipt preserved"));
+                return Ok(());
+            }
+            artifacts.push((path, source));
+        }
+    }
+    let shared_source = capture_installation(root, &root.join(MANIFEST))?;
+    let runtime_source = capture_installation(root, &root.join(RUNTIME_MANIFEST))?;
+    for (path, source) in [
+        (MANIFEST, &shared_source),
+        (RUNTIME_MANIFEST, &runtime_source),
+    ] {
+        if let Some(source) = source {
+            let value = match read_json(source, path) {
+                Ok(value) => value,
+                Err(error) => {
+                    report.notes.push(error.to_string());
+                    return Ok(());
+                }
+            };
+            let conflicting = if path == RUNTIME_MANIFEST {
+                value
+                    .get("type")
+                    .is_some_and(|kind| kind.as_str() != Some("module"))
+            } else {
+                value.get("pi").is_some_and(|pi| {
+                    !pi.is_object()
+                        || ["extensions", "skills"].into_iter().any(|key| {
+                            pi.get(key).is_some_and(|entries| {
+                                entries.as_array().is_none_or(|entries| {
+                                    entries.iter().any(|entry| !entry.is_string())
+                                })
+                            })
+                        })
+                })
+            };
+            if conflicting {
+                report.notes.push(format!("conflicting {path}; Pi artifacts, registrations and ownership receipt preserved"));
+                return Ok(());
+            }
+        }
+    }
+    for (path, source) in artifacts {
+        remove_captured_installation_artifact(root, &root.join(path), source)?;
+        report.push("removed", path);
+    }
     let shared_clean = remove_owned_manifest(
         root,
         MANIFEST,
+        shared_source,
         ownership.original.as_ref(),
         &ownership.installed,
         report,
@@ -496,6 +645,7 @@ pub(super) fn remove(root: &Path, report: &mut Report) -> Result<()> {
     let runtime_clean = remove_owned_manifest(
         root,
         RUNTIME_MANIFEST,
+        runtime_source,
         ownership.runtime_original.as_ref(),
         &ownership.runtime_installed,
         report,
@@ -506,4 +656,21 @@ pub(super) fn remove(root: &Path, report: &mut Report) -> Result<()> {
     remove_captured_installation_artifact(root, &root.join(RECEIPT), receipt)?;
     report.push("removed", RECEIPT);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_receipt_budget_is_aggregate_and_paths_are_fixed() {
+        let mut artifacts = BTreeMap::from([
+            (ARTIFACT_PATHS[0].to_owned(), "one".to_owned()),
+            (ARTIFACT_PATHS[1].to_owned(), "two".to_owned()),
+        ]);
+        assert!(valid_artifact_receipts(&artifacts, 6));
+        assert!(!valid_artifact_receipts(&artifacts, 5));
+        artifacts.insert(".pi/user.js".into(), String::new());
+        assert!(!valid_artifact_receipts(&artifacts, 6));
+    }
 }

@@ -1276,6 +1276,18 @@ pub fn plan_fixes(broken: &[BrokenLinkInfo], matcher: &LinkMatcher) -> FixReport
 // Fix application
 // ---------------------------------------------------------------------------
 
+fn fix_path_inventory(dir: &Path) -> Result<CaseInsensitiveIndex> {
+    let mut catalog = CaseInsensitiveIndex::new();
+    for path in crate::discovery::discover_files(dir)? {
+        catalog.insert(&crate::discovery::relative_path(dir, &path));
+    }
+    for path in crate::discovery::discover_attachments(dir)? {
+        catalog.insert(&path);
+    }
+    catalog.set_complete(true);
+    Ok(catalog)
+}
+
 /// Convert fix plans to [`RewritePlan`]s and apply them to disk.
 ///
 /// Groups fixes by source file, reads each file once, builds [`Replacement`]s
@@ -1302,6 +1314,21 @@ pub fn apply_fixes(
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
 ) -> Result<ApplyOutcome> {
+    let catalog = fix_path_inventory(dir)?;
+    apply_fixes_with_catalog(dir, fixes, site_prefix, &catalog)
+}
+
+/// Apply fixes using the caller's complete path inventory.
+pub fn apply_fixes_with_catalog(
+    dir: &Path,
+    fixes: &[FixPlan],
+    site_prefix: Option<&str>,
+    catalog: &CaseInsensitiveIndex,
+) -> Result<ApplyOutcome> {
+    anyhow::ensure!(
+        catalog.is_complete(),
+        "link fix identity validation requires a complete path inventory"
+    );
     // Group fixes by source file.
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
@@ -1354,8 +1381,13 @@ pub fn apply_fixes(
             }
         };
 
-        let (replacements, satisfied, guard_rejected, file_emitted) =
-            build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+        let (replacements, satisfied, guard_rejected, file_emitted) = build_replacements_for_file(
+            &content,
+            source_rel,
+            file_fixes,
+            site_prefix,
+            Some(catalog),
+        );
         for (idx, text) in file_emitted {
             emitted.insert(file_fixes[idx].key(), text);
         }
@@ -1478,6 +1510,21 @@ pub fn plan_fixes_dry_run(
     fixes: &[FixPlan],
     site_prefix: Option<&str>,
 ) -> Result<DryRunOutcome> {
+    let catalog = fix_path_inventory(dir)?;
+    plan_fixes_dry_run_with_catalog(dir, fixes, site_prefix, &catalog)
+}
+
+/// Plan fixes dry run using the caller's complete path inventory.
+pub fn plan_fixes_dry_run_with_catalog(
+    dir: &Path,
+    fixes: &[FixPlan],
+    site_prefix: Option<&str>,
+    catalog: &CaseInsensitiveIndex,
+) -> Result<DryRunOutcome> {
+    anyhow::ensure!(
+        catalog.is_complete(),
+        "link fix identity validation requires a complete path inventory"
+    );
     let mut by_source: HashMap<&str, Vec<&FixPlan>> = HashMap::new();
     for fix in fixes {
         by_source.entry(fix.source.as_str()).or_default().push(fix);
@@ -1506,8 +1553,13 @@ pub fn plan_fixes_dry_run(
             }
         };
 
-        let (replacements, satisfied, guard_rejected, file_emitted) =
-            build_replacements_for_file(&content, source_rel, file_fixes, site_prefix);
+        let (replacements, satisfied, guard_rejected, file_emitted) = build_replacements_for_file(
+            &content,
+            source_rel,
+            file_fixes,
+            site_prefix,
+            Some(catalog),
+        );
         for (idx, text) in file_emitted {
             emitted.insert(file_fixes[idx].key(), text);
         }
@@ -1624,21 +1676,14 @@ fn raw_markdown_fix_target(
         }
     };
 
-    if raw_target.starts_with('/') {
+    if let Some(without_slash) = raw_target.strip_prefix('/') {
         let body = keep_form(new_vault_rel);
         // Re-attach the site prefix only when the *original* link carried it.
         // `site_prefix` is auto-derived from the vault directory name when
         // nothing is configured, so injecting it unconditionally would invent
         // a path segment the author never wrote (dogfood L-11).
-        let author_used_prefix = site_prefix.is_some_and(|prefix| {
-            let prefix = prefix.trim_matches('/');
-            !prefix.is_empty()
-                && raw_target[1..]
-                    .strip_prefix(prefix)
-                    .is_some_and(|rest| rest.starts_with('/'))
-        });
-        return match site_prefix.filter(|_| author_used_prefix) {
-            Some(prefix) => format!("/{}/{}", prefix.trim_matches('/'), body),
+        return match crate::link_graph::matching_site_prefix(without_slash, site_prefix) {
+            Some(prefix) => format!("/{prefix}/{body}"),
             None => format!("/{body}"),
         };
     }
@@ -1742,6 +1787,7 @@ fn build_replacements_for_file(
     source_rel: &str,
     fixes: &[&FixPlan],
     site_prefix: Option<&str>,
+    catalog: Option<&CaseInsensitiveIndex>,
 ) -> (
     Vec<Replacement>,
     std::collections::HashSet<usize>,
@@ -1925,7 +1971,20 @@ fn build_replacements_for_file(
                         &fix.new_target,
                         source_rel,
                         site_prefix,
-                    );
+                    ) && catalog.is_none_or(|catalog| {
+                        crate::catalog::resolve(
+                            catalog,
+                            source_rel,
+                            LinkKind::Markdown,
+                            &emitted,
+                            crate::catalog::ResolutionOptions {
+                                aliases: false,
+                                site_prefix,
+                            },
+                        )
+                        .path()
+                            == Some(fix.new_target.as_str())
+                    });
                     (emitted, ok)
                 }
             };
@@ -2338,7 +2397,7 @@ mod tests {
         // `[[decision-log#DEC-041]]` into `[[decision-log-archive]]`.
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None, None);
         assert_eq!(repls.len(), 1, "one frontmatter link repaired: {repls:?}");
         assert_eq!(repls[0].old_text, "[[decision-log#DEC-041]]");
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041]]");
@@ -2348,7 +2407,7 @@ mod tests {
     fn build_replacements_frontmatter_repair_preserves_anchor_and_alias() {
         let content = "---\nrelated:\n  - \"[[decision-log#DEC-041|Log]]\"\n---\nBody\n";
         let fix = fm_fix("decision-log", "decision-log-archive.md");
-        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None, None);
         assert_eq!(repls.len(), 1);
         assert_eq!(repls[0].new_text, "[[decision-log-archive#DEC-041|Log]]");
     }
@@ -2382,7 +2441,7 @@ See [broken](old-name.md) here.
             confidence: 1.0,
             emitted_target: None,
         };
-        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None);
+        let (repls, _, _, _) = build_replacements_for_file(content, "a.md", &[&fix], None, None);
         assert_eq!(
             repls.len(),
             1,
@@ -4549,5 +4608,13 @@ See [broken](old-name.md) here.
                 );
             }
         }
+    }
+    #[test]
+    fn fix_identity_refuses_incomplete_caller_catalog_before_writes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let catalog = CaseInsensitiveIndex::new();
+        assert!(apply_fixes_with_catalog(dir.path(), &[], None, &catalog).is_err());
+        assert!(plan_fixes_dry_run_with_catalog(dir.path(), &[], None, &catalog).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }

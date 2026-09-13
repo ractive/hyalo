@@ -310,14 +310,12 @@ impl LinkWriter {
             // carried it. The prefix is often *auto-derived* from the vault
             // directory name, and blindly prepending it turns a working
             // `/foo` into `/my-vault/bar` — a link that resolves nowhere.
-            let carries_prefix = site_prefix.is_some_and(|prefix| {
-                let head = span.link.target.trim_start_matches('/');
-                head.strip_prefix(prefix)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-            });
-            match site_prefix {
-                Some(prefix) if carries_prefix => format!("/{prefix}/{target}"),
-                _ => format!("/{target}"),
+            match crate::link_graph::matching_site_prefix(
+                span.link.target.trim_start_matches('/'),
+                site_prefix,
+            ) {
+                Some(prefix) => format!("/{prefix}/{target}"),
+                None => format!("/{target}"),
             }
         } else {
             relative_path_between(source_rel, styled_target)

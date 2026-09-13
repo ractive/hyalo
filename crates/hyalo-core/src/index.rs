@@ -703,7 +703,7 @@ fn validate_bm25(bm25: &Bm25InvertedIndex, warn: bool) -> bool {
     if !bm25.validate_doc_ids() {
         if warn {
             eprintln!(
-                "warning: index file contains out-of-bounds BM25 doc_id; ignoring the BM25 section"
+                "warning: index file contains invalid BM25 scoring structure (document IDs, lengths, postings or positions); ignoring the BM25 section"
             );
         }
         return false;
@@ -3646,6 +3646,67 @@ Content.
         );
 
         assert_bm25_section_refused(&bad_bm25, "mismatched BM25 doc_lengths/doc_paths (MED-1)");
+    }
+
+    #[test]
+    fn load_refuses_invalid_compact_scoring_structure_and_accepts_empty_corpus() {
+        let valid = Bm25InvertedIndex::build_from_tokens(vec![crate::bm25::PreTokenizedInput {
+            rel_path: "doc.md".into(),
+            tokens: vec!["one".into(), "one".into()],
+        }]);
+        let original = serde_json::to_value(&valid).unwrap();
+        for (field, value) in [
+            ("positions", serde_json::json!([0, u32::MAX])),
+            ("positions", serde_json::json!([1, 0])),
+            ("positions", serde_json::json!([0, 0])),
+            ("term_freq", serde_json::json!(1)),
+        ] {
+            let mut data = original.clone();
+            data["postings"]["one"][0][field] = value;
+            let invalid = serde_json::from_value(data).unwrap();
+            assert_bm25_section_refused(&invalid, field);
+        }
+        let mut duplicates = original.clone();
+        duplicates["doc_paths"] = serde_json::json!(["doc.md", "doc.md"]);
+        duplicates["doc_lengths"] = serde_json::json!([2, 2]);
+        assert_bm25_section_refused(
+            &serde_json::from_value(duplicates).unwrap(),
+            "duplicate document paths",
+        );
+        let mut unordered = original.clone();
+        unordered["doc_paths"] = serde_json::json!(["doc.md", "other.md"]);
+        unordered["doc_lengths"] = serde_json::json!([2, 2]);
+        let mut second = unordered["postings"]["one"][0].clone();
+        second["doc_id"] = serde_json::json!(1);
+        let first = unordered["postings"]["one"][0].clone();
+        unordered["postings"]["one"] = serde_json::json!([second, first]);
+        assert_bm25_section_refused(
+            &serde_json::from_value(unordered).unwrap(),
+            "unordered document IDs",
+        );
+        for avgdl in [f64::NAN, f64::INFINITY, -1.0, 3.0] {
+            let invalid = Bm25InvertedIndex::new_for_test(
+                std::collections::HashMap::from([(
+                    "one".into(),
+                    vec![crate::bm25::Posting {
+                        doc_id: 0,
+                        term_freq: 2,
+                        positions: vec![0, 1],
+                    }],
+                )]),
+                vec![2],
+                vec!["doc.md".into()],
+                avgdl,
+            );
+            assert_bm25_section_refused(&invalid, "invalid average document length");
+        }
+        let empty = Bm25InvertedIndex::build_from_tokens(Vec::new());
+        let loaded = SnapshotIndex::load_inner(snapshot_bytes(&[], Some(&empty)), false).unwrap();
+        assert_eq!(loaded.bm25_index().unwrap().doc_count(), 0);
+        let loaded =
+            SnapshotIndex::load_inner(snapshot_bytes(&[test_entry("doc.md")], Some(&valid)), false)
+                .unwrap();
+        assert!(loaded.bm25_index().is_some());
     }
 
     // -------------------------------------------------------------------------

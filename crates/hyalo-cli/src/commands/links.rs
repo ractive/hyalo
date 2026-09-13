@@ -442,15 +442,29 @@ pub fn links_fix(
             // dry-run `unapplied` set matches what `--apply` would report.
             // `modified_files` stays empty here — dry-run must NOT patch the
             // index; `_would_modify` is informational only.
-            let (_would_modify, unapplied, rejected, emitted) =
-                hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?;
+            let (_would_modify, unapplied, rejected, emitted) = match case_index {
+                Some(catalog) => hyalo_core::link_fix::plan_fixes_dry_run_with_catalog(
+                    dir,
+                    &all_fixes,
+                    site_prefix,
+                    catalog,
+                )?,
+                None => hyalo_core::link_fix::plan_fixes_dry_run(dir, &all_fixes, site_prefix)?,
+            };
             unapplied_fixes = unapplied;
             rejected_fixes = rejected;
             emitted_targets = emitted;
         }
     } else if !all_fixes.is_empty() {
-        let (plans, unapplied, failed, rejected, emitted) =
-            apply_fixes(dir, &all_fixes, site_prefix)?;
+        let (plans, unapplied, failed, rejected, emitted) = match case_index {
+            Some(catalog) => hyalo_core::link_fix::apply_fixes_with_catalog(
+                dir,
+                &all_fixes,
+                site_prefix,
+                catalog,
+            )?,
+            None => apply_fixes(dir, &all_fixes, site_prefix)?,
+        };
         unapplied_fixes = unapplied;
         failed_fixes = failed;
         rejected_fixes = rejected;

@@ -1024,7 +1024,7 @@ fn scan_file_for_matches(
 fn wikilink_replacement_text(matched_text: &str, link_target: &str) -> String {
     let encoded =
         crate::link_write::encode_destination(link_target, crate::links::LinkKind::Wikilink);
-    if matched_text == encoded {
+    if matched_text == link_target && encoded == link_target {
         format!("[[{encoded}]]")
     } else {
         format!("[[{encoded}|{matched_text}]]")

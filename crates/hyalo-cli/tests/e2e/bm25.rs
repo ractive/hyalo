@@ -1647,12 +1647,13 @@ fn ranked_legacy_language_metadata_falls_back_and_checks_containment() {
 }
 
 #[test]
-fn ranked_compatible_persisted_corpus_does_not_read_nonselected_bodies() {
+fn ranked_partial_persisted_corpus_reuses_nonselected_tokens() {
     let vault = TempDir::new().unwrap();
     write_md(vault.path(), "keep.md", "pineapple safe\n");
     write_md(vault.path(), "other.md", "pineapple unrelated\n");
-    // This indexed note has no BM25 tokens/language and does not belong to
-    // the stored corpus; it must not invalidate otherwise compatible languages.
+    // This indexed note has no BM25 tokens/language. Complete-coverage
+    // validation must fall back, while recovering other compatible documents'
+    // tokens instead of re-reading their nonselected bodies.
     std::fs::write(vault.path().join("invalid.md"), b"# Invalid\n\xff\xfe").unwrap();
     let output = hyalo_no_hints()
         .arg("--dir")
@@ -1682,7 +1683,17 @@ fn ranked_compatible_persisted_corpus_does_not_read_nonselected_bodies() {
     let after = query();
     assert!(after.status.success(), "{after:?}");
     assert_eq!(before.stdout, after.stdout);
-    assert!(!String::from_utf8_lossy(&after.stderr).contains("unreadable"));
+    let unreadable_warnings = |output: &std::process::Output| {
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter(|line| line.contains("unreadable"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let before_warnings = unreadable_warnings(&before);
+    assert_eq!(before_warnings.len(), 1);
+    assert!(before_warnings[0].contains("skipped 1 unreadable file"));
+    assert_eq!(before_warnings, unreadable_warnings(&after));
 }
 
 #[test]
