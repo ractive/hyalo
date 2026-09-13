@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-13
+
 ### Added
 
 - Codex project integration with `hyalo init --codex`: managed `AGENTS.md`
@@ -242,6 +244,23 @@ and this project adheres to
 - The undocumented '=~' property-filter operator: 'K=~/pat/' is now a hard error naming '~=' (BREAKING; it was only ever accepted because '=' split first and '~/pat/' became a literal value, which matched YAML nulls). Empty property regexes ('K~=', 'K~=//') and empty --fields selections ('--fields ""', '--fields ,') are rejected too (DEC-276).
 
 ### Fixed
+
+- Managed MADR and OKF regions preserve handwritten prose, literal marker
+  examples, UTF-8 BOMs and line endings. Malformed MADR marker pairs refuse
+  before writing; repeated generation leaves unchanged content intact.
+- Pi installation merges shared manifests and tracks ownership of installed
+  artifacts. Reinstallation and removal preserve unrelated registrations,
+  dependencies and user edits, with safe recovery after interrupted upgrades.
+- Move and link repair encode special filenames such as `C#.md` and
+  `Release (final).md`, validate the resolved destination before writing, and
+  preserve inline-code examples in link labels. Batch counts reflect applied
+  rewrites and indexed links/backlinks remain consistent with disk.
+- New-note scaffolds preserve quoted, multiline and typed defaults, including
+  accepted integer spellings. Preview and apply agree on symlink-parent refusal.
+- Fresh large-vault indexes support direct ranked scoring without expanding
+  the full token corpus. MDN ranked search retains exact disk-result parity
+  while running about seven times faster in the focused release check;
+  malformed or incomplete scoring data falls back safely.
 
 - Ranked search checks canonical vault containment before snippet and fallback
   body reads, refusing file and directory symlink escapes. Indexed document
@@ -2684,7 +2703,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/ractive/hyalo/compare/v0.21.0...v0.24.0
 [0.23.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.23.0
 [0.21.0]: TBD
 [0.20.0]: TBD
