@@ -670,6 +670,68 @@ fn iteration296_move_encoding_round_trips_identity_and_index_backlinks() {
 }
 
 #[test]
+fn iteration296_batch_directory_index_overlap_reports_effective_edits_and_identity() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hyalo.toml", "dir = '.'\n");
+    let authored = "[B](../other/)\n[B label](../other/#Target)\n";
+    write_md(tmp.path(), "src/a.md", authored);
+    write_md(tmp.path(), "other/index.md", "# Target\n");
+    ok(tmp.path(), &["create-index"]);
+    let preview = ok(
+        tmp.path(),
+        &["mv", "--glob", "**/*.md", "--to", "archive", "--index"],
+    );
+    assert_eq!(preview["results"]["total_links_updated"], 2);
+    assert_eq!(preview["results"]["totals"]["replacements"], 2);
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("src/a.md")).unwrap(),
+        authored
+    );
+    assert!(!tmp.path().join("archive").exists());
+    let applied = ok(
+        tmp.path(),
+        &[
+            "mv", "--glob", "**/*.md", "--to", "archive", "--apply", "--index",
+        ],
+    );
+    assert_eq!(
+        applied["results"]["total_links_updated"],
+        preview["results"]["total_links_updated"]
+    );
+    assert_eq!(applied["results"]["totals"], preview["results"]["totals"]);
+    assert_eq!(
+        applied["results"]["updated_files"],
+        preview["results"]["updated_files"]
+    );
+    assert!(!tmp.path().join("src/a.md").exists());
+    assert!(!tmp.path().join("other/index.md").exists());
+    let emitted = fs::read_to_string(tmp.path().join("archive/a.md")).unwrap();
+    assert_eq!(emitted, "[B](../archive/)\n[B label](../archive/#Target)\n");
+    for (file, field) in [("archive/a.md", "links"), ("archive/index.md", "backlinks")] {
+        let disk = ok(tmp.path(), &["find", "--file", file, "--fields", field]);
+        let indexed = ok(
+            tmp.path(),
+            &["find", "--file", file, "--fields", field, "--index"],
+        );
+        assert_eq!(disk["results"], indexed["results"]);
+        let links = disk["results"][0][field].as_array().unwrap();
+        assert_eq!(links.len(), 2, "{disk}");
+        if field == "links" {
+            for link in links {
+                assert_eq!(link["path"], "archive/index.md", "{link}");
+                assert_ne!(link["broken_anchor"], true);
+            }
+        } else {
+            assert!(
+                links
+                    .iter()
+                    .all(|link| link.to_string().contains("archive/a.md"))
+            );
+        }
+    }
+}
+
+#[test]
 fn iteration296_small_batch_and_destination_collision_refusal() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), ".hyalo.toml", "dir = '.'\n");

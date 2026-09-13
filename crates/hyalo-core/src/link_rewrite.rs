@@ -391,7 +391,7 @@ pub fn plan_mv(
     }
 
     validate_move_link_identity(
-        plans.values(),
+        plans.values_mut(),
         &case_index,
         &[(old_rel.to_owned(), new_rel.to_owned())],
         site_prefix,
@@ -407,7 +407,7 @@ pub fn plan_mv(
 /// Validate the rendered syntax and resolved identity using the complete planned catalog.
 /// This runs while planning, before either previews or publication can claim updates.
 fn validate_move_link_identity<'a>(
-    plans: impl Iterator<Item = &'a RewritePlan>,
+    plans: impl Iterator<Item = &'a mut RewritePlan>,
     before: &CaseInsensitiveIndex,
     renames: &[(String, String)],
     site_prefix: Option<&str>,
@@ -431,7 +431,26 @@ fn validate_move_link_identity<'a>(
             .get(plan.rel_path.as_str())
             .copied()
             .unwrap_or(plan.rel_path.as_str());
-        for replacement in &plan.replacements {
+        let Some(original) = plan.original_content.as_deref() else {
+            anyhow::bail!(crate::user_error(format!(
+                "cannot safely validate move rewrite in {}: captured source is missing",
+                plan.rel_path
+            )));
+        };
+        let mut effective = vec![false; plan.replacements.len()];
+        let rewritten = apply_replacements_observed(original, &plan.replacements, |index| {
+            effective[index] = true;
+        });
+        if rewritten != plan.rewritten_content {
+            anyhow::bail!(crate::user_error(format!(
+                "cannot safely validate move rewrite in {}: planned content differs from applied replacements",
+                plan.rel_path
+            )));
+        }
+        for (replacement, applied) in plan.replacements.iter().zip(&effective) {
+            if !applied {
+                continue;
+            }
             let old = crate::links::extract_link_spans(&replacement.old_text);
             let new = crate::links::extract_link_spans(&replacement.new_text);
             if old.len() != new.len() {
@@ -486,6 +505,13 @@ fn validate_move_link_identity<'a>(
                 }
             }
         }
+        // Report and execute the same effective edits that identity validation
+        // observed, retaining original order for equal-offset priority.
+        plan.replacements = std::mem::take(&mut plan.replacements)
+            .into_iter()
+            .zip(effective)
+            .filter_map(|(replacement, applied)| applied.then_some(replacement))
+            .collect();
     }
     Ok(())
 }
@@ -1346,13 +1372,23 @@ fn plan_outbound_rewrites(
 /// Apply all replacements to `content`, returning the rewritten string.
 ///
 /// Replacements are matched against lines by their `old_text`.  Multiple
-/// replacements on the same line are applied right-to-left (by first
-/// occurrence of `old_text`) to avoid offset shifts.
+/// replacements on the same line are applied right-to-left by byte offset
+/// to avoid offset shifts; equal offsets retain their input order.
 pub(crate) fn apply_replacements(content: &str, replacements: &[Replacement]) -> String {
+    apply_replacements_observed(content, replacements, |_| {})
+}
+
+/// Observe only substitutions accepted by the same stable, right-to-left
+/// application used to construct plans. Later stale proposals are not edits.
+fn apply_replacements_observed(
+    content: &str,
+    replacements: &[Replacement],
+    mut applied: impl FnMut(usize),
+) -> String {
     // Group replacements by 1-based line number.
-    let mut by_line: HashMap<usize, Vec<&Replacement>> = HashMap::new();
-    for r in replacements {
-        by_line.entry(r.line).or_default().push(r);
+    let mut by_line: HashMap<usize, Vec<(usize, &Replacement)>> = HashMap::new();
+    for (index, r) in replacements.iter().enumerate() {
+        by_line.entry(r.line).or_default().push((index, r));
     }
 
     // Reconstruct content line by line, preserving exact line endings.
@@ -1371,14 +1407,15 @@ pub(crate) fn apply_replacements(content: &str, replacements: &[Replacement]) ->
         if let Some(repls) = by_line.get(&line_num) {
             // Sort right-to-left by byte offset so that applying one
             // substitution doesn't shift offsets for subsequent ones.
-            let mut sorted: Vec<&&Replacement> = repls.iter().collect();
-            sorted.sort_by_key(|r| std::cmp::Reverse(r.byte_offset));
+            let mut sorted: Vec<&(usize, &Replacement)> = repls.iter().collect();
+            sorted.sort_by_key(|(_, r)| std::cmp::Reverse(r.byte_offset));
 
-            for r in sorted {
+            for &(index, r) in sorted {
                 let pos = r.byte_offset;
                 let end = pos + r.old_text.len();
                 if end <= line.len() && line[pos..end] == *r.old_text {
                     line = format!("{}{}{}", &line[..pos], r.new_text, &line[end..]);
+                    applied(index);
                 }
             }
         }
@@ -1707,7 +1744,7 @@ pub fn plan_batch_mv(
     );
 
     validate_move_link_identity(
-        plans.values(),
+        plans.values_mut(),
         &case_index,
         renames,
         site_prefix,
@@ -2334,6 +2371,101 @@ mod tests {
     }
 
     #[test]
+    fn move_identity_uses_only_effective_same_span_proposals() {
+        let mut index = CaseInsensitiveIndex::new();
+        index.insert("src/a.md");
+        index.insert("other/index.md");
+        let renames = vec![
+            ("src/a.md".into(), "archive/a.md".into()),
+            ("other/index.md".into(), "archive/index.md".into()),
+        ];
+        let mut plan = identity_plan("archive/a.md", "[B](../other/)", "[B](../archive/)");
+        let mut discarded = plan.replacements[0].clone();
+        discarded.new_text = "[B](../other)".into();
+        plan.replacements.push(discarded);
+        let mut reversed = identity_plan("archive/a.md", "[B](../other/)", "[B](../archive/)");
+        reversed.replacements = plan.replacements.iter().rev().cloned().collect();
+        reversed.rewritten_content = apply_replacements(
+            reversed.original_content.as_deref().unwrap(),
+            &reversed.replacements,
+        );
+        assert!(
+            validate_move_link_identity(
+                std::iter::once(&mut reversed),
+                &index,
+                &renames,
+                None,
+                false
+            )
+            .is_err(),
+            "a wrong proposal that actually wins must still be refused"
+        );
+        validate_move_link_identity(std::iter::once(&mut plan), &index, &renames, None, false)
+            .unwrap();
+        assert_eq!(
+            plan.replacements.len(),
+            1,
+            "discarded proposals must not inflate reported counts"
+        );
+        assert_eq!(plan.rewritten_content, "[B](../archive/)");
+        assert_eq!(
+            apply_replacements(
+                plan.original_content.as_deref().unwrap(),
+                &plan.replacements
+            ),
+            plan.rewritten_content
+        );
+    }
+
+    #[test]
+    fn move_identity_refuses_content_not_produced_by_the_captured_edits() {
+        let mut index = CaseInsensitiveIndex::new();
+        index.insert("old.md");
+        let renames = vec![("old.md".into(), "new.md".into())];
+        let mut plan = identity_plan("reader.md", "[[old]]", "[[new]]");
+        plan.rewritten_content = "[[unrelated]]".into();
+        assert!(
+            validate_move_link_identity(std::iter::once(&mut plan), &index, &renames, None, false)
+                .is_err()
+        );
+        plan.rewritten_content = "[[new]]".into();
+        plan.original_content = None;
+        assert!(
+            validate_move_link_identity(std::iter::once(&mut plan), &index, &renames, None, false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn replacement_observer_preserves_order_offsets_and_line_endings() {
+        let old = "é [L](left.md) [R](right.md)\r\n";
+        let left = Replacement {
+            line: 1,
+            byte_offset: old.find("[L]").unwrap(),
+            old_text: "[L](left.md)".into(),
+            new_text: "[L](new-left.md)".into(),
+        };
+        let right = Replacement {
+            line: 1,
+            byte_offset: old.find("[R]").unwrap(),
+            old_text: "[R](right.md)".into(),
+            new_text: "[R](new-right.md)".into(),
+        };
+        let mut duplicate = right.clone();
+        duplicate.new_text = "[R](discarded.md)".into();
+        let mut missing_line = left.clone();
+        missing_line.line = 9;
+        let mut mismatch = left.clone();
+        mismatch.old_text = "not present".into();
+        let replacements = [left, right, duplicate, missing_line, mismatch];
+        let mut applied = Vec::new();
+        let observed = apply_replacements_observed(old, &replacements, |index| applied.push(index));
+        assert_eq!(applied, [1, 0]);
+        assert_eq!(observed, "é [L](new-left.md) [R](new-right.md)\r\n");
+        assert_eq!(apply_replacements(old, &replacements), observed);
+    }
+
+    #[test]
     fn move_identity_lookup_preserves_exact_keys_and_first_mapping() {
         let mut index = CaseInsensitiveIndex::new();
         for path in ["old/source.md", "old/target.md", "Old/target.md"] {
@@ -2346,7 +2478,7 @@ mod tests {
             // Reverse lookup must also retain the first source mapping.
             ("absent/source.md".into(), "new/source.md".into()),
         ];
-        let plans = [
+        let mut plans = [
             identity_plan(
                 "new/source.md",
                 "[label](target.md#part)",
@@ -2358,24 +2490,24 @@ mod tests {
                 "[case](Old/target.md)",
             ),
         ];
-        validate_move_link_identity(plans.iter(), &index, &renames, None, false).unwrap();
-        let wrong = identity_plan(
+        validate_move_link_identity(plans.iter_mut(), &index, &renames, None, false).unwrap();
+        let mut wrong = identity_plan(
             "new/source.md",
             "[label](target.md#part)",
             "[label](ignored.md#part)",
         );
         assert!(
-            validate_move_link_identity(std::iter::once(&wrong), &index, &renames, None, false)
+            validate_move_link_identity(std::iter::once(&mut wrong), &index, &renames, None, false)
                 .is_err()
         );
-        let wrong_label = identity_plan(
+        let mut wrong_label = identity_plan(
             "new/source.md",
             "[label](target.md#part)",
             "[changed](first.md#part)",
         );
         assert!(
             validate_move_link_identity(
-                std::iter::once(&wrong_label),
+                std::iter::once(&mut wrong_label),
                 &index,
                 &renames,
                 None,
@@ -2394,11 +2526,12 @@ mod tests {
             ("z/shared.md".into(), "moved/first.md".into()),
             ("a/shared.md".into(), "moved/second.md".into()),
         ];
-        let first = identity_plan("reader.md", "[[shared]]", "[[moved/first]]");
-        validate_move_link_identity(std::iter::once(&first), &index, &renames, None, true).unwrap();
-        let second = identity_plan("reader.md", "[[shared]]", "[[moved/second]]");
+        let mut first = identity_plan("reader.md", "[[shared]]", "[[moved/first]]");
+        validate_move_link_identity(std::iter::once(&mut first), &index, &renames, None, true)
+            .unwrap();
+        let mut second = identity_plan("reader.md", "[[shared]]", "[[moved/second]]");
         assert!(
-            validate_move_link_identity(std::iter::once(&second), &index, &renames, None, true)
+            validate_move_link_identity(std::iter::once(&mut second), &index, &renames, None, true)
                 .is_err()
         );
     }
