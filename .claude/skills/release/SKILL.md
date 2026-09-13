@@ -27,8 +27,23 @@ after everything on main is final.
 ## 1. Preconditions
 
 Decide the version from the `[Unreleased]` contents (pre-1.0 convention
-here: minor bump for features/breaking, patch for fix-only), then run the
-read-only preflight — it checks branch/clean/sync, the 3-spot version
+here: minor bump for features/breaking, patch for fix-only). Check published
+versions across channels before choosing it: `gh release list --limit 5` and
+`npm view @ractive-ch/hyalo versions --json`, plus the target versions of the
+npm platform packages and crates when publishing those. A missing GitHub tag
+does not mean the version is unused. If a channel already published that
+version from older source, choose a fresh version for the new changes across
+channels; immutable package versions cannot be replaced. Completing a partial
+release at an existing version is only appropriate for the same source and
+artifacts, using the publication workflow's existing-version checks.
+
+The 2026-09-13 dogfood found exactly this split: GitHub's latest was 0.21.0,
+npm already shipped 0.23.0, and `CHANGELOG.md` had both a dated `[0.23.0]`
+section and substantial `[Unreleased]` content. Releasing the new work therefore
+needs a new version (0.24.0 for the current feature-bearing changes), preserving
+the existing 0.23.0 history. Recheck registry state when actually releasing.
+
+Then run the read-only preflight — it checks branch/clean/sync, the 3-spot version
 match, that the tag doesn't exist, the changelog state (pre- vs
 post-rotation), changelog-profile lint, and gh auth:
 
@@ -38,7 +53,13 @@ post-rotation), changelog-profile lint, and gh auth:
 
 Fix every FAIL before proceeding. Additionally verify the latest merges are
 green (`gh run list --branch main --limit 5` / `gh pr checks <last-PR>`) —
-the script cannot judge CI health.
+the script cannot judge CI health. It also does not check registry versions,
+and accepts an existing changelog section even when `[Unreleased]` is non-empty.
+A passing preflight therefore does not establish that the version is available
+or the changelog is fully rotated. Preview `hyalo changelog release X.Y.Z
+--dry-run` when rotation is still needed; an existing version section is a
+reason to reconcile the version/history, not delete published history to make
+the command pass.
 
 ## 2. Verify or bump the workspace version
 
@@ -100,14 +121,17 @@ show <version>` exists by now, prefer it.)
   Homebrew, winget, SBOMs, provenance, SHA256SUMS).
 - `gh release view vX.Y.Z` — assets present, notes render with the curated
   section on top.
-- **Publish crates — manual dispatch required.** `publish-crates.yml` is
-  `workflow_dispatch`-only; nothing triggers it automatically. Once the
-  release pipeline is green:
-  `gh workflow run publish-crates.yml -f ref=vX.Y.Z`, find the run id with
-  `gh run list --workflow publish-crates.yml --limit 1`, then
-  `gh run watch <id> --exit-status`. If it fails half-published, it has a
-  manual escape hatch — see that workflow. The release is not done until
-  this run is green.
+- **Verify crates publication.** The shared release workflow at `v0.2.0`
+  publishes the configured crates automatically through its `crates-io` job.
+  Confirm that job passes and all three target versions exist on crates.io.
+  `publish-crates.yml` is the manual recovery path, not an additional mandatory
+  publication: if recovery is needed, dispatch
+  `gh workflow run publish-crates.yml -f ref=vX.Y.Z`, find its run with
+  `gh run list --workflow publish-crates.yml --limit 1`, and watch it to success.
+  Inspect that workflow before recovering a partially published release.
+- Verify all eight npm packages reached the target version, then dispatch
+  `gh workflow run npm-registry.yml -f version=X.Y.Z` to test installation from
+  the registry on macOS, Linux, Windows and Alpine/musl.
 - Pipeline internals live in `ractive/release-workflows`; failures inside
   reusable jobs are usually fixed there, not here.
 
