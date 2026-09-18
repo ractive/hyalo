@@ -1460,7 +1460,10 @@ fn normalize_link_target<'a>(
                 // Bare basename: try source-relative first so same-folder links
                 // resolve correctly, then fall back to the raw target.
                 let src_rel = normalize_target(Path::new(source_rel), target);
-                if src_rel_resolves(&src_rel) {
+                let decoded = percent_decode_path(target);
+                if !allows_vault_relative_fallback(decoded.as_deref().unwrap_or(target))
+                    || src_rel_resolves(&src_rel)
+                {
                     std::borrow::Cow::Owned(src_rel)
                 } else {
                     std::borrow::Cow::Borrowed(target)
@@ -4858,6 +4861,7 @@ mod tests {
             "guides/local.md",
             "notes/guides/local.md",
             "docs/reference/index.md",
+            "index.md",
         ] {
             make_files(tmp.path(), &[path]);
             idx.insert(path);
@@ -4892,6 +4896,8 @@ mod tests {
                 ("../guides/target.md", Some("guides/target.md")),
                 ("notes/a.md", Some("notes/a.md")),
                 ("../../02 Attachments/task-plugins-sorted.png", None),
+                (".", None),
+                ("%2E", None),
             ] {
                 assert_eq!(
                     resolve_link_from_source(

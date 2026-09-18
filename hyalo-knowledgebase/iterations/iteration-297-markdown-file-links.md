@@ -32,6 +32,11 @@ specify collision precedence, so this change preserves Hyalo's existing policy.
 
 Balanced parentheses are preserved in Markdown destinations. Link extraction,
 byte spans for rewriting, lint, and indexed reads share the corrected behavior.
+Titles after filenames containing spaces remain separate from the destination.
+Snapshot format version 3 invalidates cached destinations from the old parser;
+older indexes fall back to disk until rebuilt. Single and batch moves resolve
+targets before rebasing links and preserve directory-reference spelling,
+including percent-encoded directory names.
 Related work: [[iteration-261-link-resolution-obsidian-compat]] and
 [[iteration-292-query-resolution-and-index-coherence]].
 

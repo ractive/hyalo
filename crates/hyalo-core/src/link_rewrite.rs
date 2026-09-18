@@ -21,7 +21,7 @@ use serde::Serialize;
 use crate::case_index::CaseInsensitiveIndex;
 use crate::discovery::{canonicalize_vault_dir, ensure_within_vault};
 use crate::frontmatter_links::FrontmatterValueLines;
-use crate::link_graph::{LinkGraph, normalize_target, relative_path_between};
+use crate::link_graph::{LinkGraph, normalize_target};
 use crate::link_resolve::LinkResolver;
 use crate::link_write::{LinkWriter, SpanReplacement, TargetStyle};
 use crate::links::{LinkKind, PreserveForm, Resolution, extract_link_spans_with_original};
@@ -1183,6 +1183,41 @@ static EMPTY_CASE_INDEX: std::sync::LazyLock<CaseInsensitiveIndex> =
 // Outbound rewrite planning
 // ---------------------------------------------------------------------------
 
+/// Resolve the identity before rebasing it from a moved source. Missing links
+/// retain the historical lexical rebase, while known links use the same catalog
+/// and directory spelling policy as inbound rewrites and identity validation.
+fn resolve_outbound_target(
+    span: &crate::links::LinkSpan,
+    source: &str,
+    case_index: &CaseInsensitiveIndex,
+    site_prefix: Option<&str>,
+) -> (String, TargetStyle) {
+    let resolution = crate::catalog::resolve(
+        case_index,
+        source,
+        span.kind,
+        &span.link.target,
+        crate::catalog::ResolutionOptions {
+            aliases: case_index.aliases_enabled(),
+            site_prefix,
+        },
+    );
+    if let Some(path) = resolution.path() {
+        let style = LinkResolver::new(case_index, site_prefix)
+            .dir_index_match(span, source, path)
+            .map_or(TargetStyle::File, |trailing_slash| {
+                TargetStyle::DirectoryIndex { trailing_slash }
+            });
+        return (path.to_owned(), style);
+    }
+    let (target_path, _) = split_target_fragment(&span.link.target);
+    let decoded = crate::discovery::percent_decode_path(target_path);
+    (
+        normalize_target(Path::new(source), decoded.as_deref().unwrap_or(target_path)),
+        TargetStyle::File,
+    )
+}
+
 /// Walk every body line in `content` (which lives at `old_rel`) and return
 /// [`Replacement`]s for links whose targets change when the file moves to
 /// `new_rel`.
@@ -1314,17 +1349,8 @@ fn plan_outbound_rewrites(
                 continue;
             }
 
-            // Strip any trailing `#fragment` for resolution / comparison, then
-            // re-attach it to the rewritten path so anchored file links keep
-            // their anchor.
-            let (target_path, target_fragment) = split_target_fragment(&span.link.target);
-
-            // Resolve target relative to the OLD location's directory.
-            let decoded = crate::discovery::percent_decode_path(target_path);
-            let resolved = normalize_target(
-                Path::new(old_rel),
-                decoded.as_deref().unwrap_or(target_path),
-            );
+            let (resolved, style) =
+                resolve_outbound_target(&span, old_rel, case_index, site_prefix);
 
             // Self-links: the file moves to `new_rel`, so the link should
             // continue to refer to the file at its new location.
@@ -1339,38 +1365,22 @@ fn plan_outbound_rewrites(
                 resolved
             };
 
-            // Compute new relative path from the NEW location, then re-attach
-            // any fragment that was stripped above.
-            let new_target = format!(
-                "{}{}",
-                crate::link_write::encode_destination(
-                    &relative_path_between(new_rel, &target_after_move),
-                    LinkKind::Markdown
-                ),
-                target_fragment
-            );
-
-            // Original target as written in the file.
-            let original_target = &line[span.target_start..span.target_end];
-
-            if new_target == original_target {
-                continue;
+            if let Some(replacement) = LinkWriter::rewrite_styled(
+                &span,
+                line,
+                &target_after_move,
+                new_rel,
+                PreserveForm::Preserve,
+                site_prefix,
+                style,
+            ) {
+                replacements.push(Replacement {
+                    line: line_num,
+                    byte_offset: replacement.byte_offset,
+                    old_text: replacement.old_text,
+                    new_text: replacement.new_text,
+                });
             }
-
-            let old_text = line[span.full_start..span.full_end].to_string();
-            let new_text = format!(
-                "{}{}{}",
-                &line[span.full_start..span.target_start],
-                new_target,
-                &line[span.target_end..span.full_end]
-            );
-
-            replacements.push(Replacement {
-                line: line_num,
-                byte_offset: span.full_start,
-                old_text,
-                new_text,
-            });
         }
     }
 
@@ -1690,8 +1700,15 @@ pub fn plan_batch_mv(
             .with_context(|| format!("reading {}", old_abs.display()))?;
 
         // Outbound: rewrite relative markdown links using the FULL rename map.
-        let outbound_repls =
-            plan_outbound_rewrites_batch(&content, old_rel, new_rel, &rename_map, dir_changed);
+        let outbound_repls = plan_outbound_rewrites_batch(
+            &content,
+            old_rel,
+            new_rel,
+            &rename_map,
+            dir_changed,
+            &case_index,
+            site_prefix,
+        );
 
         if outbound_repls.is_empty() {
             // Even if no outbound rewrites, if the inbound pass already
@@ -2232,6 +2249,8 @@ fn plan_outbound_rewrites_batch(
     new_rel: &str,
     rename_map: &HashMap<String, String>,
     dir_changed: bool,
+    case_index: &CaseInsensitiveIndex,
+    site_prefix: Option<&str>,
 ) -> Vec<Replacement> {
     let mut replacements = Vec::new();
     // Shared, cross-line-aware line classifier (iter-183 Phase B).
@@ -2280,12 +2299,8 @@ fn plan_outbound_rewrites_batch(
                 continue;
             }
 
-            let (target_path, target_fragment) = split_target_fragment(&span.link.target);
-            let decoded = crate::discovery::percent_decode_path(target_path);
-            let resolved = normalize_target(
-                Path::new(old_rel),
-                decoded.as_deref().unwrap_or(target_path),
-            );
+            let (resolved, style) =
+                resolve_outbound_target(&span, old_rel, case_index, site_prefix);
 
             // Check if the target is itself being moved.
             let target_after_move = if let Some(new_target_rel) = rename_map.get(&resolved) {
@@ -2298,34 +2313,22 @@ fn plan_outbound_rewrites_batch(
                 resolved
             };
 
-            let new_target = format!(
-                "{}{}",
-                crate::link_write::encode_destination(
-                    &relative_path_between(new_rel, &target_after_move),
-                    LinkKind::Markdown
-                ),
-                target_fragment
-            );
-
-            let original_target = &line[span.target_start..span.target_end];
-            if new_target == original_target {
-                continue;
+            if let Some(replacement) = LinkWriter::rewrite_styled(
+                &span,
+                line,
+                &target_after_move,
+                new_rel,
+                PreserveForm::Preserve,
+                site_prefix,
+                style,
+            ) {
+                replacements.push(Replacement {
+                    line: line_num,
+                    byte_offset: replacement.byte_offset,
+                    old_text: replacement.old_text,
+                    new_text: replacement.new_text,
+                });
             }
-
-            let old_text = line[span.full_start..span.full_end].to_string();
-            let new_text = format!(
-                "{}{}{}",
-                &line[span.full_start..span.target_start],
-                new_target,
-                &line[span.target_end..span.full_end]
-            );
-
-            replacements.push(Replacement {
-                line: line_num,
-                byte_offset: span.full_start,
-                old_text,
-                new_text,
-            });
         }
     }
 
@@ -3793,6 +3796,8 @@ mod tests {
             "a-renamed.md",
             &HashMap::new(),
             false,
+            &CaseInsensitiveIndex::new(),
+            None,
         );
         assert_eq!(repls.len(), 1);
         assert_eq!(repls[0].old_text, "[[a#intro]]");

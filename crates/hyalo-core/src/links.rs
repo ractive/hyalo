@@ -613,7 +613,7 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
         // attachment names such as `image%20(1).png`. Only a closing paren
         // at depth zero terminates the link.
         let mut depth = 0usize;
-        let mut first_whitespace = true;
+        let allow_title = !matches!(bytes.first(), Some(b' ' | b'\t'));
         // iter-211 / BUG-12: a bare CommonMark destination cannot contain
         // whitespace — anything after the first space/tab is an optional
         // title (`[a](p.md "Title")`). Without this split the title became
@@ -627,17 +627,20 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
         // hand-written vaults. A leading space (`[a]( p.md )`) is likewise
         // left alone rather than producing an empty target.
         for (i, &byte) in bytes.iter().enumerate() {
-            if matches!(byte, b' ' | b'\t') && first_whitespace {
-                first_whitespace = false;
-                if i > 0
-                    && depth == 0
-                    && let Some(cp) = find_close_paren_after_destination(&rest[i..])
-                {
-                    return Some(ParsedDestination {
-                        target_raw: &rest[..i],
-                        end: i + cp + 1,
-                    });
-                }
+            // Retry after each whitespace run outside parentheses: an earlier
+            // space may belong to the tolerant, unencoded filename syntax.
+            // Only probe the start of a run to avoid repeatedly scanning it.
+            if allow_title
+                && i > 0
+                && depth == 0
+                && matches!(byte, b' ' | b'\t')
+                && !matches!(bytes[i - 1], b' ' | b'\t')
+                && let Some(cp) = find_close_paren_after_destination(&rest[i..])
+            {
+                return Some(ParsedDestination {
+                    target_raw: &rest[..i],
+                    end: i + cp + 1,
+                });
             }
             if matches!(byte, b'(' | b')') && is_escaped(bytes, i) {
                 continue;
@@ -1847,12 +1850,14 @@ mod tests {
             );
             assert_eq!(spans[1].link.target, "other.md");
         }
-        for title in [r#""has ) paren""#, "'has ( paren'", "(title)"] {
-            let text = format!("[image](image(1).png {title}) tail");
-            let spans = extract_link_spans(&text);
-            assert_eq!(spans.len(), 1);
-            assert_eq!(spans[0].link.target, "image(1).png");
-            assert_eq!(&text[spans[0].full_end..], " tail");
+        for target in ["image(1).png", "image (1).png", "(my image).png"] {
+            for title in [r#""has ) paren""#, "'has ( paren'", "(title)"] {
+                let text = format!("[image]({target} {title}) tail");
+                let spans = extract_link_spans(&text);
+                assert_eq!(spans.len(), 1);
+                assert_eq!(spans[0].link.target, target);
+                assert_eq!(&text[spans[0].full_end..], " tail");
+            }
         }
     }
 

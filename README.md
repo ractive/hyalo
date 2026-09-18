@@ -200,7 +200,9 @@ the scanned directory's root. This supports Obsidian's "Absolute path in vault"
 format for notes and other linked files, without requiring a particular folder
 name. Explicit `.` or `..` path components keep a link source-relative; leading
 `/` paths follow `--site-prefix`. Balanced parentheses in destinations such as
-`![image](images/photo%20(1).png)` are preserved.
+`![image](images/photo%20(1).png)` are preserved. Moving notes keeps these links
+pointing to the same files. Older indexes fall back to a disk scan; rebuild them
+with `hyalo create-index` to use indexed reads with the corrected parser.
 
 ### Agent loop: new → edit → lint
 
