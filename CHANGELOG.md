@@ -9,6 +9,19 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Markdown file links now try the scanned directory's root when a
+  source-relative target is absent, supporting Obsidian's absolute vault paths
+  for notes and other linked files. Explicit `.` and `..` components retain
+  relative semantics, and source-relative matches keep precedence.
+- Balanced parentheses in Markdown destinations no longer truncate paths such
+  as `images/photo%20(1).png`, avoiding false broken-link reports and incorrect
+  rewrite spans. Link titles after space-containing filenames remain separate.
+  Older indexes fall back to a disk scan until rebuilt with `hyalo create-index`.
+- Moving notes preserves root-relative link targets in single and batch moves,
+  including extensionless links and percent-encoded directory references.
+
 ## [0.24.0] - 2026-09-13
 
 ### Added

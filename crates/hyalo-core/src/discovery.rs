@@ -1389,6 +1389,17 @@ impl std::fmt::Display for FileResolveError {
 
 impl std::error::Error for FileResolveError {}
 
+/// Whether a decoded Markdown target permits a vault-relative fallback.
+/// Explicit relative components assert a source-relative location and must
+/// never be rescued by a different file. Site-absolute paths have their own
+/// resolution policy.
+pub(crate) fn allows_vault_relative_fallback(target: &str) -> bool {
+    !target.starts_with(['/', '\\'])
+        && !target
+            .split(['/', '\\'])
+            .any(|part| matches!(part, "." | ".."))
+}
+
 /// Normalize a link's *target string* to the vault-relative form used for
 /// resolution, applying the kind-dependent branching shared by the read-side
 /// entry points (`resolve_link_from_source` / `classify_link_from_source`).
@@ -1399,9 +1410,9 @@ impl std::error::Error for FileResolveError {}
 ///
 /// - Wikilinks are vault-relative by definition, returned as-written.
 /// - Markdown site-absolute (`/site/...`) targets are returned as-written.
-/// - Markdown path-qualified targets are normalized against the source dir.
-/// - Markdown bare basenames try source-relative first, falling back to the
-///   raw target. The two modes differ only in *how* they decide whether the
+/// - Markdown relative targets try the source directory first, then the vault
+///   root unless `.` or `..` components explicitly assert a relative path.
+///   The two modes differ only in *how* they decide whether the
 ///   source-relative candidate "resolves", so that decision is abstracted
 ///   behind `src_rel_resolves` — the sole intentional behavioral seam between
 ///   Exists and Classify (locked by tests in iter-189 task 1):
@@ -1437,12 +1448,22 @@ fn normalize_link_target<'a>(
                 {
                     norm.push('/');
                 }
-                std::borrow::Cow::Owned(norm)
+                let decoded = percent_decode_path(target);
+                if allows_vault_relative_fallback(decoded.as_deref().unwrap_or(target))
+                    && !src_rel_resolves(&norm)
+                {
+                    std::borrow::Cow::Borrowed(target)
+                } else {
+                    std::borrow::Cow::Owned(norm)
+                }
             } else {
                 // Bare basename: try source-relative first so same-folder links
                 // resolve correctly, then fall back to the raw target.
                 let src_rel = normalize_target(Path::new(source_rel), target);
-                if src_rel_resolves(&src_rel) {
+                let decoded = percent_decode_path(target);
+                if !allows_vault_relative_fallback(decoded.as_deref().unwrap_or(target))
+                    || src_rel_resolves(&src_rel)
+                {
                     std::borrow::Cow::Owned(src_rel)
                 } else {
                     std::borrow::Cow::Borrowed(target)
@@ -1500,9 +1521,8 @@ pub fn link_target_escapes_vault(
 ///
 /// - Wikilinks are vault-relative by definition, resolved as-written.
 /// - Markdown site-absolute (`/site/...`) targets are resolved as-written.
-/// - Markdown path-qualified targets are normalized against the source dir.
-/// - Markdown bare basenames try source-relative first, then fall back to the
-///   raw target (matching the pre-existing `find` behavior).
+/// - Markdown relative targets try the source directory first, then the vault
+///   root unless `.` or `..` components explicitly assert a relative path.
 #[must_use]
 pub fn resolve_link_from_source(
     canonical_dir: &Path,
@@ -1900,7 +1920,7 @@ pub(crate) fn classify_link_from_source(
         LinkKind::Markdown => {
             // Markdown normalization shares the Exists-mode branching via
             // `normalize_link_target`. The only Classify-specific seam is the
-            // bare-basename fallback predicate: a source-relative candidate that
+            // vault-root fallback predicate: a source-relative candidate that
             // merely case-mismatches still counts as "resolved" and is preferred
             // over the raw target. To avoid classifying the source-relative
             // candidate twice (once in the predicate, once for the verdict), the
@@ -4829,6 +4849,87 @@ mod tests {
             idx.insert(p);
         }
         (tmp, canonical, idx)
+    }
+
+    #[test]
+    fn markdown_vault_paths_respect_relative_precedence() {
+        let (tmp, canonical, mut idx) = attachment_vault();
+        for path in [
+            "sub/img2.png",
+            "notes/Templates/Bases/Books.base",
+            "guides/target.md",
+            "guides/local.md",
+            "notes/guides/local.md",
+            "docs/reference/index.md",
+            "index.md",
+        ] {
+            make_files(tmp.path(), &[path]);
+            idx.insert(path);
+        }
+        // Exercise both filesystem fallback and the complete catalog used
+        // by commands, including snapshots.
+        for complete in [false, true] {
+            idx.set_complete(complete);
+            for (target, expected) in [
+                (
+                    "02%20Attachments/task-plugins-sorted.png",
+                    Some("02 Attachments/task-plugins-sorted.png"),
+                ),
+                (
+                    "02 Attachments/task-plugins-sorted.png",
+                    Some("02 Attachments/task-plugins-sorted.png"),
+                ),
+                ("sub/img2.png", Some("notes/sub/img2.png")),
+                (
+                    "Templates/Bases/Books.base",
+                    Some("notes/Templates/Bases/Books.base"),
+                ),
+                ("./02 Attachments/task-plugins-sorted.png", None),
+                ("%2E/02%20Attachments/task-plugins-sorted.png", None),
+                ("missing/../02 Attachments/task-plugins-sorted.png", None),
+                ("02 Attachments/missing.png", None),
+                ("guides/target.md", Some("guides/target.md")),
+                ("guides/target", Some("guides/target.md")),
+                ("guides/local.md", Some("notes/guides/local.md")),
+                ("docs/reference/", Some("docs/reference/index.md")),
+                ("./guides/target.md", None),
+                ("../guides/target.md", Some("guides/target.md")),
+                ("notes/a.md", Some("notes/a.md")),
+                ("../../02 Attachments/task-plugins-sorted.png", None),
+                (".", None),
+                ("%2E", None),
+            ] {
+                assert_eq!(
+                    resolve_link_from_source(
+                        &canonical,
+                        "notes/a.md",
+                        crate::links::LinkKind::Markdown,
+                        target,
+                        None,
+                        Some(&idx),
+                    )
+                    .as_deref(),
+                    expected,
+                    "target={target}, complete={complete}"
+                );
+                let mut links = Vec::new();
+                crate::links::extract_links_from_text(&format!("[link]({target})"), &mut links);
+                let (_, verdict) = classify_link_from_source(
+                    &canonical,
+                    "notes/a.md",
+                    &links[0],
+                    None,
+                    Some(&idx),
+                    &StemIndex::build(&[]),
+                    false,
+                );
+                assert_eq!(
+                    verdict == LinkResolution::Broken,
+                    expected.is_none(),
+                    "classification of {target}, complete={complete}"
+                );
+            }
+        }
     }
 
     #[test]

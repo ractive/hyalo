@@ -300,7 +300,13 @@ impl LinkWriter {
         // (`[f](foo/index)`) came back from `mv` as `[f](bar/index.md)` —
         // a suffix the author never wrote, breaking iter-203's spelling
         // guarantee on one of its ten forms.
-        let had_md = span.link.target.to_ascii_lowercase().ends_with(".md");
+        // Encoded punctuation/letters still express an explicit Markdown suffix.
+        let decoded = crate::discovery::percent_decode_path(&span.link.target);
+        let had_md = decoded
+            .as_deref()
+            .unwrap_or(&span.link.target)
+            .to_ascii_lowercase()
+            .ends_with(".md");
         let styled_target = if had_md { new_vault_rel } else { new_stem };
 
         if span.link.target.starts_with('/') {
@@ -331,6 +337,28 @@ impl LinkWriter {
 mod tests {
     use super::*;
     use crate::links::{LinkKind, extract_link_spans};
+
+    #[test]
+    fn encoded_markdown_suffix_remains_explicit() {
+        for target in [
+            "../guides/topic.v1%2Emd",
+            "../guides/topic.v1.%6D%64",
+            "../guides/topic.v1%2eMD",
+        ] {
+            let line = format!("[Topic]({target}#heading)");
+            let spans = extract_link_spans(&line);
+            let replacement = LinkWriter::rewrite(
+                &spans[0],
+                &line,
+                "guides/new.v1.md",
+                "archive/a.md",
+                PreserveForm::Preserve,
+                None,
+            )
+            .unwrap();
+            assert_eq!(replacement.new_text, "[Topic](../guides/new.v1.md#heading)");
+        }
+    }
 
     fn span_from(text: &str, idx: usize) -> LinkSpan {
         let spans = extract_link_spans(text);

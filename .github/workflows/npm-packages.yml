@@ -136,4 +136,4 @@ jobs:
             *) echo "unexpected hyalo version output: $actual" >&2; exit 1 ;;
           esac
           node --input-type=module -e \
-            "import('@ractive-ch/hyalo').then(async ({config}) => { const value = await config(); if (value.results.snapshot_format_version !== 2) process.exit(1) })"
+            "import('@ractive-ch/hyalo').then(async ({config}) => { const value = await config(); if (value.results.snapshot_format_version !== 3) process.exit(1) })"

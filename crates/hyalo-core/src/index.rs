@@ -363,7 +363,9 @@ impl VaultIndex for ScannedIndex {
 /// |   |          | witness for the files whose frontmatter would not parse,
 /// |   |          | so `summary --index` reported `0 skipped` where the disk
 /// |   |          | scan reported 1 (Hub) and 28 (kepano) |
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 2;
+/// | 3 | iter-297 | balanced parentheses in parsed Markdown destinations;
+/// |   |          | older entries retain truncated link targets |
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 3;
 
 /// Metadata header embedded in every snapshot file.
 #[derive(Debug, Serialize, Deserialize)]

@@ -186,6 +186,260 @@ fn attachments_resolve_from_every_folder_and_are_never_broken() {
 }
 
 #[test]
+fn markdown_image_attachments_with_parentheses_resolve_on_disk_and_in_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "attachments/image (1).png", "image bytes");
+    write(
+        &tmp,
+        "notes/a.md",
+        "---\ntitle: Images\n---\n\
+         ![](../attachments/image%20(1).png)\n\
+         ![](../attachments/image (1).png)\n\
+         ![](<../attachments/image (1).png>)\n\
+         ![[image (1).png]]\n\
+         ![](../attachments/missing(2).png)\n\
+         [[missing-note]]\n\
+         ![](../attachments/image (1).png \"Title\")\n",
+    );
+    run_json(&tmp, &["create-index"]);
+    for indexed in [false, true] {
+        let mut args = vec!["find", "--file", "notes/a.md", "--fields", "links"];
+        if indexed {
+            args.push("--index");
+        }
+        let found = run_json(&tmp, &args);
+        let links = found["results"][0]["links"].as_array().unwrap();
+        assert_eq!(links.len(), 7);
+        for link in &links[..4] {
+            assert_eq!(link["path"], "attachments/image (1).png");
+            assert_eq!(link["kind"], "attachment");
+        }
+        assert_eq!(links[4]["target"], "../attachments/missing(2).png");
+        assert!(links[4]["path"].is_null());
+        assert!(links[5]["path"].is_null());
+        assert_eq!(links[6]["path"], "attachments/image (1).png");
+
+        let mut args = vec!["lint", "--rule", "HYALO006", "--detailed"];
+        if indexed {
+            args.push("--index");
+        }
+        let lint = run_json(&tmp, &args);
+        assert_eq!(lint["results"]["violations"], 2, "{lint}");
+        let violations = lint["results"]["files"][0]["rule_groups"][0]["violations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(violations[0]["line"], 8);
+        assert!(
+            violations[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing(2).png")
+        );
+        assert_eq!(violations[1]["line"], 9);
+        assert!(
+            violations[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing-note")
+        );
+    }
+}
+
+#[test]
+fn markdown_vault_root_files_resolve_on_disk_and_in_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "_attachments/image one.png", "image bytes");
+    write(&tmp, "_attachments/local.png", "root image bytes");
+    write(&tmp, "notes/_attachments/local.png", "local image bytes");
+    write(&tmp, "guides/target.md", "---\ntitle: Target\n---\n");
+    write(
+        &tmp,
+        "notes/a.md",
+        "---\ntitle: Images\n---\n\
+         ![](_attachments/image%20one.png)\n\
+         ![](_attachments/image one.png)\n\
+         ![[_attachments/image one.png]]\n\
+         ![](_attachments/local.png)\n\
+         ![](./_attachments/image%20one.png)\n\
+         ![](_attachments/missing.png)\n\
+         [[missing-note]]\n\
+         [Target](guides/target.md)\n\
+         [Target](guides/target)\n\
+         [Explicit relative](./guides/target.md)\n",
+    );
+    run_json(&tmp, &["create-index"]);
+    for indexed in [false, true] {
+        let mut args = vec!["find", "--file", "notes/a.md", "--fields", "links"];
+        if indexed {
+            args.push("--index");
+        }
+        let found = run_json(&tmp, &args);
+        let links = found["results"][0]["links"].as_array().unwrap();
+        assert_eq!(links.len(), 10);
+        for link in &links[..3] {
+            assert_eq!(link["path"], "_attachments/image one.png");
+            assert_eq!(link["kind"], "attachment");
+        }
+        assert_eq!(links[3]["path"], "notes/_attachments/local.png");
+        for link in &links[4..7] {
+            assert!(link["path"].is_null(), "{link}");
+        }
+        assert_eq!(links[7]["path"], "guides/target.md");
+        assert_eq!(links[8]["path"], "guides/target.md");
+        assert!(links[9]["path"].is_null());
+
+        let mut args = vec!["lint", "--rule", "HYALO006", "--detailed"];
+        if indexed {
+            args.push("--index");
+        }
+        let lint = run_json(&tmp, &args);
+        assert_eq!(lint["results"]["violations"], 4, "{lint}");
+        let violations = lint["results"]["files"][0]["rule_groups"][0]["violations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(violations[0]["line"], 8);
+        assert_eq!(violations[1]["line"], 9);
+        assert_eq!(violations[2]["line"], 10);
+        assert_eq!(violations[3]["line"], 13);
+    }
+}
+
+#[test]
+fn moving_notes_preserves_vault_relative_file_targets() {
+    for mode in ["single", "batch", "batch_with_target"] {
+        let batch = mode != "single";
+        let glob = if mode == "batch_with_target" {
+            "{notes/a,guides/target}.md"
+        } else {
+            "notes/a.md"
+        };
+        let tmp = TempDir::new().unwrap();
+        write(
+            &tmp,
+            "guides/target.md",
+            "---\ntitle: Target\n---\n# Heading\n",
+        );
+        write(
+            &tmp,
+            "docs/reference/index.md",
+            "---\ntitle: Reference\n---\n",
+        );
+        write(&tmp, "notes/guides/local.md", "---\ntitle: Local\n---\n");
+        write(&tmp, "guides/local.md", "---\ntitle: Root twin\n---\n");
+        write(
+            &tmp,
+            "guides/topic.v1.md",
+            "---\ntitle: Versioned\n---\n# Heading\n",
+        );
+        write(
+            &tmp,
+            "notes/a.md",
+            "---\ntitle: Source\n---\n\
+             [Target](guides/target.md#heading)\n\
+             [Short](guides/target)\n\
+             [Reference](docs/reference/)\n\
+             [Local](guides/local.md)\n\
+             [Self](notes/a.md)\n\
+             [Encoded](../guides/topic.v1%2Emd)\n\
+             [Encoded letters](guides/topic.v1.%6D%64#heading)\n",
+        );
+        let preview = if batch {
+            vec!["mv", "--glob", glob, "--to", "archive/", "--dry-run"]
+        } else {
+            vec!["mv", "notes/a.md", "archive/a.md", "--dry-run"]
+        };
+        run_json(&tmp, &preview);
+        assert!(tmp.path().join("notes/a.md").is_file());
+        let apply = if batch {
+            vec!["mv", "--glob", glob, "--to", "archive/", "--apply"]
+        } else {
+            vec!["mv", "notes/a.md", "archive/a.md"]
+        };
+        run_json(&tmp, &apply);
+        let content = std::fs::read_to_string(tmp.path().join("archive/a.md")).unwrap();
+        let targets = if mode == "batch_with_target" {
+            [
+                "[Target](../archive/target.md#heading)",
+                "[Short](../archive/target)",
+            ]
+        } else {
+            [
+                "[Target](../guides/target.md#heading)",
+                "[Short](../guides/target)",
+            ]
+        };
+        for expected in [
+            targets[0],
+            targets[1],
+            "[Reference](../docs/reference/)",
+            "[Local](../notes/guides/local.md)",
+            "[Self](a.md)",
+            "[Encoded](../guides/topic.v1.md)",
+            "[Encoded letters](../guides/topic.v1.md#heading)",
+        ] {
+            assert!(content.contains(expected), "mode={mode}: {content}");
+        }
+        assert_eq!(
+            run_json(&tmp, &["lint", "--rule", "HYALO006"])["results"]["violations"],
+            0
+        );
+    }
+}
+
+#[test]
+fn moving_encoded_directory_index_preserves_directory_spelling() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "docs/my guide/index.md", "---\ntitle: Guide\n---\n");
+    write(
+        &tmp,
+        "notes/a.md",
+        "---\ntitle: Source\n---\n[Guide](docs/my%20guide/)\n",
+    );
+    run_json(
+        &tmp,
+        &["mv", "docs/my guide/index.md", "docs/new guide/index.md"],
+    );
+    let content = std::fs::read_to_string(tmp.path().join("notes/a.md")).unwrap();
+    assert!(
+        content.contains("[Guide](../docs/new%20guide/)"),
+        "{content}"
+    );
+    assert_eq!(
+        run_json(&tmp, &["lint", "--rule", "HYALO006"])["results"]["violations"],
+        0
+    );
+}
+
+#[test]
+fn old_snapshot_with_truncated_parentheses_falls_back_to_disk() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "images/photo (1).png", "image");
+    write(
+        &tmp,
+        "note.md",
+        "---\ntitle: Note\n---\n![](images/photo%20(1).png)\n",
+    );
+    run_json(&tmp, &["create-index"]);
+    let path = tmp.path().join(".hyalo-index");
+    let mut snapshot: serde_json::Value =
+        rmp_serde::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    snapshot["header"]["format_version"] = 2.into();
+    snapshot["entries"][0]["links"][0][1]["target"] = "images/photo%20(1".into();
+    std::fs::write(&path, rmp_serde::to_vec_named(&snapshot).unwrap()).unwrap();
+
+    let output = hyalo(&tmp)
+        .args(["find", "--index", "--fields", "links", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("falling back to disk scan"));
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let link = &json["results"][0]["links"][0];
+    assert_eq!(link["target"], "images/photo%20(1).png");
+    assert_eq!(link["path"], "images/photo (1).png");
+}
+
+#[test]
 fn links_fix_never_proposes_a_base_to_md_rewrite() {
     let tmp = TempDir::new().unwrap();
     write(&tmp, "Categories/Posts.md", "---\ntitle: Posts\n---\n");
