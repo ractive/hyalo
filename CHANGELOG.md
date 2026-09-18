@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-09-18
+
 ### Fixed
 
 - Markdown file links now try the scanned directory's root when a
@@ -2716,7 +2718,8 @@ already complied (`total = modified + skipped`) and are unchanged.
 - Snapshot index files larger than 512 MB are rejected to prevent OOM from
   crafted files.
 
-[Unreleased]: https://github.com/ractive/hyalo/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/ractive/hyalo/compare/v0.24.1...HEAD
+[0.24.1]: https://github.com/ractive/hyalo/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/ractive/hyalo/compare/v0.21.0...v0.24.0
 [0.23.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.23.0
 [0.21.0]: TBD
