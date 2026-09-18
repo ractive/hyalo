@@ -146,15 +146,17 @@ impl<'a> LinkResolver<'a> {
             LinkKind::Markdown => {
                 if trimmed.starts_with('/') {
                     vec![strip_site_prefix(trimmed, self.site_prefix)]
-                } else if trimmed.contains('/') {
-                    vec![normalize_target(Path::new(source_rel), trimmed)]
                 } else {
-                    // Bare basename: source-relative first, then vault-root —
-                    // the same two candidates `normalize_link_target` tries.
-                    vec![
-                        normalize_target(Path::new(source_rel), trimmed),
-                        trimmed.to_owned(),
-                    ]
+                    // Source-relative first, then vault-root, just like the
+                    // catalog. Explicit relative components disable fallback.
+                    let mut paths = vec![normalize_target(Path::new(source_rel), trimmed)];
+                    let decoded = crate::discovery::percent_decode_path(trimmed);
+                    if crate::discovery::allows_vault_relative_fallback(
+                        decoded.as_deref().unwrap_or(trimmed),
+                    ) {
+                        paths.push(trimmed.to_owned());
+                    }
+                    paths
                 }
             }
         };
@@ -273,6 +275,25 @@ mod tests {
             detect_wikilink_form("path/note.md"),
             WrittenForm::PathRelative
         );
+    }
+
+    #[test]
+    fn vault_relative_directory_link_matches_the_same_file_for_rewrites() {
+        let mut idx = CaseInsensitiveIndex::new();
+        idx.insert("docs/reference/index.md");
+        let resolver = LinkResolver::new(&idx, None);
+        for (target, expected) in [
+            ("docs/reference/", Some(true)),
+            ("docs/reference", Some(false)),
+            ("./docs/reference/", None),
+        ] {
+            let spans = crate::links::extract_link_spans(&format!("[ref]({target})"));
+            assert_eq!(
+                resolver.dir_index_match(&spans[0], "notes/a.md", "docs/reference/index.md"),
+                expected,
+                "{target}"
+            );
+        }
     }
 
     #[test]

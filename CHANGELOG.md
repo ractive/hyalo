@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Markdown file links now try the scanned directory's root when a
+  source-relative target is absent, supporting Obsidian's absolute vault paths
+  for notes and other linked files. Explicit `.` and `..` components retain
+  relative semantics, and source-relative matches keep precedence.
+- Balanced parentheses in Markdown destinations no longer truncate paths such
+  as `images/photo%20(1).png`, avoiding false broken-link reports and incorrect
+  rewrite spans.
+
 ## [0.24.0] - 2026-09-13
 
 ### Added

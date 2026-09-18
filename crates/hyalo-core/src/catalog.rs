@@ -100,7 +100,10 @@ pub fn resolve(
         ));
     } else if kind == LinkKind::Markdown || raw.starts_with("./") {
         candidates.push(crate::link_graph::normalize_target(Path::new(source), raw));
-        if kind == LinkKind::Markdown && !raw.contains('/') {
+        // Markdown file links can name a path from the vault root without a
+        // leading slash (Obsidian's "Absolute path in vault" format). Prefer
+        // the source-relative candidate, preserving existing precedence.
+        if kind == LinkKind::Markdown && crate::discovery::allows_vault_relative_fallback(raw) {
             candidates.push(raw.to_owned());
         }
     } else {

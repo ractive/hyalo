@@ -195,6 +195,13 @@ hyalo new --type iteration --file iterations/iter-99-example.md
 
 Commands that expose `--dry-run` preview their documented changes before applying them. Other mutations, including task toggles, report their exact behavior in `hyalo <cmd> --help`.
 
+Markdown file links resolve from the containing note's folder first, then from
+the scanned directory's root. This supports Obsidian's "Absolute path in vault"
+format for notes and other linked files, without requiring a particular folder
+name. Explicit `.` or `..` path components keep a link source-relative; leading
+`/` paths follow `--site-prefix`. Balanced parentheses in destinations such as
+`![image](images/photo%20(1).png)` are preserved.
+
 ### Agent loop: new → edit → lint
 
 `hyalo new` creates a skeleton file with `TBD` placeholders that are intentionally

@@ -570,7 +570,7 @@ fn find_close_paren_after_destination(s: &str) -> Option<usize> {
 /// Parse a markdown link destination starting at `rest` (the text right
 /// after the opening `(`).
 ///
-/// Handles both bare destinations (`dest.md`, up to the first `)`) and
+/// Handles both bare destinations (including balanced parentheses) and
 /// CommonMark angle-bracket destinations (`<my dest.md>`, which may contain
 /// spaces and literal `)`), per L-A1. For the angle form, the destination is
 /// closed by the first unescaped `>`; an optional title between it and the
@@ -609,9 +609,11 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
 
         Some(ParsedDestination { target_raw, end })
     } else {
-        // Bare destination: up to the first `)`.
-        let close_paren = rest.find(')')?;
-        let raw = &rest[..close_paren];
+        // Bare destinations can contain balanced parentheses, including in
+        // attachment names such as `image%20(1).png`. Only a closing paren
+        // at depth zero terminates the link.
+        let mut depth = 0usize;
+        let mut first_whitespace = true;
         // iter-211 / BUG-12: a bare CommonMark destination cannot contain
         // whitespace — anything after the first space/tab is an optional
         // title (`[a](p.md "Title")`). Without this split the title became
@@ -624,22 +626,35 @@ fn parse_destination(rest: &str) -> Option<ParsedDestination<'_>> {
         // (`[x](my dest.md)`), which is not valid CommonMark but is common in
         // hand-written vaults. A leading space (`[a]( p.md )`) is likewise
         // left alone rather than producing an empty target.
-        if let Some(ws) = raw.find([' ', '\t'])
-            && ws > 0
-            && let Some(cp) = find_close_paren_after_destination(&rest[ws..])
-        {
-            // `find_close_paren_after_destination` also skips a title that
-            // itself contains `)`, so the span end can legitimately land past
-            // the `close_paren` found above.
-            return Some(ParsedDestination {
-                target_raw: &raw[..ws],
-                end: ws + cp + 1,
-            });
+        for (i, &byte) in bytes.iter().enumerate() {
+            if matches!(byte, b' ' | b'\t') && first_whitespace {
+                first_whitespace = false;
+                if i > 0
+                    && depth == 0
+                    && let Some(cp) = find_close_paren_after_destination(&rest[i..])
+                {
+                    return Some(ParsedDestination {
+                        target_raw: &rest[..i],
+                        end: i + cp + 1,
+                    });
+                }
+            }
+            if matches!(byte, b'(' | b')') && is_escaped(bytes, i) {
+                continue;
+            }
+            match byte {
+                b'(' => depth += 1,
+                b')' if depth == 0 => {
+                    return Some(ParsedDestination {
+                        target_raw: &rest[..i],
+                        end: i + 1,
+                    });
+                }
+                b')' => depth -= 1,
+                _ => {}
+            }
         }
-        Some(ParsedDestination {
-            target_raw: raw,
-            end: close_paren + 1,
-        })
+        None
     }
 }
 
@@ -1811,6 +1826,41 @@ mod tests {
             &text[s.full_start..s.full_end],
             r#"[a](p.md "has ) paren")"#
         );
+    }
+
+    #[test]
+    fn balanced_parentheses_preserve_destinations_and_spans() {
+        for target in [
+            "image%20(1).png",
+            "image (1).png",
+            "folder/(nested(1))/note.md",
+            r"image\(1\).png",
+        ] {
+            let text = format!("[image]({target}) tail [next](other.md)");
+            assert_eq!(one_link(&format!("![image]({target})")).target, target);
+            let spans = extract_link_spans(&text);
+            assert_eq!(spans.len(), 2, "{text}");
+            assert_eq!(&text[spans[0].target_start..spans[0].target_end], target);
+            assert_eq!(
+                &text[spans[0].full_start..spans[0].full_end],
+                format!("[image]({target})")
+            );
+            assert_eq!(spans[1].link.target, "other.md");
+        }
+        for title in [r#""has ) paren""#, "'has ( paren'", "(title)"] {
+            let text = format!("[image](image(1).png {title}) tail");
+            let spans = extract_link_spans(&text);
+            assert_eq!(spans.len(), 1);
+            assert_eq!(spans[0].link.target, "image(1).png");
+            assert_eq!(&text[spans[0].full_end..], " tail");
+        }
+    }
+
+    #[test]
+    fn unclosed_parentheses_do_not_produce_truncated_links() {
+        let mut links = Vec::new();
+        extract_links_from_text("![image](image(1).png", &mut links);
+        assert!(links.is_empty());
     }
 
     #[test]

@@ -186,6 +186,123 @@ fn attachments_resolve_from_every_folder_and_are_never_broken() {
 }
 
 #[test]
+fn markdown_image_attachments_with_parentheses_resolve_on_disk_and_in_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "attachments/image (1).png", "image bytes");
+    write(
+        &tmp,
+        "notes/a.md",
+        "---\ntitle: Images\n---\n\
+         ![](../attachments/image%20(1).png)\n\
+         ![](../attachments/image (1).png)\n\
+         ![](<../attachments/image (1).png>)\n\
+         ![[image (1).png]]\n\
+         ![](../attachments/missing(2).png)\n\
+         [[missing-note]]\n",
+    );
+    run_json(&tmp, &["create-index"]);
+    for indexed in [false, true] {
+        let mut args = vec!["find", "--file", "notes/a.md", "--fields", "links"];
+        if indexed {
+            args.push("--index");
+        }
+        let found = run_json(&tmp, &args);
+        let links = found["results"][0]["links"].as_array().unwrap();
+        assert_eq!(links.len(), 6);
+        for link in &links[..4] {
+            assert_eq!(link["path"], "attachments/image (1).png");
+            assert_eq!(link["kind"], "attachment");
+        }
+        assert_eq!(links[4]["target"], "../attachments/missing(2).png");
+        assert!(links[4]["path"].is_null());
+        assert!(links[5]["path"].is_null());
+
+        let mut args = vec!["lint", "--rule", "HYALO006", "--detailed"];
+        if indexed {
+            args.push("--index");
+        }
+        let lint = run_json(&tmp, &args);
+        assert_eq!(lint["results"]["violations"], 2, "{lint}");
+        let violations = lint["results"]["files"][0]["rule_groups"][0]["violations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(violations[0]["line"], 8);
+        assert!(
+            violations[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing(2).png")
+        );
+        assert_eq!(violations[1]["line"], 9);
+        assert!(
+            violations[1]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing-note")
+        );
+    }
+}
+
+#[test]
+fn markdown_vault_root_files_resolve_on_disk_and_in_snapshot() {
+    let tmp = TempDir::new().unwrap();
+    write(&tmp, "_attachments/image one.png", "image bytes");
+    write(&tmp, "_attachments/local.png", "root image bytes");
+    write(&tmp, "notes/_attachments/local.png", "local image bytes");
+    write(&tmp, "guides/target.md", "---\ntitle: Target\n---\n");
+    write(
+        &tmp,
+        "notes/a.md",
+        "---\ntitle: Images\n---\n\
+         ![](_attachments/image%20one.png)\n\
+         ![](_attachments/image one.png)\n\
+         ![[_attachments/image one.png]]\n\
+         ![](_attachments/local.png)\n\
+         ![](./_attachments/image%20one.png)\n\
+         ![](_attachments/missing.png)\n\
+         [[missing-note]]\n\
+         [Target](guides/target.md)\n\
+         [Target](guides/target)\n\
+         [Explicit relative](./guides/target.md)\n",
+    );
+    run_json(&tmp, &["create-index"]);
+    for indexed in [false, true] {
+        let mut args = vec!["find", "--file", "notes/a.md", "--fields", "links"];
+        if indexed {
+            args.push("--index");
+        }
+        let found = run_json(&tmp, &args);
+        let links = found["results"][0]["links"].as_array().unwrap();
+        assert_eq!(links.len(), 10);
+        for link in &links[..3] {
+            assert_eq!(link["path"], "_attachments/image one.png");
+            assert_eq!(link["kind"], "attachment");
+        }
+        assert_eq!(links[3]["path"], "notes/_attachments/local.png");
+        for link in &links[4..7] {
+            assert!(link["path"].is_null(), "{link}");
+        }
+        assert_eq!(links[7]["path"], "guides/target.md");
+        assert_eq!(links[8]["path"], "guides/target.md");
+        assert!(links[9]["path"].is_null());
+
+        let mut args = vec!["lint", "--rule", "HYALO006", "--detailed"];
+        if indexed {
+            args.push("--index");
+        }
+        let lint = run_json(&tmp, &args);
+        assert_eq!(lint["results"]["violations"], 4, "{lint}");
+        let violations = lint["results"]["files"][0]["rule_groups"][0]["violations"]
+            .as_array()
+            .unwrap();
+        assert_eq!(violations[0]["line"], 8);
+        assert_eq!(violations[1]["line"], 9);
+        assert_eq!(violations[2]["line"], 10);
+        assert_eq!(violations[3]["line"], 13);
+    }
+}
+
+#[test]
 fn links_fix_never_proposes_a_base_to_md_rewrite() {
     let tmp = TempDir::new().unwrap();
     write(&tmp, "Categories/Posts.md", "---\ntitle: Posts\n---\n");
