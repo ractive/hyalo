@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 297 — Markdown file link resolution
 date: 2026-09-18
-status: in-progress
+status: completed
 tags:
   - iteration
   - links
@@ -49,7 +49,7 @@ Related work: [[iteration-261-link-resolution-obsidian-compat]] and
 - [x] Add unit and CLI regressions for disk and snapshot reads, including missing targets.
 - [x] Run formatting, strict workspace Clippy, and workspace tests.
 - [x] Run release dogfood and the supported xtask quality gates.
-- [ ] Complete independent local and Copilot reviews and reconcile findings.
+- [x] Complete independent local and Copilot reviews and reconcile findings.
 
 ## Validation
 
@@ -61,3 +61,13 @@ parentheses, and source-relative precedence with and without a snapshot.
 
 The legacy `check-dead-primitives` and `check-todo-annotations` xtask commands
 identify themselves as unsupported placeholders, not quality gates.
+
+## Review
+
+[PR 354](https://github.com/ractive/hyalo/pull/354) received independent local
+and Copilot review. The initial review found two local and three Copilot
+defects; the first repair review found one additional encoded-suffix defect.
+All six were fixed with regressions. The final independent review of
+`144282ab..f23604c8` found no further defects. Workspace checks, release build,
+and npm launcher/API tests passed at `f23604c8`. The PR records each finding,
+its disposition, and the full review coverage.
