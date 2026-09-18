@@ -328,13 +328,20 @@ fn moving_notes_preserves_vault_relative_file_targets() {
         write(&tmp, "guides/local.md", "---\ntitle: Root twin\n---\n");
         write(
             &tmp,
+            "guides/topic.v1.md",
+            "---\ntitle: Versioned\n---\n# Heading\n",
+        );
+        write(
+            &tmp,
             "notes/a.md",
             "---\ntitle: Source\n---\n\
              [Target](guides/target.md#heading)\n\
              [Short](guides/target)\n\
              [Reference](docs/reference/)\n\
              [Local](guides/local.md)\n\
-             [Self](notes/a.md)\n",
+             [Self](notes/a.md)\n\
+             [Encoded](../guides/topic.v1%2Emd)\n\
+             [Encoded letters](guides/topic.v1.%6D%64#heading)\n",
         );
         let preview = if batch {
             vec!["mv", "--glob", glob, "--to", "archive/", "--dry-run"]
@@ -367,6 +374,8 @@ fn moving_notes_preserves_vault_relative_file_targets() {
             "[Reference](../docs/reference/)",
             "[Local](../notes/guides/local.md)",
             "[Self](a.md)",
+            "[Encoded](../guides/topic.v1.md)",
+            "[Encoded letters](../guides/topic.v1.md#heading)",
         ] {
             assert!(content.contains(expected), "mode={mode}: {content}");
         }
