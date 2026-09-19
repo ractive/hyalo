@@ -52,7 +52,37 @@ fn customize(mut command: Command, parent: &[String], globals: &[clap::Arg]) -> 
     if !index {
         command = hide(command, "index_file");
     }
-    if (!index && path[0] != "config") || path[0] == "drop-index" {
+    // Link queries consume the prefix directly; mutations also need it when
+    // maintaining a snapshot's link graph. Plain reads and metadata summaries
+    // do neither, even though they accept an index.
+    let site_prefix = matches!(
+        name.as_str(),
+        "find"
+            | "summary"
+            | "backlinks"
+            | "mv"
+            | "set"
+            | "remove"
+            | "append"
+            | "create-index"
+            | "links"
+            | "links fix"
+            | "links auto"
+            | "lint"
+            | "new"
+            | "config"
+            | "properties rename"
+            | "tags rename"
+            | "task toggle"
+            | "task set"
+            | "views run"
+            | "okf index"
+            | "okf log"
+            | "madr toc"
+            | "changelog release"
+            | "changelog add"
+    );
+    if !site_prefix {
         command = hide(command, "site_prefix");
     }
     if matches!(path[0].as_str(), "init" | "deinit" | "completions" | "help") {

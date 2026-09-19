@@ -108,6 +108,7 @@ fn help_and_descriptors_match_runtime_capabilities() {
         for (flag, supported) in [
             ("--count", has("count")),
             ("--index-file", has("index-file")),
+            ("--site-prefix", has("site-prefix")),
         ] {
             let advertised = help.lines().any(|line| {
                 line.trim_start()
@@ -132,6 +133,43 @@ fn help_and_descriptors_match_runtime_capabilities() {
             .find(|line| line.starts_with("Global: "))
             .unwrap();
         assert_eq!(pointer.contains("--count"), has("count"), "{path:?}");
+        assert_eq!(
+            pointer.contains("--site-prefix"),
+            has("site-prefix"),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn site_prefix_is_advertised_for_link_work_not_plain_reads() {
+    // Index support alone is insufficient: these commands read content or
+    // metadata without resolving links, while backlinks uses the link graph.
+    for (args, expected) in [
+        (vec!["read"], false),
+        (vec!["task", "read"], false),
+        (vec!["tags"], false),
+        (vec!["tags", "summary"], false),
+        (vec!["properties", "summary"], false),
+        (vec!["drop-index"], false),
+        (vec!["backlinks"], true),
+        (vec!["find"], true),
+        (vec!["summary"], true),
+        (vec!["create-index"], true),
+        (vec!["task", "toggle"], true),
+        (vec!["config"], true),
+    ] {
+        let argv: Vec<String> = std::iter::once("hyalo")
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect();
+        let descriptor = hyalo_cli::describe_invocation(&argv).unwrap();
+        let advertised = descriptor["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|option| option["long"] == "site-prefix");
+        assert_eq!(advertised, expected, "{args:?}");
     }
 }
 

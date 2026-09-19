@@ -49,7 +49,7 @@ batch reads, content fields, summaries, or output budgets.
 
 ## Validation
 
-Formatting, strict workspace Clippy, and all 5,207 workspace tests passed
+Formatting, strict workspace Clippy, and all 5,208 workspace tests passed
 (two doctests ignored). All 12 supported xtask checks passed: feature fanout,
 help drift, command reference, bundled skills, Pi package sync, TypeScript
 types, Pi runtime, Codex package, jq recipes, behavioral contracts, mutation
@@ -58,4 +58,19 @@ help pages and unsupported-selector rejection before writes.
 
 The legacy `check-dead-primitives` and `check-todo-annotations` commands were
 run and explicitly reported unsupported placeholders; they are not counted
-as passing gates. Independent local and Copilot reviews remain pending.
+as passing gates.
+
+## Review
+
+The independent local review of `b81aef53..92e4287a` returned no findings.
+Copilot review 5258233708 returned one medium finding: index support is not
+sufficient to advertise `--site-prefix`. Plain content reads and metadata
+summaries do not resolve links. The repair gives link queries and mutations
+that maintain a snapshot graph explicit visibility, with regression coverage
+for descriptors and both help forms. The repair passed formatting, strict
+workspace Clippy, and workspace tests. Refreshed help gates, release dogfood,
+and independent delta review remain pending.
+
+Copilot's overview prose said "three" issues, but its Findings/Open counts,
+complete inline response, and review-specific comments endpoint all contain
+only this one finding. No suppressed or additional finding was supplied.
