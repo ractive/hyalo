@@ -222,6 +222,14 @@ impl OutputPreflight {
 
     pub(crate) fn new(cli: &Cli) -> Result<Self> {
         let capabilities = Capabilities::of(&cli.command);
+        if matches!(&cli.command, Commands::Views {
+            action: Some(ViewsAction::Set { filters, .. }),
+        } if filters.files_from.is_some())
+        {
+            bail!(crate::error::user_error(
+                "--files-from cannot be saved in a view; use --file or --glob"
+            ));
+        }
         if cli.internal_mutation_report
             && (!matches!(
                 cli.command,
@@ -825,7 +833,7 @@ pub fn describe_invocation(args: &[String]) -> Result<serde_json::Value> {
         capabilities: Capabilities,
         options: Vec<OptionDescriptor<'a>>,
     }
-    let mut root = Cli::command();
+    let mut root = crate::cli::presentation::apply(Cli::command());
     root.build();
     let matches = root.clone().try_get_matches_from(args)?;
     let cli = Cli::from_arg_matches(&matches)?;

@@ -11,7 +11,7 @@ dir?: string,
 /**
  * Output format (default: text on a terminal, json when piped)
  *
- * Output format: "json" or "text".
+ * Output format: "json" or "text"; "github" is available only for lint.
  * Default: "text" when stdout is a terminal, "json" when piped.
  * Override for a session via .hyalo.toml: format = "text"
  */
@@ -19,7 +19,7 @@ format?: "json" | "text" | "github",
 /**
  * jq filter over the JSON envelope
  *
- * Apply a jq filter expression to the JSON output of any command.
+ * Apply a jq filter expression to JSON output (not available for shell completions).
  * Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
  * The filtered result is printed as plain text. Incompatible with --format text
  * (combining them is a user error and exits 1).

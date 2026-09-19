@@ -17,6 +17,7 @@
  * constants `find` uses, so the input trio reads identically on `read`,
  * `task read/toggle/set` and `backlinks` — and each short line fits one
  * rendered line instead of the three-to-five it used to wrap to.
+ * `cli::presentation` narrows this shared help for single-target commands.
  */
 export type InputSelection = {
 /**

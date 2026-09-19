@@ -14,6 +14,7 @@
 /// constants `find` uses, so the input trio reads identically on `read`,
 /// `task read/toggle/set` and `backlinks` — and each short line fits one
 /// rendered line instead of the three-to-five it used to wrap to.
+/// `cli::presentation` narrows this shared help for single-target commands.
 #[derive(Debug, Default, Clone, clap::Args)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]

@@ -595,15 +595,14 @@ const TOP_SHORT_HELP_TEMPLATE: &str = "\
 {before-help}{about-with-newline}
 {usage-heading} {usage}{after-help}
 
-GLOBAL OPTIONS (every command):
+GLOBAL OPTIONS (availability varies by command):
 {options}";
 
 /// Hide every global flag from `-h` (but not `--help`) so a subcommand's short
 /// help can stand in one pointer line for the whole block.
 ///
-/// `hide_short_help` is set on the root's own arg objects; clap propagates
-/// `global = true` args to subcommands at build time, so the flag travels with
-/// them. A subcommand that declares its *own* arg of the same name (`find`'s
+/// Presentation has already copied globals to each subcommand, so visit each
+/// copy. A subcommand that declares its *own* arg of the same name (`find`'s
 /// `--index-file` from [`crate::cli::args::IndexFlags`]) keeps its own copy
 /// visible, which is the intent: it is documented per command, not globally.
 fn hide_globals_from_short_help(mut cmd: clap::Command) -> clap::Command {
@@ -619,9 +618,14 @@ fn hide_globals_from_short_help(mut cmd: clap::Command) -> clap::Command {
         "index_file",
     ];
     for id in GLOBAL_ARG_IDS {
-        cmd = cmd.mut_arg(id, |a| a.hide_short_help(true));
+        if cmd
+            .get_arguments()
+            .any(|arg| arg.get_id() == id && arg.is_global_set())
+        {
+            cmd = cmd.mut_arg(id, |a| a.hide_short_help(true));
+        }
     }
-    cmd
+    cmd.mut_subcommands(hide_globals_from_short_help)
 }
 
 /// Append the global-options pointer line to every subcommand's `-h`,
@@ -642,11 +646,12 @@ fn attach_subcommand_pointer(cmd: clap::Command, pointer: &str) -> clap::Command
                 return sub;
             }
             let sub = attach_subcommand_pointer(sub, pointer);
+            let pointer = crate::cli::help::applicable_global_pointer(&sub, pointer);
             match sub.get_after_help().map(ToString::to_string) {
                 Some(existing) if !existing.is_empty() => {
                     sub.after_help(format!("{existing}\n\n{pointer}"))
                 }
-                _ => sub.after_help(pointer.to_owned()),
+                _ => sub.after_help(pointer),
             }
         });
     }
@@ -724,6 +729,10 @@ fn run_inner() -> Result<(), AppError> {
     // iter-256 HELP-5: `hyalo help <cmd>` becomes `hyalo <cmd> -h` here, so
     // the short-help reshaping below applies to it unchanged.
     let raw_args = crate::cli::help::rewrite_help_to_short_page(raw_args, &cmd);
+
+    // Inherited flags must be filtered after config hiding and before the
+    // short-help pointer is assembled from the applicable options.
+    cmd = crate::cli::presentation::apply(cmd);
 
     // iter-251: reshape *short* help only. `-h` is what an agent reads first
     // and 7.7 KB of it (29 KB for `--help`) is what stopped them reading past
@@ -1057,7 +1066,7 @@ fn run_inner() -> Result<(), AppError> {
         };
     }
     if let Commands::Completion { shell } = &mut cli.command {
-        let mut cmd = Cli::command();
+        let mut cmd = crate::cli::presentation::apply(Cli::command());
         let mut bytes = Vec::new();
         clap_complete::generate(*shell, &mut cmd, "hyalo", &mut bytes);
         let code =
