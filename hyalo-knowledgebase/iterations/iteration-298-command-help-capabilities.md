@@ -2,7 +2,7 @@
 type: iteration
 title: Iteration 298 — Command help capabilities
 date: 2026-09-20
-status: in-progress
+status: completed
 tags:
   - iteration
   - cli
@@ -37,7 +37,7 @@ batch reads, content fields, summaries, or output budgets.
 - [x] Regenerate affected TypeScript documentation.
 - [x] Run formatting, strict workspace Clippy, and workspace tests.
 - [x] Run the supported xtask gates and release-build dogfood.
-- [ ] Reconcile independent local and Copilot reviews.
+- [x] Reconcile independent local and Copilot reviews.
 
 ## Acceptance criteria
 
@@ -45,7 +45,7 @@ batch reads, content fields, summaries, or output budgets.
 - [x] Short and long help agree on applicable global flags.
 - [x] Advertised count and index capabilities match runtime metadata.
 - [x] Unsavable path-list input is refused before changing a saved view.
-- [ ] Required checks pass and every review finding has a disposition.
+- [x] Required checks pass and every review finding has a disposition.
 
 ## Validation
 
@@ -79,8 +79,11 @@ is consumed before dispatch; its narrower documentation concern is addressed.
 The local delta finding is fixed by restoring visibility. Raw totals are zero
 initial local, one Copilot, and one local delta finding; no duplicates. The
 final repair passed formatting, strict workspace Clippy, and all 5,208 tests.
-Refreshed help gates, release dogfood, and independent delta review remain
-pending.
+The fresh independent review of `7fd87232..d9cc0dcd` returned zero findings,
+closing both dispositions. The release build and snapshot-prefix dogfood
+passed. Refreshed help, command-reference, and package/contract gates passed
+in CI run 35475667887 on `d9cc0dcd`. The completion-only metadata update was
+verified separately against the reviewed implementation.
 
 Copilot's overview prose said "three" issues, but its Findings/Open counts,
 complete inline response, and review-specific comments endpoint all contain
