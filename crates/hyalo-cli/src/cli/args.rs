@@ -372,7 +372,7 @@ pub(crate) struct Cli {
 
     /// Output format (default: text on a terminal, json when piped)
     ///
-    /// Output format: "json" or "text".
+    /// Output format: "json" or "text"; "github" is available only for lint.
     /// Default: "text" when stdout is a terminal, "json" when piped.
     /// Override for a session via .hyalo.toml: format = "text"
     #[arg(long, global = true)]
@@ -381,7 +381,7 @@ pub(crate) struct Cli {
 
     /// jq filter over the JSON envelope
     ///
-    /// Apply a jq filter expression to the JSON output of any command.
+    /// Apply a jq filter expression to JSON output (not available for shell completions).
     /// Operates on the full JSON envelope: {"results": ..., "total": N, "hints": [...]}.
     /// The filtered result is printed as plain text. Incompatible with --format text
     /// (combining them is a user error and exits 1).
@@ -1210,7 +1210,7 @@ pub(crate) enum Commands {
             - toggle: Flip completion state ([ ] <-> [x], custom -> [x]).\n\
             - set: Set an arbitrary single-character status.\n\n\
             INPUT: FILE (positional or --file) and one of: --line (repeatable/comma-separated), --section <heading>, or --all.\n\
-            SCOPE: Single file only.\n\
+            SCOPE: 'read' requires one file. 'toggle' and 'set' also accept --glob and --files-from for batches; --files-from requires --all or --section.\n\
             SIDE EFFECTS: 'toggle' and 'set' modify the file on disk. 'read' is read-only.\n\n\
             EXAMPLES:\n\
             hyalo task toggle todo.md --all\n\
@@ -2815,7 +2815,7 @@ pub(crate) enum ViewsAction {
         The view is stored in .hyalo.toml and can be recalled with `hyalo find --view <name>`.\n\
         You can combine --view with additional CLI filters to extend or override the saved set.\n\
         Overwrites if the view already exists.\n\n\
-        WHAT IS PERSISTED: every flag shown below \u{2014} not just the filters. --sort, --reverse, \
+        WHAT IS PERSISTED: find filters and output settings. Global options only control this invocation. --sort, --reverse, \
         --limit and --fields are saved with the view, and so are the output-shaping switches \
         --strict, --filenames-only and --filenames0, so a saved view can be a complete CI gate \
         rather than a filter set someone still has to decorate. On recall, a CLI flag of the same \

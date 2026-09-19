@@ -185,6 +185,23 @@ pub(crate) fn global_pointer(hide_dir: bool, hide_format: bool) -> String {
     format!("Global: {} — see `hyalo -h`", flags.join(" "))
 }
 
+/// Keep the compact pointer in sync with the command-specific long help.
+pub(crate) fn applicable_global_pointer(command: &clap::Command, pointer: &str) -> String {
+    pointer
+        .split_whitespace()
+        .filter(|word| {
+            if let Some(long) = word.strip_prefix("--") {
+                command
+                    .get_arguments()
+                    .any(|arg| arg.get_long() == Some(long) && !arg.is_hide_set())
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Short help (shown by `-h`): one example per feature.
 pub(crate) const HELP_EXAMPLES: &str = "EXAMPLES:
   Search for files:             hyalo find --property status=draft
@@ -344,10 +361,10 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
   Help (print a command's SHORT help \u{2014} the same page as `hyalo <cmd> -h`):
     hyalo help [COMMAND]...   # `hyalo help find` == `hyalo find -h`; `hyalo find --help` for this reference
 
-  Global flags (apply to all commands \u{2014} the same set every `Global:` pointer line names):
+  Global flags (availability depends on the command; see its help page):
 {GLOBAL_FLAGS}
-    (Not global: --index / --index-file are per-subcommand. They appear in the
-    Options block of every subcommand that can read a snapshot index.)
+    (--index is command-specific. --index-file also works as a global alias
+    on commands that read, create, or remove a snapshot index.)
 
   Default output limits:
     Capped commands ({LIMITED_COMMANDS}) return
@@ -716,7 +733,7 @@ pub(crate) fn filter_long_help(hide_dir: bool, hide_format: bool) -> String {
         // iter-254: the rows themselves come from GLOBAL_FLAGS via the
         // {GLOBAL_FLAGS} placeholder, so hiding a config-defaulted flag is a
         // filter on that one list rather than a second pass over rendered text.
-        if para.contains("  Global flags (apply to all commands") {
+        if para.contains("  Global flags (") {
             out.push(para.replace(
                 GLOBAL_FLAGS_PLACEHOLDER,
                 &global_flags_block(hide_dir, hide_format),
@@ -802,7 +819,7 @@ mod tests {
                 !rendered.contains(GLOBAL_FLAGS_PLACEHOLDER),
                 "the placeholder leaked into --help (hide_dir={hide_dir}, hide_format={hide_format})"
             );
-            assert!(rendered.contains("Global flags (apply to all commands"));
+            assert!(rendered.contains("Global flags (availability depends on the command"));
         }
     }
 }

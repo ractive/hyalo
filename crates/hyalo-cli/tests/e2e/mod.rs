@@ -26,6 +26,7 @@ mod find;
 mod find_result_shape;
 mod frontmatter_preservation;
 mod help;
+mod help_capabilities;
 mod help_reference;
 mod hint_execution;
 mod hints;

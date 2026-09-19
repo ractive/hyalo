@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Command help now advertises only supported selectors, global options, and
+  output formats. Single-file commands no longer advertise `--glob`;
+  `views set` rejects `--files-from` instead of silently discarding it.
+
 ## [0.24.1] - 2026-09-18
 
 ### Fixed
