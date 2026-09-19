@@ -64,12 +64,23 @@ as passing gates.
 
 The independent local review of `b81aef53..92e4287a` returned no findings.
 Copilot review 5258233708 returned one medium finding: index support is not
-sufficient to advertise `--site-prefix`. Plain content reads and metadata
-summaries do not resolve links. The repair gives link queries and mutations
-that maintain a snapshot graph explicit visibility, with regression coverage
-for descriptors and both help forms. The repair passed formatting, strict
-workspace Clippy, and workspace tests. Refreshed help gates, release dogfood,
-and independent delta review remain pending.
+sufficient to advertise `--site-prefix`. The first repair hid the option on
+plain content reads and metadata summaries, which do not resolve links.
+
+Independent delta review of `92e4287a..7fd87232` returned one medium finding:
+the shared loader still validates every selected snapshot against its prefix.
+Hiding the override would obscure how to avoid a fallback disk scan. The final
+repair keeps the option discoverable and explains snapshot validation in the
+help for these readers. A behavioral regression exercises matching and
+mismatched prefixes on actual snapshots, alongside descriptor/help checks.
+
+Disposition: Copilot's proposed hiding is not appropriate because the option
+is consumed before dispatch; its narrower documentation concern is addressed.
+The local delta finding is fixed by restoring visibility. Raw totals are zero
+initial local, one Copilot, and one local delta finding; no duplicates. The
+final repair passed formatting, strict workspace Clippy, and all 5,208 tests.
+Refreshed help gates, release dogfood, and independent delta review remain
+pending.
 
 Copilot's overview prose said "three" issues, but its Findings/Open counts,
 complete inline response, and review-specific comments endpoint all contain

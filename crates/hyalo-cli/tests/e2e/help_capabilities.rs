@@ -142,15 +142,15 @@ fn help_and_descriptors_match_runtime_capabilities() {
 }
 
 #[test]
-fn site_prefix_is_advertised_for_link_work_not_plain_reads() {
-    // Index support alone is insufficient: these commands read content or
-    // metadata without resolving links, while backlinks uses the link graph.
+fn site_prefix_remains_discoverable_for_snapshot_validation() {
+    // Plain readers do not resolve links, but a prefix mismatch still makes
+    // the shared snapshot loader fall back to disk.
     for (args, expected) in [
-        (vec!["read"], false),
-        (vec!["task", "read"], false),
-        (vec!["tags"], false),
-        (vec!["tags", "summary"], false),
-        (vec!["properties", "summary"], false),
+        (vec!["read"], true),
+        (vec!["task", "read"], true),
+        (vec!["tags"], true),
+        (vec!["tags", "summary"], true),
+        (vec!["properties", "summary"], true),
         (vec!["drop-index"], false),
         (vec!["backlinks"], true),
         (vec!["find"], true),
@@ -170,6 +170,49 @@ fn site_prefix_is_advertised_for_link_work_not_plain_reads() {
             .iter()
             .any(|option| option["long"] == "site-prefix");
         assert_eq!(advertised, expected, "{args:?}");
+    }
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("note.md"),
+        "---\ntags: [example]\n---\n# Note\n",
+    )
+    .unwrap();
+    let created = hyalo()
+        .current_dir(tmp.path())
+        .args(["create-index", "--site-prefix", "custom-prefix"])
+        .output()
+        .unwrap();
+    assert!(created.status.success());
+    for args in [&["tags"][..], &["properties"], &["read", "note.md"]] {
+        let mismatched = hyalo()
+            .current_dir(tmp.path())
+            .args(args)
+            .arg("--index")
+            .output()
+            .unwrap();
+        assert!(mismatched.status.success());
+        assert!(
+            String::from_utf8_lossy(&mismatched.stderr).contains("index does not match this run")
+        );
+        let matched = hyalo()
+            .current_dir(tmp.path())
+            .args(args)
+            .args(["--index", "--site-prefix", "custom-prefix"])
+            .output()
+            .unwrap();
+        assert!(matched.status.success());
+        assert!(
+            !String::from_utf8_lossy(&matched.stderr).contains("index does not match this run")
+        );
+        let help = hyalo()
+            .current_dir(tmp.path())
+            .args(args)
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(help.status.success());
+        assert!(String::from_utf8_lossy(&help.stdout).contains("Match the site prefix stored"));
     }
 }
 

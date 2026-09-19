@@ -52,38 +52,24 @@ fn customize(mut command: Command, parent: &[String], globals: &[clap::Arg]) -> 
     if !index {
         command = hide(command, "index_file");
     }
-    // Link queries consume the prefix directly; mutations also need it when
-    // maintaining a snapshot's link graph. Plain reads and metadata summaries
-    // do neither, even though they accept an index.
-    let site_prefix = matches!(
-        name.as_str(),
-        "find"
-            | "summary"
-            | "backlinks"
-            | "mv"
-            | "set"
-            | "remove"
-            | "append"
-            | "create-index"
-            | "links"
-            | "links fix"
-            | "links auto"
-            | "lint"
-            | "new"
-            | "config"
-            | "properties rename"
-            | "tags rename"
-            | "task toggle"
-            | "task set"
-            | "views run"
-            | "okf index"
-            | "okf log"
-            | "madr toc"
-            | "changelog release"
-            | "changelog add"
-    );
-    if !site_prefix {
+    if (!index && path[0] != "config") || path[0] == "drop-index" {
         command = hide(command, "site_prefix");
+    }
+    // These readers do not resolve links, but run.rs still validates a selected
+    // snapshot against the effective prefix before preparing their request.
+    if matches!(
+        name.as_str(),
+        "read" | "task read" | "tags" | "tags summary" | "properties" | "properties summary"
+    ) {
+        command = command.mut_arg("site_prefix", |arg| {
+            arg.help("Site prefix used to validate a selected snapshot index")
+                .long_help(
+                    "Match the site prefix stored in the selected snapshot index. \
+                With --index or --index-file, a mismatched prefix discards the snapshot \
+                and falls back to disk. Defaults to the configured or auto-derived prefix. \
+                This command does not resolve links in its output.",
+                )
+        });
     }
     if matches!(path[0].as_str(), "init" | "deinit" | "completions" | "help") {
         command = hide(hide(command, "hints"), "no_hints");
