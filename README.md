@@ -227,6 +227,16 @@ This installs two [skills](https://docs.anthropic.com/en/docs/claude-code/skills
 
 **`hyalo-tidy` skill** (`/hyalo-tidy`) — A five-phase knowledgebase consolidation. Think of it as a librarian doing a periodic shelf-read: it orients with `hyalo summary`, gathers recent signal from git history, detects structural issues (broken links, orphan files, stale statuses, missing metadata), applies conservative fixes, and reports a health dashboard. Run it periodically to keep your vault clean.
 
+You can explicitly ask tidy to use Jev for selected documents and fields, for
+example: “Use Jev to suggest missing types and existing folders for these five
+inbox notes; audit only.” This optional path needs Bun or Node.js and a
+`TYPESAFE_API_KEY`. It sends selected document evidence and approved classification
+rubrics to Typesafe; the helper returns suggestions, and the agent reviews them
+against local schemas before proposing changes. Ordinary tidy stays local and
+requires no JavaScript runtime or API key. See the
+[Jev workflow](plugins/hyalo/skills/hyalo-tidy/references/jev.md) for scope,
+setup, and preview requirements.
+
 **`knowledgebase` rule** — Scoped to `<your-vault>/**`. Reminds Claude to prefer hyalo CLI commands over built-in file tools whenever it touches vault files.
 
 All artifacts are idempotent — re-running `hyalo init --claude` updates to the latest versions. `hyalo deinit` removes everything cleanly.
