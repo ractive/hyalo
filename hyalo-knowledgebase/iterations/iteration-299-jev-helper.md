@@ -21,7 +21,7 @@ Ship a portable JavaScript bundle that also runs with Node.
 
 Design: [[research/jev-skill-runtime-options-2026-09-20]]. Classification findings:
 [[research/jev-opt-in-classification-2026-09-20]]. Follow-up integration:
-[[iterations/iteration-300-jev-tidy-integration]].
+planned as `iterations/iteration-300-jev-tidy-integration.md` in the next branch.
 
 ## Scope and ownership
 
@@ -120,3 +120,10 @@ remove that compatibility limitation.
 One explicitly authorized live call on a synthetic scratch note returned a
 research suggestion and the local research-folder mapping in 657 ms, with 400
 input tokens and 41 output tokens (estimated USD 0.0000168). No notes were changed.
+
+Before publication, the helper also received the integration's credential-evidence
+backstop, own-property folder lookup, and empty-body Retry-After normalization.
+The refreshed standalone suite passes ten tests with 79 assertions. These fixes
+belong in the helper's own PR; installation-specific coverage follows in iteration
+300. Forward references to its not-yet-present plan remain plain paths so this
+branch independently passes strict knowledgebase lint.

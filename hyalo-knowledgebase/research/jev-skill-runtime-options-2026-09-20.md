@@ -17,7 +17,7 @@ all document changes.
 This follows [[research/jev-opt-in-classification-2026-09-20]] and narrows its pilot
 to a concrete delivery approach. Implementation is planned in
 [[iterations/iteration-299-jev-helper]] and
-[[iterations/iteration-300-jev-tidy-integration]]. The user specifically asked to
+the follow-up `iterations/iteration-300-jev-tidy-integration.md`. The user specifically asked to
 evaluate Bun and to bootstrap it using the official quickstart. That bootstrap
 was completed in an isolated prototype; details below supersede the earlier
 Node-only recommendation.
