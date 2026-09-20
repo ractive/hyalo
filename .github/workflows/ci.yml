@@ -40,6 +40,9 @@ jobs:
         working-directory: npm/jev
       - run: bun test
         working-directory: npm/jev
+      - run: cargo run -p xtask -- check-jev-assets
+      - run: cargo run -p xtask -- check-codex-package
+      - run: cargo run -p xtask -- check-pi-package-sync
 
   fmt:
     runs-on: ubuntu-latest

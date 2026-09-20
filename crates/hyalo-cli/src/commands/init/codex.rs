@@ -119,6 +119,7 @@ fn managed_range(text: &str) -> Result<Option<std::ops::Range<usize>>> {
 }
 
 pub(super) fn preflight_removal(root: &Path) -> Result<()> {
+    super::jev_assets::preflight_removal(root, ".agents/skills/hyalo-tidy")?;
     check_path(root, "AGENTS.md")?;
     if let Some(text) = read_optional(&root.join("AGENTS.md"))? {
         managed_range(&text)?;
@@ -291,6 +292,7 @@ pub(super) fn install(root: &Path, mode: CodexMode, report: &mut Report) -> Resu
 }
 
 fn remove_skills(root: &Path, report: &mut Report) -> Result<()> {
+    super::jev_assets::remove(root, ".agents/skills/hyalo-tidy", report)?;
     for skill in SKILLS {
         for suffix in ["SKILL.md", "agents/openai.yaml"] {
             let relative = format!(".agents/skills/{}/{suffix}", skill.name);

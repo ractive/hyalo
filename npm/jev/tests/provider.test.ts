@@ -33,7 +33,7 @@ test("one throttle retry; no auth, validation, server or connection retries", as
 });
 test("deadline cancels long Retry-After without retrying early", async () => {
   let calls = 0; const start = performance.now();
-  const result = await ask(fixture(), { allowNetwork: true, apiKey: "test-key", deadlineMs: 40, fetch: async () => { calls++; return new Response("", { status: 429, headers: { "Retry-After": "99999999" } }); } });
+  const result = await ask(fixture(), { allowNetwork: true, apiKey: "test-key", deadlineMs: 40, fetch: async () => { calls++; return new Response(null, { status: 429, headers: { "Retry-After": "99999999" } }); } });
   expect(calls).toBe(1); expect(result.exitCode).toBe(1); expect(performance.now() - start).toBeLessThan(1000);
 });
 test("caps chunked bodies without Content-Length and cancels slow bodies", async () => {
@@ -56,4 +56,13 @@ test("refuses redirects and invalid responses; retains independent successes", a
   let calls = 0;
   const result = await ask(manifest(m), { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => ++calls === 1 ? Response.json(response(JSON.parse(init?.body as string))) : new Response("", { status: 401 }) });
   expect(result.results.map(r => r.status)).toEqual(["ok", "unavailable"]); expect(result.exitCode).toBe(1);
+});
+
+test("existing type cannot inherit an unapproved folder from Object.prototype", async () => {
+  const m = fixture();
+  const doc = { ...m.documents[0]!, current: { type: "constructor" }, missingType: false };
+  const { fingerprint: _, ...evidence } = doc;
+  doc.fingerprint = evidenceHash(evidence, m.policy, m.contextHash); m.documents = [doc];
+  const result = await ask(manifest(m), { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => Response.json(response(JSON.parse(init?.body as string))) });
+  expect(result.results[0]?.decisions.some(d => d.field === "folder")).toBe(false);
 });

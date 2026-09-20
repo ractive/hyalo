@@ -39,7 +39,7 @@ command, mutation engine, persistent consent store, or implicit runtime install.
 
 ## Tasks
 
-- [ ] Bootstrap the Bun package, narrow its generated files to the actual CLI deliverable, pin dependencies, and commit the lockfile.
+- [x] Bootstrap the Bun package, narrow its generated files to the actual CLI deliverable, pin dependencies, and commit the lockfile.
 - [x] Implement a versioned manifest/policy schema with local metadata separated from the explicit API payload; validate finite sizes/counts and known keys.
 - [x] Implement local-only `prepare` with explicit file selection and described type/folder/tag candidates; query the resolved Hyalo binary using read-only argument arrays.
 - [x] Bound selection, child output and time; preserve partial-selection and oversized-document outcomes instead of claiming complete inspection.

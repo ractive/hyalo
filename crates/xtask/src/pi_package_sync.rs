@@ -25,7 +25,7 @@ use crate::workspace::workspace_root;
 
 /// Run the gate: `Ok(true)` when the vendored copies match `pi-package/`
 /// exactly, `Ok(false)` on any mismatch (details printed to stderr).
-pub fn run() -> Result<bool> {
+pub fn run(sync: bool) -> Result<bool> {
     let root = workspace_root()?;
     let pi_package = root.join("pi-package");
     let vendored = root
@@ -36,22 +36,15 @@ pub fn run() -> Result<bool> {
 
     let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
 
-    // skills/*/SKILL.md
+    // Whole skill directories include optional references and executable assets.
     let skills_dir = pi_package.join("skills");
     match std::fs::read_dir(&skills_dir) {
         Ok(entries) => {
             for entry in entries.filter_map(|e| e.ok()) {
                 let skill_dir = entry.path();
-                let skill_md = skill_dir.join("SKILL.md");
-                if skill_md.is_file() {
-                    let name = skill_dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    pairs.push((
-                        skill_md,
-                        vendored.join("skills").join(&name).join("SKILL.md"),
-                    ));
+                for file in skill_files(&skill_dir)? {
+                    let target = vendored.join(file.strip_prefix(&pi_package)?);
+                    pairs.push((file, target));
                 }
             }
         }
@@ -120,6 +113,13 @@ pub fn run() -> Result<bool> {
     let mut checked = 0usize;
     for (source, vendored_copy) in &pairs {
         checked += 1;
+        if sync {
+            let parent = vendored_copy
+                .parent()
+                .context("vendored asset has no parent")?;
+            std::fs::create_dir_all(parent)?;
+            std::fs::copy(source, vendored_copy)?;
+        }
         if !vendored_copy.is_file() {
             all_ok = false;
             eprintln!(
@@ -215,12 +215,7 @@ fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
             Err(e) => Err(e).with_context(|| format!("reading {dir:?}")),
         }
     };
-    for skill_dir in read(&vendored.join("skills"))? {
-        let skill_md = skill_dir.join("SKILL.md");
-        if skill_md.is_file() {
-            found.push(skill_md);
-        }
-    }
+    found.extend(skill_files(&vendored.join("skills"))?);
     for path in read(&vendored.join("extensions"))? {
         if path.extension().and_then(|e| e.to_str()) == Some("ts") {
             found.push(path);
@@ -251,6 +246,28 @@ fn display_rel(root: &Path, path: &Path) -> String {
         .into_owned()
 }
 
+fn skill_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    anyhow::ensure!(
+        !metadata.file_type().is_symlink(),
+        "skill resource is a symlink: {}",
+        path.display()
+    );
+    if metadata.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        files.extend(skill_files(&entry?.path())?);
+    }
+    files.sort();
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,7 +295,11 @@ mod tests {
         fs::create_dir_all(v.join("extensions")).expect("mkdir");
         fs::create_dir_all(v.join("lib")).expect("mkdir");
         fs::write(v.join("skills/hyalo/SKILL.md"), "s").expect("write");
-        fs::write(v.join("skills/hyalo/notes.txt"), "ignored").expect("write");
+        fs::write(v.join("skills/hyalo/notes.txt"), "resource").expect("write");
+        fs::create_dir_all(v.join("skills/hyalo-tidy/scripts")).expect("mkdir");
+        fs::create_dir_all(v.join("skills/hyalo-tidy/references")).expect("mkdir");
+        fs::write(v.join("skills/hyalo-tidy/scripts/jev.mjs"), "runtime").expect("write");
+        fs::write(v.join("skills/hyalo-tidy/references/jev.md"), "reference").expect("write");
         fs::write(v.join("extensions/hyalo.ts"), "t").expect("write");
         fs::write(v.join("lib/hyalo-api.js"), "j").expect("write");
         fs::write(v.join("lib/hyalo-api.d.ts"), "d").expect("write");
@@ -292,6 +313,9 @@ mod tests {
             v.join("lib/hyalo-api.d.ts"),
             v.join("package.json"),
             v.join("skills/hyalo/SKILL.md"),
+            v.join("skills/hyalo/notes.txt"),
+            v.join("skills/hyalo-tidy/scripts/jev.mjs"),
+            v.join("skills/hyalo-tidy/references/jev.md"),
         ];
         expected.sort();
         assert_eq!(found, expected);

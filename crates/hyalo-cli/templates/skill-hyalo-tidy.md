@@ -32,15 +32,28 @@ which hyalo 2>/dev/null || echo "target/release/hyalo"
 Confirm `.hyalo.toml` exists in the project root to determine the KB directory. If it
 doesn't exist, ask the user which directory to consolidate.
 
+## Optional Jev assistance and audit scope
+
+Only when the user explicitly requests Jev, read [references/jev.md](references/jev.md)
+and follow that branch before loading full document bodies. A key or repository
+setting never enables it. Ordinary tidy needs no JavaScript runtime or network.
+Jev failure leaves the usual local workflow available.
+
+An audit or health question is read-only: omit `--index` throughout, skip index
+creation/removal, and return Phase 4 repairs as proposals only. Jev-assisted runs
+also skip indexes and follow the reference's scope and review rules. A request to
+tidy or repair authorizes relevant edits, preserving unrelated content and metadata.
+
 ## Phase 1 — Orient and snapshot
 
-Get the lay of the land and create a snapshot index for fast repeated queries.
+Get the lay of the land. Create an index only for a repair run without Jev;
+for audits and Jev-assisted runs, omit the index step and all `--index` flags.
 
 ```bash
 # 1. High-level overview (baseline for the final health dashboard)
 hyalo summary
 
-# 2. Create snapshot index (one scan, reused by all subsequent queries)
+# 2. Repair runs without Jev only: create snapshot index
 hyalo create-index
 
 # 3. Save recurring diagnostic queries as views for reuse
@@ -216,7 +229,8 @@ in the report rather than listing every file.
 
 ## Phase 4 — Consolidate
 
-Fix what you can. Be conservative — prefer fixing metadata over deleting files. For
+Apply these changes only within an authorized repair request. For an audit,
+report the proposed changes. Be conservative — prefer fixing metadata over deleting files. For
 each change, note what you did and why.
 
 **Keep using `--index`** for all mutations — hyalo now patches the index
@@ -325,6 +339,6 @@ files moved.
   wikilink text in prose, adding cross-reference lines).
 - **Batch similar findings**: if 15 completed items have unchecked tasks, say that once
   with the count. The report should be scannable in 30 seconds.
-- **Minimize disk scans**: use `--index` for all queries and mutations.
+- **Minimize disk scans in repair runs without Jev**: use `--index` for queries and mutations.
   Mutations automatically patch the index in-place — no need to drop and recreate.
   Only drop the index at the very end when the session is complete.
