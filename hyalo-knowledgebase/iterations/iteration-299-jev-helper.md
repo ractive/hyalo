@@ -39,7 +39,7 @@ command, mutation engine, persistent consent store, or implicit runtime install.
 
 ## Tasks
 
-- [ ] Bootstrap the Bun package, narrow its generated files to the actual CLI deliverable, pin dependencies, and commit the lockfile.
+- [x] Bootstrap the Bun package, narrow its generated files to the actual CLI deliverable, pin dependencies, and commit the lockfile.
 - [x] Implement a versioned manifest/policy schema with local metadata separated from the explicit API payload; validate finite sizes/counts and known keys.
 - [x] Implement local-only `prepare` with explicit file selection and described type/folder/tag candidates; query the resolved Hyalo binary using read-only argument arrays.
 - [x] Bound selection, child output and time; preserve partial-selection and oversized-document outcomes instead of claiming complete inspection.
@@ -127,3 +127,27 @@ The refreshed standalone suite passes ten tests with 79 assertions. These fixes
 belong in the helper's own PR; installation-specific coverage follows in iteration
 300. Forward references to its not-yet-present plan remain plain paths so this
 branch independently passes strict knowledgebase lint.
+
+## PR review follow-up
+
+PR 356's independent review returned four findings: filesystem-aware exclusions,
+existing tag semantics, normalized type mappings and aggregate manifest size.
+Copilot review 5260484628 returned three inline findings; its two type-mapping
+comments duplicate the independent type finding. Its overview also mentions a
+retained-result concern: a failed tag request could discard a known local folder
+mapping. A regression confirmed that case and it is included in the repair.
+
+Five verified defects are corrected. Exclusions compare filesystem identities
+without lowercasing distinct paths; scalar/ASCII-case-variant tags avoid redundant
+requests; type wikilinks and single-item lists map without editing metadata;
+oversized manifests defer excess documents; local filing suggestions survive
+unrelated provider failure. Fifteen offline tests pass with 110 assertions.
+
+Copilot's remaining inline claim, that optional `init` breaks TypeScript checking,
+is not a defect: the `insist` assertion on `init?.method` narrows it before signal
+access. The pinned TypeScript check passes locally and in the three-platform CI.
+The independent follow-up review also covers that disputed assertion contract.
+
+All 13 active CI checks passed on the initial published head `dc7d079d`, including
+Bun and Node 22 on Linux, macOS and Windows. The repair batch requires its own
+review and platform results before completion.

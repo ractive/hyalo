@@ -76,10 +76,29 @@ export interface Document {
 }
 export interface Deferral { file: string; reason: string }
 export interface Manifest { version: 1; policy: Policy; contextHash: string; documents: Document[]; deferred: Deferral[]; selected: number }
+// Match hyalo_core::schema::normalize_type_value without changing frontmatter.
+export function normalizedType(value: unknown): string | undefined {
+  const raw = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  if (typeof raw !== "string") return undefined;
+  const trim = (s: string) => s.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const s = trim(raw);
+  if (!s.startsWith("[[") || !s.endsWith("]]")) return s;
+  const target = trim(s.slice(2, -2).split("|")[0]!.split("#")[0]!.split("/").at(-1)!);
+  return target || undefined;
+}
+
+function hasTag(current: unknown, candidate: string): boolean {
+  // Hyalo append deduplicates scalar/list values using ASCII case folding.
+  const fold = (s: string) => s.replace(/[A-Z]/g, c => c.toLowerCase());
+  return (Array.isArray(current) ? current : [current]).some(value =>
+    ["string", "number", "boolean"].includes(typeof value) && fold(String(value)) === fold(candidate));
+}
+
 export function evidenceHash(doc: Omit<Document, "fingerprint">, p: Policy, contextHash: string) {
   return hash({ document: doc, policy: p, contextHash });
 }
 export function manifest(value: unknown): Manifest {
+  insist(Buffer.byteLength(JSON.stringify(value)) + 1 <= LIMITS.input, "manifest exceeds input limit");
   const m = object(value); keys(m, ["version", "policy", "contextHash", "documents", "deferred", "selected"]);
   insist(m.version === 1, "unsupported manifest version");
   const p = policy(m.policy), contextHash = string(m.contextHash, 64);
@@ -114,7 +133,7 @@ export function payload(doc: Document, p: Policy): { request: SystemOneRequestPa
   // A complete type-to-folder convention is resolved locally after the type answer.
   if (!Object.keys(p.typeFolders).length) choice("folder", p.folders);
   p.tags.forEach((candidate, i) => {
-    if (Array.isArray(doc.current.tags) && doc.current.tags.includes(candidate.value)) return;
+    if (hasTag(doc.current.tags, candidate.value)) return;
     const id = `tag${i}`;
     questions[id] = { type: "noul", instructions: preamble + "Does this document clearly qualify for this tag?", criteria: { true: candidate.description, false: "The described tag does not apply, or there is insufficient evidence." } };
     bindings[id] = { field: "tag", value: candidate.value, options: {} };

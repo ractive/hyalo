@@ -1,7 +1,7 @@
-import { lstat, realpath } from "node:fs/promises";
-import { resolve, relative as pathRelative, sep } from "node:path";
+import { lstat, stat, realpath } from "node:fs/promises";
+import { resolve, relative as pathRelative, sep, isAbsolute } from "node:path";
 import { type HyaloRead } from "./io.ts";
-import { type Manifest, type Document, type Deferral, type Policy, LIMITS, Invalid, insist, object, keys, relative, string, hash, evidenceHash, payload, manifest } from "./protocol.ts";
+import { type Manifest, type Document, type Deferral, type Policy, LIMITS, Invalid, insist, object, keys, relative, string, hash, evidenceHash, payload, manifest, normalizedType } from "./protocol.ts";
 
 export interface Selection { file: string; section: string | null }
 export function selection(value: unknown): Selection[] {
@@ -16,14 +16,29 @@ export function selection(value: unknown): Selection[] {
   return files;
 }
 
-async function inside(root: string, path: string, directory: boolean) {
+const identity = (info: { dev: bigint; ino: bigint }) => `${info.dev}:${info.ino}`;
+async function exclusionIdentities(root: string, exclusions: string[]) {
+  const identities = new Set<string>();
+  for (const path of exclusions) {
+    try { identities.add(identity(await stat(resolve(root, path), { bigint: true }))); }
+    catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+      throw new Invalid("cannot inspect policy exclusion");
+    }
+  }
+  return identities;
+}
+
+async function inside(root: string, path: string, directory: boolean, excluded?: Set<string>) {
   const target = resolve(root, path), resolved = await realpath(target);
   const rel = pathRelative(root, resolved);
-  insist(rel !== ".." && !rel.startsWith(".." + sep), "path escapes vault");
+  insist(!isAbsolute(rel) && rel !== ".." && !rel.startsWith(".." + sep), "path escapes vault");
   let component = root;
   for (const part of path.split("/")) {
     component = resolve(component, part);
-    insist(!(await lstat(component)).isSymbolicLink(), "symlink requires manual review");
+    const info = await lstat(component, { bigint: true });
+    insist(!info.isSymbolicLink(), "symlink requires manual review");
+    insist(!excluded?.has(identity(info)), "excluded by policy");
   }
   const stat = await lstat(target);
   insist(directory ? stat.isDirectory() : stat.isFile(), "unexpected path kind");
@@ -35,14 +50,19 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
   const config = object((await read(["config", "--raw"])).results);
   insist(config.malformed === false && config.dir_out_of_bounds === false && !config.schema_error, "configuration requires repair");
   const root = await realpath(resolve(string(config.cwd), string(config.dir)));
+  const excluded = await exclusionIdentities(root, p.exclude);
   const schemas = Object.fromEntries(await Promise.all(p.types.map(async c => [c.value, object((await read(["types", "show", c.value])).results)])));
   for (const c of p.folders) await inside(root, c.value, true);
   const contextHash = hash({ config, schemas });
   const documents: Document[] = [], deferred: Deferral[] = [];
+  // Reserve every possible deferral up front. Added documents then consume a
+  // conservative shared budget, including the CLI's trailing newline.
+  let manifestBytes = Buffer.byteLength(JSON.stringify({ version: 1, policy: p, contextHash, documents: [], deferred: files.map(({ file }) => ({ file, reason: "x".repeat(100) })), selected: files.length })) + 1;
+  insist(manifestBytes <= LIMITS.input, "policy and selection exceed manifest limit");
   for (const selected of files) {
     try {
       if (p.exclude.some(x => selected.file === x || selected.file.startsWith(x + "/"))) throw new Invalid("excluded by policy");
-      await inside(root, selected.file, false);
+      await inside(root, selected.file, false, excluded);
       const found = await read(["find", "--file", selected.file, "--fields", "size", "--limit", "2"]);
       insist(found.total === 1 && Array.isArray(found.results) && found.results.length === 1, "document excluded or unavailable");
       const entry = object(found.results[0]);
@@ -73,7 +93,11 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
       const doc = { file: selected.file, section: selected.section, content, current, missingType };
       const full = { ...doc, fingerprint: evidenceHash(doc, p, contextHash) };
       const request = payload(full, p);
-      if (Object.keys(request.request.questions).length || (typeof current.type === "string" && Object.hasOwn(p.typeFolders, current.type))) {
+      const type = normalizedType(current.type);
+      if (Object.keys(request.request.questions).length || (type !== undefined && Object.hasOwn(p.typeFolders, type))) {
+        const bytes = Buffer.byteLength(JSON.stringify(full)) + 1;
+        insist(manifestBytes + bytes <= LIMITS.input, "manifest budget exceeded; select fewer documents");
+        manifestBytes += bytes;
         // A document can have deferred fields and usable independent questions.
         if (deferred.at(-1)?.file === selected.file) deferred.pop();
         documents.push(full);

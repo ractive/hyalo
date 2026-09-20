@@ -1,6 +1,6 @@
 import { TypeSafeClient, APIError, RateLimitError } from "@typesafe-ai/sdk";
 import { decisions, type Decision } from "./decisions.ts";
-import { type Manifest, MODEL, LIMITS, Invalid, Unavailable, insist, hash, payload } from "./protocol.ts";
+import { type Manifest, MODEL, LIMITS, Invalid, Unavailable, insist, hash, payload, normalizedType } from "./protocol.ts";
 
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -82,11 +82,6 @@ export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?
           row.usageUnknown = attempts > 1;
         } finally { clearTimeout(timer); }
       }
-      const type = row.decisions.find(d => d.field === "type" && d.status === "suggestion")?.value ?? (typeof doc.current.type === "string" ? doc.current.type : undefined);
-      const mapped = type && Object.hasOwn(m.policy.typeFolders, type) ? m.policy.typeFolders[type] : undefined;
-      if (mapped) row.decisions.push({ field: "folder", status: "suggestion", value: mapped, reason: "local type-to-folder convention" });
-      for (const d of row.decisions) if (d.field === "folder" && d.value === doc.file.split("/").slice(0, -1).join("/")) d.status = "no-change";
-      if (!doc.missingType && !("type" in doc.current) && m.policy.types.length) row.decisions.push({ field: "type", status: "defer", reason: "type eligibility not established by Hyalo" });
     } catch (error) {
       row.status = error instanceof Invalid || transportInvalid ? "invalid" : "unavailable";
       // Never serialize SDK errors: their messages can contain provider bodies.
@@ -94,6 +89,13 @@ export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?
       row.usage = null; row.estimatedCostUsd = null; row.usageUnknown = attempts > 0;
       row.decisions = Object.values(bindings).map(b => ({ field: b.field, status: "defer", reason: row.reason }));
     }
+    // Existing local filing conventions remain usable when independent tag
+    // questions fail. A failed classification never supplies a missing type.
+    const type = row.decisions.find(d => d.field === "type" && d.status === "suggestion")?.value ?? normalizedType(doc.current.type);
+    const mapped = type && Object.hasOwn(m.policy.typeFolders, type) ? m.policy.typeFolders[type] : undefined;
+    if (mapped) row.decisions.push({ field: "folder", status: "suggestion", value: mapped, reason: "local type-to-folder convention" });
+    for (const d of row.decisions) if (d.field === "folder" && d.value === doc.file.split("/").slice(0, -1).join("/")) d.status = "no-change";
+    if (!doc.missingType && !("type" in doc.current) && m.policy.types.length) row.decisions.push({ field: "type", status: "defer", reason: "type eligibility not established by Hyalo" });
     row.attempts = attempts; row.elapsedMs = Math.round(performance.now() - started); results.push(row);
   }
   const exitCode = results.some(r => r.status === "invalid") ? 2 : results.some(r => r.status === "unavailable") ? 1 : 0;

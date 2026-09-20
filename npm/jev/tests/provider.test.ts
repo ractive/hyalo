@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { manifest, evidenceHash, MODEL } from "../src/protocol.ts";
+import { manifest, evidenceHash, MODEL, policy } from "../src/protocol.ts";
 import { ask, boundedFetch } from "../src/provider.ts";
 import { fixture, p, response } from "./fixtures.ts";
 test("explicit opt-in before dispatch; fixed endpoint and model override environment", async () => {
@@ -65,4 +65,18 @@ test("existing type cannot inherit an unapproved folder from Object.prototype", 
   doc.fingerprint = evidenceHash(evidence, m.policy, m.contextHash); m.documents = [doc];
   const result = await ask(manifest(m), { allowNetwork: true, apiKey: "test-key", fetch: async (_, init) => Response.json(response(JSON.parse(init?.body as string))) });
   expect(result.results[0]?.decisions.some(d => d.field === "folder")).toBe(false);
+});
+
+test("failed tag requests retain independent local filing suggestions", async () => {
+  const m = fixture();
+  m.policy = policy({ ...p, folders: [{ value: "research", description: "Experiments." }, { value: "docs", description: "Documentation." }], typeFolders: { research: "research", docs: "docs" } });
+  for (const current of [{ type: "[[docs]]" }, {}]) {
+    const doc = { ...m.documents[0]!, current, missingType: !("type" in current) };
+    const { fingerprint: _, ...evidence } = doc;
+    doc.fingerprint = evidenceHash(evidence, m.policy, m.contextHash); m.documents = [doc];
+    const result = await ask(manifest(m), { allowNetwork: true, apiKey: "test-key", fetch: async () => new Response(null, { status: 401 }) });
+    expect(result.exitCode).toBe(1);
+    expect(result.results[0]?.decisions.find(d => d.field === "tag")?.status).toBe("defer");
+    expect(result.results[0]?.decisions.filter(d => d.field === "folder")).toEqual("type" in current ? [{ field: "folder", status: "suggestion", value: "docs", reason: "local type-to-folder convention" }] : []);
+  }
 });
