@@ -27,6 +27,15 @@ use crate::workspace::workspace_root;
 /// exactly, `Ok(false)` on any mismatch (details printed to stderr).
 pub fn run(sync: bool) -> Result<bool> {
     let root = workspace_root()?;
+    let (mut all_ok, checked) = sync_and_check_pi(&root, sync)?;
+    all_ok &= crate::npm_package::check_metadata(&root)?;
+    if all_ok {
+        println!("check-pi-package-sync: {checked} pi-package file(s) match their vendored copies");
+    }
+    Ok(all_ok)
+}
+
+fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
     let pi_package = root.join("pi-package");
     let vendored = root
         .join("crates")
@@ -105,11 +114,10 @@ pub fn run(sync: bool) -> Result<bool> {
 
     if pairs.is_empty() {
         eprintln!("check-pi-package-sync: no pi-package files found to check");
-        return Ok(false);
+        return Ok((false, 0));
     }
 
-    let mut all_ok = versions_match(&root)?;
-    all_ok &= crate::npm_package::check_metadata(&root)?;
+    let mut all_ok = true;
     let mut checked = 0usize;
     for (source, vendored_copy) in &pairs {
         checked += 1;
@@ -124,8 +132,8 @@ pub fn run(sync: bool) -> Result<bool> {
             all_ok = false;
             eprintln!(
                 "check-pi-package-sync: {} has no vendored counterpart at {} — run `just sync-pi-package`",
-                display_rel(&root, source),
-                display_rel(&root, vendored_copy),
+                display_rel(root, source),
+                display_rel(root, vendored_copy),
             );
             continue;
         }
@@ -136,8 +144,8 @@ pub fn run(sync: bool) -> Result<bool> {
             all_ok = false;
             eprintln!(
                 "check-pi-package-sync: {} differs from vendored copy {} — run `just sync-pi-package`",
-                display_rel(&root, source),
-                display_rel(&root, vendored_copy),
+                display_rel(root, source),
+                display_rel(root, vendored_copy),
             );
         }
     }
@@ -155,15 +163,15 @@ pub fn run(sync: bool) -> Result<bool> {
             all_ok = false;
             eprintln!(
                 "check-pi-package-sync: vendored {} has no source under pi-package/ — delete it (and any include_str! of it)",
-                display_rel(&root, &orphan),
+                display_rel(root, &orphan),
             );
         }
     }
 
-    if all_ok {
-        println!("check-pi-package-sync: {checked} pi-package file(s) match their vendored copies");
-    }
-    Ok(all_ok)
+    // In sync mode the canonical manifest may just have repaired a missing,
+    // malformed or old vendored copy. Validate that resulting state.
+    all_ok &= versions_match(root)?;
+    Ok((all_ok, checked))
 }
 
 /// Check each published/embedded pi manifest against the Cargo workspace.
@@ -340,6 +348,41 @@ mod tests {
 #[cfg(test)]
 mod version_tests {
     use super::*;
+
+    #[test]
+    fn synchronization_reports_repaired_manifest_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace.package]\nversion = \"0.22.0\"\n",
+        )
+        .unwrap();
+        for path in ["package.json", "pi-package/package.json"] {
+            let full = root.join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, r#"{"version":"0.22.0"}"#).unwrap();
+        }
+        let vendored = root.join("crates/hyalo-cli/templates/pi/package.json");
+        assert!(!sync_and_check_pi(root, false).unwrap().0);
+        assert!(sync_and_check_pi(root, true).unwrap().0);
+        for stale in [r#"{"version":"0.1.0"}"#, "malformed JSON"] {
+            std::fs::write(&vendored, stale).unwrap();
+            assert!(sync_and_check_pi(root, true).unwrap().0);
+            assert_eq!(
+                std::fs::read(&vendored).unwrap(),
+                std::fs::read(root.join("pi-package/package.json")).unwrap()
+            );
+            assert!(sync_and_check_pi(root, false).unwrap().0);
+        }
+        // Genuine canonical/workspace drift must still fail after copying.
+        std::fs::write(
+            root.join("pi-package/package.json"),
+            r#"{"version":"0.1.0"}"#,
+        )
+        .unwrap();
+        assert!(!sync_and_check_pi(root, true).unwrap().0);
+    }
 
     #[test]
     fn detects_each_manifest_mismatch_even_when_pi_copies_agree() {

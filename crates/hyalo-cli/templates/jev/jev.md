@@ -54,6 +54,11 @@ paths or directory prefixes, not globs. All folders must already exist. Omit
 every candidate type and resolve its folder locally without a second model call.
 Do not invent a taxonomy where the local convention is unclear—defer that field.
 
+Exclusions match selected files and ancestor directories by filesystem identity,
+so case aliases do not bypass them. Explicit file exclusions also cover hard links.
+Existing type wikilinks/single-item lists and scalar or case-variant tags retain
+Hyalo's interpretation without rewriting their original frontmatter.
+
 Resolve `scripts/jev.mjs` relative to this installed skill. Prefer an available
 Bun runtime with `--no-install --no-env-file`; Node 22.14+ runs the same bundle.
 Do not install a runtime or dependencies during tidy. An unavailable runtime/key
@@ -88,6 +93,8 @@ explicit section. Files above 1 MiB defer even with a section. Requests are capp
 at 24,000 UTF-8 bytes and 48 questions; the helper does not silently truncate.
 It groups each document's independent questions into one request. Oversized,
 unreadable, excluded or already satisfied documents have explicit outcomes.
+The complete manifest, including local frontmatter, must fit the 1 MiB input
+budget; excess documents defer with a request to select a smaller batch.
 
 Missing-type questions require Hyalo's positive missing-type diagnostic, so
 path-bound and exempt documents are not reclassified. Hyalo 0.24 exposes this as
@@ -119,9 +126,10 @@ existing authorization. Use Hyalo for all actual metadata/tag/move edits. No hel
 command applies changes. Preserve existing values and unrelated metadata. Run
 lint on changed files and recheck links and original findings; report failures.
 
-For an audit, return proposals only. In this optional branch, skip snapshot index
-creation/maintenance, persistent caches and configuration changes. After the
-suggestion pass, continue independent local findings within the original scope.
+Every Jev-assisted run, including an authorized repair, omits `--index` from all
+commands and skips index creation/removal, persistent caches and configuration
+changes. For an audit, return proposals only. After the suggestion pass, continue
+independent local findings within the original scope.
 The longer tidy entrypoint's index and repair examples do not authorize audit writes.
 
 ## Failures and reporting

@@ -96,10 +96,26 @@ function policy(value) {
   insist(!Object.keys(typeFolders).length || types.every((c) => Object.hasOwn(typeFolders, c.value)), "type-folder convention must cover every candidate type");
   return { version: 1, types, folders, tags, exclude, typeFolders };
 }
+function normalizedType(value) {
+  const raw = Array.isArray(value) && value.length === 1 ? value[0] : value;
+  if (typeof raw !== "string")
+    return;
+  const trim = (s) => s.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const s = trim(raw);
+  if (!s.startsWith("[[") || !s.endsWith("]]"))
+    return s;
+  const target = trim(s.slice(2, -2).split("|")[0].split("#")[0].split("/").at(-1));
+  return target || undefined;
+}
+function hasTag(current, candidate) {
+  const fold = (s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return (Array.isArray(current) ? current : [current]).some((value) => ["string", "number", "boolean"].includes(typeof value) && fold(String(value)) === fold(candidate));
+}
 function evidenceHash(doc, p, contextHash) {
   return hash({ document: doc, policy: p, contextHash });
 }
 function manifest(value) {
+  insist(Buffer.byteLength(JSON.stringify(value)) + 1 <= LIMITS.input, "manifest exceeds input limit");
   const m = object(value);
   keys(m, ["version", "policy", "contextHash", "documents", "deferred", "selected"]);
   insist(m.version === 1, "unsupported manifest version");
@@ -142,7 +158,7 @@ function payload(doc, p) {
   if (!Object.keys(p.typeFolders).length)
     choice("folder", p.folders);
   p.tags.forEach((candidate, i) => {
-    if (Array.isArray(doc.current.tags) && doc.current.tags.includes(candidate.value))
+    if (hasTag(doc.current.tags, candidate.value))
       return;
     const id = `tag${i}`;
     questions[id] = { type: "noul", instructions: preamble + "Does this document clearly qualify for this tag?", criteria: { true: candidate.description, false: "The described tag does not apply, or there is insufficient evidence." } };
@@ -228,8 +244,8 @@ function hyaloReader(binary) {
 }
 
 // src/prepare.ts
-import { lstat, realpath } from "node:fs/promises";
-import { resolve, relative as pathRelative, sep } from "node:path";
+import { lstat, stat, realpath } from "node:fs/promises";
+import { resolve, relative as pathRelative, sep, isAbsolute as isAbsolute2 } from "node:path";
 function selection(value) {
   insist(Array.isArray(value) && value.length > 0 && value.length <= LIMITS.documents, "select 1–25 explicit documents");
   const files = value.map((v) => {
@@ -243,14 +259,30 @@ function selection(value) {
   insist(files.every((d) => d.file.endsWith(".md")), "select Markdown files");
   return files;
 }
-async function inside(root, path, directory) {
+var identity = (info) => `${info.dev}:${info.ino}`;
+async function exclusionIdentities(root, exclusions) {
+  const identities = new Set;
+  for (const path of exclusions) {
+    try {
+      identities.add(identity(await stat(resolve(root, path), { bigint: true })));
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes(error.code ?? ""))
+        continue;
+      throw new Invalid("cannot inspect policy exclusion");
+    }
+  }
+  return identities;
+}
+async function inside(root, path, directory, excluded) {
   const target = resolve(root, path), resolved = await realpath(target);
   const rel = pathRelative(root, resolved);
-  insist(rel !== ".." && !rel.startsWith(".." + sep), "path escapes vault");
+  insist(!isAbsolute2(rel) && rel !== ".." && !rel.startsWith(".." + sep), "path escapes vault");
   let component = root;
   for (const part of path.split("/")) {
     component = resolve(component, part);
-    insist(!(await lstat(component)).isSymbolicLink(), "symlink requires manual review");
+    const info = await lstat(component, { bigint: true });
+    insist(!info.isSymbolicLink(), "symlink requires manual review");
+    insist(!excluded?.has(identity(info)), "excluded by policy");
   }
   const stat = await lstat(target);
   insist(directory ? stat.isDirectory() : stat.isFile(), "unexpected path kind");
@@ -261,16 +293,19 @@ async function prepare(files, p, read) {
   const config = object((await read(["config", "--raw"])).results);
   insist(config.malformed === false && config.dir_out_of_bounds === false && !config.schema_error, "configuration requires repair");
   const root = await realpath(resolve(string(config.cwd), string(config.dir)));
+  const excluded = await exclusionIdentities(root, p.exclude);
   const schemas = Object.fromEntries(await Promise.all(p.types.map(async (c) => [c.value, object((await read(["types", "show", c.value])).results)])));
   for (const c of p.folders)
     await inside(root, c.value, true);
   const contextHash = hash({ config, schemas });
   const documents = [], deferred = [];
+  let manifestBytes = Buffer.byteLength(JSON.stringify({ version: 1, policy: p, contextHash, documents: [], deferred: files.map(({ file }) => ({ file, reason: "x".repeat(100) })), selected: files.length })) + 1;
+  insist(manifestBytes <= LIMITS.input, "policy and selection exceed manifest limit");
   for (const selected of files) {
     try {
       if (p.exclude.some((x) => selected.file === x || selected.file.startsWith(x + "/")))
         throw new Invalid("excluded by policy");
-      await inside(root, selected.file, false);
+      await inside(root, selected.file, false, excluded);
       const found = await read(["find", "--file", selected.file, "--fields", "size", "--limit", "2"]);
       insist(found.total === 1 && Array.isArray(found.results) && found.results.length === 1, "document excluded or unavailable");
       const entry = object(found.results[0]);
@@ -298,7 +333,11 @@ async function prepare(files, p, read) {
       const doc = { file: selected.file, section: selected.section, content, current, missingType };
       const full = { ...doc, fingerprint: evidenceHash(doc, p, contextHash) };
       const request = payload(full, p);
-      if (Object.keys(request.request.questions).length || typeof current.type === "string" && Object.hasOwn(p.typeFolders, current.type)) {
+      const type = normalizedType(current.type);
+      if (Object.keys(request.request.questions).length || type !== undefined && Object.hasOwn(p.typeFolders, type)) {
+        const bytes = Buffer.byteLength(JSON.stringify(full)) + 1;
+        insist(manifestBytes + bytes <= LIMITS.input, "manifest budget exceeded; select fewer documents");
+        manifestBytes += bytes;
         if (deferred.at(-1)?.file === selected.file)
           deferred.pop();
         documents.push(full);
@@ -1032,15 +1071,6 @@ async function ask(m, options) {
           clearTimeout(timer);
         }
       }
-      const type = row.decisions.find((d) => d.field === "type" && d.status === "suggestion")?.value ?? (typeof doc.current.type === "string" ? doc.current.type : undefined);
-      const mapped = type && Object.hasOwn(m.policy.typeFolders, type) ? m.policy.typeFolders[type] : undefined;
-      if (mapped)
-        row.decisions.push({ field: "folder", status: "suggestion", value: mapped, reason: "local type-to-folder convention" });
-      for (const d of row.decisions)
-        if (d.field === "folder" && d.value === doc.file.split("/").slice(0, -1).join("/"))
-          d.status = "no-change";
-      if (!doc.missingType && !("type" in doc.current) && m.policy.types.length)
-        row.decisions.push({ field: "type", status: "defer", reason: "type eligibility not established by Hyalo" });
     } catch (error) {
       row.status = error instanceof Invalid || transportInvalid ? "invalid" : "unavailable";
       row.reason = row.status === "invalid" ? "invalid provider response" : error instanceof APIError ? `provider HTTP ${error.status}` : "provider unavailable or deadline exceeded";
@@ -1049,6 +1079,15 @@ async function ask(m, options) {
       row.usageUnknown = attempts > 0;
       row.decisions = Object.values(bindings).map((b) => ({ field: b.field, status: "defer", reason: row.reason }));
     }
+    const type = row.decisions.find((d) => d.field === "type" && d.status === "suggestion")?.value ?? normalizedType(doc.current.type);
+    const mapped = type && Object.hasOwn(m.policy.typeFolders, type) ? m.policy.typeFolders[type] : undefined;
+    if (mapped)
+      row.decisions.push({ field: "folder", status: "suggestion", value: mapped, reason: "local type-to-folder convention" });
+    for (const d of row.decisions)
+      if (d.field === "folder" && d.value === doc.file.split("/").slice(0, -1).join("/"))
+        d.status = "no-change";
+    if (!doc.missingType && !("type" in doc.current) && m.policy.types.length)
+      row.decisions.push({ field: "type", status: "defer", reason: "type eligibility not established by Hyalo" });
     row.attempts = attempts;
     row.elapsedMs = Math.round(performance.now() - started);
     results.push(row);

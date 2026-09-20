@@ -48,6 +48,9 @@ creation/removal, and return Phase 4 repairs as proposals only. Jev-assisted run
 also skip indexes and follow the reference's scope and review rules. A request to
 tidy or repair authorizes relevant edits, preserving unrelated content and metadata.
 
+Command examples below omit `--index`. Add it only for a repair run without Jev
+after creating its snapshot. Audits and every Jev-assisted run use live reads.
+
 ## Phase 1 — Orient and snapshot
 
 Get the lay of the land. Create an index only for a repair run without Jev;
@@ -64,23 +67,24 @@ hyalo create-index --format text
 hyalo views list --format text
 
 # Use a matching saved view when present; otherwise keep diagnostics inline
-hyalo find --property status=in-progress --fields tasks --index --format text
-hyalo find --property '!status' --index --format text
-hyalo find --property '!type' --index --format text
-hyalo find --orphan --fields backlinks --index --format text
-hyalo find --property status=completed --task todo --fields tasks --index --format text
+hyalo find --property status=in-progress --fields tasks --format text
+hyalo find --property '!status' --format text
+hyalo find --property '!type' --format text
+hyalo find --orphan --fields backlinks --format text
+hyalo find --property status=completed --task todo --fields tasks --format text
 ```
 
 Do not create or replace saved views during a tidy unless the user explicitly asks;
 the diagnostic phase must leave existing definitions byte-for-byte unchanged.
 
 The snapshot index captures every file's metadata in a binary file (`.hyalo-index`).
-All read-only queries in Phase 2 and Phase 3 should use `--index` to
-avoid repeated disk scans. For complex reshaping, combine hyalo filtering with `--jq`.
+For repair runs without Jev, add `--index` to Phase 2 and Phase 3 queries to avoid
+repeated disk scans. Otherwise keep it omitted. For complex reshaping, combine
+Hyalo filtering with `--jq`.
 
 Also grab the tag vocabulary for inconsistency detection:
 ```bash
-hyalo tags summary --index --format text
+hyalo tags summary --format text
 ```
 
 ## Phase 2 — Gather recent signal
@@ -101,7 +105,7 @@ git log --oneline --since="4 weeks ago" -- "*.rs" | head -30
 
 Extract non-completed iterations and their branches from the index:
 ```bash
-hyalo find --property type=iteration --index --jq '.results | map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
+hyalo find --property type=iteration --jq '.results | map(select(.properties.status != "completed" and .properties.status != "superseded" and .properties.status != "wont-do")) | map({file, branch: .properties.branch, status: .properties.status})'
 ```
 
 For each non-completed iteration that has a branch, check if that branch was merged:
@@ -139,7 +143,7 @@ git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebas
 
 ## Phase 3 — Detect structural issues
 
-All queries below use `--index` — no additional disk scans needed.
+Queries below use live reads. Only repair runs without Jev may add `--index`.
 
 ### Schema & lint
 Check if type schemas are defined, then run lint in strict mode. `hyalo lint` covers
@@ -149,7 +153,7 @@ rules for things like bare `[]` checkboxes and `status: completed` with open tas
 warnings to errors so a tidy pass fails fast on schema drift:
 ```bash
 hyalo types list --format text
-hyalo lint --strict --index --format text
+hyalo lint --strict --format text
 ```
 
 If `hyalo types list` returns zero types but files have a `type` property, propose
@@ -171,14 +175,14 @@ one in Phase 5.
 ### Broken links
 ```bash
 # Dry-run shows broken links with proposed fixes and confidence scores
-hyalo links fix --index --format text
+hyalo links fix --format text
 ```
 This categorizes links as **fixable** (fuzzy match found) vs **unfixable** (no match).
 Note the counts for the health dashboard. Actual fixes happen in Phase 4.
 
 ### Orphan files
 ```bash
-hyalo find --view orphans --index --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
+hyalo find --view orphans --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -189,7 +193,7 @@ Focus on **actionable orphans**: active/planned items that should be cross-refer
 
 ### Dead-end files
 ```bash
-hyalo find --dead-end --index --jq '.results | map(.file)'
+hyalo find --dead-end --jq '.results | map(.file)'
 ```
 Dead-end files have inbound links but no outbound links — often stubs or leaf nodes
 that could benefit from cross-references. Not always a problem, but worth reviewing.
@@ -197,19 +201,19 @@ that could benefit from cross-references. Not always a problem, but worth review
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-hyalo find --view stale-in-progress --index --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
+hyalo find --view stale-in-progress --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
-hyalo find --property status=planned --fields tasks --index --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
+hyalo find --property status=planned --fields tasks --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
-hyalo find --view stale-in-progress --index --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
+hyalo find --view stale-in-progress --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
 ### Stale backlog items
 ```bash
-hyalo find --property status=planned --property type=backlog --index --jq '.results | map({file, title})'
+hyalo find --property status=planned --property type=backlog --jq '.results | map({file, title})'
 ```
 Compare each planned backlog item against merged iterations and recent git history.
 If the feature clearly shipped (in a different iteration or under a different name),
@@ -217,8 +221,8 @@ flag it.
 
 ### Missing metadata
 ```bash
-hyalo find --view missing-status --index --jq '.results | map(.file)'
-hyalo find --view missing-type --index --jq '.results | map(.file)'
+hyalo find --view missing-status --jq '.results | map(.file)'
+hyalo find --view missing-type --jq '.results | map(.file)'
 ```
 
 ### Tag inconsistencies
@@ -232,7 +236,7 @@ The `HYALO002` rule from the lint pass already flags `status: completed` files w
 open tasks (fires only when `[schema.types.*].properties.status` is declared as an enum
 containing `"completed"`). If you want a per-file breakdown with open/total counts, use the view:
 ```bash
-hyalo find --view completed-with-todos --index --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
+hyalo find --view completed-with-todos --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.
@@ -243,17 +247,17 @@ Apply these changes only within an authorized repair request. For an audit,
 report the proposed changes. Be conservative — prefer fixing metadata over deleting files. For
 each change, note what you did and why.
 
-**Keep using `--index`** for all mutations — hyalo now patches the index
-in-place after each file write, so it stays current for subsequent queries. No need to
-drop the index before making changes. Only drop it at the very end (Phase 5).
+For repair runs without Jev, add `--index` to mutations to keep the snapshot
+current. Jev-assisted repairs omit it from every command. Audits propose changes
+without applying them; neither audits nor Jev runs create or remove indexes.
 
 ### Fix lint violations
 If lint reported fixable violations in Phase 3, auto-fix them. `--fix` covers both
 passes — frontmatter (defaults, typos, dates, types) and body (e.g. `HYALO001` bare
 brackets, trailing whitespace). Always preview with `--dry-run` first:
 ```bash
-hyalo lint --fix --dry-run --index --format text
-hyalo lint --fix --index --format text
+hyalo lint --fix --dry-run --format text
+hyalo lint --fix --format text
 ```
 
 If you only want to fix specific rules (e.g. body fixes only, leaving frontmatter
@@ -268,10 +272,10 @@ correct target (handles moves to `done/`, case changes, extension mismatches, et
 
 ```bash
 # Preview what will be fixed
-hyalo links fix --index --format text
+hyalo links fix --format text
 
 # Apply fixes
-hyalo links fix --apply --index --format text
+hyalo links fix --apply --format text
 ```
 
 Review the dry-run output first. For any links it can't resolve (reported as unfixable),
@@ -280,12 +284,12 @@ leave them and report them in Phase 5.
 ### Update stale statuses
 If an iteration's branch was merged:
 ```bash
-hyalo set <path> --property status=completed --index --format text
+hyalo set <path> --property status=completed --format text
 ```
 
 If a backlog item's feature clearly shipped:
 ```bash
-hyalo set <path> --property status=completed --index --format text
+hyalo set <path> --property status=completed --format text
 ```
 
 Only update when the evidence is clear. When uncertain, flag it in the report.
@@ -293,13 +297,13 @@ Only update when the evidence is clear. When uncertain, flag it in the report.
 ### Archive completed items
 If completed items are in a top-level directory and a `done/` subfolder exists:
 ```bash
-hyalo mv <old-path> --to <done-subdir/filename> --dry-run --index --format text
+hyalo mv <old-path> --to <done-subdir/filename> --dry-run --format text
 ```
 Review the dry-run output. If correct, execute without `--dry-run`.
 
 ### Normalize tags
 ```bash
-hyalo tags rename --from <variant> --to <canonical> --index --format text
+hyalo tags rename --from <variant> --to <canonical> --format text
 ```
 
 ### Add missing cross-references

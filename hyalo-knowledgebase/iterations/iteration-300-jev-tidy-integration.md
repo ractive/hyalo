@@ -154,3 +154,22 @@ so the helper requires Hyalo 0.24's exact positive diagnostic and otherwise defe
 resulting document; the skill explicitly reviews complete schema requirements
 before applying a type suggestion. These are compatibility limits, not reasons
 to infer missing status values or override path bindings.
+
+## PR review follow-up
+
+PR 357's independent review found that Pi synchronization validated manifest
+versions before copying, so a repaired stale/missing manifest still produced a
+failure. Validation now checks the resulting state. A regression covers missing,
+old and malformed vendored manifests and continued rejection of canonical drift.
+
+Copilot review 5260492627 returned three inline findings: the helper's normalized
+type issue, fixed in PR 356 and regenerated here, plus duplicate Claude/Pi index
+guidance findings. Its overview repeats the same index concern with an additional
+unspecified nit count; all entrypoints and shared references are covered by the
+same correction. Examples now omit index flags consistently, with their optional
+use limited to ordinary repair runs. Audits and all Jev runs omit indexes; saved
+view examples no longer authorize configuration writes during an audit.
+
+The initial published head `8194e3cc` passed all 13 active CI checks, including
+the three-platform Jev and installer tests. The repair batch receives a fresh
+independent review and CI run; broader semantic accuracy remains uncalibrated.

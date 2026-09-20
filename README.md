@@ -232,7 +232,7 @@ example: “Use Jev to suggest missing types and existing folders for these five
 inbox notes; audit only.” This optional path needs Bun or Node.js and a
 `TYPESAFE_API_KEY`. It sends selected document evidence and approved classification
 rubrics to Typesafe; the helper returns suggestions, and the agent reviews them
-against local schemas before proposing changes. Ordinary tidy stays local and
+against local schemas before proposing changes. Ordinary tidy does not call Jev and
 requires no JavaScript runtime or API key. See the
 [Jev workflow](plugins/hyalo/skills/hyalo-tidy/references/jev.md) for scope,
 setup, and preview requirements.
