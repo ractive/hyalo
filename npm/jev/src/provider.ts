@@ -12,7 +12,14 @@ export function boundedFetch(fetcher: Fetch, onDispatch: () => void, maxBytes: n
     onDispatch();
     const response = await fetcher(input, { ...init, redirect: "error" });
     insist(!response.redirected && !(response.status >= 300 && response.status < 400), "provider redirect refused");
-    if (!response.body) return response;
+    const headers = new Headers(response.headers);
+    const retryAfter = new RateLimitError(response.status, undefined, headers).retryAfterMs;
+    if ((response.status === 429 || response.status === 529) && retryAfter !== undefined && retryAfter > LIMITS.deadline) {
+      // JS timers overflow above 2^31-1 and retry immediately. Normalize to
+      // beyond our total budget: cancellation wins, with no early retry.
+      headers.delete("retry-after"); headers.set("retry-after-ms", String(LIMITS.deadline + 1));
+    }
+    if (!response.body) return new Response(null, { status: response.status, headers });
     const reader = response.body.getReader(), chunks: Uint8Array[] = [];
     let bytes = 0;
     const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -25,13 +32,6 @@ export function boundedFetch(fetcher: Fetch, onDispatch: () => void, maxBytes: n
         if (part.done) break;
         bytes += part.value.byteLength;
         insist(bytes <= maxBytes, "provider response exceeds limit"); chunks.push(part.value);
-      }
-      const headers = new Headers(response.headers);
-      const retryAfter = new RateLimitError(response.status, undefined, headers).retryAfterMs;
-      if ((response.status === 429 || response.status === 529) && retryAfter !== undefined && retryAfter > LIMITS.deadline) {
-        // JS timers overflow above 2^31-1 and retry immediately. Normalize to
-        // beyond our total budget: cancellation wins, with no early retry.
-        headers.delete("retry-after"); headers.set("retry-after-ms", String(LIMITS.deadline + 1));
       }
       return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers });
     } finally {
@@ -83,7 +83,7 @@ export async function ask(m: Manifest, options: { allowNetwork: boolean; apiKey?
         } finally { clearTimeout(timer); }
       }
       const type = row.decisions.find(d => d.field === "type" && d.status === "suggestion")?.value ?? (typeof doc.current.type === "string" ? doc.current.type : undefined);
-      const mapped = type ? m.policy.typeFolders[type] : undefined;
+      const mapped = type && Object.hasOwn(m.policy.typeFolders, type) ? m.policy.typeFolders[type] : undefined;
       if (mapped) row.decisions.push({ field: "folder", status: "suggestion", value: mapped, reason: "local type-to-folder convention" });
       for (const d of row.decisions) if (d.field === "folder" && d.value === doc.file.split("/").slice(0, -1).join("/")) d.status = "no-change";
       if (!doc.missingType && !("type" in doc.current) && m.policy.types.length) row.decisions.push({ field: "type", status: "defer", reason: "type eligibility not established by Hyalo" });

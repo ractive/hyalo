@@ -30,6 +30,8 @@ async function inside(root: string, path: string, directory: boolean) {
 }
 
 export async function prepare(files: Selection[], p: Policy, read: HyaloRead): Promise<Manifest> {
+  const credential = process.env.TYPESAFE_API_KEY?.trim();
+  insist(!credential || !JSON.stringify({ files, policy: p }).includes(credential), "credential appears in selection or policy");
   const config = object((await read(["config", "--raw"])).results);
   insist(config.malformed === false && config.dir_out_of_bounds === false && !config.schema_error, "configuration requires repair");
   const root = await realpath(resolve(string(config.cwd), string(config.dir)));
@@ -50,6 +52,7 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
       const evidence = object((await read(["read", "--file", selected.file, "--frontmatter", ...readArgs])).results);
       insist(evidence.file === selected.file, "file resolution differs from selection");
       const current = object(evidence.frontmatter ?? {}), content = string(evidence.content, 18_000);
+      insist(!credential || !JSON.stringify({ current, content }).includes(credential), "credential found in selected evidence");
       let missingType = false;
       if (!("type" in current) && p.types.length) {
         // Use Hyalo's effective schema resolution, including path bindings,
@@ -70,7 +73,7 @@ export async function prepare(files: Selection[], p: Policy, read: HyaloRead): P
       const doc = { file: selected.file, section: selected.section, content, current, missingType };
       const full = { ...doc, fingerprint: evidenceHash(doc, p, contextHash) };
       const request = payload(full, p);
-      if (Object.keys(request.request.questions).length || (typeof current.type === "string" && p.typeFolders[current.type])) {
+      if (Object.keys(request.request.questions).length || (typeof current.type === "string" && Object.hasOwn(p.typeFolders, current.type))) {
         // A document can have deferred fields and usable independent questions.
         if (deferred.at(-1)?.file === selected.file) deferred.pop();
         documents.push(full);

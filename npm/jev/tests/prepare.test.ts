@@ -28,6 +28,14 @@ test("real Hyalo preparation respects bindings, exclusions, filenames, sizes and
     const m = await prepare(selection(["note.md", "space $().md", "bound/note.md", "exempt.md", "excluded.md", "valid.md", "large.md"]), policy({ version: 1, types: p.types, exclude: ["excluded.md"] }), hyaloReader(binary));
     expect(m.documents.map(d => d.file)).toEqual(["note.md", "space $().md"]);
     expect(m.deferred).toHaveLength(5); expect(await snapshot(root)).toEqual(before);
+    const oldKey = process.env.TYPESAFE_API_KEY;
+    try {
+      process.env.TYPESAFE_API_KEY = "temporary-fixture-credential";
+      await writeFile(join(root, "vault/credential.md"), body + "temporary-fixture-credential");
+      const secret = await prepare(selection(["credential.md"]), p, hyaloReader(binary));
+      expect(secret.documents).toHaveLength(0);
+      expect(JSON.stringify(secret)).not.toContain("temporary-fixture-credential");
+    } finally { if (oldKey === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = oldKey; }
     if (process.platform !== "win32") {
       await symlink(join(root, "vault/note.md"), join(root, "vault/link.md"));
       const linked = await prepare(selection(["link.md"]), p, hyaloReader(binary)); expect(linked.deferred).toHaveLength(1);
