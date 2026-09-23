@@ -1337,3 +1337,85 @@ fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
         "templated anchors must not inflate the summary broken-anchor count: {json}"
     );
 }
+
+#[test]
+fn iteration301_hidden_local_target_keeps_its_identity_over_discovered_root_fallback() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n[scan]\ninclude = [\".hidden.md\"]\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), ".hidden.md", "# Root\n");
+    write_md(tmp.path(), "notes/.hidden.md", "# Present\n");
+    write_md(tmp.path(), "notes/target.md", "# Target\n");
+    write_md(
+        tmp.path(),
+        "notes/source.md",
+        "# Source\n\n[local](.hidden.md#present)\n[local-missing](.hidden.md#missing-local)\n[root](/.hidden.md#missing-root)\n[normal](target.md#missing-normal)\n",
+    );
+    for indexed in [false, true] {
+        if indexed {
+            hyalo_no_hints()
+                .current_dir(tmp.path())
+                .arg("create-index")
+                .assert()
+                .success();
+        }
+        for scope in [None, Some("--file"), Some("--glob")] {
+            let mut extra = Vec::new();
+            if indexed {
+                extra.push("--index");
+            }
+            if let Some(flag) = scope {
+                extra.extend([flag, "notes/source.md"]);
+            }
+            let output = hyalo_no_hints()
+                .current_dir(tmp.path())
+                .args(["find", "--fields", "links", "--format", "json"])
+                .args(&extra)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let source = value["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["file"] == "notes/source.md")
+                .unwrap();
+            let links = source["links"].as_array().unwrap();
+            assert_eq!(links.len(), 4, "{value}");
+            for link in &links[..2] {
+                assert_eq!(link["path"], "notes/.hidden.md", "{value}");
+                assert_eq!(link["kind"], "attachment", "{value}");
+                assert_ne!(link["broken_anchor"], true, "{value}");
+            }
+            // These discovered documents are outside a scoped source scan,
+            // but remain checkable through the vault-wide catalog and cache.
+            for (link, target) in links[2..].iter().zip([".hidden.md", "notes/target.md"]) {
+                assert_eq!(link["path"], target, "{value}");
+                assert_eq!(link["kind"], "markdown", "{value}");
+                assert_eq!(link["broken_anchor"], true, "{value}");
+            }
+            let output = hyalo_no_hints()
+                .current_dir(tmp.path())
+                .args(["lint", "--rule", "HYALO008", "--format", "json"])
+                .args(&extra)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["results"]["warnings"], 2, "{value}");
+            let messages = String::from_utf8(output).unwrap();
+            assert!(messages.contains("#missing-root"), "{messages}");
+            assert!(messages.contains("#missing-normal"), "{messages}");
+            assert!(!messages.contains("#present"), "{messages}");
+            assert!(!messages.contains("#missing-local"), "{messages}");
+        }
+    }
+}

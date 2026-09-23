@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::anchor::{fragment_matches_headings, numbered_heading_repair};
@@ -285,13 +285,23 @@ pub struct AnchorApplyReport {
     pub failed: bool,
 }
 
-/// Revalidate source bytes and target heading eligibility immediately before
-/// writing. A source with any file-target repair is conservatively deferred,
-/// preventing a fragment plan from applying against a changed destination.
+/// Prepare source edits, then freshly validate target headings before one
+/// batch publication. The shared executor rechecks captured source bytes at
+/// each publication and selects durability from the complete rewrite count.
+/// A source or target with any file-target repair is conservatively deferred.
 pub fn apply_anchor_fixes(
     dir: &Path,
     fixes: &[AnchorFixPlan],
     target_fixes: &[crate::link_fix::FixPlan],
+) -> Result<AnchorApplyReport> {
+    apply_anchor_fixes_with_executor(dir, fixes, target_fixes, execute_plans_partial)
+}
+
+fn apply_anchor_fixes_with_executor(
+    dir: &Path,
+    fixes: &[AnchorFixPlan],
+    target_fixes: &[crate::link_fix::FixPlan],
+    execute: impl FnOnce(&Path, &[RewritePlan]) -> Result<crate::link_rewrite::PartialExecuteReport>,
 ) -> Result<AnchorApplyReport> {
     let canonical = crate::discovery::canonicalize_vault_dir(dir)?;
     let mut result = AnchorApplyReport::default();
@@ -300,7 +310,8 @@ pub fn apply_anchor_fixes(
     for plan in fixes {
         by_source.entry(&plan.source).or_default().push(plan);
     }
-    for (source, plans) in by_source {
+    let mut prepared = Vec::with_capacity(by_source.len());
+    for (&source, plans) in &by_source {
         let Some(first) = plans.first() else { continue };
         let validation = (|| -> Result<Vec<Replacement>, String> {
             if target_fixes.iter().any(|fix| {
@@ -320,38 +331,15 @@ pub fn apply_anchor_fixes(
             if current != *first.source_bytes {
                 return Err("stale source bytes; rebuild anchor proposals".to_owned());
             }
-            let mut headings = HashMap::new();
-            let mut replacements = Vec::new();
-            for plan in &plans {
-                if !headings.contains_key(&plan.target) {
-                    let path = canonical.join(&plan.target);
-                    if !crate::discovery::ensure_within_vault(&canonical, &path).unwrap_or(false) {
-                        return Err("target is missing or outside vault".to_owned());
-                    }
-                    let sections = crate::index::scan_file_sections(&path)
-                        .map_err(|e| format!("target unavailable: {e}"))?;
-                    headings.insert(&plan.target, sections);
-                }
-                let sections = headings
-                    .get(&plan.target)
-                    .ok_or("target headings unavailable")?;
-                let candidate =
-                    numbered_heading_repair(&plan.old_fragment, sections).map_err(str::to_owned)?;
-                if candidate.0 != plan.heading
-                    || candidate.1 != plan.new_fragment
-                    || fragment_matches_headings(&plan.old_fragment, sections)
-                    || !fragment_matches_headings(&plan.new_fragment, sections)
-                {
-                    return Err("target headings changed; rebuild anchor proposals".to_owned());
-                }
-                replacements.push(Replacement {
+            Ok(plans
+                .iter()
+                .map(|plan| Replacement {
                     line: plan.line,
                     byte_offset: plan.byte_offset,
                     old_text: plan.old_fragment.clone(),
                     new_text: plan.new_fragment.clone(),
-                });
-            }
-            Ok(replacements)
+                })
+                .collect())
         })();
         let replacements = match validation {
             Ok(replacements) => replacements,
@@ -371,26 +359,82 @@ pub fn apply_anchor_fixes(
             );
             continue;
         }
-        let rewrite = RewritePlan {
-            path: canonical.join(source),
-            rel_path: source.to_owned(),
-            replacements,
-            rewritten_content,
-            mtime: None,
-            original_content: Some(first.source_bytes.to_string()),
-        };
-        let written = execute_plans_partial(&canonical, &[rewrite])?;
-        result.failed |= written.has_failures();
-        for outcome in written.outcomes {
-            if outcome.applied {
-                result.modified_files.push(source.to_owned());
-                result.applied.extend(plans.iter().map(|p| (*p).clone()));
+        prepared.push((
+            RewritePlan {
+                path: canonical.join(source),
+                rel_path: source.to_owned(),
+                replacements,
+                rewritten_content,
+                mtime: None,
+                original_content: Some(first.source_bytes.to_string()),
+            },
+            plans,
+        ));
+    }
+
+    // Read current target headings only after every projected source has been
+    // prepared. This cache belongs to the publication pass, never to preview:
+    // repeated targets share one fresh read, including failed reads. Accepted
+    // anchor edits preserve headings, so writes cannot invalidate each other's
+    // target evidence. Unrelated concurrent target edits remain nontransactional.
+    let mut headings = HashMap::new();
+    let mut rewrites = Vec::with_capacity(prepared.len());
+    for (rewrite, plans) in prepared {
+        let validation = (|| -> Result<(), String> {
+            for plan in plans {
+                let sections = headings
+                    .entry(plan.target.as_str())
+                    .or_insert_with(|| {
+                        let path = canonical.join(&plan.target);
+                        if !crate::discovery::ensure_within_vault(&canonical, &path)
+                            .unwrap_or(false)
+                        {
+                            return Err("target is missing or outside vault".to_owned());
+                        }
+                        crate::index::scan_file_sections(&path)
+                            .map_err(|e| format!("target unavailable: {e}"))
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)?;
+                let candidate =
+                    numbered_heading_repair(&plan.old_fragment, sections).map_err(str::to_owned)?;
+                if candidate.0 != plan.heading
+                    || candidate.1 != plan.new_fragment
+                    || fragment_matches_headings(&plan.old_fragment, sections)
+                    || !fragment_matches_headings(&plan.new_fragment, sections)
+                {
+                    return Err("target headings changed; rebuild anchor proposals".to_owned());
+                }
             }
-            if let Some(error) = outcome.error {
-                result
-                    .deferred
-                    .extend(plans.iter().map(|p| deferral(p, &error)));
-            }
+            Ok(())
+        })();
+        match validation {
+            Ok(()) => rewrites.push(rewrite),
+            Err(reason) => result
+                .deferred
+                .extend(plans.iter().map(|p| deferral(p, &reason))),
+        }
+    }
+    if rewrites.is_empty() {
+        return Ok(result);
+    }
+
+    // One invocation preserves the executor's parallel writes, >8-file bulk
+    // durability policy, aggregate directory finalization, and per-file effects.
+    let written = execute(&canonical, &rewrites)?;
+    result.failed = written.has_failures();
+    for outcome in written.outcomes {
+        let plans = by_source
+            .get(outcome.rel_path.as_str())
+            .context("anchor rewrite outcome has no source plan")?;
+        if outcome.applied {
+            result.modified_files.push(outcome.rel_path);
+            result.applied.extend(plans.iter().map(|p| (*p).clone()));
+        }
+        if let Some(error) = outcome.error {
+            result
+                .deferred
+                .extend(plans.iter().map(|p| deferral(p, &error)));
         }
     }
     Ok(result)
@@ -602,5 +646,113 @@ mod tests {
         assert!(report.fixes.is_empty());
         assert_eq!(report.deferred.len(), 1);
         assert!(report.deferred[0].reason.contains("unknowable"));
+    }
+    #[test]
+    fn bulk_anchor_batch_keeps_partial_effects_and_revalidates_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = "[x](target.md#success-metrics)\n";
+        let mut documents: Vec<_> = (0..9)
+            .map(|i| {
+                (
+                    format!("source-{i}.md"),
+                    source.repeat(if i == 0 { 2 } else { 1 }),
+                )
+            })
+            .collect();
+        documents.extend([
+            ("stale-source.md".to_owned(), source.to_owned()),
+            (
+                "changed-heading.md".to_owned(),
+                "[x](changed-target.md#success-metrics)\n".to_owned(),
+            ),
+            (
+                "missing-target-source.md".to_owned(),
+                "[x](missing-target.md#success-metrics)\n".to_owned(),
+            ),
+            ("target.md".to_owned(), "## 6. Success metrics\n".to_owned()),
+            (
+                "changed-target.md".to_owned(),
+                "## 6. Success metrics\n".to_owned(),
+            ),
+            (
+                "missing-target.md".to_owned(),
+                "## 6. Success metrics\n".to_owned(),
+            ),
+        ]);
+        let files: Vec<_> = documents
+            .iter()
+            .map(|(name, text)| {
+                let path = temp.path().join(name);
+                std::fs::write(&path, text).unwrap();
+                (path, name.clone())
+            })
+            .collect();
+        let index = ScannedIndex::build(
+            &files,
+            None,
+            &ScanOptions {
+                scan_body: true,
+                bm25_tokenize: false,
+                default_language: None,
+                frontmatter_link_props: None,
+            },
+        )
+        .unwrap()
+        .index;
+        let report = plan_anchor_fixes(temp.path(), &index, None, None).unwrap();
+        assert_eq!(report.fixes.len(), 13);
+        std::fs::write(temp.path().join("stale-source.md"), "user edit\n").unwrap();
+        std::fs::write(
+            temp.path().join("changed-target.md"),
+            "## 7. Success metrics\n",
+        )
+        .unwrap();
+        std::fs::remove_file(temp.path().join("missing-target.md")).unwrap();
+
+        let mut executor_calls = 0;
+        let applied =
+            apply_anchor_fixes_with_executor(temp.path(), &report.fixes, &[], |root, plans| {
+                executor_calls += 1;
+                // Nine file plans must reach the executor together, which selects
+                // bulk durability above eight; individual anchor counts do not.
+                assert_eq!(plans.len(), 9);
+                assert!(
+                    plans
+                        .iter()
+                        .all(|plan| plan.rel_path.starts_with("source-"))
+                );
+                // A change after preparation must still be rejected by the real
+                // executor, without suppressing other files' successful rewrites.
+                std::fs::write(root.join("source-4.md"), "late user edit\n")?;
+                execute_plans_partial(root, plans)
+            })
+            .unwrap();
+        assert_eq!(executor_calls, 1);
+        assert!(applied.failed);
+        assert_eq!(applied.modified_files.len(), 8);
+        assert_eq!(applied.applied.len(), 9);
+        assert_eq!(applied.deferred.len(), 4);
+        assert!(applied.deferred.iter().any(|deferred| {
+            deferred.source == "source-4.md" && deferred.reason.contains("source bytes changed")
+        }));
+        for (name, original) in &documents {
+            if name == "missing-target.md" {
+                continue;
+            }
+            let expected = match name.as_str() {
+                "source-4.md" => "late user edit\n".to_owned(),
+                "stale-source.md" => "user edit\n".to_owned(),
+                "changed-target.md" => "## 7. Success metrics\n".to_owned(),
+                _ if name.starts_with("source-") => {
+                    original.replace("#success-metrics", "#6-success-metrics")
+                }
+                _ => original.clone(),
+            };
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join(name)).unwrap(),
+                expected,
+                "{name}"
+            );
+        }
     }
 }

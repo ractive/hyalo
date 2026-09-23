@@ -220,8 +220,10 @@ and eight measured interleaved baseline/new release runs per query:
 
 Changes of +0.62% and -1.28% fall inside measured noise. A 1,000-occurrence
 same-line anchor test exercises shared source spans; occurrence queues avoid
-rescanning previously assigned proposals. Apply revalidation intentionally reads
-target headings again per source publication to detect intervening changes.
+rescanning previously assigned proposals. Apply revalidation reads target
+headings again after source preparation and before batch publication. The shared
+executor checks captured source bytes at each publication; concurrent unrelated
+target edits are not a cross-file transaction.
 
 Unknowable template anchors are visible advisory deferrals without incrementing
 the broken-anchor count. Setext headings remain outside existing matching
@@ -298,18 +300,18 @@ The container was removed after execution. The local output is retained at
 The installed macOS executable and validated release executable have identical
 SHA-256 hashes. Strict lint of this iteration document passes without findings.
 
-Windows runtime execution remains unavailable. An attempted workspace/all-target
+Local Windows runtime execution remains unavailable. An attempted workspace/all-target
 check for the installed `x86_64-pc-windows-msvc` Rust target stopped in the
 existing `alloca` dependency because Windows C headers (`malloc.h`) are absent;
 this is not a successful Windows build or test. The existing CI test matrix in
 `.github/workflows/ci.yml` includes all 301 tests on Ubuntu, macOS, and Windows,
-but cannot run this uncommitted tree without publishing it. A read-only
+but could not run the then-uncommitted tree without publishing it. A read-only
 portability review found no concrete defect in the new fixtures; it does not
 substitute for execution.
 
 On 2026-09-23, the user explicitly approved closing iteration 301 with Windows
 validation deferred to the existing CI matrix. The platform task is closed by
-that disposition; Windows execution has not passed or run. Iteration 301 is
+that disposition; Windows execution had not passed or run at local closure. Iteration 301 is
 completed with implementation, documentation, macOS validation, and focused
 Linux validation finished. The installed binary includes the completed changes.
 At local closure, nothing had been committed or pushed and no PR had been
@@ -317,3 +319,36 @@ created. The user subsequently invoked `create-pr` and `review-pr`, authorizing
 scoped commits, publication, and review of iteration 301. Windows validation is
 to be checked on the published PR head. This authorization does not include
 merging. Mapl-memory's uncommitted changes remain untouched.
+
+### Published validation and review
+
+PR #359 was published against iteration 300 at `c09cb55a5e68`. Its full workspace
+tests passed on Linux, macOS, and Windows; the Windows run is
+[recorded in CI](https://github.com/ractive/hyalo/actions/runs/35887046211/job/107269741596).
+This closes the earlier Windows execution deferral for that revision. Review
+repairs require validation on their own final head.
+
+The independent full review covered `4818b193a322..c09cb55a5e68` in an enforced
+read-only process and returned two medium findings: hidden-path precedence in
+anchor lint/attachment classification, and anchor writes bypassing the shared
+bulk executor. Both were verified. Copilot was requested for `c09cb55a5e68` but
+returned no review within the five-minute wait; that is incomplete coverage,
+not a successful empty review.
+
+Both findings were repaired in one batch. Anchor lint and find now use the
+actual resolved target's discovery membership, preserving a source-relative
+hidden attachment over a discovered root fallback. Its regression spans
+disk/snapshot and full/file/glob scopes while retaining checks for discovered
+targets outside the selected source scope.
+
+Anchor repairs now prepare source edits, freshly validate target headings,
+and publish through one shared executor batch. More than eight source files
+retain the existing bulk durability policy and parallel writes. A nine-file
+batch regression checks stale source/heading/missing-target deferrals and a
+late source conflict, preserving successful per-file effects and unchanged
+bytes in rejected files.
+
+The consolidated repair batch passed `cargo fmt`, workspace/all-target Clippy
+with warnings denied, and the full workspace test suite in that order. Focused
+validation also passed the new six-mode resolution regression, five HYALO008
+end-to-end cases, two link-context unit tests, and eight anchor-repair unit tests.

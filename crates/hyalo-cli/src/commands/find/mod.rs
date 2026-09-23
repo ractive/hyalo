@@ -1101,25 +1101,16 @@ pub(crate) fn find_prepared(
                         // Existence-only paths omitted from discovery are attachments,
                         // including hidden Markdown. Do not read their headings through
                         // the scoped-query fallback or admit them as graph documents.
-                        if path
-                            .as_deref()
-                            .is_some_and(|target| index.get(target).is_none())
-                            && case_index.is_some_and(|catalog| {
-                                matches!(
-                                    hyalo_core::catalog::resolve(
-                                        catalog,
-                                        &entry.rel_path,
-                                        link.kind,
-                                        &link.target,
-                                        hyalo_core::catalog::ResolutionOptions {
-                                            aliases: catalog.aliases_enabled(),
-                                            site_prefix,
-                                        },
-                                    ),
-                                    hyalo_core::catalog::Resolution::Attachment(_)
-                                )
-                            })
-                        {
+                        if path.as_deref().is_some_and(|target| {
+                            index.get(target).is_none()
+                                && case_index.is_some_and(|catalog| {
+                                    catalog.is_complete() && !catalog.contains_path(target)
+                                })
+                        }) {
+                            // Use the resolved identity rather than resolving
+                            // the authored link again without existence-only
+                            // candidates. Scoped-out normal documents remain
+                            // in the complete catalog and keep heading fallback.
                             kind = LinkKindLabel::Attachment;
                         }
                         // L-21: broken-anchor check. Only runs when the TARGET

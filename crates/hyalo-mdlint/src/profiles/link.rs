@@ -340,16 +340,21 @@ pub fn check_broken_anchors(
         // Only discovered Markdown documents have checkable outlines.
         // Attachments and omitted hidden/excluded files remain existence-only
         // targets; a missing file is HYALO006, never an anchor failure too.
-        if let hyalo_core::catalog::Resolution::Resolved(target) = hyalo_core::catalog::resolve(
-            &ctx.case_index,
+        if let Some(target) = discovery::resolve_link_from_source(
+            &ctx.canonical_dir,
             rel_path,
             link.kind,
             &link.target,
-            hyalo_core::catalog::ResolutionOptions {
-                aliases: ctx.case_index.aliases_enabled(),
-                site_prefix: ctx.site_prefix.as_deref(),
-            },
-        ) {
+            ctx.site_prefix.as_deref(),
+            Some(&ctx.case_index),
+        ) && ctx.case_index.contains_path(&target)
+            && Path::new(&target)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            // Test discovery membership on the actual selected path. A
+            // catalog-only second resolution could skip an omitted local
+            // attachment and select a different discovered root fallback.
             check(line, &target, fragment);
         }
     }
