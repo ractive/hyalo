@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 300: opt-in Jev assistance for hyalo-tidy"
 date: 2026-09-20
-status: in-progress
+status: completed
 tags:
   - iteration
   - jev
@@ -142,11 +142,10 @@ format, strict workspace Clippy and full workspace test sequence passed.
 
 These identical semantic inputs tested workflow boundaries, not independent
 classification accuracy. Tests were performed locally, without an independent
-agent evaluation. A fresh multilingual/adversarial semantic evaluation and remote
-Linux/Windows execution remain unverified; the added CI matrix covers Linux,
-macOS and Windows using Bun 1.4.2 and Node 22. No measured agent-context savings
-or calibrated precision is claimed. Both iterations remain in progress pending
-their remote-platform acceptance checks; the implementation is ready for review.
+agent evaluation. A fresh multilingual/adversarial semantic evaluation remains
+outside the completed workflow validation; no measured agent-context savings
+or calibrated precision is claimed. Remote platform validation was pending at
+initial publication and is recorded below for the reviewed repair revision.
 
 Dogfood findings: the public lint JSON lacks a stable missing-type identifier,
 so the helper requires Hyalo 0.24's exact positive diagnostic and otherwise defers.
@@ -173,3 +172,27 @@ view examples no longer authorize configuration writes during an audit.
 The initial published head `8194e3cc` passed all 13 active CI checks, including
 the three-platform Jev and installer tests. The repair batch receives a fresh
 independent review and CI run; broader semantic accuracy remains uncalibrated.
+
+## Completion evidence
+
+The final implementation revision `9596432f29ef` passed all 13 active CI checks,
+including workspace tests, installed Jev helpers under Bun 1.4.2 and Node 22,
+and packaging on Linux, macOS, and Windows. The full-vault lint and scale-artifact
+jobs skip by their existing event/path conditions. See
+[CI run 35889722177](https://github.com/ractive/hyalo/actions/runs/35889722177)
+and [PR 357's review record](https://github.com/ractive/hyalo/pull/357).
+
+Fresh independent review of `518548e6..4818b193` found no additional defects.
+Late Copilot review 5293654633 returned three comments describing one saved-view
+dependency in the tidy recipes. Its repair review found one missing properties
+projection. Both were fixed: the recipes use explicit filters without creating
+configuration, and the installed Claude/Pi regression executes all nine recipes
+and verifies returned date and branch values. The final independent repair review
+returned no findings; its frozen patch matches the committed repair exactly.
+
+The repair passed formatting, strict workspace/all-target Clippy, and full
+workspace tests in order, plus Pi asset parity, all 14 bundled skills, and all
+41 executable shipped jq recipes. The existing MADR TOC recipe is inapplicable
+to this vault because it has no ADR directory. All original and late review
+findings are resolved in the PR record. Iteration 300 is complete; broader
+semantic accuracy remains an explicit limitation, not a claimed result.

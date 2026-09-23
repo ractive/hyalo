@@ -143,7 +143,8 @@ git log --diff-filter=A --name-only --since="4 weeks ago" -- "hyalo-knowledgebas
 
 ## Phase 3 — Detect structural issues
 
-Queries below use live reads. Only repair runs without Jev may add `--index`.
+Queries below use live reads and inline selectors, so they work without saved views.
+Only repair runs without Jev may add `--index`.
 
 ### Schema & lint
 Check if type schemas are defined, then run lint in strict mode. `hyalo lint` covers
@@ -182,7 +183,7 @@ Note the counts for the health dashboard. Actual fixes happen in Phase 4.
 
 ### Orphan files
 ```bash
-hyalo find --view orphans --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
+hyalo find --orphan --fields backlinks --jq '.results | map(select(.backlinks | length == 0)) | map(.file)'
 ```
 Not all orphans are problems. Expect these to be legitimately orphaned:
 - Top-level files (SEED.md, project-pitch.md, decision-log.md)
@@ -201,13 +202,13 @@ that could benefit from cross-references. Not always a problem, but worth review
 ### Stale statuses
 ```bash
 # In-progress items — should any be completed?
-hyalo find --view stale-in-progress --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
+hyalo find --property status=in-progress --fields properties --jq '.results | map({file, date: .properties.date, branch: .properties.branch})'
 
 # Planned items where all tasks are done
 hyalo find --property status=planned --fields tasks --jq '.results | map(select((.tasks | length > 0) and ([.tasks[] | select(.status != "x")] | length) == 0)) | map(.file)'
 
 # In-progress items sorted by date (oldest first — possibly stale)
-hyalo find --view stale-in-progress --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
+hyalo find --property status=in-progress --fields properties --jq '.results | map(select(.properties.date != null)) | sort_by(.properties.date) | map({file, date: .properties.date})'
 ```
 Cross-reference with git merges from Phase 2. If the branch was merged, update status.
 
@@ -221,8 +222,8 @@ flag it.
 
 ### Missing metadata
 ```bash
-hyalo find --view missing-status --jq '.results | map(.file)'
-hyalo find --view missing-type --jq '.results | map(.file)'
+hyalo find --property '!status' --jq '.results | map(.file)'
+hyalo find --property '!type' --jq '.results | map(.file)'
 ```
 
 ### Tag inconsistencies
@@ -234,9 +235,9 @@ more files.
 ### Task completion vs status mismatch
 The `HYALO002` rule from the lint pass already flags `status: completed` files with
 open tasks (fires only when `[schema.types.*].properties.status` is declared as an enum
-containing `"completed"`). If you want a per-file breakdown with open/total counts, use the view:
+containing `"completed"`). If you want a per-file breakdown with open/total counts, use this inline query:
 ```bash
-hyalo find --view completed-with-todos --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
+hyalo find --property status=completed --task todo --fields tasks --jq '.results | map({file, open: ([.tasks[] | select(.status != "x")] | length), total: (.tasks | length)})'
 ```
 If many completed items have unchecked tasks, this is a workflow pattern — note it once
 in the report rather than listing every file.

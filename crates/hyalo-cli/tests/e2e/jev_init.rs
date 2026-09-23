@@ -174,3 +174,62 @@ fn jev_legacy_install_without_optional_resources_can_be_upgraded() {
         );
     }
 }
+
+#[test]
+fn installed_tidy_diagnostics_work_without_saved_views() {
+    for (mode, skill) in [MODES[0], MODES[2]] {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::write(root.join(".hyalo.toml"), "dir = \".\"\n").unwrap();
+        fs::write(
+            root.join("note.md"),
+            "---\ntitle: Note\nstatus: in-progress\ndate: 2026-09-23\nbranch: iter-300/example\n---\n# Note\n\n- [ ] Task\n",
+        )
+        .unwrap();
+        success(&init(root, mode));
+        let config = fs::read(root.join(".hyalo.toml")).unwrap();
+        let installed = fs::read_to_string(root.join(skill).join("SKILL.md")).unwrap();
+        let phase = installed
+            .split("## Phase 3")
+            .nth(1)
+            .unwrap()
+            .split("## Phase 4")
+            .next()
+            .unwrap();
+        let mut checked = 0;
+        for line in phase.lines().filter(|line| line.starts_with("hyalo find ")) {
+            // Execute the shipped one-line recipes without invoking a shell.
+            // Their selectors contain no whitespace; jq is one quoted argument.
+            let (selectors, query) = line.split_once(" --jq '").unwrap();
+            let query = query.strip_suffix('\'').unwrap();
+            let selectors = selectors
+                .split_whitespace()
+                .skip(1)
+                .map(|argument| argument.trim_matches('\''));
+            let output = hyalo_no_hints()
+                .current_dir(root)
+                .args(selectors)
+                .args(["--jq", query])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{mode}: installed recipe failed: {line}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if line.contains("--property status=in-progress") {
+                let results: Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(results.as_array().unwrap().len(), 1, "{mode}: {line}");
+                assert_eq!(results[0]["file"], "note.md", "{mode}: {line}");
+                assert_eq!(results[0]["date"], "2026-09-23", "{mode}: {line}");
+                if query.contains("branch:") {
+                    assert_eq!(results[0]["branch"], "iter-300/example", "{mode}: {line}");
+                }
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 9, "must execute every Phase 3 find recipe");
+        assert_eq!(fs::read(root.join(".hyalo.toml")).unwrap(), config);
+        assert!(!root.join(".hyalo-index").exists());
+    }
+}
