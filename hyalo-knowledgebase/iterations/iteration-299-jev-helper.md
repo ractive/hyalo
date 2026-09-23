@@ -2,7 +2,7 @@
 type: iteration
 title: "Iteration 299: optional Jev helper and request preparation"
 date: 2026-09-20
-status: in-progress
+status: completed
 tags:
   - iteration
   - jev
@@ -65,7 +65,7 @@ command, mutation engine, persistent consent store, or implicit runtime install.
 - [x] No operation writes notes, indexes, config, caches, or implicit temporary files; only the caller's chosen stdout redirection can create artifacts.
 - [x] Paths, current values, and local diagnostic metadata remain outside the transmitted payload; document text is treated as data.
 - [x] Prepared evidence is acquired through bounded Hyalo reads without loading full documents into the main agent's context.
-- [ ] The same built helper works under Bun 1.4.2 and supported Node versions; platform-specific process and stdin behavior is checked on Linux, macOS, and Windows.
+- [x] The same built helper works under Bun 1.4.2 and supported Node versions; platform-specific process and stdin behavior is checked on Linux, macOS, and Windows.
 - [x] No Python, runtime package download, `bunx`/`npx`, or source-checkout dependency is required to execute the artifact.
 
 ## Validation approach
@@ -108,7 +108,8 @@ with 76 assertions, including bounded real HTTP streams under both runtimes,
 standalone bundled execution, path-bound/exempt notes and unchanged vault bytes.
 Type checking, bundle rebuild comparison, frozen lockfile install, release build,
 formatting, strict workspace Clippy and all workspace tests passed. A CI matrix
-now covers Linux, macOS and Windows with Node 22; those remote runs are pending.
+now covers Linux, macOS and Windows with Node 22; the completed repair-head
+results are recorded below.
 
 The tests caught a large `Retry-After` overflowing JavaScript timers into an
 immediate retry. Long delays now remain beyond the total deadline, preventing
@@ -149,5 +150,27 @@ access. The pinned TypeScript check passes locally and in the three-platform CI.
 The independent follow-up review also covers that disputed assertion contract.
 
 All 13 active CI checks passed on the initial published head `dc7d079d`, including
-Bun and Node 22 on Linux, macOS and Windows. The repair batch requires its own
-review and platform results before completion.
+Bun and Node 22 on Linux, macOS and Windows. Repair-head review and platform
+results are recorded below.
+
+## Merge finalization evidence
+
+On 2026-09-23, the completed [CI run 35509138706](https://github.com/ractive/hyalo/actions/runs/35509138706)
+was verified against exact repair head `518548e6c9d0d16357ed31378d6cd40fe2842d86`.
+The Jev helper jobs passed on Linux, macOS and Windows, using Bun 1.4.2 and
+Node 22 for the bundle and offline runtime tests. Each platform passed the
+frozen dependency install, TypeScript check, bundle build and test steps.
+All 13 active PR checks passed; full-knowledgebase lint and the optional scale
+artifact job were expected skips.
+
+Independent read-only review covered `332efea6..dc7d079d`; its repair follow-up
+covered `dc7d079d..518548e6` and returned no findings. The five verified defects
+are fixed, and the optional-fetch-init assertion concern is answered as recorded
+above and in [PR 356](https://github.com/ractive/hyalo/pull/356).
+
+The remaining platform acceptance criterion is verified, so the iteration is
+completed. This finalization changes only plan status, its verified task and
+evidence references; the recorded passing code gates remain applicable to
+unchanged implementation inputs. CI must still pass on the metadata commit
+before merge. No held-out semantic-accuracy evaluation, calibrated thresholds or
+measured agent-context savings are claimed by this runtime iteration.
