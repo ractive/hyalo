@@ -51,6 +51,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
     ("HYALO005", DiagSeverity::Error),
     ("HYALO006", DiagSeverity::Warn),
     ("HYALO007", DiagSeverity::Warn),
+    ("HYALO008", DiagSeverity::Warn),
 ];
 
 /// Rules that are **default-on** (cheap, structural, low false-positive).
@@ -58,7 +59,7 @@ static SEVERITY_TABLE: &[(&str, DiagSeverity)] = &[
 static DEFAULT_ON: &[&str] = &[
     "MD001", "MD009", "MD010", "MD011", "MD012", "MD018", "MD019", "MD022", "MD023", "MD031",
     "MD034", "MD040", "MD042", "MD047", // HYALO rules are always default-on
-    "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006", "HYALO007",
+    "HYALO001", "HYALO002", "HYALO003", "HYALO004", "HYALO005", "HYALO006", "HYALO007", "HYALO008",
 ];
 
 /// Stock rules whose upstream autofix hyalo **refuses to offer**, however the
@@ -241,7 +242,16 @@ impl HyaloLintEngine {
             RuleCatalogEntry {
                 id: "HYALO006".to_owned(),
                 name: "broken-link".to_owned(),
-                description: "A wikilink or markdown link points at a vault file that does not exist. Checks the link TARGET only — a broken `#heading` anchor is not flagged here; use `find --broken-links` for anchors. Warns by default; promoted to error under --strict so CI can gate broken links.".to_owned(),
+                description: "A wikilink or markdown link points at a vault file that does not exist. Checks the link target only; HYALO008 checks heading anchors. Warns by default; promoted to error under --strict so CI can gate broken links.".to_owned(),
+                default_severity: DiagSeverity::Warn,
+                default_enabled: true,
+                autofixable: false,
+                source: "hyalo-mdlint".to_owned(),
+            },
+            RuleCatalogEntry {
+                id: "HYALO008".to_owned(),
+                name: "broken-heading-anchor".to_owned(),
+                description: "A same-file or cross-file heading fragment does not match the existing target document. Uses the shared heading matcher; skips block references, templates and unreadable targets. Warns by default; promoted to error under --strict. Review numbered-heading repairs with links fix --dry-run.".to_owned(),
                 default_severity: DiagSeverity::Warn,
                 default_enabled: true,
                 autofixable: false,

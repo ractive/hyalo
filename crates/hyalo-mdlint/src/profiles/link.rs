@@ -1,23 +1,25 @@
-//! HYALO006 (`broken-link`) lint rule support.
+//! Vault-aware HYALO006 (broken-link) and HYALO008 (broken-heading-anchor).
 //!
-//! The rule fires when a wikilink or markdown link in a linted file points at a
-//! vault file that does not exist. The catalog entry lives in `hyalo-mdlint`
-//! (severity/default-on/description); the resolution logic lives here in
-//! `hyalo-cli` because it needs vault-wide context (the set of files that
-//! exist) which the stateless mdlint engine does not have.
-//!
-//! The vault-wide [`LinkLintContext`] is built **once** per `hyalo lint`
-//! invocation (in the dispatch arm) and shared by reference across the rayon
-//! workers — the graph is never rebuilt per file.
+//! The stateless body engine supplies the catalog and configuration. CLI lint
+//! builds one [`LinkLintContext`] per invocation and shares it across workers.
+//! Heading validation is opt-in on that context so a disabled or filtered-out
+//! anchor rule performs no heading work. Targets use the shared resolver and
+//! heading matcher; cached outlines are never rebuilt per link.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use hyalo_core::types::OutlineSection;
+
+type CachedSections = Arc<OnceLock<Option<Vec<OutlineSection>>>>;
 
 use hyalo_core::CaseInsensitiveIndex;
 use hyalo_core::discovery;
 use hyalo_core::links::{self, Link, LinkKind};
 use hyalo_core::scanner::{FileVisitor, ScanAction, scan_slice_multi};
 
-/// Vault-wide context needed to resolve links for the HYALO006 rule.
+/// Vault-wide context needed to resolve file targets and heading anchors.
 ///
 /// Built once per invocation and borrowed by every worker. Cheap to share:
 /// resolution reads the [`CaseInsensitiveIndex`] and touches the filesystem
@@ -33,6 +35,9 @@ pub struct LinkLintContext {
     /// `None` scans every frontmatter value — the default; `Some(list)` is the
     /// `[links] frontmatter = false` / `frontmatter_properties` opt-out.
     frontmatter_props: Option<Vec<String>>,
+    /// One lazy heading read per distinct target, including failed reads.
+    /// Absent when HYALO008 is disabled or filtered out.
+    anchor_sections: Option<Mutex<HashMap<String, CachedSections>>>,
 }
 
 impl LinkLintContext {
@@ -52,7 +57,32 @@ impl LinkLintContext {
             site_prefix,
             case_index,
             frontmatter_props,
+            anchor_sections: None,
         })
+    }
+    /// Enable heading validation, reusing snapshot outlines where available.
+    /// Only called when the anchor rule is selected.
+    #[must_use]
+    pub fn with_anchors(mut self, snapshot: Option<&dyn hyalo_core::index::VaultIndex>) -> Self {
+        let mut cache = HashMap::new();
+        if let Some(snapshot) = snapshot {
+            for entry in snapshot.entries() {
+                cache.insert(
+                    entry.rel_path.clone(),
+                    Arc::new(OnceLock::from(Some(entry.sections.clone()))),
+                );
+            }
+        }
+        self.anchor_sections = Some(Mutex::new(cache));
+        self
+    }
+
+    fn target_sections(&self, target: &str) -> Option<CachedSections> {
+        let cache = self.anchor_sections.as_ref()?;
+        let mut cache = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(Arc::clone(cache.entry(target.to_owned()).or_default()))
     }
 }
 
@@ -69,6 +99,8 @@ pub struct BrokenLinkFinding {
 /// matching how the link graph and `find` index links.
 struct LinkCollector<'a> {
     links: Vec<(usize, Link)>,
+    anchors: Vec<links::SelfAnchor>,
+    collect_anchors: bool,
     scratch: Vec<Link>,
     /// Frontmatter property allow-list, or `None` to scan every value.
     frontmatter_props: Option<&'a [String]>,
@@ -78,6 +110,8 @@ impl<'a> LinkCollector<'a> {
     fn new(frontmatter_props: Option<&'a [String]>) -> Self {
         Self {
             links: Vec::new(),
+            anchors: Vec::new(),
+            collect_anchors: false,
             scratch: Vec::new(),
             frontmatter_props,
         }
@@ -97,12 +131,25 @@ impl FileVisitor for LinkCollector<'_> {
         );
     }
 
-    fn on_body_line(&mut self, _raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
+    fn on_body_line(&mut self, raw: &str, cleaned: &str, line_num: usize) -> ScanAction {
         // Resolution only needs the target, not the label, so scanning the
         // inline-code-stripped `cleaned` line as both text and original is
         // sufficient (label fidelity is irrelevant to HYALO006).
         self.scratch.clear();
-        links::extract_links_from_text(cleaned, &mut self.scratch);
+        if self.collect_anchors {
+            let start = self.anchors.len();
+            links::extract_links_and_self_anchors(
+                cleaned,
+                raw,
+                &mut self.scratch,
+                &mut self.anchors,
+            );
+            for anchor in &mut self.anchors[start..] {
+                anchor.line = line_num;
+            }
+        } else {
+            links::extract_links_from_text(cleaned, &mut self.scratch);
+        }
         for link in self.scratch.drain(..) {
             self.links.push((line_num, link));
         }
@@ -227,4 +274,146 @@ pub fn check_broken_links(
         }
     }
     findings
+}
+
+/// Check heading fragments only after the file target resolves. The outline
+/// cache is shared across workers and each target is parsed at most once.
+#[must_use]
+pub fn check_broken_anchors(
+    ctx: &LinkLintContext,
+    content: &[u8],
+    rel_path: &str,
+) -> Vec<BrokenLinkFinding> {
+    if ctx.anchor_sections.is_none() {
+        return Vec::new();
+    }
+    let mut collector = LinkCollector::new(ctx.frontmatter_props.as_deref());
+    collector.collect_anchors = true;
+    if scan_slice_multi(content, &mut [&mut collector]).is_err() {
+        return Vec::new();
+    }
+    let mut findings = Vec::new();
+    let source_sections = OnceLock::new();
+    let mut check = |line: usize, target: &str, fragment: &str| {
+        // The matcher handles encoded blocks/templates too; no headings are
+        // needed when the fragment is unconditionally accepted.
+        if hyalo_core::anchor::fragment_matches_headings(fragment, &[]) {
+            return;
+        }
+        let broken = if target == rel_path {
+            source_sections
+                .get_or_init(|| hyalo_core::index::scan_slice_sections(content).ok())
+                .as_deref()
+                .is_some_and(|sections| {
+                    !hyalo_core::anchor::fragment_matches_headings(fragment, sections)
+                })
+        } else if let Some(cell) = ctx.target_sections(target) {
+            cell.get_or_init(|| {
+                hyalo_core::index::scan_file_sections(&ctx.canonical_dir.join(target)).ok()
+            })
+            .as_deref()
+            .is_some_and(|sections| {
+                !hyalo_core::anchor::fragment_matches_headings(fragment, sections)
+            })
+        } else {
+            false
+        };
+        if broken {
+            findings.push(BrokenLinkFinding {
+                line,
+                message: format!(
+                    "broken heading anchor: `#{fragment}` does not match a heading in `{target}`"
+                ),
+            });
+        }
+    };
+    for anchor in collector.anchors {
+        check(anchor.line, rel_path, &anchor.fragment);
+    }
+    for (line, link) in collector.links {
+        if link.external {
+            continue;
+        }
+        let Some(fragment) = link.fragment.as_deref() else {
+            continue;
+        };
+        // Only discovered Markdown documents have checkable outlines.
+        // Attachments and omitted hidden/excluded files remain existence-only
+        // targets; a missing file is HYALO006, never an anchor failure too.
+        if let Some(target) = discovery::resolve_link_from_source(
+            &ctx.canonical_dir,
+            rel_path,
+            link.kind,
+            &link.target,
+            ctx.site_prefix.as_deref(),
+            Some(&ctx.case_index),
+        ) && ctx.case_index.contains_path(&target)
+            && Path::new(&target)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            // Test discovery membership on the actual selected path. A
+            // catalog-only second resolution could skip an omitted local
+            // attachment and select a different discovered root fallback.
+            check(line, &target, fragment);
+        }
+    }
+    findings.sort_by_key(|finding| finding.line);
+    findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(dir: &Path) -> LinkLintContext {
+        let mut index = CaseInsensitiveIndex::default();
+        index.insert("source.md");
+        index.insert("target.md");
+        index.insert("attachment.txt");
+        LinkLintContext::new(dir, None, index, None).unwrap()
+    }
+
+    #[test]
+    fn anchor_targets_share_one_cached_outline() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("target.md"), "## Real\n").unwrap();
+        let ctx = context(dir.path()).with_anchors(None);
+        let content = b"[one](target.md#absent)\n[two](target.md#absent)\n";
+        assert_eq!(check_broken_anchors(&ctx, content, "source.md").len(), 2);
+        // If a second file/occurrence re-read the target, this newly-added
+        // heading would incorrectly make the invocation's verdict change.
+        std::fs::write(dir.path().join("target.md"), "## absent\n").unwrap();
+        assert_eq!(check_broken_anchors(&ctx, content, "source.md").len(), 2);
+        assert_eq!(
+            ctx.anchor_sections.as_ref().unwrap().lock().unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn disabled_rule_and_non_document_targets_need_no_heading_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = context(dir.path());
+        assert!(check_broken_anchors(&ctx, b"[x](#absent)", "source.md").is_empty());
+        let ctx = ctx.with_anchors(None);
+        std::fs::write(dir.path().join("attachment.txt"), "text\n").unwrap();
+        std::fs::write(dir.path().join(".hidden.md"), "## Present\n").unwrap();
+        assert!(
+            check_broken_anchors(
+                &ctx,
+                b"[a](attachment.txt#absent)\n[b](.hidden.md#absent)",
+                "source.md"
+            )
+            .is_empty()
+        );
+        assert!(
+            ctx.anchor_sections
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

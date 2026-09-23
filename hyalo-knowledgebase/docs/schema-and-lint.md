@@ -151,6 +151,30 @@ Files without a `type` property are validated against `schema.default` only.
 
 ## Running `hyalo lint`
 
+### File targets and heading anchors
+
+`HYALO006` checks whether a link target resolves. `HYALO008` checks its heading
+fragment only after the target resolves, so a missing target produces no duplicate
+anchor finding. Both are enabled as warnings by default and promoted by `--strict`,
+unless an explicit severity override is configured. Select only anchors with
+`hyalo lint --rule HYALO008 --strict`, or disable the rule through `lint-rules`.
+File, file-list and glob selections keep vault-wide target context.
+
+Anchor checks share `find` semantics for same-file fragments, cross-file links,
+configured frontmatter wikilinks, duplicate heading slugs and percent encoding.
+External URLs, block references and unknowable templated headings are skipped.
+Explicit hidden paths resolve by in-vault existence without adding hidden documents
+or their headings to the scan.
+
+`links fix --dry-run` previews conservative numbered-heading repairs separately from
+file-target repairs. A unique match after removing a leading decimal section number
+can propose `#success-metrics` to `#6-success-metrics`. Ordinary `links fix --apply`
+writes safe target and anchor repairs together. `--apply-fuzzy` additionally enables
+eligible fuzzy file-target repairs; broader fuzzy anchor guesses remain advisory.
+Lint autofix does not apply anchor repairs. Ambiguous, stale and unsupported
+destinations are deferred with a reason. See
+[[iterations/iteration-301-hidden-links-and-anchor-repairs]].
+
 ```sh
 # Lint the whole vault
 hyalo lint

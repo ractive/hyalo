@@ -36,6 +36,15 @@ hyalo lint iterations/example.md --format text
 
 The paths above are examples: resolve actual files before running mutations.
 Use `hyalo <command> --help` for exact syntax, advanced filters, links, or bulk operations.
+
+For link validation, `HYALO006` checks targets and `HYALO008` checks heading anchors.
+Both default to warnings and are promoted by `lint --strict` unless explicitly configured.
+`links fix --dry-run` previews unique numbered-heading fragment repairs with source lines
+and deferral reasons. Ordinary `links fix --apply` writes safe target and anchor repairs
+together. `--apply-fuzzy` additionally enables eligible fuzzy file-target repairs; broader
+fuzzy anchor guesses remain advisory. Broken counts describe the pre-apply scan.
+Explicit hidden paths can resolve by existence without joining document discovery.
+
 `find`'s positional query is ranked search; `-e` is regex. Quote filter expressions
 and paths as single arguments using the active shell's quoting rules.
 

@@ -343,6 +343,21 @@ fn heading_path_matches(segments: &[&str], sections: &[OutlineSection]) -> bool 
 /// match a non-empty fragment.
 #[must_use]
 pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) -> bool {
+    fragment_matches_headings_inner(fragment, sections, true)
+}
+
+pub(crate) fn fragment_matches_literal_headings(
+    fragment: &str,
+    sections: &[OutlineSection],
+) -> bool {
+    fragment_matches_headings_inner(fragment, sections, false)
+}
+
+fn fragment_matches_headings_inner(
+    fragment: &str,
+    sections: &[OutlineSection],
+    allow_templates: bool,
+) -> bool {
     // Block references are not validated — we do not index block ids.
     if is_block_ref(fragment) {
         return true;
@@ -406,12 +421,63 @@ pub fn fragment_matches_headings(fragment: &str, sections: &[OutlineSection]) ->
     // corpus (6 of 7 checkable anchors were false positives before DEC-075,
     // and the templated remainder after it). Consistent with the module's
     // stated bias: a false positive costs a user far more than a miss.
+    if !allow_templates {
+        return false;
+    }
     if is_templated_heading(&needle) {
         return true;
     }
     sections
         .iter()
         .any(|s| s.heading.as_deref().is_some_and(is_templated_heading))
+}
+
+/// Conservative numbered-heading repair: exactly one heading must match after
+/// removing a decimal section prefix (for example `6.` or `6.2.`). Duplicate
+/// headings and merely similar names are deliberately not repairable.
+pub fn numbered_heading_repair(
+    fragment: &str,
+    sections: &[OutlineSection],
+) -> Result<(String, String), &'static str> {
+    if is_block_ref(fragment)
+        || is_templated_heading(fragment)
+        || sections
+            .iter()
+            .filter_map(|s| s.heading.as_deref())
+            .any(is_templated_heading)
+    {
+        return Err("templated or block-reference anchor is not repairable");
+    }
+    let needle = github_slug(&normalize_for_match(fragment));
+    let headings: Vec<_> = sections
+        .iter()
+        .filter_map(|s| s.heading.as_deref())
+        .filter(|h| !github_slug(h).is_empty())
+        .collect();
+    let slugs = heading_slugs(sections);
+    let mut found = None;
+    for (heading, slug) in headings.into_iter().zip(slugs) {
+        let heading_trimmed = heading.trim();
+        let Some((number, rest)) = heading_trimmed.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let digits = number.strip_suffix('.').unwrap_or(number);
+        if digits.is_empty()
+            || !digits
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        if github_slug(rest) != needle || needle.is_empty() {
+            continue;
+        }
+        if found.is_some() {
+            return Err("ambiguous numbered headings (including duplicate headings)");
+        }
+        found = Some((heading.to_owned(), slug));
+    }
+    found.ok_or("no unique exact numbered-heading match; similar headings are advisory only")
 }
 
 #[cfg(test)]

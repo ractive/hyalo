@@ -1246,6 +1246,77 @@ fn templated_heading_skip_holds_on_the_index_path() {
 }
 
 #[test]
+fn iteration301_hidden_markdown_is_attachment_without_anchor_work() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hidden.md", "# Hidden\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "# Source\n\n[hidden](.hidden.md#missing)\n",
+    );
+    let dir = tmp.path().to_str().unwrap();
+    for scope in [None, Some("--file"), Some("--glob")] {
+        let mut command = hyalo_no_hints();
+        command.args([
+            "--dir", dir, "find", "--fields", "links", "--format", "json",
+        ]);
+        if let Some(flag) = scope {
+            command.args([flag, "source.md"]);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["total"], 1, "{json}");
+        let link = &json["results"][0]["links"][0];
+        assert_eq!(link["path"], ".hidden.md", "{json}");
+        assert_eq!(link["kind"], "attachment", "{json}");
+        assert_ne!(link["broken_anchor"], true, "{json}");
+    }
+}
+
+#[test]
+fn iteration301_summary_retains_mixed_target_and_anchor_findings() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "# Target\n\n## 6. Success metrics\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "# Source\n\n[missing](absent.md#missing)\n[anchor](target.md#success-metrics)\n",
+    );
+    let dir = tmp.path().to_str().unwrap();
+    for indexed in [false, true] {
+        if indexed {
+            assert!(
+                hyalo_no_hints()
+                    .args(["--dir", dir, "create-index"])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let mut command = hyalo_no_hints();
+        command.args(["--dir", dir, "summary", "--format", "json"]);
+        if indexed {
+            command.arg("--index");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["results"]["links"]["broken"], 1, "{json}");
+        assert_eq!(json["results"]["links"]["broken_anchors"], 1, "{json}");
+    }
+}
+
+#[test]
 fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
     // `summary`'s broken-anchor count routes through the same matcher
     // (`count_broken_anchors`), so the DEC-099 skip must move both numbers.
@@ -1265,4 +1336,86 @@ fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
         0,
         "templated anchors must not inflate the summary broken-anchor count: {json}"
     );
+}
+
+#[test]
+fn iteration301_hidden_local_target_keeps_its_identity_over_discovered_root_fallback() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "dir = \".\"\n[scan]\ninclude = [\".hidden.md\"]\n",
+    )
+    .unwrap();
+    write_md(tmp.path(), ".hidden.md", "# Root\n");
+    write_md(tmp.path(), "notes/.hidden.md", "# Present\n");
+    write_md(tmp.path(), "notes/target.md", "# Target\n");
+    write_md(
+        tmp.path(),
+        "notes/source.md",
+        "# Source\n\n[local](.hidden.md#present)\n[local-missing](.hidden.md#missing-local)\n[root](/.hidden.md#missing-root)\n[normal](target.md#missing-normal)\n",
+    );
+    for indexed in [false, true] {
+        if indexed {
+            hyalo_no_hints()
+                .current_dir(tmp.path())
+                .arg("create-index")
+                .assert()
+                .success();
+        }
+        for scope in [None, Some("--file"), Some("--glob")] {
+            let mut extra = Vec::new();
+            if indexed {
+                extra.push("--index");
+            }
+            if let Some(flag) = scope {
+                extra.extend([flag, "notes/source.md"]);
+            }
+            let output = hyalo_no_hints()
+                .current_dir(tmp.path())
+                .args(["find", "--fields", "links", "--format", "json"])
+                .args(&extra)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let source = value["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["file"] == "notes/source.md")
+                .unwrap();
+            let links = source["links"].as_array().unwrap();
+            assert_eq!(links.len(), 4, "{value}");
+            for link in &links[..2] {
+                assert_eq!(link["path"], "notes/.hidden.md", "{value}");
+                assert_eq!(link["kind"], "attachment", "{value}");
+                assert_ne!(link["broken_anchor"], true, "{value}");
+            }
+            // These discovered documents are outside a scoped source scan,
+            // but remain checkable through the vault-wide catalog and cache.
+            for (link, target) in links[2..].iter().zip([".hidden.md", "notes/target.md"]) {
+                assert_eq!(link["path"], target, "{value}");
+                assert_eq!(link["kind"], "markdown", "{value}");
+                assert_eq!(link["broken_anchor"], true, "{value}");
+            }
+            let output = hyalo_no_hints()
+                .current_dir(tmp.path())
+                .args(["lint", "--rule", "HYALO008", "--format", "json"])
+                .args(&extra)
+                .assert()
+                .success()
+                .get_output()
+                .stdout
+                .clone();
+            let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(value["results"]["warnings"], 2, "{value}");
+            let messages = String::from_utf8(output).unwrap();
+            assert!(messages.contains("#missing-root"), "{messages}");
+            assert!(messages.contains("#missing-normal"), "{messages}");
+            assert!(!messages.contains("#present"), "{messages}");
+            assert!(!messages.contains("#missing-local"), "{messages}");
+        }
+    }
 }

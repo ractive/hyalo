@@ -251,7 +251,7 @@ pub(crate) fn extract_links_from_text_with_original(
 ///
 /// Block references (`^block-id`) are collected too; the anchor matcher skips
 /// them, keeping the "never reported broken" contract in one place.
-pub(crate) fn extract_links_and_self_anchors(
+pub fn extract_links_and_self_anchors(
     cleaned: &str,
     original: &str,
     out: &mut Vec<Link>,
@@ -739,6 +739,77 @@ pub(crate) fn extract_link_spans_with_original(cleaned: &str, original: &str) ->
     }
 
     out
+}
+
+/// A fragment occurrence whose offsets are backed by the shared link parser.
+pub(crate) struct FragmentSpan {
+    pub target: String,
+    pub fragment: String,
+    pub start: usize,
+}
+
+/// Exact fragment byte spans for inline links; reference definitions and
+/// multiline destinations deliberately remain unsupported by repair.
+pub(crate) fn extract_fragment_spans(cleaned: &str, original: &str) -> Vec<FragmentSpan> {
+    let mut result = Vec::new();
+    let bytes = cleaned.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'[' || is_escaped(bytes, i) {
+            i += 1;
+            continue;
+        }
+        let parsed = if bytes.get(i + 1) == Some(&b'[') {
+            try_parse_wikilink_span_at(cleaned, i)
+        } else {
+            try_parse_markdown_link_span_at(cleaned, original, i)
+        };
+        if let Some((span, end)) = parsed {
+            if let Some(fragment) = span.link.fragment
+                && let Some(hash) = cleaned[span.target_end..end].find('#')
+            {
+                let start = span.target_end + hash + 1;
+                if original.get(start..start + fragment.len()) == Some(fragment.as_str()) {
+                    result.push(FragmentSpan {
+                        target: span.link.target,
+                        fragment,
+                        start,
+                    });
+                }
+            }
+            i = end;
+            continue;
+        }
+        let parsed = if bytes.get(i + 1) == Some(&b'[') {
+            try_parse_self_anchor_wikilink_at(cleaned, i)
+        } else {
+            try_parse_self_anchor_markdown_at(cleaned, original, i)
+        };
+        if let Some((anchor, end)) = parsed {
+            // The label may itself contain '#'; start at the destination.
+            let destination = if anchor.kind == LinkKind::Wikilink {
+                i + 2
+            } else {
+                i + find_label_close_bracket(&cleaned[i..]).unwrap_or(0) + 2
+            };
+            if let Some(hash) = cleaned[destination..end].find('#') {
+                let start = destination + hash + 1;
+                if original.get(start..start + anchor.fragment.len())
+                    == Some(anchor.fragment.as_str())
+                {
+                    result.push(FragmentSpan {
+                        target: String::new(),
+                        fragment: anchor.fragment,
+                        start,
+                    });
+                }
+            }
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    result
 }
 
 /// Try to parse a wikilink span starting at `start` (the first `[` of `[[`).

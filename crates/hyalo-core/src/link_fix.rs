@@ -428,9 +428,7 @@ pub fn is_prefix_bearing_site_absolute(target: &str, site_prefix: Option<&str>) 
 /// broken never looked at anchors at all. Mirrors `find`'s own
 /// `LinkInfo::broken_anchor` computation so every caller counts the same
 /// thing. Same-file fragments (`[b](#nope)`, indexed separately as
-/// `entry.self_anchors`) are not included — this counts only links that
-/// point *at another file's* heading, matching what `links fix`'s target
-/// resolution already covers.
+/// `entry.self_anchors`) are included against the source document headings.
 ///
 /// Returns `None` when `dir` cannot be canonicalized (matching
 /// [`detect_broken_links_from_index`]'s own empty-report fallback for the
@@ -447,6 +445,14 @@ pub fn count_broken_anchors(
     let canonical = canonicalize_vault_dir(dir).ok()?;
     let mut count = 0usize;
     for entry in index.entries() {
+        count += entry
+            .self_anchors
+            .iter()
+            .filter(|anchor| {
+                !crate::anchor::fragment_matches_headings(&anchor.fragment, &entry.sections)
+            })
+            .count();
+
         for (_, link) in &entry.links {
             let Some(fragment) = &link.fragment else {
                 continue;
@@ -3823,11 +3829,9 @@ See [broken](old-name.md) here.
     }
 
     #[test]
-    fn count_broken_anchors_ignores_same_file_fragments() {
-        // Same-file fragments live in `entry.self_anchors`, never
-        // `entry.links` — count_broken_anchors only walks `entry.links`, so a
-        // dead same-file anchor (find's own broken_anchor concern) must not
-        // be double-counted here regardless of how many self_anchors exist.
+    fn count_broken_anchors_includes_same_file_fragments() {
+        // Same-file fragments are counted once from their own inventory,
+        // agreeing with find and fragment repair previews.
         let entry = crate::index::IndexEntry {
             rel_path: "source.md".to_string(),
             modified: String::new(),
@@ -3853,7 +3857,7 @@ See [broken](old-name.md) here.
         let tmp = vault_with_files(&[("source.md", "")]);
         assert_eq!(
             count_broken_anchors(tmp.path(), &index, None, None),
-            Some(0)
+            Some(1)
         );
     }
 

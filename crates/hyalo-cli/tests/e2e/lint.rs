@@ -4422,3 +4422,144 @@ patterns = ".*"
         "text output must surface the malformed-schema violation: {stdout}"
     );
 }
+
+// Iteration 301: independently configurable heading-anchor coverage.
+fn anchor_lint_vault() -> TempDir {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(
+        tmp.path(),
+        "target.md",
+        "# Target\n\n## 6. Success metrics\n\n## Notes\n\n## Notes\n\n## Überschrift\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "---\ntitle: Source\ncustom_reference: '[[target#frontmatter-missing]]'\n---\n# Source\n\n[broken](target.md#success-metrics)\n[self](#absent)\n[[missing#also-absent]]\n[valid](target.md#notes-1)\n[unicode](target.md#%C3%BCberschrift)\n[block](target.md#^block)\n[external](https://example.com/#absent)\n`[code](target.md#absent)`\n<!-- [comment](target.md#absent) -->\n",
+    );
+    tmp
+}
+
+#[test]
+fn hyalo008_reports_absolute_lines_and_does_not_duplicate_missing_targets() {
+    let tmp = anchor_lint_vault();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint",
+            "--rule",
+            "HYALO008",
+            "--format",
+            "json",
+            "--detailed",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let results = &value["results"];
+    assert_eq!(results["warnings"], 3, "{value}");
+    assert_eq!(results["errors"], 0, "{value}");
+    let text = String::from_utf8(output.stdout).unwrap();
+    for fragment in ["#frontmatter-missing", "#success-metrics", "#absent"] {
+        assert!(text.contains(fragment), "{text}");
+    }
+    assert!(!text.contains("also-absent"), "{text}");
+    let group = &results["files"][0]["rule_groups"][0];
+    let lines: Vec<_> = group["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [3, 7, 8], "{value}");
+}
+
+#[test]
+fn hyalo008_strict_annotations_and_target_rule_independence() {
+    let tmp = anchor_lint_vault();
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args([
+            "lint", "--rule", "HYALO008", "--strict", "--format", "github",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("::error file=source.md,line=7,"), "{text}");
+    assert!(text.contains("#success-metrics"), "{text}");
+    let output = hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO006", "--format", "json"])
+        .output()
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["results"]["warnings"], 1, "{value}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("HYALO008"));
+}
+
+#[test]
+fn hyalo008_disabled_severity_and_frontmatter_options() {
+    let tmp = anchor_lint_vault();
+    for (config, expected) in [
+        ("[lint.rules.HYALO008]\nenabled = false\n", 0),
+        ("[lint.rules.HYALO008]\nseverity = \"warn\"\n", 3),
+        (
+            "[links]\nfrontmatter = false\n[lint.rules.HYALO008]\nseverity = \"warn\"\n",
+            2,
+        ),
+    ] {
+        write_schema_toml(tmp.path(), &format!("dir = \".\"\n{config}"));
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(["lint", "--rule", "HYALO008", "--strict", "--format", "json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["results"]["warnings"], expected, "{value}");
+    }
+}
+
+#[test]
+fn hyalo008_scoped_lint_keeps_vault_wide_heading_context() {
+    let tmp = anchor_lint_vault();
+    let list = write_list_file(&["source.md"]);
+    for scope in [
+        vec!["--file", "source.md"],
+        vec!["--glob", "source*"],
+        vec!["--files-from", list.path().to_str().unwrap()],
+    ] {
+        let output = hyalo_no_hints()
+            .current_dir(tmp.path())
+            .args(["lint", "--rule", "HYALO008", "--format", "json"])
+            .args(&scope)
+            .output()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["results"]["warnings"], 3, "{scope:?}: {value}");
+        assert_eq!(value["results"]["files_checked"], 1, "{scope:?}: {value}");
+    }
+}
+
+#[test]
+fn hyalo008_clean_templates_duplicate_slugs_and_scanner_exclusions() {
+    let tmp = TempDir::new().unwrap();
+    write_schema_toml(tmp.path(), "dir = \".\"\n");
+    write_md(tmp.path(), "template.md", "## {{ dynamic_title }}\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "# Source\n\n## Notes\n\n## Notes\n\n[duplicate](#notes-1)\n[templated](template.md#anything)\n[fragment](#%7B%7Banchor%7D%7D)\n[block](#^block)\n\n```md\n[ignored](#missing)\n```\n",
+    );
+    hyalo_no_hints()
+        .current_dir(tmp.path())
+        .args(["lint", "--rule", "HYALO008", "--strict"])
+        .assert()
+        .success();
+}

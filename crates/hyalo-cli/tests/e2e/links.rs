@@ -317,13 +317,9 @@ fn summary_reports_broken_anchors_distinctly_from_broken_links() {
     );
 }
 
-/// PR #251 review M3: `summary`'s `broken_anchors` count is gated on
-/// `broken == 0` — it must not run a second full link-resolution pass when
-/// there are already broken targets. The documented trade-off is that a
-/// vault with both reports `0` (omitted) for `broken_anchors` until the
-/// targets are fixed; this pins that behavior so it stays intentional.
+/// Iteration 301: mixed target and anchor failures retain both categories.
 #[test]
-fn summary_broken_anchors_is_gated_when_targets_are_also_broken() {
+fn summary_broken_anchors_are_counted_when_targets_are_also_broken() {
     let tmp = TempDir::new().unwrap();
     write_md(
         tmp.path(),
@@ -352,10 +348,10 @@ fn summary_broken_anchors_is_gated_when_targets_are_also_broken() {
         results.links.broken, 1,
         "the dead target must still be counted: {results:?}"
     );
-    assert!(
-        results.links.broken_anchors.is_none(),
-        "broken_anchors must be omitted (gated to 0) while a broken target \
-         exists, not silently re-resolve every link a second time: {results:?}"
+    assert_eq!(
+        results.links.broken_anchors,
+        Some(1),
+        "the dead anchor must be counted independently: {results:?}"
     );
 }
 

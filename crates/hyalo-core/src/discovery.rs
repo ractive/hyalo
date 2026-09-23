@@ -324,7 +324,7 @@ fn warn_skip_once(path: &Path, message: &str) {
 }
 
 /// True when any component of `rel` is a hidden (dot-prefixed) segment.
-fn has_hidden_component(rel: &str) -> bool {
+pub(crate) fn has_hidden_component(rel: &str) -> bool {
     rel.split('/')
         .any(|c| c.starts_with('.') && c != "." && c != "..")
 }
@@ -829,7 +829,8 @@ fn resolve_case_insensitive(dir: &Path, rel: &str) -> Option<(PathBuf, String)> 
         return None;
     }
 
-    let mut current = dir.to_path_buf();
+    let canonical_dir = dunce::canonicalize(dir).ok()?;
+    let mut current = canonical_dir.clone();
     let mut real_components: Vec<String> = Vec::new();
 
     for component in rel.split('/') {
@@ -837,6 +838,10 @@ fn resolve_case_insensitive(dir: &Path, rel: &str) -> Option<(PathBuf, String)> 
             return None;
         }
 
+        // Reject escaping symlink parents before inspecting their contents.
+        if !ensure_within_vault(&canonical_dir, &current).unwrap_or(false) {
+            return None;
+        }
         // Case-insensitive scan of `current` for a unique match. We always scan
         // (rather than short-circuiting on an exact-casing `is_file`) so that on
         // a case-insensitive host FS we still recover the *true* on-disk casing
@@ -1533,7 +1538,7 @@ pub fn resolve_link_from_source(
     case_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
     if let Some(index) = case_index.filter(|index| index.is_complete()) {
-        return crate::catalog::resolve(
+        return crate::catalog::resolve_with_explicit_paths(
             index,
             source_rel,
             kind,
@@ -1541,6 +1546,15 @@ pub fn resolve_link_from_source(
             crate::catalog::ResolutionOptions {
                 aliases: index.aliases_enabled(),
                 site_prefix,
+            },
+            |candidate| {
+                if !has_hidden_component(candidate) {
+                    return None;
+                }
+                match probe_existence(canonical_dir, candidate, Some(index), None, true) {
+                    Existence::Present(path) => Some(path),
+                    Existence::Absent | Existence::Unknown => None,
+                }
             },
         )
         .path()
@@ -2134,12 +2148,48 @@ fn probe_existence(
     rel_path: &str,
     case_index: Option<&CaseInsensitiveIndex>,
     existence_index: Option<&CaseInsensitiveIndex>,
+    explicit: bool,
 ) -> Existence {
-    if case_index.is_some() {
+    let indexed = if case_index.is_some() {
         indexed_existence(rel_path, case_index)
     } else {
         literal_existence(canonical_dir, rel_path, existence_index)
+    };
+    if matches!(indexed, Existence::Present(_)) || !explicit || !has_hidden_component(rel_path) {
+        return indexed;
     }
+    // Discovery completeness only covers its filtered inventory. A literal
+    // hidden path can name an existing attachment or Markdown file even when
+    // hidden/ignore/exclude rules omitted it. Do not insert that path into the
+    // document, stem, alias or fuzzy inventories, or probe inferred suffixes.
+    let canonical_case =
+        case_index.is_some_and(CaseInsensitiveIndex::case_insensitive_paths_enabled);
+    let probe = || explicit_hidden_path(canonical_dir, rel_path, canonical_case);
+    let found = match case_index.or(existence_index) {
+        Some(idx) => idx.cached_explicit_path(canonical_dir, rel_path, canonical_case, probe),
+        None => probe(),
+    };
+    found.map_or(Existence::Absent, Existence::Present)
+}
+
+/// A bounded lookup along the author's literal path; never walks a subtree or
+/// reads file contents. Case-enabled fallback inspects only the named parents.
+fn explicit_hidden_path(
+    canonical_dir: &Path,
+    rel_path: &str,
+    canonical_case: bool,
+) -> Option<String> {
+    let full = canonical_dir.join(rel_path);
+    if full.is_file() && ensure_within_vault(canonical_dir, &full).unwrap_or(false) {
+        if !canonical_case {
+            return Some(rel_path.to_owned());
+        }
+    } else if !canonical_case {
+        return None;
+    }
+    let (full, canonical) = resolve_case_insensitive(canonical_dir, rel_path)?;
+    (full.is_file() && ensure_within_vault(canonical_dir, &full).unwrap_or(false))
+        .then_some(canonical)
 }
 
 fn resolve_candidate_path(
@@ -2148,7 +2198,7 @@ fn resolve_candidate_path(
     case_index: Option<&CaseInsensitiveIndex>,
     existence_index: Option<&CaseInsensitiveIndex>,
 ) -> Option<String> {
-    match probe_existence(canonical_dir, candidate, case_index, existence_index) {
+    match probe_existence(canonical_dir, candidate, case_index, existence_index, false) {
         // The vault-wide index already resolves this path, so the file exists
         // and is inside the vault by construction — no `stat`, no
         // `canonicalize` (iter-277, BUG-13).
@@ -2374,7 +2424,7 @@ fn resolve_target_inner(
     // iter-278: the literal probe — `case_index: None`, which `classify_link`
     // runs for every link in the vault — answers from `existence_index` the
     // same way.
-    match probe_existence(canonical_dir, target, case_index, existence_index) {
+    match probe_existence(canonical_dir, target, case_index, existence_index, true) {
         Existence::Present(path) => return Some(path),
         Existence::Absent => {
             // Proof of absence for this literal path only; the `.md` /
@@ -3688,6 +3738,134 @@ mod tests {
         }
         idx.set_complete(true);
         idx
+    }
+
+    #[test]
+    fn explicit_hidden_paths_escape_discovery_without_expanding_inventory() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(
+            tmp.path(),
+            &[
+                "README.md",
+                ".gitignore",
+                ".github/workflows/Lint.yml",
+                ".hidden/Note.md",
+                ".hidden/my file.md",
+                "notes/.gitignore",
+            ],
+        );
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let idx = complete_index(&["README.md"]);
+        for target in [
+            ".gitignore",
+            ".github/workflows/Lint.yml",
+            ".hidden/Note.md",
+        ] {
+            assert_eq!(
+                resolve_target(&canonical, target, None, Some(&idx)).as_deref(),
+                Some(target)
+            );
+            assert_eq!(
+                resolve_target_literal(&canonical, target, None, Some(&idx)).as_deref(),
+                Some(target)
+            );
+        }
+        assert_eq!(
+            resolve_target(&canonical, ".hidden/my%20file.md", None, Some(&idx)).as_deref(),
+            Some(".hidden/my file.md")
+        );
+        assert_eq!(
+            resolve_target(&canonical, "/docs/.gitignore", Some("docs"), Some(&idx)).as_deref(),
+            Some(".gitignore")
+        );
+        for target in [
+            "Note",
+            "Note.md",
+            ".hidden/Note",
+            ".missing",
+            "../.gitignore",
+            "%2e%2e/.gitignore",
+        ] {
+            assert_eq!(
+                resolve_target(&canonical, target, None, Some(&idx)),
+                None,
+                "{target}"
+            );
+        }
+        assert_eq!(idx.len(), 1);
+        assert!(idx.lookup_stem_all("Note").is_empty());
+        assert!(!idx.contains_path(".gitignore"));
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/note.md",
+                crate::links::LinkKind::Markdown,
+                ".gitignore",
+                None,
+                Some(&idx)
+            )
+            .as_deref(),
+            Some("notes/.gitignore")
+        );
+        assert_eq!(
+            resolve_link_from_source(
+                &canonical,
+                "notes/note.md",
+                crate::links::LinkKind::Markdown,
+                ".github/workflows/Lint.yml",
+                None,
+                Some(&idx)
+            )
+            .as_deref(),
+            Some(".github/workflows/Lint.yml")
+        );
+    }
+
+    #[test]
+    fn explicit_hidden_paths_preserve_case_modes_and_refresh_with_new_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_files(tmp.path(), &[".Hidden/Note.md"]);
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let mut idx = complete_index(&[]);
+        assert_eq!(
+            resolve_target(&canonical, ".hidden/note.md", None, Some(&idx)).as_deref(),
+            Some(".Hidden/Note.md")
+        );
+        idx.set_case_insensitive_paths(false);
+        assert_eq!(
+            resolve_target(&canonical, ".hidden/note.md", None, Some(&idx)),
+            resolve_target(&canonical, ".hidden/note.md", None, None)
+        );
+        assert_eq!(
+            resolve_target(&canonical, ".Hidden/Note.md", None, Some(&idx)).as_deref(),
+            Some(".Hidden/Note.md")
+        );
+        fs::remove_file(canonical.join(".Hidden/Note.md")).unwrap();
+        let refreshed = complete_index(&[]);
+        assert_eq!(
+            resolve_target(&canonical, ".Hidden/Note.md", None, Some(&refreshed)),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_hidden_paths_reject_escaping_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        make_files(outside.path(), &["Note.md"]);
+        make_files(tmp.path(), &[".inside/Note.md"]);
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join(".escape")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join(".inside"), tmp.path().join(".alias")).unwrap();
+        let canonical = canonicalize_vault_dir(tmp.path()).unwrap();
+        let idx = complete_index(&[]);
+        for target in [".escape/Note.md", ".ESCAPE/note.md"] {
+            assert_eq!(resolve_target(&canonical, target, None, Some(&idx)), None);
+        }
+        assert_eq!(
+            resolve_target(&canonical, ".alias/Note.md", None, Some(&idx)).as_deref(),
+            Some(".alias/Note.md")
+        );
     }
 
     #[test]

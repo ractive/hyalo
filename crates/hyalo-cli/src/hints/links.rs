@@ -51,7 +51,11 @@ pub(super) fn hints_for_links_fix(ctx: &HintContext, data: &serde_json::Value) -
         .get("unapplied")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let applicable = fixable.saturating_sub(unapplied);
+    let anchor_fixable = data
+        .get("anchor_fixable")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let applicable = fixable.saturating_sub(unapplied) + anchor_fixable;
 
     if is_dry_run && applicable > 0 {
         hints.push(links_fix_apply_hint(

@@ -1097,6 +1097,22 @@ pub(crate) fn find_prepared(
                                 case_index,
                             )
                         };
+                        let mut kind = LinkKindLabel::classify(link, path.as_deref());
+                        // Existence-only paths omitted from discovery are attachments,
+                        // including hidden Markdown. Do not read their headings through
+                        // the scoped-query fallback or admit them as graph documents.
+                        if path.as_deref().is_some_and(|target| {
+                            index.get(target).is_none()
+                                && case_index.is_some_and(|catalog| {
+                                    catalog.is_complete() && !catalog.contains_path(target)
+                                })
+                        }) {
+                            // Use the resolved identity rather than resolving
+                            // the authored link again without existence-only
+                            // candidates. Scoped-out normal documents remain
+                            // in the complete catalog and keep heading fallback.
+                            kind = LinkKindLabel::Attachment;
+                        }
                         // L-21: broken-anchor check. Only runs when the TARGET
                         // resolved (`path` is `Some`) — a broken target is never
                         // also reported as a broken anchor. The target file's
@@ -1113,13 +1129,17 @@ pub(crate) fn find_prepared(
                         // memoized read of the target file, so all four
                         // spellings agree.
                         let (broken_anchor, suggested_fragment) = match (&path, &link.fragment) {
-                            (Some(target_path), Some(fragment)) => anchor_verdict(
-                                index,
-                                &anchor_sections_cache,
-                                &canonical_dir,
-                                target_path,
-                                fragment,
-                            ),
+                            (Some(target_path), Some(fragment))
+                                if kind != LinkKindLabel::Attachment =>
+                            {
+                                anchor_verdict(
+                                    index,
+                                    &anchor_sections_cache,
+                                    &canonical_dir,
+                                    target_path,
+                                    fragment,
+                                )
+                            }
                             _ => (false, None),
                         };
                         // iter-193: a target that walks above the vault root
@@ -1134,7 +1154,6 @@ pub(crate) fn find_prepared(
                             );
                         // iter-261 (UX-6): the reported bucket —
                         // wikilink/embed/markdown/external/attachment.
-                        let kind = LinkKindLabel::classify(link, path.as_deref());
                         // DEC-268 (iter-261): `suggested_fragment` — the full
                         // heading text when the dead fragment is the prefix of
                         // exactly one heading in the target file — is computed

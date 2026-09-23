@@ -267,29 +267,20 @@ pub fn links_fix(
         (filtered, ignored)
     };
 
-    // NEW-15 / UX-2 (dogfood pre3): `links` never looked at anchors at all,
-    // so a vault whose only defect was a dead heading anchor reported
-    // "Broken links: 0" — a summary an agent will trust. Gated on
-    // `broken.is_empty()`: the note only fires when targets are otherwise
-    // clean (matching the exact condition it exists to catch), which also
-    // means the extra resolution pass never runs on a vault that already has
-    // broken targets — the common case on a large, imperfect corpus.
-    // PR #251 review L6: `count_broken_anchors` returns `None` when the
-    // vault directory could not be canonicalized — serialized as JSON `null`
-    // (not `0`) below, so a caller checking `broken_anchors == 0` cannot
-    // mistake "could not check" for "genuinely clean". The `Some(0)` in the
-    // gated-off branch is a real, computed zero: no anchor check ran because
-    // targets are already broken (see the NEW-15/UX-2 gate comment above the
-    // JSON block), which is different from "we tried and failed to look."
-    // BUG-45 (iter-277): the count used to be gated on `broken.is_empty()`,
-    // so on any corpus with a broken target — the normal case on a large
-    // vault — `broken_anchors` was a hard-coded `0` that contradicted
-    // `find --broken-links` (MDN: 529 anchors reported as 0). The gate existed
-    // because the pass re-resolved every fragment-bearing link against the
-    // filesystem; since iter-277's PREFIX-1 that resolution is answered from
-    // the in-memory file set, so the pass is cheap enough to always run.
-    let broken_anchor_count: Option<usize> =
-        hyalo_core::link_fix::count_broken_anchors(dir, index, site_prefix, case_index);
+    // Target and fragment repairs have independent inventories; --apply writes
+    // both kinds when their conservative validation succeeds.
+    // Capture pre-apply anchor counts while respecting source scope and the
+    // same ignore-target policy before reading any source repair spans.
+    let mut anchor_report = hyalo_core::anchor_fix::plan_anchor_fixes_filtered(
+        dir,
+        index,
+        site_prefix,
+        case_index,
+        |source, target| {
+            in_scope(source) && !ignore_target.iter().any(|pattern| target.contains(pattern))
+        },
+    )?;
+    let broken_anchor_count = Some(anchor_report.broken);
 
     let matcher = LinkMatcher::from_index(index, threshold, site_prefix);
     // UX-3 (iter-274): when the `site_prefix` check above found that *no*
@@ -435,6 +426,13 @@ pub fn links_fix(
     all_fixes.extend(case_mismatches.iter().cloned());
     all_fixes.extend(relocations.iter().cloned());
     all_fixes.extend(alias_fixes.iter().cloned());
+
+    let anchor_apply = if dry_run {
+        hyalo_core::anchor_fix::AnchorApplyReport::default()
+    } else {
+        hyalo_core::anchor_fix::apply_anchor_fixes(dir, &anchor_report.fixes, &all_fixes)?
+    };
+    anchor_report.deferred.extend(anchor_apply.deferred);
 
     if dry_run {
         if !all_fixes.is_empty() {
@@ -619,15 +617,24 @@ pub fn links_fix(
     let templated_links = fix_report.templated.clone();
     let templated_count = templated_links.len();
 
+    modified_files.extend(anchor_apply.modified_files);
+    modified_files.sort();
+    modified_files.dedup();
     let output = LinksFixResult {
         broken: broken.len(),
         broken_anchors: broken_anchor_count,
+        anchor_fixable: anchor_report.fixes.len(),
+        anchor_fixes: &anchor_report.fixes,
+        anchors_applied: anchor_apply.applied.len(),
+        applied_anchor_fixes: &anchor_apply.applied,
+        anchors_deferred: anchor_report.deferred.len(),
+        deferred_anchor_fixes: &anchor_report.deferred,
         fixable: certain_fixes.len(),
         unfixable: unfixable_links.len(),
         ignored: ignored_count,
         fixes: &certain_fixes,
         unfixable_links: &unfixable_links,
-        applied: !dry_run && !applied_fixes.is_empty(),
+        applied: !dry_run && (!applied_fixes.is_empty() || !anchor_apply.applied.is_empty()),
         dry_run,
         applied_fixes: &applied_fixes,
         unapplied: unapplied_count,
@@ -657,7 +664,7 @@ pub fn links_fix(
     Ok((
         CommandOutcome::success(serde_json::to_value(&output).context("failed to serialize")?),
         modified_files,
-        failed_count > 0,
+        failed_count > 0 || anchor_apply.failed,
     ))
 }
 
@@ -2244,6 +2251,18 @@ struct LinksFixResult<'a> {
     broken: usize,
     /// Broken heading anchors, or null when checking was impossible.
     broken_anchors: Option<usize>,
+    /// Eligible fragment-only proposals before application.
+    anchor_fixable: usize,
+    /// Exact fragment-only repair proposals.
+    anchor_fixes: &'a [hyalo_core::anchor_fix::AnchorFixPlan],
+    /// Number of fragment repairs durably published.
+    anchors_applied: usize,
+    /// Published fragment repairs, separate from file-target repairs.
+    applied_anchor_fixes: &'a [hyalo_core::anchor_fix::AnchorFixPlan],
+    /// Broken or proposed anchors deferred with a reason.
+    anchors_deferred: usize,
+    /// Explicit reasons an anchor was not rewritten.
+    deferred_anchor_fixes: &'a [hyalo_core::anchor_fix::AnchorFixDeferral],
     /// Number of fixable.
     fixable: usize,
     /// Number of unfixable.

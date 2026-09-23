@@ -8,7 +8,9 @@
 use super::{ExtLintOptions, lint_files_extended, validate_schema_config, validate_views};
 use crate::output::CommandOutcome;
 use anyhow::Result;
-use hyalo_mdlint::schema::{FileLintResult, FixMode, RULE_ID_BROKEN_LINK, Severity};
+use hyalo_mdlint::schema::{
+    FileLintResult, FixMode, RULE_ID_BROKEN_ANCHOR, RULE_ID_BROKEN_LINK, Severity,
+};
 
 /// ARCH-1 (iter-225): the `hyalo lint` dispatch arm, extracted verbatim from
 /// `dispatch.rs` so its warning policy (`[lint] ignore` notices), profile
@@ -389,26 +391,23 @@ pub(crate) fn run(
             None => ctx.md_lint.max_files(),
         };
 
-        // HYALO006 (broken-link): build the vault-wide resolution context
-        // ONCE per invocation, but only when the rule will actually run —
-        // i.e. it is enabled (no `[lint.rules.HYALO006] enabled = false`)
-        // AND selected by any `--rule` / `--rule-prefix` filter. Building it
-        // means seeding a case/stem index (from the snapshot when `--index`
-        // is active, else a single disk walk) — never per file.
-        let hyalo006_enabled = ctx
-            .md_lint
-            .rules
-            .get(self::RULE_ID_BROKEN_LINK)
-            .and_then(hyalo_mdlint::RuleOverride::enabled)
-            .unwrap_or(true);
-        let hyalo006_selected = match (&rule, &rule_prefix) {
-            (Some(r), _) => r == self::RULE_ID_BROKEN_LINK,
-            (None, Some(p)) => self::RULE_ID_BROKEN_LINK
-                .to_ascii_uppercase()
-                .starts_with(&p.to_ascii_uppercase()),
-            (None, None) => true,
+        // Both vault-aware rules share resolution context. Only the anchor
+        // rule enables heading work, and filters/disabled rules avoid it entirely.
+        let link_rule_selected = |id: &str| {
+            ctx.md_lint
+                .rules
+                .get(id)
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true)
+                && match (&rule, &rule_prefix) {
+                    (Some(r), _) => r == id,
+                    (None, Some(p)) => id.to_ascii_uppercase().starts_with(&p.to_ascii_uppercase()),
+                    (None, None) => true,
+                }
         };
-        let link_lint_ctx = if hyalo006_enabled && hyalo006_selected {
+        let targets_selected = link_rule_selected(RULE_ID_BROKEN_LINK);
+        let anchors_selected = link_rule_selected(RULE_ID_BROKEN_ANCHOR);
+        let link_lint_ctx = if targets_selected || anchors_selected {
             let case_index = maybe_case_index(
                 ctx.case_insensitive_mode,
                 dir,
@@ -422,6 +421,17 @@ pub(crate) fn run(
                 case_index,
                 ctx.frontmatter_link_props.map(<[String]>::to_vec),
             )
+            .map(|context| {
+                if anchors_selected {
+                    context.with_anchors(
+                        (*snapshot_index)
+                            .as_ref()
+                            .map(|index| index as &dyn hyalo_core::index::VaultIndex),
+                    )
+                } else {
+                    context
+                }
+            })
         } else {
             None
         };

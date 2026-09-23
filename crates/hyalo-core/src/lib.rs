@@ -23,6 +23,7 @@
 //! — only the re-exported boundary items.
 
 pub mod anchor;
+pub mod anchor_fix;
 pub mod auto_link;
 pub mod bm25;
 pub(crate) mod case_index;

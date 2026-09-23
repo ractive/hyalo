@@ -420,3 +420,115 @@ title: Linker
         "no stale `foo` spelling may remain:\n{written}"
     );
 }
+
+// Iteration 301: explicit hidden paths are existence targets, not discovered notes.
+fn hidden_link_vault() -> TempDir {
+    let tmp = TempDir::new().expect("tempdir");
+    for path in [".github/workflows", ".hidden", ".excluded", "notes", ".git"] {
+        std::fs::create_dir_all(tmp.path().join(path)).expect("fixture directory");
+    }
+    std::fs::write(tmp.path().join(".gitignore"), ".hidden/\nignored.md\n").unwrap();
+    for name in ["lint-kb", "no-binaries", "likec4-pages"] {
+        std::fs::write(
+            tmp.path().join(format!(".github/workflows/{name}.yml")),
+            "name: fixture\n",
+        )
+        .unwrap();
+    }
+    write_md(
+        tmp.path(),
+        ".hidden/secret.md",
+        "---\ntitle: Secret\naliases: [HiddenAlias]\n---\n# Secret\n",
+    );
+    write_md(tmp.path(), ".excluded/other.md", "# Excluded\n");
+    write_md(tmp.path(), "ignored.md", "# Ignored\n");
+    write_md(tmp.path(), "excluded.md", "# Excluded\n");
+    std::fs::write(
+        tmp.path().join(".hyalo.toml"),
+        "[scan]\nexclude = [\".excluded/**\", \"excluded.md\"]\n",
+    )
+    .unwrap();
+    write_md(
+        tmp.path(),
+        "README.md",
+        "---\ntitle: README\n---\n# README\n\n[ignore](.gitignore)\n[lint](.github/workflows/lint-kb.yml)\n[binaries](.github/workflows/no-binaries.yml)\n[pages](.github/workflows/likec4-pages.yml)\n[hidden](.hidden/secret.md)\n[excluded](.excluded/other.md)\n",
+    );
+    write_md(
+        tmp.path(),
+        "notes/note.md",
+        "---\ntitle: Note\n---\n# Note\n\n[ignore](../.gitignore)\n[lint](../.github/workflows/lint-kb.yml)\n[root](.github/workflows/no-binaries.yml)\n",
+    );
+    tmp
+}
+
+#[test]
+fn hidden_explicit_targets_agree_across_disk_and_snapshot_commands() {
+    let tmp = hidden_link_vault();
+    for indexed in [false, true] {
+        if indexed {
+            run_json(&tmp, &["create-index"]);
+        }
+        let index_args: &[&str] = if indexed { &["--index"] } else { &[] };
+        for args in [
+            vec!["find", "--broken-links"],
+            vec!["lint", "--rule", "HYALO006"],
+            vec!["summary"],
+            vec!["links", "fix", "--dry-run"],
+        ] {
+            let mut command = args.clone();
+            command.extend_from_slice(index_args);
+            let json = run_json(&tmp, &command);
+            match args[0] {
+                "find" => assert_eq!(json["total"], 0, "{json}"),
+                "lint" => assert_eq!(json["results"]["violations"], 0, "{json}"),
+                "summary" => {
+                    assert_eq!(
+                        json["results"]["files"]["total"], 2,
+                        "hidden and ignored notes stay undiscovered: {json}"
+                    );
+                    assert_eq!(json["results"]["links"]["broken"], 0, "{json}");
+                }
+                "links" => {
+                    assert_eq!(json["results"]["broken"], 0, "{json}");
+                    assert_eq!(json["results"]["fixable"], 0, "{json}");
+                }
+                _ => unreachable!(),
+            }
+        }
+        let mut args = vec!["find", "--fields", "links"];
+        args.extend_from_slice(index_args);
+        let json = run_json(&tmp, &args);
+        assert_eq!(json["total"], 2, "{json}");
+        assert!(
+            json["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|file| file["links"].as_array().unwrap())
+                .all(|link| link["path"].is_string()),
+            "{json}"
+        );
+    }
+    // Snapshot omission never freezes hidden-file existence; another invocation
+    // checks current disk evidence even while source entries come from snapshot.
+    std::fs::remove_file(tmp.path().join(".gitignore")).unwrap();
+    let json = run_json(&tmp, &["find", "--broken-links", "--index"]);
+    assert_eq!(json["total"], 2, "{json}");
+    let json = run_json(&tmp, &["links", "fix", "--apply", "--index"]);
+    assert_eq!(json["results"]["broken"], 2, "{json}");
+}
+
+#[test]
+fn hidden_missing_controls_and_bare_names_remain_broken() {
+    let tmp = hidden_link_vault();
+    write_md(
+        tmp.path(),
+        "controls.md",
+        "---\ntitle: Controls\n---\n# Controls\n\n[missing](.hidden/missing.md)\n[[secret]]\n[[HiddenAlias]]\n[ignored](ignored.md)\n[excluded](excluded.md)\n",
+    );
+    let json = run_json(&tmp, &["lint", "--rule", "HYALO006"]);
+    assert_eq!(json["results"]["violations"], 5, "{json}");
+    let json = run_json(&tmp, &["links", "fix", "--dry-run"]);
+    assert_eq!(json["results"]["broken"], 5, "{json}");
+    assert_eq!(json["results"]["fixable"], 0, "{json}");
+}
