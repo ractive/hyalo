@@ -198,6 +198,15 @@ hyalo mv backlog/my-item.md --to backlog/done/my-item.md --format text          
 
 ## Broken Link Detection & Repair
 
+`HYALO006` lints file targets; `HYALO008` lints heading anchors. Both default to
+warnings and are promoted by `lint --strict` unless severity is explicitly configured.
+Explicit hidden paths can resolve without joining document discovery.
+`links fix` previews unique numbered-heading fragment proposals separately from target
+repairs, with deferral reasons for ambiguous or unsupported destinations. Ordinary
+`links fix --apply` writes safe target and anchor repairs together. `--apply-fuzzy`
+additionally enables eligible fuzzy file-target repairs; broader fuzzy anchor guesses
+remain advisory. Broken counts describe the pre-apply scan.
+
 ```bash
 # Detect broken links with proposed fixes
 hyalo links fix --format text

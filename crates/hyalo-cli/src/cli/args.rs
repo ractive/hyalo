@@ -1989,13 +1989,15 @@ Repeatable (AND).\n\
             relocations is a bare-stem link (no directory in the written target) whose stem \
             resolved to a file in a different directory — a move, not a casing fix, so it is \
             reported apart from case_mismatches (both are written by plain --apply).\n\
-            ANCHORS: broken_anchors is always the count find --broken-links computes — the links \
-            whose target resolves but whose #fragment names no heading. It used to be reported only \
-            when broken was 0, so on any corpus with a broken target it was a hard-coded 0 that \
-            contradicted find (iter-277, BUG-45); the check is answered from the in-memory file set \
-            and costs nothing to always run. null (never 0) means the vault directory could not be \
-            canonicalized, so the check never ran. `find --broken-links --strict` is the CI gate for \
-            anchors; this command does not fix them (NEW-15 / UX-2).\n\
+            ANCHORS: broken_anchors counts broken heading fragments before applying repairs, \
+            including same-file anchors, within the selected scope and ignore-target policy. \
+            Missing targets never also count as broken anchors. anchor_fixable/anchor_fixes \
+            reports unique numbered-heading proposals with source line, old/new fragment and heading. \
+            Plain --apply writes eligible numbered-heading repairs alongside file-target fixes. \
+            anchors_applied/applied_anchor_fixes records published fragment edits separately from \
+            file-target repairs. anchors_deferred/deferred_anchor_fixes explains ambiguous, \
+            unsupported or stale proposals. Use lint --rule HYALO008 --strict to gate anchors, \
+            or find --broken-links --strict to gate both targets and anchors.\n\
             CONFIDENCE FLOOR: fuzzy_min_confidence reports the floor in force (0.8 unless \
             --min-confidence or `[links] fuzzy_min_confidence` moves it) and fuzzy_below_floor \
             counts the proposals it suppresses — those have a candidate but are never written, \
@@ -2074,6 +2076,12 @@ Repeatable (AND).\n\
               - HYALO007: frontmatter `title` is a list or a map, so it cannot be promoted\n\
                          to the `find --fields title` value (usually a quoting typo such as\n\
                          `title: [Draft] Notes`) \u{2014} the item falls back to its first H1\n\
+              - HYALO006: broken file targets (warning; strict promotes to error)\n\
+              - HYALO008: broken heading anchors on resolved document targets, including\n\
+                         same-file and configured frontmatter wikilinks (warning; strict\n\
+                         promotes unless severity is explicitly configured). Scoped lint\n\
+                         keeps vault-wide targets. Repair with links fix after reviewing\n\
+                         the preview and applying with --apply.\n\
               - HYALO005: frontmatter that cannot be parsed (invalid YAML, duplicate keys,\n\
                          oversized scalar) — error by default; the file still counts in\n\
                          `files_checked` so a corrupt file can never leave a green lint.\n\

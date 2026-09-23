@@ -1246,6 +1246,77 @@ fn templated_heading_skip_holds_on_the_index_path() {
 }
 
 #[test]
+fn iteration301_hidden_markdown_is_attachment_without_anchor_work() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), ".hidden.md", "# Hidden\n");
+    write_md(
+        tmp.path(),
+        "source.md",
+        "# Source\n\n[hidden](.hidden.md#missing)\n",
+    );
+    let dir = tmp.path().to_str().unwrap();
+    for scope in [None, Some("--file"), Some("--glob")] {
+        let mut command = hyalo_no_hints();
+        command.args([
+            "--dir", dir, "find", "--fields", "links", "--format", "json",
+        ]);
+        if let Some(flag) = scope {
+            command.args([flag, "source.md"]);
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["total"], 1, "{json}");
+        let link = &json["results"][0]["links"][0];
+        assert_eq!(link["path"], ".hidden.md", "{json}");
+        assert_eq!(link["kind"], "attachment", "{json}");
+        assert_ne!(link["broken_anchor"], true, "{json}");
+    }
+}
+
+#[test]
+fn iteration301_summary_retains_mixed_target_and_anchor_findings() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "target.md",
+        "# Target\n\n## 6. Success metrics\n",
+    );
+    write_md(
+        tmp.path(),
+        "source.md",
+        "# Source\n\n[missing](absent.md#missing)\n[anchor](target.md#success-metrics)\n",
+    );
+    let dir = tmp.path().to_str().unwrap();
+    for indexed in [false, true] {
+        if indexed {
+            assert!(
+                hyalo_no_hints()
+                    .args(["--dir", dir, "create-index"])
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let mut command = hyalo_no_hints();
+        command.args(["--dir", dir, "summary", "--format", "json"]);
+        if indexed {
+            command.arg("--index");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["results"]["links"]["broken"], 1, "{json}");
+        assert_eq!(json["results"]["links"]["broken_anchors"], 1, "{json}");
+    }
+}
+
+#[test]
 fn templated_heading_vault_reports_no_broken_anchors_in_summary() {
     // `summary`'s broken-anchor count routes through the same matcher
     // (`count_broken_anchors`), so the DEC-099 skip must move both numbers.

@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Mode for case-insensitive link resolution fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,8 +74,9 @@ pub struct CaseInsensitiveIndex {
     /// lookups have failed, so a real filename always wins, and an alias
     /// claimed by two notes is ambiguous rather than resolved.
     alias_map: HashMap<String, Vec<String>>,
-    /// Whether this index holds *every* file of the vault (notes and
-    /// attachments), so a miss is proof of absence.
+    /// Whether this index holds the complete discovered inventory (notes and
+    /// attachments). Hidden paths may still be omitted by discovery; explicit
+    /// hidden-path existence is checked separately without expanding the index.
     ///
     /// Set by the vault-wide builders (a full disk walk or a snapshot load).
     /// When it is `true`, [`crate::discovery::resolve_target`] answers
@@ -86,7 +87,13 @@ pub struct CaseInsensitiveIndex {
     /// every probe goes to disk exactly as before.
     complete: bool,
     aliases_enabled: bool,
+    /// Invocation-local explicit hidden-path probes, separate from discovery
+    /// maps so omitted files never become stems, aliases, or fuzzy candidates.
+    explicit_paths: Arc<Mutex<ExplicitPathCache>>,
 }
+
+type ExplicitPathCache = HashMap<(PathBuf, String, bool), Option<String>>;
+const MAX_EXPLICIT_PATH_PROBES: usize = 4096;
 
 /// The map key for `s`, borrowed when `s` is already the key (iter-278).
 ///
@@ -120,6 +127,7 @@ impl CaseInsensitiveIndex {
             alias_map: HashMap::new(),
             complete: false,
             aliases_enabled: false,
+            explicit_paths: Arc::default(),
         }
     }
 
@@ -157,8 +165,9 @@ impl CaseInsensitiveIndex {
         self.aliases_enabled
     }
 
-    /// Declare that this index holds every file in the vault, so a lookup miss
-    /// means the file does not exist (iter-277, BUG-13).
+    /// Declare that this index holds every discovered file in the vault.
+    /// Ordinary misses prove absence; omitted explicit hidden paths still
+    /// require bounded filesystem probes (iter-301).
     ///
     /// Only the vault-wide builders may set this: a full `discover_files` +
     /// `discover_attachments` walk, or a snapshot load. An index seeded from a
@@ -168,10 +177,37 @@ impl CaseInsensitiveIndex {
         self.complete = complete;
     }
 
-    /// Whether a lookup miss in this index proves the file is absent.
+    /// Whether the index covers the entire discovery scope.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// Reuse hidden-path existence evidence for this invocation only. The
+    /// cache has a fixed upper bound; ordinary indexed hits never enter it.
+    pub(crate) fn cached_explicit_path(
+        &self,
+        canonical_dir: &Path,
+        rel_path: &str,
+        canonical_case: bool,
+        probe: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        let key = (
+            canonical_dir.to_path_buf(),
+            rel_path.to_owned(),
+            canonical_case,
+        );
+        let Ok(mut cache) = self.explicit_paths.lock() else {
+            return probe();
+        };
+        if let Some(cached) = cache.get(&key) {
+            return cached.clone();
+        }
+        let result = probe();
+        if cache.len() < MAX_EXPLICIT_PATH_PROBES {
+            cache.insert(key, result.clone());
+        }
+        result
     }
 
     /// Whether the vault contains this path in **any** casing.
@@ -825,6 +861,36 @@ mod tests {
     use super::*;
 
     // ---- fold_key (iter-278) ----
+
+    #[test]
+    fn explicit_path_cache_bounds_memory_and_shares_repeated_probes() {
+        let idx = CaseInsensitiveIndex::new();
+        let calls = std::cell::Cell::new(0);
+        let dir = Path::new("vault");
+        for _ in 0..10 {
+            assert_eq!(
+                idx.cached_explicit_path(dir, ".missing", false, || {
+                    calls.set(calls.get() + 1);
+                    None
+                }),
+                None
+            );
+        }
+        assert_eq!(calls.get(), 1);
+        for n in 0..MAX_EXPLICIT_PATH_PROBES + 10 {
+            idx.cached_explicit_path(dir, &format!(".hidden/{n}"), false, || None);
+        }
+        assert_eq!(
+            idx.explicit_paths.lock().unwrap().len(),
+            MAX_EXPLICIT_PATH_PROBES
+        );
+        // Ordinary indexed reads do not add filesystem-probe cache entries.
+        assert!(!idx.contains_path("ordinary.md"));
+        assert_eq!(
+            idx.explicit_paths.lock().unwrap().len(),
+            MAX_EXPLICIT_PATH_PROBES
+        );
+    }
 
     #[test]
     fn fold_key_borrows_a_key_that_is_already_folded() {

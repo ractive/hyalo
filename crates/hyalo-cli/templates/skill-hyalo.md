@@ -469,6 +469,20 @@ What follows is only what those pages do not say — the behaviour that surprise
 
 ### Pitfalls
 
+- **Hidden paths resolve without discovery.** Explicit Markdown paths such as
+  `.gitignore` and `.github/workflows/lint.yml` can resolve by in-vault existence,
+  including hidden paths omitted by scan exclusions or gitignore. They do not enter
+  document discovery, bare-name/alias lookup, or fuzzy candidates. Nonhidden excluded
+  targets retain the existing scan policy; escaping symlinks never resolve in-vault.
+- **Anchor lint and repair have separate controls.** `HYALO006` checks file targets;
+  `HYALO008` checks heading fragments (warning by default, promoted by `--strict`
+  unless severity is explicitly configured). Scoped lint keeps vault-wide targets.
+  `links fix --dry-run` proposes a numbered-heading repair only for one eligible
+  match, such as `#success-metrics` to `#6-success-metrics`. Ordinary `links fix --apply`
+  writes safe target and anchor repairs together. `--apply-fuzzy` additionally enables
+  eligible fuzzy file-target repairs; broader fuzzy anchor guesses remain advisory.
+  Ambiguous or unsupported destinations are deferred with a reason. Broken counts
+  describe the pre-apply scan; anchor proposals and outcomes have separate fields.
 - **`mv` has two modes.** Single-file mode writes immediately (`--dry-run` to preview;
   `--apply` is rejected there). Batch mode (`--glob`/`--property`/`--tag`/`--type`)
   defaults to dry-run and needs `--apply` to commit. A batch **dry run** lists destination

@@ -116,8 +116,9 @@ pub enum LinkKindLabel {
     Markdown,
     /// `[text](https://…)`, `[[obsidian://…]]` — a URI, resolved by nothing.
     External,
-    /// A link that resolved to a vault file which is **not** markdown — an
-    /// image, a PDF, an Obsidian `.base`. Never broken, never a graph edge.
+    /// A resolved non-document file: an image, PDF, Obsidian `.base`, or an
+    /// explicit hidden path omitted from discovery (including Markdown).
+    /// Never broken, never a graph edge.
     Attachment,
     /// A `[[wikilink]]` written inside a YAML frontmatter value — `related:`,
     /// `categories: ["[[Books]]"]`, `type: "[[Author]]"` (iter-262, BUG-1).

@@ -14,10 +14,11 @@ use hyalo_core::frontmatter::{check_mtime, read_mtime};
 use hyalo_core::scanner;
 use hyalo_core::schema::{PropertyConstraint, SchemaConfig, TypeSchema};
 use hyalo_mdlint::schema::{
-    FixAction, FixMode, RULE_ID_BROKEN_LINK, RULE_ID_FRONTMATTER_PARSE_ERROR, Severity,
-    VIOLATION_KIND_CONSTRAINT_VIOLATION, VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT,
-    VIOLATION_KIND_MISSING_TYPE, VIOLATION_KIND_UNDECLARED_PROPERTY, Violation, apply_fixes,
-    terse_root_cause, validate_properties, validate_required_sections,
+    FixAction, FixMode, RULE_ID_BROKEN_ANCHOR, RULE_ID_BROKEN_LINK,
+    RULE_ID_FRONTMATTER_PARSE_ERROR, Severity, VIOLATION_KIND_CONSTRAINT_VIOLATION,
+    VIOLATION_KIND_MISSING_REQUIRED_NO_DEFAULT, VIOLATION_KIND_MISSING_TYPE,
+    VIOLATION_KIND_UNDECLARED_PROPERTY, Violation, apply_fixes, terse_root_cause,
+    validate_properties, validate_required_sections,
 };
 use std::borrow::Cow;
 use std::path::Path;
@@ -1083,59 +1084,49 @@ fn lint_one_file_extended_with_after_frontmatter(
             .push(diag_to_violation(d, false));
     }
 
-    // HYALO006 (broken-link) — vault-aware rule. Runs only when a shared
-    // LinkLintContext was built for this invocation (it is skipped when the
-    // rule is disabled or filtered out, so no context is constructed). Each of
-    // the file's links is resolved through the single shared resolver entry
-    // point; unresolved ones become findings. Severity follows the
-    // configurable / --strict pattern used by the other HYALO rules.
+    // Vault-aware target and anchor checks keep independent filters and
+    // severity overrides while sharing invocation-wide resolution/heading data.
     if let Some(link_ctx) = link_ctx {
-        let base_sev = md_lint_config
-            .rules
-            .get(RULE_ID_BROKEN_LINK)
-            .and_then(hyalo_mdlint::RuleOverride::severity)
-            .map_or("warn", |s| {
-                if s.eq_ignore_ascii_case("error") {
-                    "error"
-                } else {
-                    "warn"
-                }
-            });
-        // --strict promotes the default warn to error (unless the user pinned
-        // an explicit severity via `[lint.rules.HYALO006] severity`).
-        let has_explicit_sev = md_lint_config
-            .rules
-            .get(RULE_ID_BROKEN_LINK)
-            .and_then(hyalo_mdlint::RuleOverride::severity)
-            .is_some();
-        let severity = if strict && !has_explicit_sev {
-            "error"
-        } else {
-            base_sev
-        };
-        for f in
-            hyalo_mdlint::profiles::link::check_broken_links(link_ctx, content.as_bytes(), rel_path)
-        {
-            violations_by_rule
-                .entry(RULE_ID_BROKEN_LINK.to_owned())
-                .or_default()
-                .push(InternalViolation {
-                    // iter-211 / BUG-9: HYALO006 scans the WHOLE file (frontmatter
-                    // included) through `scan_slice_multi`, whose visitor line
-                    // numbers are already file-absolute. The body-rule
-                    // `to_file_line` translation must NOT be applied here — doing
-                    // so added the frontmatter length a second time, so a link on
-                    // line 5 of a file with 3 frontmatter lines was reported at
-                    // line 8. MD rules keep `to_file_line` because they lint the
-                    // post-frontmatter slice.
-                    line: f.line,
-                    column: 1,
-                    message: f.message,
-                    severity: severity.to_owned(),
-                    fix: None,
-                    fixed: false,
-                    autofixable: None,
-                });
+        for rule_id in [RULE_ID_BROKEN_LINK, RULE_ID_BROKEN_ANCHOR] {
+            let override_config = md_lint_config.rules.get(rule_id);
+            if !override_config
+                .and_then(hyalo_mdlint::RuleOverride::enabled)
+                .unwrap_or(true)
+                || (!rule_filter.is_empty() && !rule_filter.iter().any(|id| id == rule_id))
+            {
+                continue;
+            }
+            let explicit_severity = override_config.and_then(hyalo_mdlint::RuleOverride::severity);
+            let severity = explicit_severity.unwrap_or(if strict { "error" } else { "warn" });
+            let findings = if rule_id == RULE_ID_BROKEN_LINK {
+                hyalo_mdlint::profiles::link::check_broken_links(
+                    link_ctx,
+                    content.as_bytes(),
+                    rel_path,
+                )
+            } else {
+                hyalo_mdlint::profiles::link::check_broken_anchors(
+                    link_ctx,
+                    content.as_bytes(),
+                    rel_path,
+                )
+            };
+            for finding in findings {
+                violations_by_rule
+                    .entry(rule_id.to_owned())
+                    .or_default()
+                    .push(InternalViolation {
+                        // The shared scanner sees whole-file bytes, so these
+                        // source lines already include the frontmatter offset.
+                        line: finding.line,
+                        column: 1,
+                        message: finding.message,
+                        severity: severity.to_ascii_lowercase(),
+                        fix: None,
+                        fixed: false,
+                        autofixable: None,
+                    });
+            }
         }
     }
 

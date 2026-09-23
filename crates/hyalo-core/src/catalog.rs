@@ -80,6 +80,20 @@ pub fn resolve(
     target: &str,
     options: ResolutionOptions<'_>,
 ) -> Resolution {
+    resolve_with_explicit_paths(index, source, kind, target, options, |_| None)
+}
+
+/// Read-side adapter for explicitly named files omitted from discovery. The
+/// supplied lookup must not expand the catalog: such files are attachments,
+/// even when their extension is Markdown, because they are not scanned notes.
+pub(crate) fn resolve_with_explicit_paths(
+    index: &CaseInsensitiveIndex,
+    source: &str,
+    kind: LinkKind,
+    target: &str,
+    options: ResolutionOptions<'_>,
+    explicit_path: impl Fn(&str) -> Option<String>,
+) -> Resolution {
     if crate::links::is_external_target(target) {
         return Resolution::External;
     }
@@ -122,7 +136,7 @@ pub fn resolve(
         if crate::discovery::normalized_target_escapes_vault(candidate) {
             return Resolution::External;
         }
-        let resolved = resolve_path(index, candidate, trailing);
+        let resolved = resolve_path(index, candidate, trailing, &explicit_path);
         if !matches!(resolved, Resolution::Missing) {
             return resolved;
         }
@@ -141,7 +155,7 @@ pub fn resolve(
             }
         }
     }
-    if crate::discovery::has_non_md_extension(raw) {
+    if crate::discovery::has_non_md_extension(raw) || crate::discovery::has_hidden_component(raw) {
         Resolution::Attachment(None)
     } else {
         Resolution::Missing
@@ -182,10 +196,18 @@ fn literal(index: &CaseInsensitiveIndex, path: &str) -> Resolution {
     }
     candidates_result(index.lookup_all(path))
 }
-fn resolve_path(index: &CaseInsensitiveIndex, target: &str, trailing: bool) -> Resolution {
+fn resolve_path(
+    index: &CaseInsensitiveIndex,
+    target: &str,
+    trailing: bool,
+    explicit_path: &impl Fn(&str) -> Option<String>,
+) -> Resolution {
     let direct = literal(index, target);
     if !matches!(direct, Resolution::Missing) {
         return direct;
+    }
+    if let Some(path) = explicit_path(target) {
+        return Resolution::Attachment(Some(path));
     }
     if strip_md(target) != target || crate::discovery::has_non_md_extension(target) {
         return Resolution::Missing;
@@ -206,6 +228,38 @@ fn resolve_path(index: &CaseInsensitiveIndex, target: &str, trailing: bool) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn omitted_hidden_paths_are_not_document_graph_edges() {
+        let mut index = CaseInsensitiveIndex::new();
+        index.set_complete(true);
+        let options = ResolutionOptions {
+            aliases: false,
+            site_prefix: None,
+        };
+        for target in [".gitignore", ".hidden/note.md", ".github/lint.yml"] {
+            assert_eq!(
+                resolve(&index, "README.md", LinkKind::Markdown, target, options),
+                Resolution::Attachment(None)
+            );
+        }
+        let result = resolve_with_explicit_paths(
+            &index,
+            "notes/note.md",
+            LinkKind::Markdown,
+            ".gitignore",
+            options,
+            |candidate| {
+                (candidate == "notes/.gitignore" || candidate == ".gitignore")
+                    .then(|| candidate.to_owned())
+            },
+        );
+        assert_eq!(
+            result,
+            Resolution::Attachment(Some("notes/.gitignore".to_owned()))
+        );
+        assert_eq!(index.len(), 0);
+    }
+
     #[test]
     fn source_relative_precedence_and_explicit_policy() {
         let mut index = CaseInsensitiveIndex::new();

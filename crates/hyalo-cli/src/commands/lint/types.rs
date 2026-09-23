@@ -252,10 +252,10 @@ pub struct ExtLintOptions<'a> {
     /// globs (e.g. `**/index.md`) fold case the same way `hyalo okf index`
     /// does on case-insensitive filesystems.
     pub case_insensitive: bool,
-    /// Vault-wide context for the HYALO006 broken-link rule, built ONCE per
+    /// Vault-wide context for the HYALO006 target and HYALO008 anchor rules, built ONCE per
     /// invocation in the dispatch arm (link graph / case index) and shared by
-    /// reference across the rayon workers. `None` when HYALO006 is disabled or
-    /// filtered out, so no graph is built and the rule never runs.
+    /// reference across the rayon workers. `None` when both rules are disabled or
+    /// filtered out; heading work is enabled only when HYALO008 is selected.
     pub link_lint_ctx: Option<hyalo_mdlint::profiles::link::LinkLintContext>,
     /// Files dropped from this run by `[lint] ignore`, regardless of scope
     /// (bare sweep, `--glob`, or `--file`). UX-1 (dogfood pre3): surfaced in

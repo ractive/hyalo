@@ -2798,6 +2798,17 @@ pub fn scan_file_sections(full_path: &Path) -> Result<Vec<OutlineSection>> {
     Ok(scanner.into_sections())
 }
 
+/// Parse heading outlines from already-read file bytes using the same scanner
+/// as the disk and snapshot index paths.
+///
+/// # Errors
+/// Returns an error if the source cannot be scanned.
+pub fn scan_slice_sections(content: &[u8]) -> Result<Vec<OutlineSection>> {
+    let mut scanner = SectionScanner::new();
+    crate::scanner::scan_slice_multi(content, &mut [&mut scanner])?;
+    Ok(scanner.into_sections())
+}
+
 /// Visitor that builds outline sections from body events.
 struct SectionScanner {
     current: SectionBuilder,

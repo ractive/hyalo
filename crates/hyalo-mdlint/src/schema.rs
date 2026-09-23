@@ -129,6 +129,10 @@ pub const RULE_ID_FRONTMATTER_PARSE_ERROR: &str = "HYALO005";
 /// [`hyalo_mdlint::profiles::link`] where the link graph / case index live.
 pub const RULE_ID_BROKEN_LINK: &str = "HYALO006";
 
+/// Broken heading fragment on an existing target. Warning by default, promoted
+/// under strict mode; independently configurable from file-target failures.
+pub const RULE_ID_BROKEN_ANCHOR: &str = "HYALO008";
+
 /// A single lint violation found in a file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Violation {
