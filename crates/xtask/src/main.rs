@@ -8,6 +8,7 @@ mod codex_package;
 mod command_reference;
 mod feature_fanout;
 mod help_drift;
+mod jev_assets;
 mod jq_recipes;
 mod mutation_journal;
 mod npm_package;
@@ -42,6 +43,12 @@ enum Commands {
     /// Gate: verify the vendored `crates/hyalo-cli/templates/pi/` copies
     /// match the canonical `pi-package/` files byte-for-byte.
     CheckPiPackageSync,
+    /// Refresh all embedded Pi skills and runtime resources.
+    SyncPiPackage,
+    /// Rebuild the optional Jev helper and check all distributed resources.
+    CheckJevAssets,
+    /// Refresh the optional Jev helper and shared skill references.
+    SyncJevAssets,
     /// Rebuild the self-contained Pi API runtime in isolation and reject drift.
     CheckPiRuntime,
     /// Generate or verify npm launcher/platform package metadata.
@@ -83,7 +90,10 @@ fn main() {
         Commands::CheckHelpDrift => help_drift::run(),
         Commands::CheckCommandReference => command_reference::run(),
         Commands::CheckBundledSkills => bundled_skills::run(),
-        Commands::CheckPiPackageSync => pi_package_sync::run(),
+        Commands::CheckPiPackageSync => pi_package_sync::run(false),
+        Commands::SyncPiPackage => pi_package_sync::run(true),
+        Commands::CheckJevAssets => jev_assets::run(false),
+        Commands::SyncJevAssets => jev_assets::run(true),
         Commands::CheckPiRuntime => pi_runtime::run(),
         Commands::GenerateNpmPackages(args) => npm_package::run(args),
         Commands::PlanNpmPublication(args) => npm_package::run_publication_plan(args),

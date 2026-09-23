@@ -66,6 +66,7 @@ mod iteration282_directory_token_dominance;
 mod iteration291_document_consistency;
 mod iteration292_coherence;
 mod iteration_ergonomics;
+mod jev_init;
 mod jq;
 mod json_errors;
 mod links;

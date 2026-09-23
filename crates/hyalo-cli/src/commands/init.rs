@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
 mod codex;
+mod jev_assets;
 mod pi_manifest;
 pub use codex::CodexMode;
 
@@ -499,6 +500,13 @@ fn initialize_observed(
         let pi_manifest = pi
             .then(|| pi_manifest::prepare(root, &dir_value))
             .transpose()?;
+        let mut jev_plans = Vec::new();
+        if claude {
+            jev_plans.push(jev_assets::prepare(root, ".claude/skills/hyalo-tidy")?);
+        }
+        if codex == CodexMode::Local {
+            jev_plans.push(jev_assets::prepare(root, ".agents/skills/hyalo-tidy")?);
+        }
         // A vault outside CWD becomes its own project root, so create the tree
         // itself before writing `.hyalo.toml` into it.
         if scope.external && !root.exists() {
@@ -672,6 +680,9 @@ fn initialize_observed(
         }
 
         if !claude && !pi {
+            for plan in jev_plans {
+                plan.publish(root, &mut report)?;
+            }
             return Ok(());
         }
 
@@ -817,6 +828,10 @@ fn initialize_observed(
             plan.publish(root, &mut report)?;
         }
 
+        for plan in jev_plans {
+            plan.publish(root, &mut report)?;
+        }
+
         Ok(())
     })();
     match result {
@@ -842,6 +857,7 @@ fn preflight_installation_manifest(
 ) -> Result<()> {
     let mut artifacts = vec![PathBuf::from(".hyalo.toml")];
     if claude {
+        jev_assets::preflight_removal(root, ".claude/skills/hyalo-tidy")?;
         artifacts.extend([
             PathBuf::from(".claude/skills/hyalo/SKILL.md"),
             PathBuf::from(".claude/skills/hyalo-tidy/SKILL.md"),
@@ -861,6 +877,8 @@ fn preflight_installation_manifest(
         artifacts.extend([
             PathBuf::from(".pi/skills/hyalo/SKILL.md"),
             PathBuf::from(".pi/skills/hyalo-tidy/SKILL.md"),
+            PathBuf::from(".pi/skills/hyalo-tidy/references/jev.md"),
+            PathBuf::from(".pi/skills/hyalo-tidy/scripts/jev.mjs"),
             PathBuf::from(".pi/extensions/hyalo.ts"),
             PathBuf::from(".pi/lib/hyalo-api.js"),
             PathBuf::from(".pi/lib/hyalo-api.d.ts"),
@@ -1176,6 +1194,7 @@ fn deinitialize_observed(
         remove_dir_if_empty(skill_dir, ".claude/skills/hyalo/", &mut report)?;
 
         // Step 2: Remove .claude/skills/hyalo-tidy/SKILL.md and parent dir if empty.
+        jev_assets::remove(root, ".claude/skills/hyalo-tidy", &mut report)?;
         let tidy_skill_path = root
             .join(".claude")
             .join("skills")
@@ -1265,6 +1284,8 @@ fn deinitialize_observed(
         // Only empty directories are cleaned after ownership-aware removal.
         for relative in [
             ".pi/skills/hyalo",
+            ".pi/skills/hyalo-tidy/references",
+            ".pi/skills/hyalo-tidy/scripts",
             ".pi/skills/hyalo-tidy",
             ".pi/skills",
             ".pi/extensions",

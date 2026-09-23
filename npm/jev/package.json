@@ -1,0 +1,20 @@
+{
+  "name": "@hyalo/jev-helper",
+  "type": "module",
+  "private": true,
+  "packageManager": "bun@1.4.2",
+  "engines": { "node": ">=22.14" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun run build.ts",
+    "check:bundle": "bun run build.ts --check"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0"
+  }
+}

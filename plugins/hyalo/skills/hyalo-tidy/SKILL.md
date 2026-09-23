@@ -14,6 +14,11 @@ missing, report what is needed before doing maintenance.
 An audit or health question is read-only. A request to tidy or repair authorizes relevant
 changes, not deletion of notes based only on age or orphan status.
 
+Only when the user explicitly selects Jev assistance, read [references/jev.md](references/jev.md)
+and follow its scoped preparation and suggestion workflow before loading full documents.
+An API key or repository setting never enables Jev. Ordinary tidy needs no JavaScript
+runtime or network access; Jev failure leaves the usual local workflow available.
+
 Orient with `hyalo summary --format text`, `hyalo lint --format text`, and
 `hyalo find --broken-links --format text`. Inspect individual files with `hyalo read`.
 Check schemas with `hyalo types list` before proposing metadata normalization.

@@ -13,15 +13,17 @@ use std::path::Path;
 const RUNTIME_MANIFEST: &str = ".pi/lib/package.json";
 const MANIFEST: &str = ".pi/package.json";
 pub(super) const RECEIPT: &str = ".pi/.hyalo-manifest.json";
-const ARTIFACT_PATHS: [&str; 5] = [
+const ARTIFACT_PATHS: [&str; 7] = [
     ".pi/skills/hyalo/SKILL.md",
     ".pi/skills/hyalo-tidy/SKILL.md",
     ".pi/extensions/hyalo.ts",
     ".pi/lib/hyalo-api.js",
     ".pi/lib/hyalo-api.d.ts",
+    ".pi/skills/hyalo-tidy/references/jev.md",
+    ".pi/skills/hyalo-tidy/scripts/jev.mjs",
 ];
 // Exact installed bytes avoid hash collisions and remain bounded independently
-// of the general JSON decoder. The five shipped files currently total < 200 KiB.
+// of the general JSON decoder. The shipped files currently total < 300 KiB.
 const MAX_ARTIFACT_RECEIPT_BYTES: usize = 2 * 1024 * 1024;
 
 fn valid_artifact_receipts(artifacts: &BTreeMap<String, String>, budget: usize) -> bool {
@@ -370,6 +372,8 @@ pub(super) fn prepare(root: &Path, dir_value: &str) -> Result<Plan> {
         super::PI_EXTENSION_CONTENT.to_owned(),
         super::PI_API_RUNTIME_CONTENT.to_owned(),
         super::PI_API_DECLARATION_CONTENT.to_owned(),
+        super::jev_assets::REFERENCE.to_owned(),
+        super::jev_assets::SCRIPT.to_owned(),
     ];
     anyhow::ensure!(
         contents.iter().map(String::len).sum::<usize>() <= MAX_ARTIFACT_RECEIPT_BYTES,
@@ -447,6 +451,8 @@ impl Plan {
             ".pi",
             ".pi/skills/hyalo",
             ".pi/skills/hyalo-tidy",
+            ".pi/skills/hyalo-tidy/references",
+            ".pi/skills/hyalo-tidy/scripts",
             ".pi/extensions",
             ".pi/lib",
         ] {

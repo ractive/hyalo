@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Explicitly opt-in Jev classification in the `hyalo-tidy` skill for Codex,
+  Claude Code, and Pi. Selected documents can receive suggestions for missing
+  types, approved tags, and existing folders. The bundled helper uses Bun or
+  Node.js and a Typesafe API key; ordinary tidy needs neither. Agents review
+  suggestions and preview changes through Hyalo before applying them.
+
 ### Fixed
 
 - Command help now advertises only supported selectors, global options, and
