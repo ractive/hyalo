@@ -61,7 +61,7 @@ xtask gate of the CI quality-gates job exits 0 (check-jev-assets,
 check-codex-package, check-pi-package-sync, check-feature-fanout,
 check-help-drift, check-command-reference, check-bundled-skills,
 check-ts-types, check-pi-runtime, check-jq-recipes, check-mutation-journal,
-check-typed-output). `hyalo find -h` is 3064 bytes, under its 3072 ceiling.
+check-typed-output). `hyalo find -h` is 2949 bytes over 47 lines, 123 bytes under its 3072 ceiling (Windows adds a CR per line).
 
 Default output is unchanged: eight `find` invocations (ranked JSON and text,
 negation, tag filter, `--broken-links`, a zero-result did-you-mean, `--section`,

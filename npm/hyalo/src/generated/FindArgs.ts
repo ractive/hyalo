@@ -55,7 +55,7 @@ regexp?: string,
  */
 properties: Array<string>,
 /**
- * Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
+ * Tag, exact or prefix ('a' matches 'a/b'); repeatable (AND)
  *
  * Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
  * 'projects'). Repeatable (AND).
@@ -103,7 +103,7 @@ glob: Array<string>,
  */
 files_from?: string,
 /**
- * all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
+ * all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks (exact)
  *
  * Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
  * exactly the named fields plus file (filters add what they need).
@@ -150,7 +150,7 @@ fields: Array<string>,
  */
 sort?: string,
 /**
- * file (default)|section: rank files or sections
+ * file|section: rank files or sections
  *
  * `section` turns a ranked PATTERN search into one result per matching SECTION:
  * {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
@@ -164,7 +164,7 @@ sort?: string,
  */
 granularity?: Granularity,
 /**
- * Count hits per tags|property:K|type|dir (repeatable)
+ * Count per tags|property:K|type|dir; repeatable
  *
  * Facet counts over the FULL match set, computed before --limit, emitted as a top-level
  * `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
@@ -219,14 +219,14 @@ broken_links: boolean,
  */
 strict: boolean,
 /**
- * Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
+ * Only orphan files: no inbound or outbound links (adds links, backlinks)
  *
  * Deciding orphanhood needs both directions of the graph, so both fields come back
  * whether or not --fields names them.
  */
 orphan: boolean,
 /**
- * Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
+ * Only dead-end files: inbound but no outbound links (adds links, backlinks)
  *
  * Deciding dead-endedness needs both directions of the graph, so both fields come back
  * whether or not --fields names them.
@@ -241,7 +241,7 @@ dead_end: boolean,
  */
 title?: string,
 /**
- * BM25 Snowball stemmer language (default: english) [alias: --stemmer]
+ * BM25 stemmer language (default: english) [alias: --stemmer]
  *
  * Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
  * tokenization — NOT markdown code-block language.
@@ -253,7 +253,7 @@ title?: string,
  */
 language?: string,
 /**
- * Print matching paths only, one per line — no envelope, no hints
+ * Print matching paths only, one per line, no hints
  *
  * Print only the file path of each matching entry, one per line — no JSON,
  * no envelope, no count, no hints. grep `-l` precedent: the agent/
@@ -270,7 +270,7 @@ language?: string,
  */
 filenames_only: boolean,
 /**
- * Like --filenames-only but NUL-separated, for `xargs -0`
+ * NUL-separated --filenames-only, for `xargs -0`
  *
  * NUL-delimited sibling of `--filenames-only` (iter-238): each matching
  * file path is printed terminated by a NUL byte instead of a newline,
