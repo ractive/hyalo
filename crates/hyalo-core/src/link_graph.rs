@@ -1747,7 +1747,11 @@ mod tests {
         let graph2 = build2.graph;
 
         // Verify warnings from from_file_links are always empty
-        assert!(build2.warnings.is_empty());
+        assert!(
+            build2.warnings.is_empty(),
+            "expected empty, got {:?}",
+            build2.warnings
+        );
 
         // Both graphs must produce identical backlinks for all targets
         for target in &["a", "b", "c.md", "c"] {

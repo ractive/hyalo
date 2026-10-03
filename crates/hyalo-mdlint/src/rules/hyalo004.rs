@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn valid_datetime_no_violation() {
         let v = check_datetime_properties(&[("when", "2026-06-04T14:30:00", false)]);
-        assert!(v.is_empty());
+        assert!(v.is_empty(), "expected empty, got {v:?}");
     }
 
     #[test]
@@ -80,7 +80,7 @@ mod tests {
             ("ts", "2026-05-28T22:44:47+00:00", true),
             ("ts2", "2026-05-28T14:30:00Z", true),
         ]);
-        assert!(v.is_empty());
+        assert!(v.is_empty(), "expected empty, got {v:?}");
     }
 
     #[test]

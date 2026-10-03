@@ -1936,7 +1936,7 @@ mod tests {
     fn unclosed_parentheses_do_not_produce_truncated_links() {
         let mut links = Vec::new();
         extract_links_from_text("![image](image(1).png", &mut links);
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "expected empty, got {links:?}");
     }
 
     #[test]
@@ -2007,8 +2007,16 @@ mod tests {
 
     #[test]
     fn a_targeted_fragment_is_not_a_same_file_anchor() {
-        assert!(anchors_of("see [b](p.md#frag) here").is_empty());
-        assert!(anchors_of("see [[p#frag]] here").is_empty());
+        assert!(
+            anchors_of("see [b](p.md#frag) here").is_empty(),
+            "expected empty, got {:?}",
+            anchors_of("see [b](p.md#frag) here")
+        );
+        assert!(
+            anchors_of("see [[p#frag]] here").is_empty(),
+            "expected empty, got {:?}",
+            anchors_of("see [[p#frag]] here")
+        );
     }
 
     #[test]
@@ -2539,7 +2547,7 @@ mod tests {
         let text = r"x \\\[[nope]] y";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "expected empty, got {links:?}");
     }
 
     #[test]
@@ -2555,14 +2563,14 @@ mod tests {
     fn escaped_wikilink_span_not_extracted() {
         let text = r"a \[[nope]] b";
         let spans = extract_link_spans(text);
-        assert!(spans.is_empty());
+        assert!(spans.is_empty(), "expected empty, got {spans:?}");
     }
 
     #[test]
     fn escaped_markdown_link_span_not_extracted() {
         let text = r"a \[t](x.md) b";
         let spans = extract_link_spans(text);
-        assert!(spans.is_empty());
+        assert!(spans.is_empty(), "expected empty, got {spans:?}");
     }
 
     #[test]
@@ -2711,7 +2719,7 @@ mod tests {
         let text = "See [[broken and more text";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "expected empty, got {links:?}");
     }
 
     #[test]
@@ -2719,7 +2727,7 @@ mod tests {
         let text = "See [text](broken and more";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "expected empty, got {links:?}");
     }
 
     #[test]
@@ -3224,7 +3232,7 @@ mod tests {
         let text = "[text](<dest.md> junk)";
         let mut links = Vec::new();
         extract_links_from_text(text, &mut links);
-        assert!(links.is_empty());
+        assert!(links.is_empty(), "expected empty, got {links:?}");
     }
 
     // --- L-A2: escaped brackets in link text ---
@@ -3356,7 +3364,11 @@ mod tests {
     fn external_markdown_link_produces_no_rewritable_span() {
         // The *span* extractor still drops external destinations, so `mv` and
         // `links fix` can never splice a new target into a URI.
-        assert!(extract_link_spans("[x](obsidian://show-plugin?id=y)").is_empty());
+        assert!(
+            extract_link_spans("[x](obsidian://show-plugin?id=y)").is_empty(),
+            "expected empty, got {:?}",
+            extract_link_spans("[x](obsidian://show-plugin?id=y)")
+        );
     }
 
     // -----------------------------------------------------------------

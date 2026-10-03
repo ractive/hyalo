@@ -3793,7 +3793,11 @@ mod tests {
             );
         }
         assert_eq!(idx.len(), 1);
-        assert!(idx.lookup_stem_all("Note").is_empty());
+        assert!(
+            idx.lookup_stem_all("Note").is_empty(),
+            "expected empty, got {:?}",
+            idx.lookup_stem_all("Note")
+        );
         assert!(!idx.contains_path(".gitignore"));
         assert_eq!(
             resolve_link_from_source(

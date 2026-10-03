@@ -478,7 +478,7 @@ fn find_tag_filter_no_match() {
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let arr = parsed.as_array().unwrap();
-    assert!(arr.is_empty());
+    assert!(arr.is_empty(), "expected empty, got {arr:?}");
 }
 
 // --- find: content search ---
@@ -966,7 +966,7 @@ fn find_fields_links_resolved() {
     let arr = parsed.as_array().unwrap();
     let alpha = &arr[0];
     let links = alpha["links"].as_array().unwrap();
-    assert!(!links.is_empty());
+    assert!(!links.is_empty(), "expected non-empty: links");
     let beta_link = links.iter().find(|l| l["target"] == "beta").unwrap();
     // beta.md exists in vault, so path should be Some("beta.md")
     assert_eq!(beta_link["path"], "beta.md");
@@ -1075,7 +1075,11 @@ fn find_no_match_returns_empty_array() {
         .unwrap(),
     );
     let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert!(parsed.as_array().unwrap().is_empty());
+    assert!(
+        parsed.as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        parsed.as_array().unwrap()
+    );
 }
 
 // --- find: file not found ---
@@ -1512,7 +1516,7 @@ fn find_fields_properties_typed_is_array() {
     let typed = entry["properties_typed"]
         .as_array()
         .expect("properties_typed should be an array");
-    assert!(!typed.is_empty());
+    assert!(!typed.is_empty(), "expected non-empty: typed");
 
     for item in typed {
         assert!(
@@ -1724,7 +1728,7 @@ fn find_fields_backlinks_empty_when_no_incoming() {
     let arr = parsed.as_array().unwrap();
     let gamma = &arr[0];
     let backlinks = gamma["backlinks"].as_array().unwrap();
-    assert!(backlinks.is_empty());
+    assert!(backlinks.is_empty(), "expected empty, got {backlinks:?}");
 }
 
 // --- find: content search with frontmatter-only index ---

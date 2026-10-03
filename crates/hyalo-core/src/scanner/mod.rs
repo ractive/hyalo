@@ -1160,7 +1160,7 @@ Line 6
     #[test]
     fn empty_file() {
         let lines = collect_lines("");
-        assert!(lines.is_empty());
+        assert!(lines.is_empty(), "expected empty, got {lines:?}");
     }
 
     #[test]
@@ -1829,7 +1829,11 @@ after
 ");
         let mut code = CodeBlockCollector::new();
         scan_reader_multi(input.as_bytes(), &mut [&mut code]).unwrap();
-        assert!(code.lines.is_empty());
+        assert!(
+            code.lines.is_empty(),
+            "expected empty, got {:?}",
+            code.lines
+        );
     }
 
     #[test]

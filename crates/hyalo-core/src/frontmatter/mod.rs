@@ -659,7 +659,7 @@ Body.
     #[test]
     fn infer_value_list_empty() {
         match parse_value("[]", None).unwrap() {
-            Value::Array(items) => assert!(items.is_empty()),
+            Value::Array(items) => assert!(items.is_empty(), "expected empty, got {items:?}"),
             other => panic!("expected empty sequence, got {other:?}"),
         }
     }

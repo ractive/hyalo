@@ -39,7 +39,7 @@ fn error_nonexistent_dir() {
     // Should fail with exit code 2 (anyhow error path)
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(!stderr.is_empty());
+    assert!(!stderr.is_empty(), "expected non-empty: stderr");
 }
 
 #[test]

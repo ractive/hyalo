@@ -118,20 +118,36 @@ fn the_recipe_guard_itself_catches_the_shape_iteration_252_broke() {
     assert_eq!(unrequested_fields(broken), vec!["tasks"]);
 
     let fixed = "hyalo find --property status=planned --fields tasks --index --jq '.results | map(select(.tasks | length > 0))'";
-    assert!(unrequested_fields(fixed).is_empty());
+    assert!(
+        unrequested_fields(fixed).is_empty(),
+        "expected empty, got {:?}",
+        unrequested_fields(fixed)
+    );
 
     // A filter that auto-includes the field is enough on its own.
     let auto = "hyalo find --task todo --jq '.results | map(.tasks)'";
-    assert!(unrequested_fields(auto).is_empty());
+    assert!(
+        unrequested_fields(auto).is_empty(),
+        "expected empty, got {:?}",
+        unrequested_fields(auto)
+    );
 
     // A `summary` recipe reading `.results.tasks.total` is a different payload.
     let not_find = "hyalo summary --jq '.results.tasks.total'";
-    assert!(unrequested_fields(not_find).is_empty());
+    assert!(
+        unrequested_fields(not_find).is_empty(),
+        "expected empty, got {:?}",
+        unrequested_fields(not_find)
+    );
 
     // A continuation line must be judged as part of its command.
     let split = logical_lines(
         "hyalo find --fields tasks \\\n  --jq '.results | map({file, n: (.tasks | length)})'\n",
     );
     assert_eq!(split.len(), 1, "{split:?}");
-    assert!(unrequested_fields(&split[0]).is_empty());
+    assert!(
+        unrequested_fields(&split[0]).is_empty(),
+        "expected empty, got {:?}",
+        unrequested_fields(&split[0])
+    );
 }

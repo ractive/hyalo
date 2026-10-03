@@ -427,12 +427,18 @@ fn summary_empty_vault() {
     assert_eq!(json["results"]["files"]["total"].as_u64().unwrap(), 0);
     assert_eq!(json["results"]["tasks"]["total"].as_u64().unwrap(), 0);
     assert_eq!(json["results"]["tasks"]["done"].as_u64().unwrap(), 0);
-    assert!(json["results"]["status"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"]["status"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        json["results"]["status"].as_array().unwrap()
+    );
     assert!(
         json["results"]["recent_files"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .is_empty(),
+        "expected empty, got {:?}",
+        json["results"]["recent_files"].as_array().unwrap()
     );
 }
 
@@ -541,7 +547,9 @@ fn summary_recent_zero() {
         json["results"]["recent_files"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .is_empty(),
+        "expected empty, got {:?}",
+        json["results"]["recent_files"].as_array().unwrap()
     );
 }
 

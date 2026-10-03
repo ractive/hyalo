@@ -751,7 +751,11 @@ mod tests {
     fn body_capture_rejects_too_small_limit_without_reading_or_panicking() {
         let mut reader = BufReader::new(Cursor::new("---\ntitle: x\n---\nbody"));
         assert!(read_frame_for_body(&mut reader, 0).is_err());
-        assert!(reader.buffer().is_empty());
+        assert!(
+            reader.buffer().is_empty(),
+            "expected empty, got {:?}",
+            reader.buffer()
+        );
     }
 
     #[test]
