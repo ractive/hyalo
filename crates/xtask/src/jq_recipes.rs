@@ -40,15 +40,36 @@ const MUTATING_SUBCOMMANDS: &[&str] = &[
     "drop-index",
 ];
 
-/// Documents whose `--jq` recipes are executable contracts.
-fn recipe_documents(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let templates = root.join("crates").join("hyalo-cli").join("templates");
-    if let Ok(entries) = std::fs::read_dir(&templates) {
+/// Push every `*.md` file directly inside `dir` (not recursive).
+fn push_markdown_in(dir: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
         for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
-            if path.extension().is_some_and(|e| e == "md") {
+            if path.is_file() && path.extension().is_some_and(|e| e == "md") {
                 out.push(path);
             }
+        }
+    }
+}
+
+/// Documents whose `--jq` recipes are executable contracts.
+///
+/// DEC-346 (iteration 308): besides the shipped templates, the pi skills and
+/// `.claude/CLAUDE.md`, the gate reads every document a human copies commands
+/// from — `README.md`, the root `CLAUDE.md`, `docs/*.md` and the knowledgebase's
+/// `hyalo-knowledgebase/docs/*.md`. `docs/configuration.md` carried a
+/// `--jq '[.hints[] …]'` recipe because `docs/` was outside the gate.
+fn recipe_documents(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    push_markdown_in(
+        &root.join("crates").join("hyalo-cli").join("templates"),
+        &mut out,
+    );
+    push_markdown_in(&root.join("docs"), &mut out);
+    push_markdown_in(&root.join("hyalo-knowledgebase").join("docs"), &mut out);
+    for top_level in ["README.md", "CLAUDE.md"] {
+        let path = root.join(top_level);
+        if path.is_file() {
+            out.push(path);
         }
     }
     let pi_skills = root.join("pi-package").join("skills");
@@ -246,6 +267,21 @@ pub fn split_argv(cmd: &str) -> Vec<String> {
     out
 }
 
+/// The `--jq` filter of a recipe when it reads the envelope's `.hints`.
+///
+/// `--jq` computes no hints, so `.hints` under a filter is always `[]`
+/// (DEC-313): such a recipe runs without error and silently answers nothing,
+/// which executing it can never catch.
+fn reads_hints_under_jq(argv: &[String]) -> Option<&str> {
+    let filter = argv
+        .iter()
+        .position(|a| a == "--jq")
+        .and_then(|i| argv.get(i + 1))
+        .map(String::as_str)
+        .or_else(|| argv.iter().find_map(|a| a.strip_prefix("--jq=")))?;
+    filter.contains(".hints").then_some(filter)
+}
+
 /// The first token after `hyalo` that is not a flag or a flag value — the
 /// subcommand the recipe invokes.
 fn subcommand_of(argv: &[String]) -> Option<&str> {
@@ -295,6 +331,14 @@ pub fn run_with_root(root: &Path, executable: &Path) -> Result<bool> {
                 failures.push(format!(
                     "{label}: a documented recipe writes to the vault — never invite a paste-back \
                      that mutates:\n    {recipe}"
+                ));
+                continue;
+            }
+            if let Some(filter) = reads_hints_under_jq(&argv) {
+                failures.push(format!(
+                    "{label}: a documented --jq filter reads `.hints`, which is always `[]` under \
+                     --jq (DEC-313) — read hints from plain `--format json` piped to jq. \
+                     Filter: {filter}\n    {recipe}"
                 ));
                 continue;
             }
@@ -722,6 +766,52 @@ mod tests {
         assert_eq!(
             split_argv("hyalo find --title ''"),
             vec!["hyalo", "find", "--title", ""]
+        );
+    }
+
+    #[test]
+    fn flags_a_filter_that_reads_hints() {
+        let argv = split_argv("hyalo find --tag rust --format json --jq '[.hints[] | .cmd]'");
+        assert_eq!(reads_hints_under_jq(&argv), Some("[.hints[] | .cmd]"));
+        let argv = split_argv("hyalo find --jq=.hints");
+        assert_eq!(reads_hints_under_jq(&argv), Some(".hints"));
+        let argv = split_argv("hyalo find --jq '.results[].file'");
+        assert_eq!(reads_hints_under_jq(&argv), None);
+    }
+
+    #[test]
+    fn covers_readme_root_claude_md_and_both_docs_trees() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        for rel in [
+            "README.md",
+            "CLAUDE.md",
+            "docs/ci.md",
+            "hyalo-knowledgebase/docs/guide.md",
+            "hyalo-knowledgebase/docs/nested/skipped.md",
+            "docs/notes.txt",
+        ] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&path, "").expect("write");
+        }
+        let labels: Vec<String> = recipe_documents(root)
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .expect("under root")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "CLAUDE.md",
+                "README.md",
+                "docs/ci.md",
+                "hyalo-knowledgebase/docs/guide.md",
+            ]
         );
     }
 
