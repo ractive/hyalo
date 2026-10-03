@@ -173,8 +173,8 @@ fn effective_index_path_for(
     let flags: Option<&IndexFlags> = match cmd {
         Commands::Find(FindArgs { index_flags, .. })
         | Commands::Summary(SummaryArgs { index_flags, .. })
-        | Commands::Backlinks { index_flags, .. }
-        | Commands::Terms { index_flags, .. }
+        | Commands::Backlinks(crate::cli::args::BacklinksArgs { index_flags, .. })
+        | Commands::Terms(crate::cli::args::TermsArgs { index_flags, .. })
         | Commands::Set { index_flags, .. }
         | Commands::Remove { index_flags, .. }
         | Commands::Append { index_flags, .. }
@@ -192,7 +192,8 @@ fn effective_index_path_for(
             ..
         } => match action {
             Some(
-                TagsAction::Summary { index_flags, .. } | TagsAction::Rename { index_flags, .. },
+                TagsAction::Summary(crate::cli::args::TagsSummaryArgs { index_flags, .. })
+                | TagsAction::Rename { index_flags, .. },
             ) if index_flags.effective_index_path(vault_dir).is_some() => Some(index_flags),
             _ => Some(bare),
         },
@@ -1057,7 +1058,7 @@ fn run_inner() -> Result<(), AppError> {
     let output_preflight = crate::prepared::OutputPreflight::new(&cli)?;
     let single_selection = match &cli.command {
         Commands::Read(ReadArgs { selection, .. })
-        | Commands::Backlinks { selection, .. }
+        | Commands::Backlinks(crate::cli::args::BacklinksArgs { selection, .. })
         | Commands::Task {
             action: crate::cli::args::TaskAction::Read { selection, .. },
         } => Some(selection),
@@ -1637,9 +1638,9 @@ fn run_inner() -> Result<(), AppError> {
                 action,
             } if !matches!(action, Some(crate::cli::args::TagsAction::Rename { .. })) => {
                 let (glob, limit) = match action {
-                    Some(crate::cli::args::TagsAction::Summary { glob, limit, .. }) => {
-                        (glob, limit)
-                    }
+                    Some(crate::cli::args::TagsAction::Summary(
+                        crate::cli::args::TagsSummaryArgs { glob, limit, .. },
+                    )) => (glob, limit),
                     _ => (bare_glob, bare_limit),
                 };
                 let mut ctx = HintContext::from_common(HintSource::TagsSummary, &common);
@@ -1773,9 +1774,9 @@ fn run_inner() -> Result<(), AppError> {
                 ctx.read_narrowed = section.is_some() || lines.is_some();
                 Some(ctx)
             }
-            Commands::Backlinks {
+            Commands::Backlinks(crate::cli::args::BacklinksArgs {
                 selection, limit, ..
-            } => {
+            }) => {
                 let mut ctx = HintContext::from_common(HintSource::Backlinks, &common);
                 if let Some(f) = selection
                     .file_positional
@@ -1975,12 +1976,12 @@ fn run_inner() -> Result<(), AppError> {
                     | crate::cli::args::LintRulesAction::Remove { .. },
                 ) => None,
             },
-            Commands::Terms {
+            Commands::Terms(crate::cli::args::TermsArgs {
                 prefix,
                 glob,
                 limit,
                 ..
-            } => {
+            }) => {
                 let mut ctx = HintContext::from_common(HintSource::Terms, &common);
                 ctx.glob.clone_from(glob);
                 ctx.has_limit = limit.is_some();

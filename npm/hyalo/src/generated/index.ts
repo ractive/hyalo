@@ -2,6 +2,9 @@
 
 export type { ApplyReport } from "./ApplyReport.js";
 export type { BacklinkInfo } from "./BacklinkInfo.js";
+export type { BacklinkItem } from "./BacklinkItem.js";
+export type { BacklinksArgs } from "./BacklinksArgs.js";
+export type { BacklinksResult } from "./BacklinksResult.js";
 export type { ConfigLinksResult } from "./ConfigLinksResult.js";
 export type { ConfigPiResult } from "./ConfigPiResult.js";
 export type { ConfigResult } from "./ConfigResult.js";
@@ -48,9 +51,11 @@ export type { SuggestionCandidate } from "./SuggestionCandidate.js";
 export type { SummaryArgs } from "./SummaryArgs.js";
 export type { TagSummary } from "./TagSummary.js";
 export type { TagSummaryEntry } from "./TagSummaryEntry.js";
+export type { TagsSummaryArgs } from "./TagsSummaryArgs.js";
 export type { TaskCount } from "./TaskCount.js";
 export type { TaskDryRunResult } from "./TaskDryRunResult.js";
 export type { TaskInfo } from "./TaskInfo.js";
 export type { TaskReadResult } from "./TaskReadResult.js";
 export type { TermEntry } from "./TermEntry.js";
+export type { TermsArgs } from "./TermsArgs.js";
 export type { VaultSummary } from "./VaultSummary.js";

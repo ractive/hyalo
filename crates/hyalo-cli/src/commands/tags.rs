@@ -986,24 +986,24 @@ pub(crate) fn run(
     let site_prefix = ctx.site_prefix;
     let effective_format = ctx.effective_format;
     let snapshot_index = &mut *ctx.snapshot_index;
-    use crate::cli::args::{IndexFlags, TagsAction};
+    use crate::cli::args::{IndexFlags, TagsAction, TagsSummaryArgs};
     use crate::commands::find as find_commands;
     use crate::commands::{IndexResolution, ResolvedIndex, resolve_index};
     use crate::dispatch::resolve_limit;
     use hyalo_core::index::ScanOptions;
 
     // M-8: see the `properties` arm — bare `hyalo tags` is `tags summary`.
-    let action = action.unwrap_or(TagsAction::Summary {
+    let action = action.unwrap_or(TagsAction::Summary(TagsSummaryArgs {
         glob: bare_glob,
         limit: bare_limit,
         index_flags: IndexFlags::default(),
-    });
+    }));
     match action {
-        TagsAction::Summary {
+        TagsAction::Summary(TagsSummaryArgs {
             ref glob,
             limit: cli_limit,
             index_flags: _, // consumed in run.rs before dispatch
-        } => match resolve_index(
+        }) => match resolve_index(
             snapshot_index.as_ref(),
             dir,
             &[],

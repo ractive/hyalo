@@ -192,7 +192,7 @@ impl Commands {
                 glob,
                 ..
             } => named(file, file_positional, glob),
-            Self::Backlinks { selection, .. } => named(
+            Self::Backlinks(crate::cli::args::BacklinksArgs { selection, .. }) => named(
                 &selection.file,
                 selection.file_positional.as_slice(),
                 &selection.glob,
