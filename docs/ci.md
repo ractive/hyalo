@@ -14,7 +14,7 @@ jobs:
   lint-kb-full:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ractive/setup-hyalo@v1          # installs hyalo, adds it to PATH
       - run: hyalo lint --strict --format github
 ```
@@ -31,7 +31,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0                      # full history for the three-dot merge-base
       - uses: ractive/setup-hyalo@v1
@@ -82,7 +82,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ractive/setup-hyalo@v1          # hyalo on PATH before the agent starts
       - uses: anthropics/claude-code-action@v1
         with:
