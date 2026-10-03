@@ -790,7 +790,10 @@ impl PreparedInvocation {
                 // run — re-scanning only those files and patching the BM25
                 // postings — instead of answering from a stale snapshot. The
                 // snapshot file is never written by a read.
-                repair_stale_in_memory(index, ctx.dir);
+                if !repair_stale_in_memory(index, ctx.dir) {
+                    *ctx.snapshot_index = None;
+                    return Ok(());
+                }
             } else {
                 warn_stale_index(index, ctx.dir);
             }
@@ -902,17 +905,18 @@ pub(crate) fn cardinality_diagnostic(
 }
 
 /// Re-scan every file the snapshot no longer describes, in memory only
-/// (DEC-339). When a drifted file cannot be re-scanned (unparsable
-/// frontmatter, a symlink resolving outside the vault, an I/O error) nothing
-/// is changed: the snapshot answers as before, under the stale-index warning,
-/// and every later body read keeps its own containment checks.
-fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path) {
+/// (DEC-339), the way a disk scan would see the vault now: deleted files are
+/// dropped, files that cannot be scanned (unparsable frontmatter, a symlink
+/// resolving outside the vault) are dropped with a `-q`-proof warning, and
+/// the rest are re-scanned. Returns `false` only when the snapshot itself
+/// cannot be patched; the caller then answers from disk.
+fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path) -> bool {
     let drift = hyalo_core::index::snapshot_drift(idx, dir);
     if drift.is_empty() {
-        return;
+        return true;
     }
-    match idx.apply_changes(dir, &drift) {
-        Ok(()) => {
+    match idx.repair_drift(dir, &drift) {
+        Ok(report) => {
             let count = drift.len();
             let files = if count == 1 { "file" } else { "files" };
             let mut named = drift.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
@@ -924,12 +928,19 @@ fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path
                  in memory for this run (the index file is unchanged) — run `hyalo create-index` \
                  to fold them in"
             ));
+            for (rel, reason) in &report.skipped {
+                crate::warn::warn_always(format!(
+                    "{rel}: changed since the index was built and could not be read ({reason}); \
+                     left out of this run, as a disk scan would"
+                ));
+            }
+            true
         }
         Err(error) => {
-            warn_stale_index(idx, dir);
-            crate::warn::warn(format!(
-                "could not repair the index in memory ({error:#}); answering from the snapshot"
+            crate::warn::warn_always(format!(
+                "could not repair the index in memory ({error:#}); reading notes from disk"
             ));
+            false
         }
     }
 }

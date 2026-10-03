@@ -860,6 +860,17 @@ impl Bm25Section {
     }
 }
 
+/// What [`SnapshotIndex::repair_drift`] did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DriftRepair {
+    /// Entries re-scanned (changed or new files).
+    pub refreshed: usize,
+    /// Entries dropped because their file is gone.
+    pub removed: usize,
+    /// Files dropped because they could not be scanned, with the reason.
+    pub skipped: Vec<(String, String)>,
+}
+
 /// Complete document replacement produced by the shared scanner.
 struct ScannedDocument {
     entry: IndexEntry,
@@ -1271,6 +1282,91 @@ impl SnapshotIndex {
         self.live.dirty = true;
         self.finish_changes();
         Ok(())
+    }
+
+    /// Repair drifted entries in memory the way a disk scan would see them
+    /// (DEC-339): a deleted file is dropped, a file that cannot be scanned
+    /// (unparsable frontmatter, a symlink resolving outside the vault, an
+    /// unreadable file) is dropped and reported in [`DriftRepair::skipped`]
+    /// (unparsable frontmatter is also recorded as a build-time skip, as a
+    /// disk scan records it), and every other path is re-scanned. The BM25
+    /// postings are patched once at the end. Never fails as a unit: one bad
+    /// file cannot leave the rest of the vault stale.
+    pub fn repair_drift(&mut self, dir: &Path, paths: &[String]) -> Result<DriftRepair> {
+        self.validate_before_changes()?;
+        let root = crate::rooted::VaultRoot::new(dir)?;
+        let mut report = DriftRepair::default();
+        let mut replacements = Vec::with_capacity(paths.len());
+        let mut removals = Vec::new();
+        let mut seen = std::collections::HashSet::with_capacity(paths.len());
+        for rel in paths {
+            if !seen.insert(rel) {
+                continue;
+            }
+            if matches!(
+                std::fs::symlink_metadata(dir.join(rel)),
+                Err(ref error) if error.kind() == std::io::ErrorKind::NotFound
+            ) {
+                removals.push(rel.clone());
+                report.removed += 1;
+                continue;
+            }
+            let scanned = crate::rooted::RelativeName::new(rel)
+                .and_then(|name| root.open(&name).map(drop))
+                .and_then(|()| {
+                    let (tokenize, language) = self.bm25_scan_args(rel);
+                    scan_one_file(
+                        &dir.join(rel),
+                        rel,
+                        true,
+                        tokenize,
+                        language.as_deref(),
+                        self.frontmatter_link_props.as_deref(),
+                    )
+                });
+            match scanned {
+                Ok((entry, _)) => replacements.push(entry),
+                Err(error) => {
+                    let unparsable = frontmatter::is_parse_error(&error);
+                    removals.push(rel.clone());
+                    if unparsable && !self.header.skipped.contains(rel) {
+                        self.header.skipped.push(rel.clone());
+                    }
+                    crate::warn::record_skip(
+                        rel.clone(),
+                        format!("{error:#}"),
+                        if unparsable {
+                            crate::warn::SkipKind::Frontmatter
+                        } else {
+                            crate::warn::SkipKind::Other
+                        },
+                    );
+                    report.skipped.push((rel.clone(), format!("{error:#}")));
+                }
+            }
+        }
+        for rel in &removals {
+            if let Some(&idx) = self.path_index.get(rel) {
+                self.entries.remove(idx);
+                self.rebuild_path_index();
+            }
+        }
+        for entry in replacements {
+            self.clear_frontmatter_skip(&entry.rel_path);
+            if let Some(&id) = self.path_index.get(&entry.rel_path) {
+                self.entries[id] = entry;
+            } else {
+                self.entries.push(entry);
+            }
+            crate::internal_metrics::record_index_entries_refreshed(1);
+            self.live.work.documents += 1;
+            report.refreshed += 1;
+        }
+        self.entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        self.rebuild_path_index();
+        self.live.dirty = true;
+        self.finish_changes();
+        Ok(report)
     }
 
     /// Re-scan `rel_path` once and refresh both its full index entry (like

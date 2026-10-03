@@ -153,6 +153,40 @@ fn negative_weight_warns_and_is_ignored() {
     assert_eq!(json["results"]["search"]["weights"]["title"], 3.0);
 }
 
+/// Review item 4: a huge weight would overflow scores to inf/NaN (`score:
+/// null`); values above 1000 are refused with a warning.
+#[test]
+fn oversized_weight_warns_and_scores_stay_finite() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        ".hyalo.toml",
+        "[search.weights]\nbody = 1e308\ntitle = 1e308\n",
+    );
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntitle: Kiwi\n---\nkiwi body kiwi\n",
+    );
+    write_md(tmp.path(), "b.md", "other text\n");
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "kiwi", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("between 0 and 1000"), "{stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        json["results"][0]["score"]
+            .as_f64()
+            .is_some_and(f64::is_finite),
+        "{json}"
+    );
+}
+
 #[test]
 fn section_granularity_scores_heading_text_in_the_headings_field() {
     let tmp = TempDir::new().unwrap();

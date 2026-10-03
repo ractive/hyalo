@@ -1421,13 +1421,18 @@ fn ranked_live_reads_refuse_file_and_directory_symlink_escape() {
                 .args(&extra)
                 .output()
                 .unwrap();
+            // DEC-339: the drifted escaping symlink is dropped by the
+            // in-memory repair exactly as a disk scan skips it — the note
+            // is left out (exit 0, no results) and never read.
             assert!(
-                !output.status.success(),
+                output.status.success(),
                 "{directory}, {extra:?}: {output:?}"
             );
             let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(stderr.contains("outside vault"), "{stderr}");
+            assert!(stderr.contains("outside"), "{stderr}");
             assert!(stderr.contains("notes/note.md"), "{stderr}");
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["results"], serde_json::json!([]), "{result}");
             assert!(!String::from_utf8_lossy(&output.stdout).contains("EXTERNAL_FIXTURE_MARKER"));
             assert!(!stderr.contains("EXTERNAL_FIXTURE_MARKER"));
         }
@@ -1666,9 +1671,12 @@ fn ranked_legacy_language_metadata_falls_back_and_checks_containment() {
         .args(["find", "pineapple", "--index"])
         .output()
         .unwrap();
-    assert!(!output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("outside vault"));
+    // DEC-339: the escaping symlink is dropped by the in-memory repair, as a
+    // disk scan skips it; its target is never read.
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("EXTERNAL_FIXTURE_MARKER"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("EXTERNAL_FIXTURE_MARKER"));
 }
 
 #[test]

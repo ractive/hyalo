@@ -32,16 +32,117 @@ fn find(tmp: &TempDir, args: &[&str]) -> (Value, std::process::Output) {
     (json, output)
 }
 
+/// Set a file's mtime one hour into the past, so it is safely older than
+/// any snapshot built afterwards (not "racily clean").
+fn backdate(path: &std::path::Path) {
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+}
+
 fn five_file_vault() -> TempDir {
     let tmp = TempDir::new().unwrap();
     for i in 1..=5 {
+        let rel = format!("f{i}.md");
         write_md(
             tmp.path(),
-            &format!("f{i}.md"),
+            &rel,
             &format!("incrementword{i} content body text.\n"),
         );
+        backdate(&tmp.path().join(rel));
     }
     tmp
+}
+
+/// Git's racily-clean rule (DEC-339): a file rewritten at the same size
+/// within the snapshot's second keeps its recorded mtime, so size+mtime
+/// cannot tell it changed. Such an entry is never reused.
+#[test]
+fn racily_clean_entry_is_rescanned_not_reused() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "old.md", "settled words\n");
+    backdate(&tmp.path().join("old.md"));
+    let same = tmp.path().join("same2.md");
+    write_md(tmp.path(), "same2.md", "alpha zulu\n");
+    let (_, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+    // Same-size rewrite with the original mtime restored: invisible to size+mtime.
+    let mtime = fs::metadata(&same).unwrap().modified().unwrap();
+    write_md(tmp.path(), "same2.md", "omega zulu\n");
+    fs::File::options()
+        .write(true)
+        .open(&same)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+    let (json, output) = create_index(&tmp, &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["results"]["reused"], 1, "{json}");
+    assert_eq!(json["results"]["refreshed"], 1, "{json}");
+    let indexed = find(&tmp, &["omega", "--index"]).0;
+    assert_eq!(indexed["results"][0]["file"], "same2.md", "{indexed}");
+    let stale = find(&tmp, &["alpha", "--index"]).0;
+    assert_eq!(stale["results"], serde_json::json!([]), "{stale}");
+}
+
+/// Review item 3: one unparsable or deleted file must not leave the rest of
+/// the vault stale. The repair drops it as a disk scan would, warns even
+/// under `-q`, and patches every other drifted file.
+#[test]
+fn repair_drops_unparsable_and_deleted_files_and_patches_the_rest() {
+    for quiet in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        write_md(tmp.path(), "a.md", "getUserName lives here\n");
+        write_md(tmp.path(), "b.md", "error handling notes\n");
+        write_md(tmp.path(), "f2.md", "---\ntitle: ok\n---\nplain words\n");
+        for f in ["a.md", "b.md", "f2.md"] {
+            backdate(&tmp.path().join(f));
+        }
+        let (_, output) = create_index(&tmp, &[]);
+        assert!(output.status.success(), "{output:?}");
+        write_md(tmp.path(), "a.md", "renamedIdentifier lives here now\n");
+        write_md(
+            tmp.path(),
+            "f2.md",
+            "---\ntitle: [broken\n---\nplain words\n",
+        );
+        fs::remove_file(tmp.path().join("b.md")).unwrap();
+        for query in [
+            "getUserName",
+            "renamedIdentifier",
+            "\"error handling\"",
+            "plain",
+        ] {
+            let mut args = vec![query, "--index"];
+            if quiet {
+                args.push("-q");
+            }
+            let (indexed, output) = find(&tmp, &args);
+            assert!(output.status.success(), "{query} quiet={quiet}: {output:?}");
+            let (disk, _) = find(&tmp, &[query]);
+            assert_eq!(indexed["results"], disk["results"], "{query} quiet={quiet}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains("repaired in memory"), "{stderr}");
+            assert!(stderr.contains("f2.md"), "{stderr}");
+            assert!(stderr.contains("could not be read"), "{stderr}");
+        }
+        let summary = |extra: &[&str]| {
+            let output = hyalo_no_hints()
+                .arg("--dir")
+                .arg(tmp.path())
+                .args(["summary", "--format", "json"])
+                .args(extra)
+                .output()
+                .unwrap();
+            let mut json: Value = serde_json::from_slice(&output.stdout).unwrap();
+            json["results"]["files"]["total"].take()
+        };
+        assert_eq!(summary(&["--index"]), summary(&[]));
+    }
 }
 
 #[test]

@@ -32,6 +32,9 @@ struct SearchWeightsConfig {
     body: Option<f64>,
 }
 
+/// Largest accepted `[search.weights]` value or `proximity_bonus`.
+const MAX_SEARCH_FACTOR: f64 = 1000.0;
+
 /// Resolve `[search] code_blocks`, `[search.weights]` and
 /// `[search] proximity_bonus` into the settings hyalo-core installs. An
 /// invalid value is a config error the user should see, so warn and keep the
@@ -49,11 +52,13 @@ fn resolve_search_settings(search: Option<&SearchConfig>) -> hyalo_core::bm25::S
         )),
     }
     let valid = |key: &str, v: f64| {
-        if v.is_finite() && v >= 0.0 {
+        // Bounded so a weight can never overflow a score to inf/NaN.
+        if (0.0..=MAX_SEARCH_FACTOR).contains(&v) {
             Some(v)
         } else {
             crate::warn::warn(format!(
-                "invalid [search] {key} in .hyalo.toml: {v} must be a finite number >= 0 — ignoring"
+                "invalid [search] {key} in .hyalo.toml: {v} must be between 0 and \
+                 {MAX_SEARCH_FACTOR} — ignoring"
             ));
             None
         }

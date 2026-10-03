@@ -3,8 +3,8 @@ use anyhow::Result;
 use hyalo_core::bm25::{Bm25InvertedIndex, PreTokenizedInput, TOKENIZER_VERSION, resolve_language};
 use hyalo_core::discovery;
 use hyalo_core::index::{
-    IndexEntry, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex, find_stale_indexes,
-    format_mtime,
+    IndexEntry, STALENESS_TOLERANCE_SECS, ScanOptions, ScannedIndex, SnapshotIndex, VaultIndex,
+    find_stale_indexes, format_mtime,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -247,7 +247,8 @@ pub fn create_index(
         warnings: build.warnings.len(),
         note: replacing_existing.then_some("replaced existing index"),
         reused,
-        refreshed: files.len() - reused,
+        refreshed: file_count.saturating_sub(reused),
+        skipped: files.len().saturating_sub(file_count),
         removed,
         rebuilt,
     };
@@ -279,8 +280,10 @@ struct CreateIndexResult<'a> {
     note: Option<&'a str>,
     /// Entries kept from the previous snapshot unchanged (DEC-339).
     reused: usize,
-    /// Files scanned and tokenized by this run (new or changed).
+    /// Entries scanned and indexed by this run (new or changed files).
     refreshed: usize,
+    /// Discovered files left out of the index (unparsable frontmatter).
+    skipped: usize,
     /// Previous entries whose files no longer exist.
     removed: usize,
     /// Whether the index was built from scratch (no reusable snapshot,
@@ -299,7 +302,20 @@ fn reusable_entry(
 ) -> Option<IndexEntry> {
     let entry = previous.get(rel)?;
     let meta = std::fs::metadata(full).ok()?;
-    if meta.len() != entry.size || format_mtime(meta.modified().ok()?, full) != entry.modified {
+    let mtime = meta.modified().ok()?;
+    if meta.len() != entry.size || format_mtime(mtime, full) != entry.modified {
+        return None;
+    }
+    // Racily clean (git's rule): a file whose mtime is not safely older than
+    // the previous snapshot could have been rewritten, same size, within the
+    // same whole second after it was scanned. Never trust such an entry —
+    // re-scan it, so create-index stays the cure for staleness.
+    let (_, _, created_at, _) = previous.header_info();
+    let mtime_secs = mtime
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if mtime_secs.saturating_add(STALENESS_TOLERANCE_SECS) >= created_at {
         return None;
     }
     if let Some(version) = entry.bm25_tokenizer_version {

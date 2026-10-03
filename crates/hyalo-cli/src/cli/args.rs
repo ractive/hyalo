@@ -1939,8 +1939,9 @@ Repeatable (AND).\n\
             only the changed, deleted and (when a directory mtime moved) new notes,\n\
             patches the search postings, and prints a note -q cannot silence naming\n\
             the count and up to three files. The index file is never written by a\n\
-            read. Mutating commands and a failed repair warn `index older than\n\
-            vault` instead. Remaining blind spot: an edit landing in the same whole\n\
+            read. A drifted file that cannot be scanned (unparsable frontmatter, a\n\
+            symlink leaving the vault) is left out with a warning, as a disk scan\n\
+            would. Mutating commands warn `index older than vault` instead. Remaining blind spot: an edit landing in the same whole\n\
             second as the snapshot that keeps the file size.\n\
             EXCLUSIONS: the snapshot records how many files `[scan] exclude`\n\
             dropped when it was built, and which patterns dropped them, so\n\
@@ -1950,14 +1951,16 @@ Repeatable (AND).\n\
             vault built with the same tokenizer and [search] code_blocks, unchanged\n\
             files (same size and mtime) keep their entries, changed and new files\n\
             are re-scanned, removed ones dropped, and the search postings patched\n\
-            in place. --force rebuilds from scratch. Older snapshots are always\n\
-            rebuilt.\n\n\
+            in place. A file whose mtime is not safely older than the previous\n\
+            snapshot (\"racily clean\": a same-size rewrite in the same second keeps\n\
+            its mtime) is always re-scanned. --force rebuilds from scratch. Older\n\
+            snapshots are always rebuilt.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\
             statistics. On large vaults, create an index for this workload.\n\n\
             OUTPUT: JSON object with `path`, `files_indexed`, `warnings`, `reused`,\n\
-            `refreshed`, `removed` and `rebuilt` (true for a from-scratch build).\n\
+            `refreshed`, `skipped`, `removed` and `rebuilt` (true for a from-scratch build).\n\
             SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir).\n\n\
             FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
             accepted as a synonym for `-o / --output PATH`. If both are provided and\n\
