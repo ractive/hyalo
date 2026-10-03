@@ -120,6 +120,58 @@ pub(crate) struct ConfigReport {
     /// extension injects a `hyalo summary` snapshot into the LLM context at
     /// session start. `false` when unset.
     pub pi_session_summary: bool,
+    /// Effective `[search]` settings (iter-304).
+    pub search: SearchReport,
+}
+
+/// Effective `[search]` settings, as `hyalo config` reports them (iter-304).
+#[derive(Debug, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub(crate) struct SearchReport {
+    /// `[search] language`, or null when unset (English is the fallback).
+    pub language: Option<String>,
+    /// `[search] code_blocks`: `"index"` or `"skip"` (DEC-336).
+    pub code_blocks: &'static str,
+    /// `[search.weights]`: BM25F field weights (DEC-337).
+    pub weights: SearchWeightsReport,
+    /// `[search] proximity_bonus` (DEC-338); 0 disables the bonus.
+    pub proximity_bonus: f64,
+}
+
+/// Effective `[search.weights]` (DEC-337).
+#[derive(Debug, serde::Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub(crate) struct SearchWeightsReport {
+    /// Weight of a title occurrence.
+    pub title: f64,
+    /// Weight of a heading-line occurrence.
+    pub headings: f64,
+    /// Weight of a tag or alias occurrence.
+    pub tags: f64,
+    /// Weight of any other body occurrence.
+    pub body: f64,
+}
+
+impl SearchReport {
+    fn new(language: Option<String>, settings: hyalo_core::bm25::SearchSettings) -> Self {
+        Self {
+            language,
+            code_blocks: if settings.skip_code_blocks {
+                "skip"
+            } else {
+                "index"
+            },
+            weights: SearchWeightsReport {
+                title: settings.weights.title,
+                headings: settings.weights.headings,
+                tags: settings.weights.tags,
+                body: settings.weights.body,
+            },
+            proximity_bonus: settings.proximity_bonus,
+        }
+    }
 }
 
 /// Effective `[links.auto]` settings, as `hyalo config` reports them.
@@ -253,6 +305,7 @@ pub(crate) fn collect_config_report(
             .fuzzy_min_confidence
             .unwrap_or(hyalo_core::link_score::DEFAULT_FUZZY_MIN_CONFIDENCE),
         pi_session_summary: resolved.pi_session_summary,
+        search: SearchReport::new(resolved.search_language.clone(), resolved.search_settings),
     })
 }
 
@@ -345,6 +398,7 @@ pub(crate) fn config_envelope(report: &ConfigReport) -> serde_json::Value {
             pi: ConfigPiResult {
                 session_summary: report.pi_session_summary,
             },
+            search: &report.search,
         };
         let mut envelope = crate::output::Envelope::new(results, None, &hints);
         envelope.dir = Some(report.dir.display().to_string());
@@ -506,7 +560,8 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         "{dir_out_of_bounds_str}{malformed_str}{schema_error_str}config: {config_path_str}\ncwd: {cwd}\ndir: {dir}{dir_suffix}\nformat: {format_str}\nhints: {hints}\nsite_prefix: {site_prefix_str}\nsnapshot_format_version: {snapshot_format_version}\nexempt: {exempt_str}\n\
          scan.include: {scan_include}\nscan.exclude: {scan_exclude}\nscan.verbose_skips: {scan_verbose_skips}\n\
          links.frontmatter: {fm_links}\nlinks.frontmatter_properties: {fm_link_props}\nlinks.aliases: {alias_links}\nlinks.case_insensitive: {case_insensitive}\n{case_insensitive_note}\
-         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n",
+         links.auto.exclude_titles: {auto_titles}\nlinks.auto.exclude_target_globs: {auto_globs}\nlinks.auto.first_only: {auto_first_only}\nlinks.auto.warn_common_titles: {auto_warn_common}\nlinks.fuzzy_min_confidence: {fuzzy_floor}\npi.session_summary: {pi_session_summary}\n\
+         search.language: {search_language}\nsearch.code_blocks: {search_code_blocks}\nsearch.weights: title={w_title} headings={w_headings} tags={w_tags} body={w_body}\nsearch.proximity_bonus: {proximity_bonus}\n",
         cwd = report.cwd.display(),
         dir = report.dir.display(),
         hints = report.hints,
@@ -528,6 +583,13 @@ fn run_config_text(report: &ConfigReport, show_hints: bool) -> CommandOutcome {
         auto_warn_common = report.links_auto.warn_common_titles,
         fuzzy_floor = report.fuzzy_min_confidence,
         pi_session_summary = report.pi_session_summary,
+        search_language = report.search.language.as_deref().unwrap_or("(none)"),
+        search_code_blocks = report.search.code_blocks,
+        w_title = report.search.weights.title,
+        w_headings = report.search.weights.headings,
+        w_tags = report.search.weights.tags,
+        w_body = report.search.weights.body,
+        proximity_bonus = report.search.proximity_bonus,
     );
 
     if let Some(ref contents) = report.raw_contents {
@@ -610,6 +672,8 @@ pub(crate) struct ConfigResult<'a> {
     links_fuzzy_min_confidence: f64,
     /// Effective pi setting.
     pi: ConfigPiResult,
+    /// Effective `[search]` settings.
+    search: &'a SearchReport,
 }
 
 /// Serialized ConfigLinksResult command contract.

@@ -31,6 +31,9 @@ use super::{Bm25InvertedIndex, Bm25Match, StemLanguage, create_stemmer, tokenize
 /// reports the prefix so the caller can warn.
 pub const MAX_PREFIX_EXPANSION: usize = 256;
 
+/// How many top-ranked candidates the proximity bonus re-scores (DEC-338).
+pub const PROXIMITY_CANDIDATES: usize = 200;
+
 /// Deepest parenthesis nesting accepted; bounds the recursive parser.
 const MAX_GROUP_DEPTH: usize = 64;
 
@@ -88,7 +91,8 @@ impl FieldKind {
 #[derive(Debug, Clone, PartialEq)]
 enum FieldText {
     Word(String),
-    Phrase(String),
+    /// A quoted phrase and its `~N` slop (0 when absent).
+    Phrase(String, u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,11 +108,33 @@ enum Lexeme {
         start: usize,
         end: usize,
     },
-    Phrase(String),
+    /// A quoted phrase and its `~N` slop (0 when absent).
+    Phrase(String, u32),
     Field {
         kind: FieldKind,
         value: FieldText,
     },
+}
+
+/// Largest accepted phrase slop; a larger `~N` is clamped to it.
+pub const MAX_PHRASE_SLOP: u32 = 64;
+
+/// Read an optional `~N` slop suffix directly after a closing quote (DEC-338).
+/// A `~` without digits is consumed and means 0.
+fn read_slop(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> u32 {
+    if !matches!(chars.peek(), Some(&(_, '~'))) {
+        return 0;
+    }
+    chars.next();
+    let mut slop: u32 = 0;
+    while let Some(&(_, c)) = chars.peek() {
+        let Some(digit) = c.to_digit(10) else {
+            break;
+        };
+        slop = slop.saturating_mul(10).saturating_add(digit);
+        chars.next();
+    }
+    slop.min(MAX_PHRASE_SLOP)
 }
 
 /// Read a quoted phrase body after its opening quote. An unterminated quote
@@ -174,8 +200,9 @@ fn lex(query: &str) -> Vec<Lexeme> {
             '"' => {
                 chars.next();
                 let phrase = read_phrase(&mut chars);
+                let slop = read_slop(&mut chars);
                 if !phrase.is_empty() {
-                    out.push(Lexeme::Phrase(phrase));
+                    out.push(Lexeme::Phrase(phrase, slop));
                 }
             }
             '-' => {
@@ -189,9 +216,10 @@ fn lex(query: &str) -> Vec<Lexeme> {
                     Some(&(_, '"')) => {
                         chars.next();
                         let phrase = read_phrase(&mut chars);
+                        let slop = read_slop(&mut chars);
                         if !phrase.is_empty() {
                             out.push(Lexeme::Not);
-                            out.push(Lexeme::Phrase(phrase));
+                            out.push(Lexeme::Phrase(phrase, slop));
                         }
                     }
                     Some(&(_, '(')) => out.push(Lexeme::Not),
@@ -242,9 +270,10 @@ fn classify_word(
         if matches!(chars.peek(), Some(&(_, '"'))) {
             chars.next();
             let phrase = read_phrase(chars);
+            let slop = read_slop(chars);
             return Lexeme::Field {
                 kind,
-                value: FieldText::Phrase(phrase),
+                value: FieldText::Phrase(phrase, slop),
             };
         }
     }
@@ -265,7 +294,7 @@ enum RawNode {
         start: usize,
         end: usize,
     },
-    Phrase(String),
+    Phrase(String, u32),
     Field {
         kind: FieldKind,
         value: FieldText,
@@ -369,7 +398,7 @@ impl Parser {
                 Ok(RawNode::And(items))
             }
             Lexeme::Word { text, start, end } => Ok(RawNode::Word { text, start, end }),
-            Lexeme::Phrase(text) => Ok(RawNode::Phrase(text)),
+            Lexeme::Phrase(text, slop) => Ok(RawNode::Phrase(text, slop)),
             Lexeme::Field { kind, value } => Ok(RawNode::Field { kind, value }),
             // Unreachable from parse_and/parse_or, which consume these first.
             Lexeme::Close | Lexeme::Or | Lexeme::And | Lexeme::Not => Err(QuerySyntaxError::new(
@@ -394,8 +423,9 @@ fn parse(query: &str) -> Result<RawNode, QuerySyntaxError> {
 /// What a field term compares against.
 #[derive(Debug, Clone, PartialEq)]
 enum FieldValue {
-    /// Alternative stemmed token sequences (one per query language, deduped).
-    Sequences(Vec<Vec<String>>),
+    /// Alternative stemmed token sequences (one per query language, deduped)
+    /// and the phrase slop.
+    Sequences(Vec<Vec<String>>, u32),
     /// Lowercase prefix tested against each stemmed token (`title:conf*`).
     Prefix(Vec<String>),
     /// Literal text: a tag query or a lowercase path substring.
@@ -445,12 +475,9 @@ impl FieldTerm {
 
     fn matches_tokens(&self, tokens: &[String]) -> bool {
         match &self.value {
-            FieldValue::Sequences(alternatives) => alternatives.iter().any(|seq| {
-                !seq.is_empty()
-                    && tokens
-                        .windows(seq.len())
-                        .any(|window| window == seq.as_slice())
-            }),
+            FieldValue::Sequences(alternatives, slop) => alternatives
+                .iter()
+                .any(|seq| seq_in_tokens(tokens, seq, *slop)),
             FieldValue::Prefix(candidates) => tokens
                 .iter()
                 .any(|t| candidates.iter().any(|p| t.starts_with(p.as_str()))),
@@ -510,8 +537,9 @@ pub(super) enum Node {
     /// prefix first, then its per-language stems and their longest common
     /// prefixes with the raw form, tried only when the raw prefix matches nothing.
     Prefix(Vec<String>),
-    /// Alternative consecutive stem sequences, one per query language.
-    Phrase(Vec<Vec<String>>),
+    /// Alternative stem sequences, one per query language, and the slop:
+    /// tokens in order with at most that many extra positions (DEC-338).
+    Phrase(Vec<Vec<String>>, u32),
     Field(FieldTerm),
 }
 
@@ -533,6 +561,8 @@ pub struct CompiledQuery {
     pub(super) root: Option<Node>,
     words: Vec<QueryWord>,
     source: String,
+    /// Field weights and proximity bonus used when scoring (DEC-337/338).
+    params: super::SearchSettings,
 }
 
 fn dedup<T: PartialEq>(items: Vec<T>) -> Vec<T> {
@@ -631,12 +661,12 @@ impl Compiler<'_> {
                 .compile(*child, !positive)?
                 .map(|n| Node::Not(Box::new(n))),
             RawNode::Word { text, start, end } => self.word(&text, start, end, positive)?,
-            RawNode::Phrase(text) => {
+            RawNode::Phrase(text, slop) => {
                 let mut alternatives = sequences(&text, self.stemmers);
                 if alternatives.iter().all(|seq| seq.len() == 1) && !alternatives.is_empty() {
                     Some(Node::Term(alternatives.drain(..).flatten().collect()))
                 } else {
-                    (!alternatives.is_empty()).then_some(Node::Phrase(alternatives))
+                    (!alternatives.is_empty()).then_some(Node::Phrase(alternatives, slop))
                 }
             }
             RawNode::Field { kind, value } => self.field(kind, value)?.map(Node::Field),
@@ -670,19 +700,34 @@ impl Compiler<'_> {
             nodes.push(Node::Prefix(prefix_candidates(last, self.stemmers)));
             return Ok(group(nodes, Node::And));
         }
-        let positions = positional_alternatives(text, self.stemmers);
-        if positive && positions.len() == 1 {
+        let words = super::tokenizer::query_words(text, self.stemmers);
+        if positive
+            && let [only] = words.as_slice()
+            && only.whole.is_none()
+            && only.parts.len() == 1
+        {
             self.words.push(QueryWord {
                 raw: text.to_owned(),
                 start,
                 end,
-                stems: positions[0].clone(),
+                stems: only.parts[0].clone(),
             });
         }
-        Ok(group(
-            positions.into_iter().map(Node::Term).collect(),
-            Node::And,
-        ))
+        // An identifier (`getUserName`, `error-handling`) matches its joined
+        // whole OR all of its parts (DEC-336): the whole ranks exact uses
+        // first, the parts keep prose spellings ("error handling") matching.
+        let nodes = words
+            .into_iter()
+            .filter_map(|word| {
+                let parts = group(word.parts.into_iter().map(Node::Term).collect(), Node::And);
+                match (word.whole, parts) {
+                    (Some(whole), Some(parts)) => Some(Node::Or(vec![Node::Term(whole), parts])),
+                    (Some(whole), None) => Some(Node::Term(whole)),
+                    (None, parts) => parts,
+                }
+            })
+            .collect();
+        Ok(group(nodes, Node::And))
     }
 
     fn field(
@@ -690,9 +735,9 @@ impl Compiler<'_> {
         kind: FieldKind,
         value: FieldText,
     ) -> Result<Option<FieldTerm>, QuerySyntaxError> {
-        let (text, quoted) = match value {
-            FieldText::Word(text) => (text, false),
-            FieldText::Phrase(text) => (text, true),
+        let (text, slop) = match value {
+            FieldText::Word(text) => (text, None),
+            FieldText::Phrase(text, slop) => (text, Some(slop)),
         };
         let value = match kind {
             FieldKind::Tag => {
@@ -709,7 +754,9 @@ impl Compiler<'_> {
                 FieldValue::Literal(text.to_lowercase())
             }
             FieldKind::Title | FieldKind::Heading => {
-                if !quoted && let Some(body) = text.strip_suffix('*') {
+                if slop.is_none()
+                    && let Some(body) = text.strip_suffix('*')
+                {
                     let prefix = body.trim_end_matches('*').to_lowercase();
                     if !prefix.chars().any(char::is_alphanumeric) {
                         return Err(QuerySyntaxError::new(format!(
@@ -722,7 +769,7 @@ impl Compiler<'_> {
                     if alternatives.is_empty() {
                         return Ok(None);
                     }
-                    FieldValue::Sequences(alternatives)
+                    FieldValue::Sequences(alternatives, slop.unwrap_or(0))
                 }
             }
         };
@@ -769,6 +816,7 @@ impl CompiledQuery {
             root: None,
             words: Vec::new(),
             source: query.to_owned(),
+            params: super::search_settings(),
         }
     }
 
@@ -783,7 +831,41 @@ impl CompiledQuery {
             root,
             words: compiler.words,
             source: query.to_owned(),
+            params: super::search_settings(),
         })
+    }
+
+    /// Replace the scoring parameters (field weights, proximity bonus). A
+    /// compiled query starts with the process's effective `[search]` settings.
+    #[must_use]
+    pub fn with_params(mut self, params: super::SearchSettings) -> Self {
+        self.params = params;
+        self
+    }
+
+    /// The scoring parameters this query uses.
+    #[must_use]
+    pub fn params(&self) -> &super::SearchSettings {
+        &self.params
+    }
+
+    /// The query's required ("Must") text groups for proximity (DEC-338):
+    /// each direct child of the top-level AND (or the root itself) made only
+    /// of positive text leaves. A group containing a negation or a field term
+    /// is not positional and is skipped.
+    pub(super) fn must_groups(&self) -> Vec<&Node> {
+        fn pure_text(node: &Node) -> bool {
+            match node {
+                Node::Term(_) | Node::Prefix(_) | Node::Phrase(..) => true,
+                Node::And(c) | Node::Or(c) => c.iter().all(pure_text),
+                Node::Not(_) | Node::Field(_) => false,
+            }
+        }
+        match &self.root {
+            Some(Node::And(children)) => children.iter().filter(|n| pure_text(n)).collect(),
+            Some(node) if pure_text(node) => vec![node],
+            _ => Vec::new(),
+        }
     }
 
     /// `true` when the query has a positive (non-negated) leaf of any kind.
@@ -827,7 +909,7 @@ impl CompiledQuery {
             match node {
                 Node::And(c) | Node::Or(c) => c.iter().for_each(|n| walk(n, positive, f)),
                 Node::Not(n) => walk(n, !positive, f),
-                Node::Term(_) | Node::Prefix(_) | Node::Phrase(_) if positive => f(node),
+                Node::Term(_) | Node::Prefix(_) | Node::Phrase(..) if positive => f(node),
                 _ => {}
             }
         }
@@ -852,6 +934,100 @@ impl CompiledQuery {
         }
         out
     }
+}
+
+/// Whether `positions` (one ascending list per phrase token) contain the
+/// tokens in order with at most `slop` extra positions between the first and
+/// the last token. `slop == 0` is the exact adjacent phrase.
+pub(super) fn phrase_in_positions(positions: &[&[u32]], slop: u32) -> bool {
+    let Some((first, rest)) = positions.split_first() else {
+        return false;
+    };
+    if positions.iter().any(|p| p.is_empty()) {
+        return false;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let extra_allowed = u64::from(slop);
+    for &start in *first {
+        // Greedy earliest successor per token minimises the span for a
+        // fixed start; when it runs out, no later start can succeed either.
+        let mut prev = start;
+        for list in rest {
+            let idx = list.partition_point(|&p| p <= prev);
+            match list.get(idx) {
+                Some(&p) => prev = p,
+                None => return false,
+            }
+        }
+        let span = u64::from(prev - start);
+        if span.saturating_sub(rest.len() as u64) <= extra_allowed {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `seq` occurs in `tokens` in order with at most `slop` extra tokens.
+pub(super) fn seq_in_tokens(tokens: &[String], seq: &[String], slop: u32) -> bool {
+    if seq.is_empty() {
+        return false;
+    }
+    if slop == 0 {
+        return tokens.windows(seq.len()).any(|w| w == seq);
+    }
+    let positions: Vec<Vec<u32>> = seq
+        .iter()
+        .map(|t| {
+            tokens
+                .iter()
+                .enumerate()
+                .filter(|(_, tok)| *tok == t)
+                .filter_map(|(i, _)| u32::try_from(i).ok())
+                .collect()
+        })
+        .collect();
+    let refs: Vec<&[u32]> = positions.iter().map(Vec::as_slice).collect();
+    phrase_in_positions(&refs, slop)
+}
+
+/// Smallest number of extra positions in a window holding at least one
+/// position from every list (`lists` each ascending). `None` when a list is
+/// empty. A window `[lo, hi]` over `k` lists costs `(hi - lo + 1) - k`,
+/// floored at 0, so adjacent terms cost 0 — the same unit as phrase slop.
+pub(super) fn min_window(lists: &[Vec<u32>]) -> Option<u64> {
+    if lists.is_empty() || lists.iter().any(Vec::is_empty) {
+        return None;
+    }
+    let mut events: Vec<(u32, usize)> = lists
+        .iter()
+        .enumerate()
+        .flat_map(|(g, l)| l.iter().map(move |&p| (p, g)))
+        .collect();
+    events.sort_unstable();
+    let k = lists.len();
+    let mut counts = vec![0usize; k];
+    let mut covered = 0usize;
+    let mut best: Option<u64> = None;
+    let mut lo = 0usize;
+    for hi in 0..events.len() {
+        let g = events[hi].1;
+        if counts[g] == 0 {
+            covered += 1;
+        }
+        counts[g] += 1;
+        while covered == k {
+            let width = u64::from(events[hi].0 - events[lo].0) + 1;
+            let cost = width.saturating_sub(k as u64);
+            best = Some(best.map_or(cost, |b| b.min(cost)));
+            let gl = events[lo].1;
+            counts[gl] -= 1;
+            if counts[gl] == 0 {
+                covered -= 1;
+            }
+            lo += 1;
+        }
+    }
+    best
 }
 
 /// Lexeme-level check used to explain an empty query made only of operators.
@@ -883,12 +1059,30 @@ impl SnippetGroup {
     }
 }
 
+/// Token tests for every text leaf under `node` (a required group).
+fn collect_snippet_tests(node: &Node, out: &mut Vec<SnippetGroup>) {
+    match node {
+        Node::And(c) | Node::Or(c) => c.iter().for_each(|n| collect_snippet_tests(n, out)),
+        Node::Term(stems) => out.push(SnippetGroup::Stems(stems.clone())),
+        Node::Prefix(p) => out.push(SnippetGroup::Prefix(p.clone())),
+        Node::Phrase(alternatives, _) => {
+            out.push(SnippetGroup::Stems(dedup(
+                alternatives.iter().flatten().cloned().collect(),
+            )));
+        }
+        Node::Not(_) | Node::Field(_) => {}
+    }
+}
+
 /// Positive leaves compiled for snippet qualification and coverage counting.
 #[derive(Debug, Clone, Default)]
 pub(super) struct SnippetMatcher {
     groups: Vec<SnippetGroup>,
-    phrases: Vec<Vec<String>>,
+    phrases: Vec<(Vec<String>, u32)>,
     singles: Vec<SnippetGroup>,
+    /// Token tests of each required text group, for the min-window
+    /// preference between equally covering lines (DEC-338).
+    must: Vec<Vec<SnippetGroup>>,
 }
 
 impl SnippetMatcher {
@@ -905,7 +1099,7 @@ impl SnippetMatcher {
                 matcher.singles.push(group.clone());
                 matcher.push_group(group);
             }
-            Node::Phrase(alternatives) => {
+            Node::Phrase(alternatives, slop) => {
                 let width = alternatives.iter().map(Vec::len).max().unwrap_or(0);
                 for i in 0..width {
                     let stems = dedup(
@@ -916,11 +1110,46 @@ impl SnippetMatcher {
                     );
                     matcher.push_group(SnippetGroup::Stems(stems));
                 }
-                matcher.phrases.extend(alternatives.iter().cloned());
+                matcher
+                    .phrases
+                    .extend(alternatives.iter().map(|seq| (seq.clone(), *slop)));
             }
             _ => {}
         });
+        let groups = query.must_groups();
+        if groups.len() >= 2 {
+            matcher.must = groups
+                .into_iter()
+                .map(|node| {
+                    let mut tests = Vec::new();
+                    collect_snippet_tests(node, &mut tests);
+                    tests
+                })
+                .collect();
+        }
         matcher
+    }
+
+    /// Extra positions of the smallest window on `tokens` covering every
+    /// required group; 0 when the query has fewer than two groups, and
+    /// `u64::MAX` when the line misses a group.
+    pub(super) fn window(&self, tokens: &[String]) -> u64 {
+        if self.must.is_empty() {
+            return 0;
+        }
+        let lists: Vec<Vec<u32>> = self
+            .must
+            .iter()
+            .map(|tests| {
+                tokens
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| tests.iter().any(|g| g.hit(t)))
+                    .filter_map(|(i, _)| u32::try_from(i).ok())
+                    .collect()
+            })
+            .collect();
+        min_window(&lists).unwrap_or(u64::MAX)
     }
 
     fn push_group(&mut self, group: SnippetGroup) {
@@ -938,9 +1167,10 @@ impl SnippetMatcher {
     /// line holds no complete positive leaf (a term, a prefix hit or a phrase).
     pub(super) fn coverage(&self, tokens: &[String]) -> usize {
         let qualifies = self.singles.iter().any(|g| tokens.iter().any(|t| g.hit(t)))
-            || self.phrases.iter().any(|seq| {
-                !seq.is_empty() && tokens.windows(seq.len()).any(|w| w == seq.as_slice())
-            });
+            || self
+                .phrases
+                .iter()
+                .any(|(seq, slop)| seq_in_tokens(tokens, seq, *slop));
         if !qualifies {
             return 0;
         }
@@ -1060,10 +1290,10 @@ impl<'a> Evaluator<'a> {
         set
     }
 
-    fn phrase_docs(&self, seq: &[String]) -> DocSet {
+    fn phrase_docs(&self, seq: &[String], slop: u32) -> DocSet {
         let mut set = DocSet::empty(self.len());
         for id in self.index.docs_with_all_terms(seq) {
-            if self.index.has_phrase_at_positions(seq, id) {
+            if self.index.has_phrase_at_positions(seq, id, slop) {
                 set.insert(id);
             }
         }
@@ -1108,13 +1338,13 @@ impl<'a> Evaluator<'a> {
                     .collect();
                 self.leaf(units.into_iter(), positive)
             }
-            Node::Phrase(alternatives) => {
+            Node::Phrase(alternatives, slop) => {
                 let units: Vec<_> = alternatives
                     .iter()
                     .map(|seq| {
                         (
                             seq.iter().map(String::as_str).collect(),
-                            self.phrase_docs(seq),
+                            self.phrase_docs(seq, *slop),
                         )
                     })
                     .collect();
@@ -1307,6 +1537,7 @@ impl Bm25InvertedIndex {
 
         #[allow(clippy::cast_precision_loss)]
         let n = self.doc_paths.len() as f64;
+        let weights = query.params.weights;
         let mut scores: HashMap<u32, f64> = admitted.iter().map(|id| (id, 0.0)).collect();
         for unit in &evaluator.units {
             for term in &unit.terms {
@@ -1320,8 +1551,12 @@ impl Bm25InvertedIndex {
                     if !admitted.contains(p.doc_id) || !unit.docs.contains(p.doc_id) {
                         continue;
                     }
-                    let tf = f64::from(p.term_freq);
-                    let dl = f64::from(self.doc_lengths[p.doc_id as usize]);
+                    let tf = p.weighted_tf(&weights);
+                    if tf <= 0.0 {
+                        continue;
+                    }
+                    #[allow(clippy::cast_precision_loss)]
+                    let dl = self.bm25_len(p.doc_id as usize) as f64;
                     let tf_norm = (tf * (Self::K1 + 1.0))
                         / (tf + Self::K1 * (1.0 - Self::B + Self::B * dl / self.avgdl));
                     if let Some(score) = scores.get_mut(&p.doc_id) {
@@ -1330,21 +1565,86 @@ impl Bm25InvertedIndex {
                 }
             }
         }
-        let mut matches: Vec<Bm25Match> = scores
+        let mut ranked: Vec<(u32, f64)> = scores.into_iter().collect();
+        let by_score = |a: &(u32, f64), b: &(u32, f64)| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| self.doc_paths[a.0 as usize].cmp(&self.doc_paths[b.0 as usize]))
+        };
+        // Score descending, then path: deterministic across index and disk.
+        ranked.sort_unstable_by(by_score);
+        if self.apply_proximity(query, &mut ranked) {
+            ranked.sort_unstable_by(by_score);
+        }
+        ranked
             .into_iter()
             .map(|(doc_id, score)| Bm25Match {
                 rel_path: self.doc_paths[doc_id as usize].clone(),
                 score,
             })
+            .collect()
+    }
+
+    /// Index terms a required group's leaves stand for in this corpus.
+    fn group_terms<'s>(&'s self, node: &'s Node, out: &mut Vec<&'s str>) {
+        match node {
+            Node::And(c) | Node::Or(c) => c.iter().for_each(|n| self.group_terms(n, out)),
+            Node::Term(stems) => out.extend(stems.iter().map(String::as_str)),
+            Node::Prefix(candidates) => out.extend(self.expand_prefix(candidates)),
+            Node::Phrase(alternatives, _) => {
+                out.extend(alternatives.iter().flatten().map(String::as_str));
+            }
+            Node::Not(_) | Node::Field(_) => {}
+        }
+    }
+
+    /// Proximity bonus (DEC-338): with two or more required text groups,
+    /// multiply each of the top [`PROXIMITY_CANDIDATES`] scores (by current
+    /// rank) by `1 + bonus / (1 + w)`, where `w` is the extra positions of the
+    /// smallest window holding a stream occurrence of every group. A document
+    /// that matches a group only through tags gets no bonus. Returns whether
+    /// any score changed.
+    fn apply_proximity(&self, query: &CompiledQuery, ranked: &mut [(u32, f64)]) -> bool {
+        let bonus = query.params.proximity_bonus;
+        if bonus <= 0.0 || !bonus.is_finite() {
+            return false;
+        }
+        let groups = query.must_groups();
+        if groups.len() < 2 {
+            return false;
+        }
+        let group_terms: Vec<Vec<&str>> = groups
+            .iter()
+            .map(|node| {
+                let mut terms = Vec::new();
+                self.group_terms(node, &mut terms);
+                terms.sort_unstable();
+                terms.dedup();
+                terms
+            })
             .collect();
-        // Score descending, then path: deterministic across index and disk.
-        matches.sort_unstable_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.rel_path.cmp(&b.rel_path))
-        });
-        matches
+        let mut changed = false;
+        for (doc_id, score) in ranked.iter_mut().take(PROXIMITY_CANDIDATES) {
+            let lists: Vec<Vec<u32>> = group_terms
+                .iter()
+                .map(|terms| {
+                    let mut positions: Vec<u32> = terms
+                        .iter()
+                        .flat_map(|t| self.positions_of(t, *doc_id).iter().copied())
+                        .collect();
+                    positions.sort_unstable();
+                    positions.dedup();
+                    positions
+                })
+                .collect();
+            if let Some(window) = min_window(&lists) {
+                #[allow(clippy::cast_precision_loss)]
+                let factor = 1.0 + bonus / (1.0 + window as f64);
+                *score *= factor;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Did-you-mean for each positive query word none of whose stems occur in
@@ -1453,6 +1753,7 @@ mod tests {
                     title: String::new(),
                     body: (*body).to_owned(),
                     language: StemLanguage::English,
+                    ..Default::default()
                 })
                 .collect(),
         )
@@ -1514,7 +1815,10 @@ mod tests {
             Some(Node::And(vec![
                 term("a1"),
                 Node::Not(Box::new(Node::Or(vec![term("b1"), term("c1")]))),
-                Node::Not(Box::new(Node::Phrase(vec![vec!["d1".into(), "e1".into()]]))),
+                Node::Not(Box::new(Node::Phrase(
+                    vec![vec!["d1".into(), "e1".into()]],
+                    0
+                ))),
             ]))
         );
     }
@@ -1601,7 +1905,7 @@ mod tests {
         let many: Vec<String> = (0..300).map(|i| format!("zeta{i:03}")).collect();
         let big = Bm25InvertedIndex::build_from_tokens(vec![PreTokenizedInput {
             rel_path: "big.md".into(),
-            tokens: many,
+            tokens: many.into(),
         }]);
         let q = compile("zeta*");
         assert_eq!(big.capped_prefixes(&q), vec![("zeta".to_owned(), 300)]);
@@ -1711,12 +2015,14 @@ mod tests {
                 title: String::new(),
                 body: "Die Häuser stehen am See".into(),
                 language: StemLanguage::German,
+                ..Default::default()
             },
             DocumentInput {
                 rel_path: "en.md".into(),
                 title: String::new(),
                 body: "houses by the lake".into(),
                 language: StemLanguage::English,
+                ..Default::default()
             },
         ];
         let index = Bm25InvertedIndex::build(docs);

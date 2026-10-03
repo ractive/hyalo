@@ -139,6 +139,16 @@ macro_rules! root_type {
             pub fn capture(&self, name: &RelativeName) -> Result<CapturedInput> {
                 CapturedInput::capture(self.0.clone(), self.open(name)?)
             }
+            /// [`Self::capture`] with an explicit size cap instead of the
+            /// note limit — for artifacts such as snapshot indexes, which
+            /// legitimately exceed a note's size on large vaults.
+            pub fn capture_with_limit(
+                &self,
+                name: &RelativeName,
+                limit: u64,
+            ) -> Result<CapturedInput> {
+                CapturedInput::capture_with_limit(self.0.clone(), self.open(name)?, limit)
+            }
             pub fn destination(&self, name: RelativeName) -> Result<NewEntry> {
                 let path = self.0.check(&name, false)?;
                 if std::fs::symlink_metadata(path).is_ok() {
@@ -243,24 +253,25 @@ fn file_identity(file: File) -> Result<(File, ExactIdentity, u64)> {
 
 impl CapturedInput {
     fn capture(root: Root, opened: OpenedTarget) -> Result<Self> {
+        Self::capture_with_limit(root, opened, crate::scanner::MAX_FILE_SIZE)
+    }
+
+    fn capture_with_limit(root: Root, opened: OpenedTarget, limit: u64) -> Result<Self> {
         let (mut file, exact_identity, identity) = file_identity(opened.file)?;
         let metadata = file.metadata()?;
         let oversized = || {
             crate::user_error(format!(
                 "file too large: {} exceeds {} MiB limit",
                 opened.entry.as_path().display(),
-                crate::scanner::MAX_FILE_SIZE / (1024 * 1024)
+                limit / (1024 * 1024)
             ))
         };
-        if metadata.len() > crate::scanner::MAX_FILE_SIZE {
+        if metadata.len() > limit {
             return Err(oversized());
         }
         let mut original = NamedTempFile::new()?;
-        let size = std::io::copy(
-            &mut Read::by_ref(&mut file).take(crate::scanner::MAX_FILE_SIZE + 1),
-            &mut original,
-        )?;
-        if size > crate::scanner::MAX_FILE_SIZE {
+        let size = std::io::copy(&mut Read::by_ref(&mut file).take(limit + 1), &mut original)?;
+        if size > limit {
             return Err(oversized());
         }
         Ok(Self {

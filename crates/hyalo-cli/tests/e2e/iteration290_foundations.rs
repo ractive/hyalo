@@ -189,11 +189,11 @@ fn indexed_regex_refuses_static_escape_and_mutations_reject_physical_aliases() {
     assert!(run(&dir, &["create-index"]).status.success());
     fs::remove_file(dir.path().join("a.md")).unwrap();
     std::os::unix::fs::symlink(outside.path().join("secret.md"), dir.path().join("a.md")).unwrap();
-    assert!(
-        !run(&dir, &["find", "--index", "--regexp", "secret"])
-            .status
-            .success()
-    );
+    // DEC-339: the drifted escaping symlink is dropped by the in-memory
+    // repair, exactly as a disk scan skips it; its target is never read.
+    let output = run(&dir, &["find", "--index", "--regexp", "secret"]);
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("secret marker"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside"));
     fs::remove_file(dir.path().join("a.md")).unwrap();
     fs::hard_link(dir.path().join("b.md"), dir.path().join("a.md")).unwrap();
     let before = fs::read(dir.path().join("a.md")).unwrap();

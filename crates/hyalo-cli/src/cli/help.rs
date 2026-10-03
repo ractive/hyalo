@@ -354,7 +354,8 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo deinit [-d/--dir DIR]                            # picks the tree to clean; default CWD
 
   Create-index (build snapshot for faster queries):
-    hyalo create-index [-o/--output PATH] [--allow-outside-vault]   # --path is an alias for --output
+    hyalo create-index [-o/--output PATH] [--allow-outside-vault] [--force]   # --path is an alias for --output
+      # incremental: unchanged files are reused; --force rebuilds from scratch
 
   Drop-index (delete snapshot index):
     hyalo drop-index [-p/--path PATH] [--allow-outside-vault]       # --output is an alias for --path

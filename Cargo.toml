@@ -52,6 +52,9 @@ winapi-util = "0.1"
 toml = "1"
 toml_edit = "0.25"
 rust-stemmers = "1.2.0"
+# NFKD decomposition for tokenizer v4 diacritic folding (DEC-336): nothing in
+# the tree provided it (deunicode transliterates, which would mangle CJK).
+unicode-normalization = "0.1.25"
 walkdir = "2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 # Keep native ts-rs output: optional formatting pulls in unmaintained smartstring

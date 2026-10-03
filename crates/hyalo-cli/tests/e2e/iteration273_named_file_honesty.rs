@@ -306,7 +306,7 @@ fn lint_rule_hyalo005_still_reports_the_parse_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn an_in_place_overwrite_makes_the_next_index_read_warn() {
+fn an_in_place_overwrite_makes_the_next_index_read_repair() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
     write(
@@ -330,12 +330,30 @@ fn an_in_place_overwrite_makes_the_next_index_read_warn() {
         "---\ntitle: N2 rewritten\nstatus: draft\n---\n\nnew\n",
     );
 
-    let (code, _, stderr) = run(&tmp, &["find", "--index", "--property", "status=final"]);
-    assert_eq!(code, 0, "warn-but-serve: the read still answers");
+    let (code, json, stderr) = run(&tmp, &["find", "--index", "--property", "status=final"]);
+    assert_eq!(code, 0, "repair-and-serve: the read still answers");
     assert!(
-        stderr.contains("index older than vault") && stderr.contains("n2.md"),
-        "the directory-mtime probe cannot see an in-place overwrite; the \
-         per-file probe must, and must name the witness: {stderr}"
+        stderr.contains("changed on disk since the index was built") && stderr.contains("n2.md"),
+        "the per-file probe must detect the in-place overwrite and name the \
+         witness: {stderr}"
+    );
+    assert!(
+        stderr.contains("repaired in memory"),
+        "the note must say the repair happened in memory: {stderr}"
+    );
+
+    // n2.md's disk content now says `status: draft`, so the repaired-in-memory
+    // corpus must no longer match `status=final` for it.
+    let files: Vec<&str> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["n1.md"],
+        "the repair must reflect n2.md's current disk content: {files:?}"
     );
 }
 
