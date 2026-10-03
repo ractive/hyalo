@@ -6,6 +6,9 @@ default-members = ["crates/hyalo-cli"]
 [workspace.package]
 version = "0.24.1"
 edition = "2024"
+# MSRV: AtomicU64::try_update (stable in 1.95) is the newest std API in use;
+# checked with `cargo +1.95 check --workspace --all-targets`.
+rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/ractive/hyalo"
 
@@ -17,8 +20,8 @@ hyalo-mdlint = { path = "crates/hyalo-mdlint", version = "0.24.1" }
 # External dependencies
 anyhow = "1"
 assert_cmd = "2"
-clap = "4.6.0"
-clap_complete = "4.6.1"
+clap = "4.6.7"
+clap_complete = "4.6.11"
 ctrlc = { version = "3.5", features = ["termination"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 dunce = "1"
@@ -27,18 +30,22 @@ ignore = "0.4"
 indexmap = { version = "2", features = ["serde"] }
 memchr = "2"
 libc = "0.2"
-jaq-core = "3.0.0"
-jaq-json = { version = "2.0.0", features = ["serde"] }
-jaq-std = "3.0.0"
+jaq-core = "3.1.1"
+jaq-json = { version = "2.0.3", features = ["serde"] }
+jaq-std = "3.0.3"
 predicates = "3"
 rayon = "1"
 regex = "1"
 rmp-serde = "1"
 serde = { version = "1", features = ["derive"] }
+# Held at 0.0.23 on purpose: 1.x changes how user frontmatter parses.
+# Leading-zero decimals (`zip: 01234`) become floats (1234.0) and no option
+# keeps them integers (`legacy_octal_numbers` reads them as base 8). The
+# regression tests in hyalo-core `frontmatter::tests` pin the current behavior.
 serde-saphyr = "0.0.23"
 aho-corasick = "1"
 strsim = "0.11"
-serde_json = "1.0.149"
+serde_json = "1.0.151"
 tempfile = "3"
 same-file = "1"
 winapi-util = "0.1"

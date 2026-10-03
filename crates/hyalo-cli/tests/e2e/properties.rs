@@ -118,7 +118,7 @@ fn properties_empty_dir() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let arr = json["results"].as_array().expect("expected results array");
-    assert!(arr.is_empty());
+    assert!(arr.is_empty(), "expected empty, got {arr:?}");
 }
 
 #[test]

@@ -167,6 +167,9 @@ mod tests {
     /// contains only the codes documented above.
     #[test]
     fn platform_code_list_is_well_formed() {
-        assert!(!BROKEN_PIPE_OS_ERROR_CODES.is_empty());
+        assert!(
+            !BROKEN_PIPE_OS_ERROR_CODES.is_empty(),
+            "expected non-empty: BROKEN_PIPE_OS_ERROR_CODES"
+        );
     }
 }

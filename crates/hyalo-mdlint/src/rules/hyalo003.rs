@@ -52,7 +52,11 @@ mod tests {
     #[test]
     fn clean_date_no_violation() {
         let p = props(&[("date", "2026-05-10")]);
-        assert!(check_date_keys(&p).is_empty());
+        assert!(
+            check_date_keys(&p).is_empty(),
+            "expected empty, got {:?}",
+            check_date_keys(&p)
+        );
     }
 
     #[test]
@@ -82,14 +86,22 @@ mod tests {
     #[test]
     fn non_date_key_ignored() {
         let p = props(&[("title", "not-a-date"), ("status", "planned")]);
-        assert!(check_date_keys(&p).is_empty());
+        assert!(
+            check_date_keys(&p).is_empty(),
+            "expected empty, got {:?}",
+            check_date_keys(&p)
+        );
     }
 
     #[test]
     fn null_value_ignored() {
         let mut p: IndexMap<String, Value> = IndexMap::new();
         p.insert("date".to_owned(), Value::Null);
-        assert!(check_date_keys(&p).is_empty());
+        assert!(
+            check_date_keys(&p).is_empty(),
+            "expected empty, got {:?}",
+            check_date_keys(&p)
+        );
     }
 
     #[test]

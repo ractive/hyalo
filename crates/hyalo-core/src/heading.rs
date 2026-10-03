@@ -607,7 +607,7 @@ mod tests {
         let sections = vec![make_section(2, "Other", 5)];
         let filters = vec![SectionFilter::parse("Tasks").unwrap()];
         let ranges = build_section_scope(&sections, &filters, 20);
-        assert!(ranges.is_empty());
+        assert!(ranges.is_empty(), "expected empty, got {ranges:?}");
     }
 
     #[test]

@@ -1595,6 +1595,10 @@ mod tests {
         // Guard that the hyalo-core TypeSchema surface this module relies on
         // stays available to library consumers.
         let ts = TypeSchema::default();
-        assert!(ts.required.is_empty());
+        assert!(
+            ts.required.is_empty(),
+            "expected empty, got {:?}",
+            ts.required
+        );
     }
 }

@@ -49,7 +49,11 @@ fn tags_empty_vault() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-    assert!(json["results"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        json["results"].as_array().unwrap()
+    );
 }
 
 #[test]
@@ -245,7 +249,7 @@ fn find_tag_no_match_returns_empty_array() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let json = unwrap_results(&json);
-    assert!(json.is_empty());
+    assert!(json.is_empty(), "expected empty, got {json:?}");
 }
 
 #[test]
@@ -543,7 +547,7 @@ fn find_tag_empty_tags_list() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let json = unwrap_results(&json);
-    assert!(json.is_empty());
+    assert!(json.is_empty(), "expected empty, got {json:?}");
 }
 
 // ---------------------------------------------------------------------------

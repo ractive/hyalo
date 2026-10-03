@@ -227,7 +227,11 @@ fn backlinks_empty_result() {
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-    assert!(json["results"]["backlinks"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"]["backlinks"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        json["results"]["backlinks"].as_array().unwrap()
+    );
 }
 
 #[test]

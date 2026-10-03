@@ -224,7 +224,11 @@ fn filenames0_strict_flips_exit_code_when_results_exist() {
         .output()
         .unwrap();
     assert!(output.status.success(), "--strict on zero results exits 0");
-    assert!(output.stdout.is_empty());
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty, got {:?}",
+        output.stdout
+    );
 }
 
 #[test]

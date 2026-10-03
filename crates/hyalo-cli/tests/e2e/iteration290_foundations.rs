@@ -174,7 +174,11 @@ fn create_drop_aliases_are_destinations_and_views_use_effective_projection() {
         &["find", "--property", "status=absent", "--filenames0"],
     );
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty, got {:?}",
+        output.stdout
+    );
 }
 #[cfg(unix)]
 #[test]
@@ -901,5 +905,9 @@ fn files_from_keeps_literal_first_identity_membership_and_counters() {
         ],
     );
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty, got {:?}",
+        output.stdout
+    );
 }

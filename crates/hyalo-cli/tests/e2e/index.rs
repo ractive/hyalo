@@ -518,7 +518,11 @@ fn find_with_index_content_search_no_match() {
 
     let json = run_find(&tmp, &["this-string-does-not-exist-anywhere", "--index"]);
 
-    assert!(unwrap_results(&json).is_empty());
+    assert!(
+        unwrap_results(&json).is_empty(),
+        "expected empty, got {:?}",
+        unwrap_results(&json)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -943,7 +947,10 @@ fn set_with_symlinked_index_outside_vault_does_not_clobber_it() {
         String::from_utf8_lossy(&build_output.stderr)
     );
     let original_bytes = std::fs::read(&outside_index).unwrap();
-    assert!(!original_bytes.is_empty());
+    assert!(
+        !original_bytes.is_empty(),
+        "expected non-empty: original_bytes"
+    );
 
     // Plant the tampered index: the vault's default `.hyalo-index` location
     // is a symlink to that outside file.

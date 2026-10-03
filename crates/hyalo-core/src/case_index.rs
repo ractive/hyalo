@@ -952,7 +952,11 @@ mod tests {
         let mut idx = CaseInsensitiveIndex::new();
         idx.insert("Foo/Bar.md");
         assert!(idx.lookup_unique("foo/bar.md").is_none());
-        assert!(idx.lookup_all("foo/bar.md").is_empty());
+        assert!(
+            idx.lookup_all("foo/bar.md").is_empty(),
+            "expected empty, got {:?}",
+            idx.lookup_all("foo/bar.md")
+        );
 
         // Stem lookup, however, is always active.
         assert_eq!(idx.lookup_stem("Bar"), Some("Foo/Bar.md"));
@@ -975,7 +979,11 @@ mod tests {
     fn empty_index_returns_none() {
         let idx = CaseInsensitiveIndex::new();
         assert!(idx.lookup_unique("anything.md").is_none());
-        assert!(idx.lookup_all("anything.md").is_empty());
+        assert!(
+            idx.lookup_all("anything.md").is_empty(),
+            "expected empty, got {:?}",
+            idx.lookup_all("anything.md")
+        );
         assert!(idx.is_empty());
         assert_eq!(idx.len(), 0);
     }

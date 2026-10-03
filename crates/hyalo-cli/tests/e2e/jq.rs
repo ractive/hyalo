@@ -127,7 +127,11 @@ fn jq_worker_abort_runtime_timeout_and_oversize_retain_append_effects() {
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(2), "{filter}: {output:?}");
-        assert!(output.stdout.is_empty());
+        assert!(
+            output.stdout.is_empty(),
+            "expected empty, got {:?}",
+            output.stdout
+        );
         let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
         let text = String::from_utf8_lossy(&output.stderr);
         assert!(

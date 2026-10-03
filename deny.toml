@@ -10,26 +10,14 @@
 # shared workflow's content via `gh api`).
 
 [advisories]
-# Ignore list last re-verified 2026-08-24 (iter-222): both advisories still
-# resolve through the same `comrak -> syntect` chain and nothing else in the
-# tree pulls them. RUSTSEC-2026-0190 (anyhow `Error::downcast_mut`
-# unsoundness, patched >= 1.0.103) is deliberately NOT in this ignore list —
-# it was resolved by bumping anyhow (1.0.102 -> 1.0.104 via `cargo update -p
-# anyhow`; the workspace `Cargo.toml` requirement is already `"1"`, so no
-# manifest edit was needed) rather than ignored, since a clean upgrade was
-# available.
-ignore = [
-    # bincode 1.x is unmaintained; pulled in via comrak -> syntect (syntax
-    # highlighting caches). No safe upgrade on the syntect 5.x line; not
-    # exposed to untrusted input in our usage. Mirrors cargo-audit, which
-    # reports unmaintained as a warning, not an error.
-    # Re-checked 2026-08-22: chain unchanged (comrak 0.21 -> syntect 5.3).
-    "RUSTSEC-2025-0141",
-    # yaml-rust is unmaintained; same comrak -> syntect dependency chain,
-    # used only to parse syntect's bundled theme/syntax definitions.
-    # Re-checked 2026-08-22: chain unchanged (comrak 0.21 -> syntect 5.3).
-    "RUSTSEC-2024-0320",
-]
+# No ignores (re-verified 2026-10-03). RUSTSEC-2025-0141 (bincode) and
+# RUSTSEC-2024-0320 (yaml-rust) used to be ignored because they came in via
+# `comrak -> syntect`; hyalo-mdlint now builds comrak with
+# `default-features = false`, so syntect, bincode and yaml-rust are gone
+# from the tree (`cargo tree -i bincode` / `-i yaml-rust` match nothing) and
+# the stale ignores were dropped. Prefer upgrading over ignoring: e.g.
+# RUSTSEC-2026-0190 (anyhow) was fixed by bumping anyhow, not ignored.
+ignore = []
 
 [licenses]
 allow = [
@@ -38,10 +26,8 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "ISC",
     "Zlib",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
 ]
 confidence-threshold = 0.8
 
@@ -54,9 +40,12 @@ ignore = true
 
 # `toml` 0.5 is still duplicated against `toml` 1.x: mdbook-lint-core /
 # mdbook-lint-rulesets 0.16.0 have not moved off 0.5 (upstream
-# joshrotenberg/mdbook-lint#459). Re-checked 2026-08-22 (iter-196); the
-# 0.15.2 -> 0.16.0 bump left the unique-crate count at 136 (upstream #489
-# only moved `glob` from rulesets to core).
+# joshrotenberg/mdbook-lint#459). Re-checked 2026-10-03 at 0.16.2 (still
+# the latest release): unchanged. The graph `cargo deny list` checks is now
+# 166 crate versions. The other duplicates it warns about: getrandom/r-efi
+# and thiserror 2.0.18 (serde-saphyr 0.0.23 via ahash / saphyr-parser-bw;
+# held back, see Cargo.toml), thiserror 1 (mdbook-lint), strsim (mdbook-lint's
+# darling 0.14), and syn (xtask's syn 3 vs proc-macro crates on syn 1/2).
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
