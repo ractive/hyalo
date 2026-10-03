@@ -6,10 +6,11 @@
 //! - [`tokenize`]: Unicode-aware tokenization + stemming pipeline
 //!
 //! Ranked snippet qualification (iteration 283): a body line qualifies when it
-//! contains a positive query clause: any stemmed token for plain AND/OR terms,
-//! or the complete consecutive stemmed sequence for a quoted phrase. OR accepts
-//! any positive side; excluded terms never supply snippets. Query tokens use the
-//! query language; body tokens use the document language, exactly as scoring does.
+//! contains a positive query leaf: any stem alternative of a plain term, a token
+//! starting with a `prefix*`, or the complete consecutive stemmed sequence for a
+//! quoted phrase. OR accepts any positive side; excluded terms and field terms
+//! never supply snippets. Query tokens carry one stem per corpus language
+//! (iteration 302); body tokens use the document language, exactly as scoring does.
 //! CJK uses the same overlapping bigrams, including single-character unigrams.
 //! Frontmatter never qualifies, but raw body code/fence/comment lines do. Phrases
 //! spanning lines and title-only hits may therefore have an empty matches array.
@@ -31,7 +32,7 @@ use serde::{Deserialize, Serialize};
 macro_rules! define_stem_languages {
     ( default = $default:ident; $( $variant:ident => $canonical:literal, $algo:ident; )+ ) => {
         /// A stemming language supported by the [`rust_stemmers`] crate.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum StemLanguage { $( $variant, )+ }
 
         impl Default for StemLanguage {
@@ -341,82 +342,21 @@ pub struct Bm25Match {
 }
 
 // ---------------------------------------------------------------------------
-// Boolean query AST
+// Query language (see `query.rs`, DEC-333)
 // ---------------------------------------------------------------------------
 
-/// A single clause in a boolean query.
-#[derive(Debug, Clone, PartialEq)]
-enum Clause {
-    /// Document must contain these terms (implicit AND).
-    /// Single-element for a plain word; multi-element for a quoted phrase.
-    Must(QueryAtom),
-    /// Document may contain these terms (OR group member, contributes score).
-    Should(QueryAtom),
-    /// Document must not contain these terms.
-    MustNot(QueryAtom),
-}
+mod query;
 
-/// Typed normalized atom; quoting survives compilation independently of clause occurrence.
-#[derive(Debug, Clone, PartialEq)]
-enum QueryAtom {
-    Term(String),
-    Phrase(Vec<String>),
-}
-impl QueryAtom {
-    fn terms(&self) -> &[String] {
-        match self {
-            Self::Term(term) => std::slice::from_ref(term),
-            Self::Phrase(terms) => terms,
-        }
-    }
-}
-impl From<Vec<String>> for QueryAtom {
-    fn from(mut terms: Vec<String>) -> Self {
-        if terms.len() == 1 {
-            Self::Term(terms.remove(0))
-        } else {
-            Self::Phrase(terms)
-        }
-    }
-}
-impl std::ops::Deref for QueryAtom {
-    type Target = [String];
-    fn deref(&self) -> &Self::Target {
-        self.terms()
-    }
-}
-impl<'a> IntoIterator for &'a QueryAtom {
-    type Item = &'a String;
-    type IntoIter = std::slice::Iter<'a, String>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.terms().iter()
-    }
-}
+pub use query::{
+    CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PREFIX_EXPANSION,
+    NoFields, QuerySyntaxError, TermCandidate, TermSuggestion, corrected_query,
+};
 
-/// Parsed boolean query with AND/OR/NOT/phrase support.
-#[derive(Debug, Clone)]
-struct BooleanQuery {
-    clauses: Vec<Clause>,
-}
-
-/// One normalized query shared by indexed scoring, disk fallback and snippets.
-pub struct CompiledQuery {
-    query: BooleanQuery,
-}
-impl CompiledQuery {
-    /// Compile flat Boolean/phrase semantics with the effective query language.
-    pub fn new(query: &str, language: StemLanguage) -> Self {
-        Self {
-            query: parse_boolean_query(query, &create_stemmer(language)),
-        }
-    }
-}
-
-/// Positive clauses compiled once for ranked body snippets. Shares scoring's
-/// query parser, so operators, negation, phrases and CJK never drift.
+/// Positive leaves compiled once for ranked body snippets. Shares scoring's
+/// compiled query, so operators, negation, phrases, prefixes, per-language
+/// stem alternatives and CJK never drift.
 pub struct SnippetQuery {
-    clauses: Vec<Vec<String>>,
-    terms: HashSet<String>,
+    matcher: query::SnippetMatcher,
 }
 
 /// Resolve a ranked-search live read using the vault's canonical boundary.
@@ -446,37 +386,17 @@ impl SnippetQuery {
         Self::from_compiled(&CompiledQuery::new(query, language))
     }
 
-    /// Build a snippet selector from the same normalized atoms used for scoring.
+    /// Build a snippet selector from the same compiled query used for scoring.
     pub fn from_compiled(query: &CompiledQuery) -> Self {
-        let clauses: Vec<_> = query
-            .query
-            .clauses
-            .iter()
-            .filter_map(|clause| match clause {
-                Clause::Must(atom) | Clause::Should(atom) => Some(atom.terms().to_vec()),
-                Clause::MustNot(_) => None,
-            })
-            .collect();
-        let terms = clauses.iter().flatten().cloned().collect();
-        Self { clauses, terms }
+        Self {
+            matcher: query::SnippetMatcher::from_compiled(query),
+        }
     }
 
     /// Number of distinct positive query tokens on a qualifying line, or zero.
     /// Body stemming must use the same document language as the BM25 corpus.
     fn distinct_tokens(&self, line: &str, stemmer: &Stemmer) -> usize {
-        let tokens = tokenize(line, stemmer);
-        if !self
-            .clauses
-            .iter()
-            .any(|clause| tokens.windows(clause.len()).any(|window| window == clause))
-        {
-            return 0;
-        }
-        tokens
-            .iter()
-            .filter(|token| self.terms.contains(*token))
-            .collect::<HashSet<_>>()
-            .len()
+        self.matcher.coverage(&tokenize(line, stemmer))
     }
 
     /// Stream one selected result's raw body and keep the best three lines.
@@ -585,7 +505,7 @@ impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
         // Nothing later can beat three lines carrying every distinct query
         // token; equal coverage loses on document order. Particularly useful
         // for common single-term searches over long indexed documents.
-        if self.best.len() == 3 && self.best[2].0 == self.query.terms.len() {
+        if self.best.len() == 3 && self.best[2].0 == self.query.matcher.max_coverage() {
             ScanAction::Stop
         } else {
             ScanAction::Continue
@@ -595,170 +515,6 @@ impl crate::scanner::FileVisitor for SnippetVisitor<'_> {
     fn needs_frontmatter(&self) -> bool {
         false
     }
-}
-
-impl BooleanQuery {
-    fn is_empty(&self) -> bool {
-        self.clauses.is_empty()
-    }
-
-    /// Returns `true` if the query has any [`Clause::Must`] or [`Clause::Should`] clauses.
-    fn has_positive_clauses(&self) -> bool {
-        self.clauses
-            .iter()
-            .any(|c| matches!(c, Clause::Must(_) | Clause::Should(_)))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Query parsing
-// ---------------------------------------------------------------------------
-
-/// Raw segment produced by the first-pass tokenizer.
-#[derive(Debug)]
-enum QuerySegment {
-    /// A plain word.
-    Term(String),
-    /// Content between double-quotes (without the quotes); becomes a phrase.
-    Phrase(String),
-    /// A word that was prefixed with `-`; also accepts `-"phrase"`.
-    Negated(String),
-    NegatedPhrase(String),
-    /// The literal keyword `OR` or `or`.
-    Or,
-    /// The literal keyword `AND` or `and` (syntactic sugar — treated as whitespace).
-    And,
-}
-
-/// Split a raw query string into [`QuerySegment`]s, respecting quoted phrases and `-` prefixes.
-fn tokenize_query_segments(query: &str) -> Vec<QuerySegment> {
-    let mut segments = Vec::new();
-    let mut chars = query.chars().peekable();
-
-    while let Some(&ch) = chars.peek() {
-        if ch.is_whitespace() {
-            chars.next();
-            continue;
-        }
-
-        if ch == '"' {
-            // Quoted phrase (positive).
-            chars.next(); // consume opening `"`
-            let mut phrase = String::new();
-            for c in chars.by_ref() {
-                if c == '"' {
-                    break;
-                }
-                phrase.push(c);
-            }
-            if !phrase.is_empty() {
-                segments.push(QuerySegment::Phrase(phrase));
-            }
-        } else if ch == '-' {
-            chars.next(); // consume `-`
-            if chars.peek() == Some(&'"') {
-                // Negated phrase: -"foo bar"
-                chars.next(); // consume opening `"`
-                let mut phrase = String::new();
-                for c in chars.by_ref() {
-                    if c == '"' {
-                        break;
-                    }
-                    phrase.push(c);
-                }
-                if !phrase.is_empty() {
-                    segments.push(QuerySegment::NegatedPhrase(phrase));
-                }
-            } else {
-                // Negated word: -foo
-                let mut word = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() || c == '"' {
-                        break;
-                    }
-                    word.push(c);
-                    chars.next();
-                }
-                if !word.is_empty() {
-                    segments.push(QuerySegment::Negated(word));
-                }
-            }
-        } else {
-            // Plain word — may turn out to be OR/AND keyword.
-            let mut word = String::new();
-            while let Some(&c) = chars.peek() {
-                if c.is_whitespace() || c == '"' {
-                    break;
-                }
-                word.push(c);
-                chars.next();
-            }
-            if word.eq_ignore_ascii_case("or") {
-                segments.push(QuerySegment::Or);
-            } else if word.eq_ignore_ascii_case("and") {
-                segments.push(QuerySegment::And);
-            } else if !word.is_empty() {
-                segments.push(QuerySegment::Term(word));
-            }
-        }
-    }
-
-    segments
-}
-
-/// Parse a query string into a [`BooleanQuery`].
-///
-/// Semantics:
-/// - `-word` / `-"phrase"` → [`Clause::MustNot`] (always, regardless of OR presence)
-/// - If the query contains no `OR` keyword: all positive terms/phrases → [`Clause::Must`] (AND)
-/// - If `OR` is present anywhere: all positive terms/phrases → [`Clause::Should`] (OR)
-/// - The `AND` keyword is accepted but treated as implicit whitespace (no change in behaviour)
-fn parse_boolean_query(query: &str, stemmer: &Stemmer) -> BooleanQuery {
-    let raw = tokenize_query_segments(query);
-    let has_or = raw.iter().any(|s| matches!(s, QuerySegment::Or));
-
-    let mut clauses = Vec::new();
-
-    for seg in raw {
-        match seg {
-            QuerySegment::Or | QuerySegment::And => {}
-            QuerySegment::Negated(text) => {
-                for token in tokenize(&text, stemmer) {
-                    clauses.push(Clause::MustNot(QueryAtom::Term(token)));
-                }
-            }
-            QuerySegment::NegatedPhrase(text) => {
-                let tokens = tokenize(&text, stemmer);
-                if !tokens.is_empty() {
-                    clauses.push(Clause::MustNot(QueryAtom::Phrase(tokens)));
-                }
-            }
-            QuerySegment::Phrase(text) => {
-                let tokens = tokenize(&text, stemmer);
-                if !tokens.is_empty() {
-                    if has_or {
-                        clauses.push(Clause::Should(QueryAtom::Phrase(tokens)));
-                    } else {
-                        clauses.push(Clause::Must(QueryAtom::Phrase(tokens)));
-                    }
-                }
-            }
-            QuerySegment::Term(text) => {
-                let tokens = tokenize(&text, stemmer);
-                if !tokens.is_empty() {
-                    for token in tokens {
-                        if has_or {
-                            clauses.push(Clause::Should(vec![token].into()));
-                        } else {
-                            clauses.push(Clause::Must(vec![token].into()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    BooleanQuery { clauses }
 }
 
 // ---------------------------------------------------------------------------
@@ -803,9 +559,11 @@ pub(crate) struct Posting {
 /// |---------|-----------|
 /// | `foo bar` | AND — both terms required |
 /// | `foo OR bar` | OR — either term sufficient |
-/// | `-word` | Exclude — documents containing `word` are filtered out |
+/// | `a b OR c` | `OR` binds tighter than AND: a AND (b OR c) (DEC-333) |
+/// | `(a OR b) -c` | Parentheses group; `-` negates a term, phrase or group |
 /// | `"foo bar"` | Phrase — tokens must be adjacent and in order |
-/// | `foo OR bar -baz` | Mixed — either foo or bar, not baz |
+/// | `conf*` | Prefix — any dictionary stem starting with `conf` |
+/// | `title:x` `heading:x` `tag:x` `path:x` | Field predicates from index metadata |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bm25InvertedIndex {
     /// Term → list of (doc_id, term_frequency, positions) postings, sorted by doc_id.
@@ -971,13 +729,16 @@ impl Bm25InvertedIndex {
     /// Returns **all** matches for `query`, ranked by BM25 score (highest first).
     ///
     /// Returns an empty vec when `query` produces no positive tokens or has no matches.
+    /// A malformed query (unbalanced parenthesis, bare `*`) matches nothing;
+    /// use [`CompiledQuery::parse`] to surface the error.
     pub fn score(&self, query: &str, stemmer: &Stemmer) -> Vec<Bm25Match> {
-        self.ranked_matches(&parse_boolean_query(query, stemmer))
+        self.score_compiled(&CompiledQuery::lenient_with_stemmer(query, stemmer))
     }
 
-    /// Score already-compiled atoms without repeating query normalization.
+    /// Score an already-compiled query. Field terms other than `path:` match
+    /// nothing here; use [`Bm25InvertedIndex::score_with_fields`] for those.
     pub fn score_compiled(&self, query: &CompiledQuery) -> Vec<Bm25Match> {
-        self.ranked_matches(&query.query)
+        self.score_with_fields(query, &NoFields)
     }
 
     /// Reconstruct every document's full ordered token list from postings.
@@ -1167,107 +928,6 @@ impl Bm25InvertedIndex {
     // Private helpers
     // ------------------------------------------------------------------
 
-    /// Compute BM25 scores for all documents matching the parsed query.
-    fn ranked_matches(&self, query: &BooleanQuery) -> Vec<Bm25Match> {
-        if query.is_empty() || !query.has_positive_clauses() {
-            return Vec::new();
-        }
-
-        #[allow(clippy::cast_precision_loss)]
-        let n = self.doc_paths.len() as f64;
-        let avgdl = self.avgdl;
-
-        // Eligibility is computed for whole clauses before any score is accumulated.
-        // In particular, a failed optional phrase contributes neither admission nor score.
-        let evaluated: Vec<_> = query
-            .clauses
-            .iter()
-            .map(|clause| {
-                let terms = match clause {
-                    Clause::Must(t) | Clause::Should(t) | Clause::MustNot(t) => t,
-                };
-                (clause, self.matching_documents(terms))
-            })
-            .collect();
-        let mut eligible = HashSet::new();
-        for (clause, documents) in &evaluated {
-            if !matches!(clause, Clause::MustNot(_)) {
-                eligible.extend(documents);
-            }
-        }
-        for (clause, documents) in &evaluated {
-            match clause {
-                Clause::Must(_) => eligible.retain(|id| documents.contains(id)),
-                Clause::MustNot(_) => eligible.retain(|id| !documents.contains(id)),
-                Clause::Should(_) => {}
-            }
-        }
-        let mut scores: HashMap<u32, f64> = HashMap::new();
-        for (clause, satisfied) in &evaluated {
-            let terms = match clause {
-                Clause::Must(t) | Clause::Should(t) => t,
-                Clause::MustNot(_) => continue,
-            };
-            for term in terms {
-                let Some(postings) = self.postings.get(term) else {
-                    continue;
-                };
-                #[allow(clippy::cast_precision_loss)]
-                let nt = postings.len() as f64;
-                let idf = (1.0 + (n - nt + 0.5) / (nt + 0.5)).ln();
-                for p in postings {
-                    if !eligible.contains(&p.doc_id) || !satisfied.contains(&p.doc_id) {
-                        continue;
-                    }
-                    let tf = f64::from(p.term_freq);
-                    let dl = f64::from(self.doc_lengths[p.doc_id as usize]);
-                    let tf_norm = (tf * (Self::K1 + 1.0))
-                        / (tf + Self::K1 * (1.0 - Self::B + Self::B * dl / avgdl));
-                    *scores.entry(p.doc_id).or_insert(0.0) += idf * tf_norm;
-                }
-            }
-        }
-        let mut matches: Vec<Bm25Match> = scores
-            .into_iter()
-            .filter(|(_, score)| *score > 0.0)
-            .map(|(doc_id, score)| Bm25Match {
-                rel_path: self.doc_paths[doc_id as usize].clone(),
-                score,
-            })
-            .collect();
-
-        // Sort by score (desc), then by rel_path (asc) so ties are broken
-        // deterministically: scores are accumulated through a HashMap, so an
-        // unstable score-only sort would order equal-scoring documents by
-        // HashMap iteration order — different between a persisted index and a
-        // fresh disk build, breaking `--index`/disk output parity (BUG-4,
-        // iter-244).
-        matches.sort_unstable_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.rel_path.cmp(&b.rel_path))
-        });
-        matches
-    }
-
-    fn matching_documents(&self, atom: &QueryAtom) -> HashSet<u32> {
-        match atom {
-            QueryAtom::Term(term) => self
-                .postings
-                .get(term)
-                .into_iter()
-                .flatten()
-                .map(|p| p.doc_id)
-                .collect(),
-            QueryAtom::Phrase(terms) => self
-                .docs_with_all_terms(terms)
-                .into_iter()
-                .filter(|&id| self.has_phrase_at_positions(terms, id))
-                .collect(),
-        }
-    }
-
     /// Returns the set of `doc_id`s that contain **all** given terms.
     fn docs_with_all_terms(&self, terms: &[String]) -> HashSet<u32> {
         if terms.iter().any(|t| !self.postings.contains_key(t)) {
@@ -1332,13 +992,7 @@ impl Bm25InvertedIndex {
 /// Use this to detect queries like `"and"` or `"or"` that are silently consumed as
 /// operators, leaving an empty query that matches nothing.
 pub fn query_is_operator_only(query: &str) -> bool {
-    let segments = tokenize_query_segments(query);
-    if segments.is_empty() {
-        return false;
-    }
-    segments
-        .iter()
-        .all(|s| matches!(s, QuerySegment::Or | QuerySegment::And))
+    query::operator_only(query)
 }
 
 /// Returns `true` if the BM25 results suggest the query has low discriminative power
@@ -1781,131 +1435,6 @@ mod tests {
         assert_eq!(parse_language("no").unwrap(), StemLanguage::Norwegian);
         assert_eq!(parse_language("nb").unwrap(), StemLanguage::Norwegian);
         assert_eq!(parse_language("EN").unwrap(), StemLanguage::English);
-    }
-
-    // ------------------------------------------------------------------
-    // parse_boolean_query
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_boolean_query_and() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("foo bar", &stemmer);
-        // No OR present → all terms are Must
-        let must_terms: Vec<_> = q
-            .clauses
-            .iter()
-            .filter_map(|c| match c {
-                Clause::Must(t) => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(must_terms.len(), 2, "expected two Must clauses, got: {q:?}");
-        assert!(!q.clauses.iter().any(|c| matches!(c, Clause::Should(_))));
-    }
-
-    #[test]
-    fn test_parse_boolean_query_or() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("foo OR bar", &stemmer);
-        // OR present → all terms are Should
-        let should_terms: Vec<_> = q
-            .clauses
-            .iter()
-            .filter_map(|c| match c {
-                Clause::Should(t) => Some(t.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(should_terms.len(), 2, "expected two Should clauses");
-        assert!(!q.clauses.iter().any(|c| matches!(c, Clause::Must(_))));
-    }
-
-    #[test]
-    fn test_parse_boolean_query_not() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("-foo", &stemmer);
-        assert_eq!(q.clauses.len(), 1);
-        assert!(matches!(&q.clauses[0], Clause::MustNot(_)));
-        assert!(!q.has_positive_clauses());
-    }
-
-    #[test]
-    fn test_parse_boolean_query_phrase() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("\"foo bar\"", &stemmer);
-        // Single quoted phrase → Must with multiple tokens
-        assert_eq!(q.clauses.len(), 1);
-        match &q.clauses[0] {
-            Clause::Must(QueryAtom::Phrase(tokens)) => {
-                assert_eq!(tokens.len(), 2, "phrase should produce two tokens");
-            }
-            other => panic!("expected Must, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_parse_boolean_query_mixed() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("foo OR bar -baz", &stemmer);
-        let should_count = q
-            .clauses
-            .iter()
-            .filter(|c| matches!(c, Clause::Should(_)))
-            .count();
-        let must_not_count = q
-            .clauses
-            .iter()
-            .filter(|c| matches!(c, Clause::MustNot(_)))
-            .count();
-        assert_eq!(should_count, 2, "foo and bar should be Should");
-        assert_eq!(must_not_count, 1, "baz should be MustNot");
-        assert!(!q.clauses.iter().any(|c| matches!(c, Clause::Must(_))));
-    }
-
-    #[test]
-    fn test_parse_boolean_query_case_insensitive_or() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q_lower = parse_boolean_query("foo or bar", &stemmer);
-        let q_upper = parse_boolean_query("foo OR bar", &stemmer);
-        assert_eq!(q_lower.clauses.len(), q_upper.clauses.len());
-        // Both should produce Should clauses
-        assert!(
-            q_lower
-                .clauses
-                .iter()
-                .all(|c| matches!(c, Clause::Should(_)))
-        );
-    }
-
-    #[test]
-    fn test_parse_boolean_query_and_keyword_ignored() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        // "foo AND bar" should behave identically to "foo bar"
-        let q_explicit = parse_boolean_query("foo AND bar", &stemmer);
-        let q_implicit = parse_boolean_query("foo bar", &stemmer);
-        assert_eq!(q_explicit.clauses.len(), q_implicit.clauses.len());
-        assert!(
-            q_explicit
-                .clauses
-                .iter()
-                .all(|c| matches!(c, Clause::Must(_)))
-        );
-    }
-
-    #[test]
-    fn test_parse_boolean_query_empty() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("", &stemmer);
-        assert!(q.is_empty());
-        assert!(!q.has_positive_clauses());
-    }
-
-    #[test]
-    fn test_parse_boolean_query_whitespace_only() {
-        let stemmer = make_stemmer(StemLanguage::English);
-        let q = parse_boolean_query("   ", &stemmer);
-        assert!(q.is_empty());
     }
 
     // ------------------------------------------------------------------
