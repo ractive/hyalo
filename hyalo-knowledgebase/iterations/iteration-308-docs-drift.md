@@ -6,7 +6,7 @@ tags:
   - iteration
   - docs
   - review
-status: in-progress
+status: completed
 branch: iter-308/docs-drift
 ---
 
@@ -25,32 +25,32 @@ text changes; evidence is in the Validation section.
 
 ### False claims
 
-- [ ] docs/configuration.md: describe the real `.hyalo.toml` ancestor lookup instead of "never walks up"
-- [ ] docs/configuration.md: read hints from plain `--format json`, not through `--jq` (DEC-313)
-- [ ] skill-hyalo.md: replace the "npm 0.22.0 is CLI-only" paragraph with the shipped typed API
-- [ ] skill-hyalo.md: correct the narrowed-rule count and the MD rule range
-- [ ] `required` semantics and snapshot format version corrected in the claims paragraph, rule, skill and docs
-- [ ] `links_fuzzy_min_confidence` JSON key named correctly in docs/configuration.md and the rule
-- [ ] `init --claude` help text names both skills and the rule
-- [ ] README v0.21.0 sentence, pi-package README "embeds", and moved `iterations/done/` links fixed
+- [x] docs/configuration.md: describe the real `.hyalo.toml` ancestor lookup instead of "never walks up"
+- [x] docs/configuration.md: read hints from plain `--format json`, not through `--jq` (DEC-313)
+- [x] skill-hyalo.md: replace the "npm 0.22.0 is CLI-only" paragraph with the shipped typed API
+- [x] skill-hyalo.md: correct the narrowed-rule count and the MD rule range
+- [x] `required` semantics and snapshot format version corrected in the claims paragraph, rule, skill and docs
+- [x] `links_fuzzy_min_confidence` JSON key named correctly in docs/configuration.md and the rule
+- [x] `init --claude` help text names both skills and the rule
+- [x] README v0.21.0 sentence, pi-package README "embeds", and moved `iterations/done/` links fixed
 
 ### Undocumented behaviour
 
-- [ ] CHANGELOG `[Unreleased]` carries iteration 301; docs/ci.md `--strict` matches `lint --help`
-- [ ] docs/configuration.md documents `[scan]`, `[search]`, `[lint]`, `[views]`, `[changelog]`, `[okf]`, `[links] frontmatter`
-- [ ] Help-only flags and HYALO003/HYALO004 documented; KB type table lists `datetime-tz`
-- [ ] Mutating examples carry `--dry-run`; `check-jq-recipes` covers README, docs, root CLAUDE.md and KB docs (DEC-346)
+- [x] CHANGELOG `[Unreleased]` carries iteration 301; docs/ci.md `--strict` matches `lint --help`
+- [x] docs/configuration.md documents `[scan]`, `[search]`, `[lint]`, `[views]`, `[changelog]`, `[okf]`, `[links] frontmatter`
+- [x] Help-only flags and HYALO003/HYALO004 documented; KB type table lists `datetime-tz`
+- [x] Mutating examples carry `--dry-run`; `check-jq-recipes` covers README, docs, root CLAUDE.md and KB docs (DEC-346)
 
 ### Structural
 
-- [ ] docs/releasing.md "Documentation sources" section; DEC-347 names the claims paragraph canonical
+- [x] docs/releasing.md "Documentation sources" section; DEC-347 names the claims paragraph canonical
 
 ## Acceptance criteria
 
-- [ ] Every corrected claim has binary evidence in the Validation section
-- [ ] `just gates` passes, including the extended `check-jq-recipes`
-- [ ] `cargo test -p hyalo-cli --test e2e agent_discoverability -q` passes
-- [ ] `hyalo lint --strict` is clean on every changed KB file
+- [x] Every corrected claim has binary evidence in the Validation section
+- [x] `just gates` passes, including the extended `check-jq-recipes`
+- [x] `cargo test -p hyalo-cli --test e2e agent_discoverability -q` passes
+- [x] `hyalo lint --strict` is clean on every changed KB file, except five pre-existing `decision-log.md` HYALO008 anchors (see follow-ups)
 
 ## Behaviour follow-ups
 
