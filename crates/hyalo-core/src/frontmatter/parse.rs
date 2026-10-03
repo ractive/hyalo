@@ -27,29 +27,28 @@ macro_rules! parse_bail {
 /// Also enables strict YAML 1.2 booleans (`true`/`false` only) and
 /// rejects duplicate keys.
 pub fn hyalo_options() -> Options {
-    // `Budget` and `Options` are `#[non_exhaustive]` (serde-saphyr 1.x), so
-    // start from the defaults and override the fields we tighten.
-    let mut budget = Budget::default();
-    budget.max_events = 10_000;
-    budget.max_depth = 20;
-    budget.max_aliases = 0;
-    budget.max_anchors = 0;
-    budget.max_nodes = 5_000;
-    // Matches MAX_FRONTMATTER_BYTES (the documented 64 KiB frontmatter
-    // limit): scalar content is a subset of the whole block, which is
-    // already capped there by the pre-read line/byte guards in every
-    // caller, so this can never be the tighter limit in practice
-    // (iter-219 NEW-8 — it used to be 8192, well below the documented
-    // ceiling, and the resulting parser error leaked raw budget-breach
-    // internals; see `friendly_parse_error`).
-    budget.max_total_scalar_bytes = MAX_FRONTMATTER_BYTES;
-    budget.max_documents = 1;
-
-    let mut options = Options::default();
-    options.budget = Some(budget);
-    options.duplicate_keys = DuplicateKeyPolicy::Error;
-    options.strict_booleans = true;
-    options
+    Options {
+        budget: Some(Budget {
+            max_events: 10_000,
+            max_depth: 20,
+            max_aliases: 0,
+            max_anchors: 0,
+            max_nodes: 5_000,
+            // Matches MAX_FRONTMATTER_BYTES (the documented 64 KiB frontmatter
+            // limit): scalar content is a subset of the whole block, which is
+            // already capped there by the pre-read line/byte guards in every
+            // caller, so this can never be the tighter limit in practice
+            // (iter-219 NEW-8 — it used to be 8192, well below the documented
+            // ceiling, and the resulting parser error leaked raw budget-breach
+            // internals; see `friendly_parse_error`).
+            max_total_scalar_bytes: MAX_FRONTMATTER_BYTES,
+            max_documents: 1,
+            ..Budget::default()
+        }),
+        duplicate_keys: DuplicateKeyPolicy::Error,
+        strict_booleans: true,
+        ..Options::default()
+    }
 }
 
 /// Turn a `serde_saphyr` parse error into a hyalo-voice message with no
@@ -196,12 +195,12 @@ pub(super) fn hyalo_serializer_options_for<'a>(
         safe &= !has_document_marker_line(value) && !has_trailing_line_whitespace(value);
         quote_all |= has_trailing_line_whitespace(value);
     }
-    // `SerializerOptions` is `#[non_exhaustive]` (serde-saphyr 1.x).
-    let mut options = SerializerOptions::default();
-    options.compact_list_indent = compact_list_indent;
-    options.prefer_block_scalars = safe;
-    options.quote_all = quote_all;
-    options
+    SerializerOptions {
+        compact_list_indent,
+        prefer_block_scalars: safe,
+        quote_all,
+        ..SerializerOptions::default()
+    }
 }
 
 /// Serialize ordered scaffold properties with the same safe YAML policy as mutations.

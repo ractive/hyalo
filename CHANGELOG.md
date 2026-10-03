@@ -28,12 +28,14 @@ and this project adheres to
 - Building hyalo from source now requires Rust 1.95 or newer, declared as
   `rust-version` in the workspace manifest. The code is clippy-clean on
   Rust 1.99.
-- The YAML frontmatter parser moved from serde-saphyr 0.0.23 to 1.3, with
-  the same parser limits and output. The internal `xtask` tooling moved to
-  syn 3. Other dependencies, the npm package's dev dependencies, and the CI
-  actions (`actions/checkout` v7, `actions/setup-node` v7,
-  `actions/upload-artifact` v7, `actions/download-artifact` v8) were
-  updated to their latest releases.
+- Frontmatter parsing is unchanged: the YAML parser (serde-saphyr) stays
+  at 0.0.23. Version 1.x would turn leading-zero numbers such as
+  `zip: 01234` into floats and offers no setting that keeps them integers;
+  new regression tests pin the current behavior. The internal `xtask`
+  tooling moved to syn 3. Other Rust dependencies, the npm package's dev
+  dependencies, and the CI actions (`actions/checkout` v7,
+  `actions/setup-node` v7, `actions/upload-artifact` v7,
+  `actions/download-artifact` v8) were updated to their latest releases.
 
 ## [0.24.1] - 2026-09-18
 
