@@ -24,7 +24,7 @@ mdbook-lint-core = "0.16"
 mdbook-lint-rulesets = { version = "0.16", default-features = false, features = ["standard"] }
 # Only AST node types are used; defaults pull in an unused CLI/highlighter and
 # syntect's unmaintained bincode/yaml-rust dependencies.
-comrak = { version = "0.21", default-features = false }
+comrak = { version = "0.55", default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }
