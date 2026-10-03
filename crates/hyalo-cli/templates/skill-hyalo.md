@@ -46,7 +46,7 @@ by default (unless `--sort` is specified).
 Each ranked result includes `score` and `matches`: up to 3 body snippets with
 `{line, section, text}`, ordered by distinct query tokens then line number. Tokens use
 the same stemming/CJK rules as ranking; quoted phrases must be consecutive on one line,
-and OR accepts either side. `--section` scopes snippets. Frontmatter is excluded;
+and OR accepts either side of a group. `--section` scopes snippets. Frontmatter is excluded;
 title-only hits and phrases spanning lines can have `matches: []`. Text mode prints
 the same line/section context as regex. Indexed queries read only final selected files
 after `--limit` to recover original snippet text.
@@ -59,7 +59,24 @@ hyalo find "rust -java"                  # NOT: exclude documents with "java"
 hyalo find '"error handling"'            # Phrase: exact consecutive match (after stemming)
 hyalo find '"error handling" -panic'     # Phrase + negation combined
 hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
+hyalo find "rust async OR tokio"         # OR binds tighter: rust AND (async OR tokio)
+hyalo find '(bm25 OR stemming) -tantivy' # Groups nest; -( … ) negates a group
+hyalo find "config*"                     # Prefix over stems: matches "configuration"
+hyalo find 'title:iteration tag:iteration link*'   # Field terms combine like words
+hyalo terms conf                         # Stemmed dictionary terms with document counts
 ```
+
+`OR` binds tighter than implicit AND (before iteration 302 one `OR` made every term an
+alternative). `prefix*` expands to the dictionary's **stems** (most frequent 256, with a
+`-q`-proof warning past that). Field terms: `title:`, `heading:` (stemmed words, phrases,
+prefixes), `tag:` (the `--tag` prefix rule), `path:` (case-insensitive substring); a
+field-only query returns files sorted by path with `score: 0` and no snippets, and an
+unknown `foo:bar` is a plain word. Unbalanced `(`, empty `()` or bare `*` exit 1
+(`invalid search query`). Terms are stemmed in every language present in the vault.
+A zero-result query names close dictionary terms for words no document contains, hints
+the corrected query, and carries a top-level `suggestions: [{term, candidates: [{term,
+docs}]}]` key. `hyalo terms [PREFIX]` lists `{term, docs}` (`--limit`, default 50, 0 =
+unlimited).
 
 For literal pattern matching (not stemmed), use regex: `hyalo find -e "exact_string"`.
 

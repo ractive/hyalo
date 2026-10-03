@@ -53,6 +53,10 @@ and `text`. Snippets rank by distinct query tokens then line number, share BM25
 stemming/OR/CJK rules, and honor `--section`. Quoted phrases must fit on one line;
 frontmatter is excluded and title-only hits can have an empty array. Indexed queries
 read snippet text only for final results after `--limit`.
+The query language: implicit AND, `OR` binding tighter (`a b OR c` = a AND (b OR c)),
+`( … )` groups, `-` negation, `prefix*` over stems, and `title:`/`heading:`/`tag:`/`path:`
+field terms (field-only queries score 0, no snippets). A zero-result query carries
+`suggestions`; `hyalo terms [PREFIX]` lists the stemmed dictionary.
 
 Pass `--format text` for compact reading or `--format json` for structured output.
 JSON is an envelope; results live in `.results`. `--jq` operates on that envelope

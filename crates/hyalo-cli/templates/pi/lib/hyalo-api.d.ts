@@ -24,6 +24,34 @@ type Hint = {
 };
 
 /**
+ * A dictionary term offered as a correction, with its document frequency.
+ */
+type SuggestionCandidate = {
+    /**
+     * The stemmed dictionary term.
+     */
+    term: string;
+    /**
+     * Number of documents containing it.
+     */
+    docs: number;
+};
+
+/**
+ * Did-you-mean for one ranked-search query term that occurs in no document.
+ */
+type SearchSuggestion = {
+    /**
+     * The query word as written.
+     */
+    term: string;
+    /**
+     * Up to three close dictionary terms (stems), most frequent first.
+     */
+    candidates: Array<SuggestionCandidate>;
+};
+
+/**
  * Successful output contract. Optional metadata is omitted, including all
  * counters when no file list was supplied; hints are always an array.
  */
@@ -52,6 +80,11 @@ type Envelope<T> = {
      * Named command output; arrays contain named result items.
      */
     results: T;
+    /**
+     * Did-you-mean candidates for ranked-search terms with no postings,
+     * present only on a zero-result `find PATTERN` that has some.
+     */
+    suggestions?: Array<SearchSuggestion>;
     /**
      * Total matching items before pagination, omitted for non-list commands.
      */
@@ -106,6 +139,11 @@ type MutationReportEnvelope<T> = {
      * Named command output; arrays contain named result items.
      */
     results: T;
+    /**
+     * Did-you-mean candidates for ranked-search terms with no postings,
+     * present only on a zero-result `find PATTERN` that has some.
+     */
+    suggestions?: Array<SearchSuggestion>;
     /**
      * Total matching items before pagination, omitted for non-list commands.
      */

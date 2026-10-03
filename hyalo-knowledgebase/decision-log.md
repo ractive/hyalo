@@ -6384,3 +6384,57 @@ existing `pi-package/` TypeScript extension, are shipped JavaScript deliverables
 and may use their native language. Rust remains the implementation language for
 the CLI and xtask generators and gates. This exception keeps package consumers
 testable without introducing a general-purpose polyglot scripting layer.
+
+## DEC-333: Ranked search grammar: OR binds tighter than AND, groups, prefixes, field terms (2026-10-03)
+
+**Context.** `find PATTERN` parsed a flat clause list. One `OR` anywhere in the
+query made *every* positive term an alternative, so `rust async OR tokio` meant
+any of the three terms, never "rust and (async or tokio)". There was no grouping,
+no prefix matching, no way to scope a term to a title, heading, tag or path, and
+the query was stemmed with a single language while each document is stemmed with
+its own frontmatter `language`. A zero-result query said nothing useful.
+
+**Decision** (iteration 302, [[iterations/iteration-302-search-query-language]]).
+
+- Grammar, loosest first: implicit AND (the `AND` keyword is whitespace) over
+  `OR` over unary `-` over primaries (word, `prefix*`, `"phrase"`,
+  `field:value`, `( … )`). `a b OR c` = a AND (b OR c). `-` negates a term,
+  phrase or group. A parenthesis inside a word (`main()`, `f(x)`) is literal.
+  An unbalanced parenthesis, an empty group `()`, nesting deeper than 64 or a
+  bare `*` is a user error (exit 1, JSON error envelope). A dangling `OR` or a
+  lone `-` is ignored, as before.
+- The query compiles to a small AST (And/Or/Not/Term/Prefix/Phrase/Field)
+  evaluated over postings as dense document sets. A document matches when the
+  tree is true; its score sums the BM25 contributions of every positive text
+  leaf it satisfies. A query with no positive leaf matches nothing (unchanged).
+- `prefix*` expands against the postings keys, i.e. the **stemmed** dictionary
+  (`config*` matches `configur`, the stem of "configuration"), most frequent
+  terms first, capped at 256 with a `-q`-proof warning naming the prefix.
+- `title:`, `heading:`, `tag:`, `path:` are per-document predicates read from
+  index metadata (promoted title, sections, tags, vault-relative path), never
+  from the token stream. `title:`/`heading:` compare stemmed tokens (phrase and
+  `prefix*` supported), `tag:` uses `--tag`'s prefix rule, `path:` is a
+  case-insensitive substring. A field-only query returns its files with score 0,
+  sorted by path, without snippets. An unknown `foo:bar` stays a plain term, so
+  URLs and `std::fs` keep working.
+- The query is compiled once per stemming language present in the scoped corpus
+  plus the effective `--language`/config language; each term leaf is the OR of
+  its deduplicated per-language stems, and snippets use the same expansion.
+- A zero-result ranked query reports, for each positive word with no postings,
+  up to three dictionary terms (Jaro-Winkler ≥ 0.85 or Levenshtein ≤ 2 within a
+  third of the length; tokens shorter than 3 never qualify), most frequent
+  first: in the text notice, as a `->` hint running the best single
+  substitution, and under a top-level envelope key `suggestions`. `hyalo terms
+  [PREFIX]` lists the dictionary those candidates come from.
+
+**Old vs new semantics.** Old: `a b OR c` = a OR b OR c; `(` and `)` were word
+characters. New: `a b OR c` = a AND (b OR c). Unchanged: queries without `OR`,
+`a OR b`, `a OR b -c`, phrases, negation. The snapshot format,
+`SNAPSHOT_FORMAT_VERSION` and `TOKENIZER_VERSION` are unchanged: everything is
+query-side.
+
+**Consequences.** Mixed `OR` queries return fewer, more precise results — a
+behaviour change called out in the CHANGELOG. Summing per-language and
+per-prefix-expansion contributions can rank a document matching several
+alternatives above one matching a single stem; accepted as conventional BM25
+disjunction behaviour.
