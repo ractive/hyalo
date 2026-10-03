@@ -162,6 +162,22 @@ type BacklinkInfo = {
 };
 
 /**
+ * What a link in the `--fields links` inventory *is* — the reported `kind`
+ * (iter-261, dogfood UX-6).
+ *
+ * Distinct from [`crate::links::LinkKind`], which is the two-valued *syntax*
+ * the resolver branches on. This is the user-facing bucket, and it mixes
+ * syntax (`embed`, `markdown`) with verdict (`external`, `attachment`)
+ * because that is what a reader triaging a link report needs: without it,
+ * telling `![[img.png]]` from `[[note]]` from `<obsidian://…>` meant going
+ * back to the file.
+ *
+ * Precedence when several could apply — `external` beats `attachment` beats
+ * `embed` beats the syntax kinds — so exactly one label is reported per link.
+ */
+type LinkKindLabel = "wikilink" | "embed" | "markdown" | "external" | "attachment" | "frontmatter";
+
+/**
  * One inbound link reported by `hyalo backlinks`.
  */
 type BacklinkItem = {
@@ -200,7 +216,7 @@ type BacklinkItem = {
      * a kind — so a consumer can bucket frontmatter references without
      * re-reading the source file.
      */
-    kind: "wikilink" | "embed" | "markdown" | "frontmatter";
+    kind: LinkKindLabel;
     /**
      * The frontmatter key this occurrence was written under, for a
      * `kind: "frontmatter"` entry (iter-262). Absent for a body link.
@@ -664,22 +680,6 @@ type FindTaskInfo = {
      */
     done: boolean;
 };
-
-/**
- * What a link in the `--fields links` inventory *is* — the reported `kind`
- * (iter-261, dogfood UX-6).
- *
- * Distinct from [`crate::links::LinkKind`], which is the two-valued *syntax*
- * the resolver branches on. This is the user-facing bucket, and it mixes
- * syntax (`embed`, `markdown`) with verdict (`external`, `attachment`)
- * because that is what a reader triaging a link report needs: without it,
- * telling `![[img.png]]` from `[[note]]` from `<obsidian://…>` meant going
- * back to the file.
- *
- * Precedence when several could apply — `external` beats `attachment` beats
- * `embed` beats the syntax kinds — so exactly one label is reported per link.
- */
-type LinkKindLabel = "wikilink" | "embed" | "markdown" | "external" | "attachment" | "frontmatter";
 
 /**
  * A single link with its resolution status.

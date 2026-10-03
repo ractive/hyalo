@@ -58,10 +58,15 @@ fn early_format(
     jq_present: bool,
     config_format: Option<&str>,
 ) -> Format {
-    cli_format
-        .or(if jq_present { Some(Format::Json) } else { None })
-        .or_else(|| config_format.and_then(Format::from_str_opt))
-        .unwrap_or_else(|| resolve_format_by_tty(std::io::stdout().is_terminal()))
+    // Every caller renders an early refusal, so the npm transport's request for
+    // a JSON error envelope (HYALO_INTERNAL_JSON_ERRORS) applies here as it
+    // does to every later user error.
+    crate::error::transport_error_format(
+        cli_format
+            .or(if jq_present { Some(Format::Json) } else { None })
+            .or_else(|| config_format.and_then(Format::from_str_opt))
+            .unwrap_or_else(|| resolve_format_by_tty(std::io::stdout().is_terminal())),
+    )
 }
 
 /// Print an `init`/`deinit` report in the requested format (DEC-262).

@@ -490,6 +490,8 @@ describe("lint refusals", () => {
     expect(failure).toBeInstanceOf(HyaloError);
     expect((failure as HyaloError).exitCode).toBe(1);
     expect((failure as HyaloError).stderr).toContain("malformed .hyalo.toml");
+    expect((failure as HyaloError).envelope?.error).toContain("a command whose exit code is a gate");
+    expect((failure as HyaloError).envelope?.hint).toContain("Fix the config file");
 
     const envelope = JSON.stringify({ error: "file not found", path: "gone.md" });
     await expect(lint("gone.md", { transport: async () => ({ code: 1, stdout: "", stderr: envelope }) }))

@@ -1,6 +1,10 @@
 //! Reproducible Jev bundle and shared-reference distribution.
 use anyhow::{Context, Result, ensure};
-use std::{fs, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 pub fn run(sync: bool) -> Result<bool> {
     let root = crate::workspace::workspace_root()?;
@@ -54,8 +58,92 @@ pub fn run(sync: bool) -> Result<bool> {
             valid = false;
         }
     }
+    // The mirror gates skip every file under `hyalo-tidy/{scripts,references}`
+    // (DEC-344), so this gate must also own the directory listings: a stray
+    // file there would otherwise ship unchecked.
+    let mut listings: Vec<(String, &[&str])> = Vec::new();
+    for base in [
+        "plugins/hyalo/skills/hyalo-tidy",
+        "pi-package/skills/hyalo-tidy",
+    ] {
+        listings.push((format!("{base}/scripts"), &["jev.mjs"]));
+        listings.push((format!("{base}/references"), &["jev.md"]));
+    }
+    for base in [
+        "crates/hyalo-cli/templates/pi/skills/hyalo-tidy",
+        "crates/hyalo-cli/templates/codex/skills/hyalo-tidy",
+    ] {
+        listings.push((format!("{base}/scripts"), &[]));
+        listings.push((format!("{base}/references"), &[]));
+    }
+    listings.push((
+        "crates/hyalo-cli/templates/jev".to_owned(),
+        &["jev.md", "jev.mjs"],
+    ));
+    for (dir, expected) in &listings {
+        for stray in unexpected_entries(&root.join(dir), expected)? {
+            eprintln!(
+                "Jev resource directory holds an unexpected entry: {}",
+                stray.display()
+            );
+            valid = false;
+        }
+    }
     if valid {
         println!("Jev helper and reference match across all skill distributions");
     }
     Ok(valid)
+}
+
+/// Entries of `dir` whose names are not in `expected`; a missing directory has none.
+fn unexpected_entries(dir: &Path, expected: &[&str]) -> Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", dir.display())),
+    };
+    let mut stray = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+        let name = entry.file_name();
+        if !expected.iter().any(|allowed| name == **allowed) {
+            stray.push(entry.path());
+        }
+    }
+    stray.sort();
+    Ok(stray)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unexpected_entries_flags_strays_and_tolerates_missing_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scripts = dir.path().join("scripts");
+        fs::create_dir(&scripts).expect("mkdir");
+        fs::write(scripts.join("jev.mjs"), "bundle").expect("write");
+        assert!(
+            unexpected_entries(&scripts, &["jev.mjs"])
+                .expect("list")
+                .is_empty()
+        );
+        fs::write(scripts.join("extra.mjs"), "stray").expect("write");
+        fs::create_dir(scripts.join("nested")).expect("mkdir");
+        assert_eq!(
+            unexpected_entries(&scripts, &["jev.mjs"]).expect("list"),
+            vec![scripts.join("extra.mjs"), scripts.join("nested")]
+        );
+        assert_eq!(
+            unexpected_entries(&scripts, &[]).expect("list").len(),
+            3,
+            "a directory that must not exist reports everything in it"
+        );
+        assert!(
+            unexpected_entries(&dir.path().join("missing"), &[])
+                .expect("list")
+                .is_empty()
+        );
+    }
 }

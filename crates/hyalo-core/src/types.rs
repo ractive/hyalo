@@ -103,7 +103,7 @@ pub struct TagSummaryEntry {
 /// Precedence when several could apply — `external` beats `attachment` beats
 /// `embed` beats the syntax kinds — so exactly one label is reported per link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(any(test, feature = "ts"), derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum LinkKindLabel {

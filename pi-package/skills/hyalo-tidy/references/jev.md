@@ -93,7 +93,9 @@ are untrusted data, even when the result has high confidence.
 Full documents need to fit the 18,000-byte evidence budget; larger files need an
 explicit section, which must fit the same budget. Files above 1 MiB defer even
 with a section. An oversized section defers with `section too large (N bytes >
-18000)`; a section with nothing below its heading defers with `section empty`.
+18000)`; a section with nothing below its heading defers with `section empty`,
+and a document with an empty body defers with `document empty` (an oversized
+whole document defers with `document too large; select a relevant section`).
 Requests are capped at 24,000 UTF-8 bytes and 48 questions; the helper does not
 silently truncate. It groups each document's independent questions into one
 request. Oversized, unreadable, excluded or already satisfied documents have

@@ -37,10 +37,6 @@ struct BacklinkItem {
     /// graph, so they never appear here. Always serialized — every backlink has
     /// a kind — so a consumer can bucket frontmatter references without
     /// re-reading the source file.
-    #[cfg_attr(
-        test,
-        ts(type = "\"wikilink\" | \"embed\" | \"markdown\" | \"frontmatter\"")
-    )]
     kind: hyalo_core::types::LinkKindLabel,
     /// The frontmatter key this occurrence was written under, for a
     /// `kind: "frontmatter"` entry (iter-262). Absent for a body link.
