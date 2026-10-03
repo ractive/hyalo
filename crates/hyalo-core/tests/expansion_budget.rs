@@ -35,7 +35,7 @@ fn compact_snapshot_refuses_expansion_before_effect_refresh_with_measured_alloca
     let note = tmp.path().join("a.md");
     std::fs::write(&note, "unchanged authored note\n").unwrap();
     let term = "x".repeat(8192);
-    let bm25 = serde_json::json!({"postings": {term: [{"doc_id":0,"term_freq":32768,"positions":(0..32768).collect::<Vec<_>>()}]}, "doc_lengths":[32768], "doc_paths":["a.md"],"avgdl":32768.0,"tokenizer_version":1});
+    let bm25 = serde_json::json!({"postings": {term: [{"doc_id":0,"term_freq":32768,"positions":(0..32768).collect::<Vec<_>>()}]}, "doc_lengths":[32768], "doc_paths":["a.md"],"doc_marks":[{}],"avgdl":32768.0,"tokenizer_version":1});
     let index: Bm25InvertedIndex = serde_json::from_value(bm25.clone()).unwrap();
     let envelope = serde_json::json!({"header":{"vault_dir":tmp.path(),"site_prefix":null,"created_at":0,"pid":0,"format_version":2},"entries":[],"graph":{"index":{}},"bm25_index":bm25});
     let path = tmp.path().join(".snapshot");
@@ -50,12 +50,14 @@ fn compact_snapshot_refuses_expansion_before_effect_refresh_with_measured_alloca
         snapshot.bm25_index().is_some(),
         "compact scoring remains available"
     );
-    assert!(snapshot.validate_before_changes().is_err());
-    assert!(
-        snapshot
-            .apply_changes(tmp.path(), &["a.md".into()])
-            .is_err()
-    );
+    // DEC-339: a refresh patches postings in place and never reconstructs
+    // untouched documents, so the oversized section no longer blocks it; the
+    // forged section is from tokenizer v1 and is dropped, not expanded.
+    assert!(snapshot.validate_before_changes().is_ok());
+    snapshot
+        .apply_changes(tmp.path(), &["a.md".into()])
+        .unwrap();
+    assert!(snapshot.bm25_index().is_none());
     MEASURE.store(false, Ordering::Relaxed);
     let allocated = BYTES.load(Ordering::Relaxed);
     assert!(allocated < 4 * 1024 * 1024, "allocated {allocated} bytes");
@@ -64,7 +66,7 @@ fn compact_snapshot_refuses_expansion_before_effect_refresh_with_measured_alloca
         "unchanged authored note\n"
     );
     eprintln!(
-        "snapshot_bytes={}, attempted_expansion>256MiB, measured_allocation_bytes={allocated}, budget=4MiB",
+        "snapshot_bytes={}, reconstruction_refused_refresh_patched, measured_allocation_bytes={allocated}, budget=4MiB",
         bytes.len()
     );
 }

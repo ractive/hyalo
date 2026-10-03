@@ -785,7 +785,18 @@ impl PreparedInvocation {
         let root = hyalo_core::rooted::VaultRoot::new(ctx.dir)?;
         let refreshed = selection::refresh_named_selection(&root, &selection, index, insert)?;
         if !refreshed.all_current(&selection) && !repairs {
-            warn_stale_index(index, ctx.dir);
+            if read_fallback {
+                // DEC-339: a read repairs drifted entries in memory for this
+                // run — re-scanning only those files and patching the BM25
+                // postings — instead of answering from a stale snapshot. The
+                // snapshot file is never written by a read.
+                if !repair_stale_in_memory(index, ctx.dir) {
+                    *ctx.snapshot_index = None;
+                    return Ok(());
+                }
+            } else {
+                warn_stale_index(index, ctx.dir);
+            }
             if read_fallback && (refreshed.failed > 0 || refreshed.missing > 0) {
                 // A failed named scan cannot leave old fields/postings available.
                 // Reads use the bounded disk path and its parse/skip diagnostics.
@@ -891,6 +902,47 @@ pub(crate) fn cardinality_diagnostic(
         }
     }
     diagnostic
+}
+
+/// Re-scan every file the snapshot no longer describes, in memory only
+/// (DEC-339), the way a disk scan would see the vault now: deleted files are
+/// dropped, files that cannot be scanned (unparsable frontmatter, a symlink
+/// resolving outside the vault) are dropped with a `-q`-proof warning, and
+/// the rest are re-scanned. Returns `false` only when the snapshot itself
+/// cannot be patched; the caller then answers from disk.
+fn repair_stale_in_memory(idx: &mut hyalo_core::index::SnapshotIndex, dir: &Path) -> bool {
+    let drift = hyalo_core::index::snapshot_drift(idx, dir);
+    if drift.is_empty() {
+        return true;
+    }
+    match idx.repair_drift(dir, &drift) {
+        Ok(report) => {
+            let count = drift.len();
+            let files = if count == 1 { "file" } else { "files" };
+            let mut named = drift.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            if count > 3 {
+                named = format!("{named}, +{} more", count - 3);
+            }
+            crate::warn::note_always(format!(
+                "{count} {files} changed on disk since the index was built ({named}); repaired \
+                 in memory for this run (the index file is unchanged) — run `hyalo create-index` \
+                 to fold them in"
+            ));
+            for (rel, reason) in &report.skipped {
+                crate::warn::warn_always(format!(
+                    "{rel}: changed since the index was built and could not be read ({reason}); \
+                     left out of this run, as a disk scan would"
+                ));
+            }
+            true
+        }
+        Err(error) => {
+            crate::warn::warn_always(format!(
+                "could not repair the index in memory ({error:#}); reading notes from disk"
+            ));
+            false
+        }
+    }
 }
 
 fn warn_stale_index(idx: &hyalo_core::index::SnapshotIndex, dir: &Path) {

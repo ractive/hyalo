@@ -2703,9 +2703,11 @@ fn fresh_index_does_not_warn_about_staleness() {
 }
 
 /// A note added to a subdirectory after the index was built makes the vault
-/// newer than the snapshot: warn on stderr, still exit 0.
+/// newer than the snapshot: DEC-339 detects the drift, repairs it in memory
+/// for this run (no snapshot write), names the witness on stderr, and the
+/// new note's content is actually reflected in the results.
 #[test]
-fn stale_index_warns_when_vault_is_newer() {
+fn stale_index_repairs_in_memory_when_vault_is_newer() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
     write_md(tmp.path(), "sub/b.md", "---\ntitle: B\n---\nBody.\n");
@@ -2729,26 +2731,47 @@ fn stale_index_warns_when_vault_is_newer() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "staleness is a warning, not an error"
+        "an in-memory repair is not an error"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("index older than vault"),
-        "stale index must warn: {stderr}"
+        stderr.contains("changed on disk since the index was built"),
+        "drift must be reported: {stderr}"
+    );
+    assert!(
+        stderr.contains("sub/c.md"),
+        "the warning must name the witness: {stderr}"
+    );
+    assert!(
+        stderr.contains("repaired in memory"),
+        "warning must say the repair happened in memory: {stderr}"
     );
     assert!(
         stderr.contains("create-index"),
-        "warning must name the remedy: {stderr}"
+        "warning must name the remedy to fold the repair in: {stderr}"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let files: Vec<String> = json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["file"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        files.contains(&"sub/c.md".to_owned()),
+        "the repaired-in note must be reflected in the results: {files:?}"
     );
 }
 
 /// UX-1 (iter-249 dogfood): the old probe only stat'd the vault root and its
 /// immediate children, so a note added two directories deep — the common
 /// shape for real vaults (`iterations/done/x.md` here, `web/css/*/index.md`
-/// on MDN) — never warned. Results must still be served and the run must
-/// still exit 0; only the warning's presence is new.
+/// on MDN) — never warned. Under DEC-339 the drift is now repaired in memory
+/// for this run (no snapshot write) rather than merely warned about, and the
+/// new note's content shows up in the results.
 #[test]
-fn stale_index_warns_for_new_file_two_directories_deep() {
+fn stale_index_repairs_new_file_two_directories_deep() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "a.md", "---\ntitle: A\n---\nBody.\n");
     write_md(
@@ -2763,8 +2786,8 @@ fn stale_index_warns_for_new_file_two_directories_deep() {
         .output()
         .unwrap();
 
-    // Same two-second margin as `stale_index_warns_when_vault_is_newer`:
-    // the probe compares whole seconds with one second of slack.
+    // Same two-second margin as the sibling repair test: the probe compares
+    // whole seconds with one second of slack.
     std::thread::sleep(std::time::Duration::from_millis(2100));
     write_md(
         tmp.path(),
@@ -2780,17 +2803,24 @@ fn stale_index_warns_for_new_file_two_directories_deep() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "staleness is a warning, not an error"
+        "an in-memory repair is not an error"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("index older than vault"),
+        stderr.contains("changed on disk since the index was built"),
         "a depth-2 file addition must be caught by the recursive probe: {stderr}"
     );
+    assert!(
+        stderr.contains("iterations/done/new.md"),
+        "the note must name the witness: {stderr}"
+    );
+    assert!(
+        stderr.contains("repaired in memory"),
+        "the note must say the repair happened in memory: {stderr}"
+    );
 
-    // Results are still served from the (stale) snapshot — `new.md` predates
-    // the index and is legitimately absent from indexed output; the point of
-    // this test is the warning, not upserting the new file.
+    // The new note is now repaired into the in-memory corpus and reflected
+    // in the results, on top of the pre-existing ones.
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let files: Vec<String> = json["results"]
         .as_array()
@@ -2800,7 +2830,11 @@ fn stale_index_warns_for_new_file_two_directories_deep() {
         .collect();
     assert!(
         files.contains(&"a.md".to_string()),
-        "stale results are still served: {files:?}"
+        "pre-existing results are still served: {files:?}"
+    );
+    assert!(
+        files.contains(&"iterations/done/new.md".to_string()),
+        "the repaired-in note must be reflected in the results: {files:?}"
     );
 }
 

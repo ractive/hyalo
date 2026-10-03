@@ -3,6 +3,7 @@ import type { ConfigLinksResult } from "./ConfigLinksResult.js";
 import type { ConfigPiResult } from "./ConfigPiResult.js";
 import type { LinksAutoReport } from "./LinksAutoReport.js";
 import type { ScanReport } from "./ScanReport.js";
+import type { SearchReport } from "./SearchReport.js";
 
 /**
  * Serialized ConfigResult command contract.
@@ -107,4 +108,8 @@ links_fuzzy_min_confidence: number,
 /**
  * Effective pi setting.
  */
-pi: ConfigPiResult, };
+pi: ConfigPiResult,
+/**
+ * Effective `[search]` settings.
+ */
+search: SearchReport, };

@@ -222,7 +222,11 @@ fn append_task_and_move_keep_indexed_scan_products_current() {
 }
 
 #[test]
-fn oversized_snapshot_expansion_refuses_set_before_note_publication() {
+fn oversized_snapshot_postings_are_patched_not_expanded_by_set() {
+    // DEC-339 (iter-304): a mutation under --index patches the postings in
+    // place; it never reconstructs untouched documents, so a section whose
+    // full expansion would exceed the reconstruction budget no longer blocks
+    // the write, and the re-scanned note's oversized postings are replaced.
     let tmp = TempDir::new().unwrap();
     let original = "---\nstatus: draft\n---\nAuthored body\n";
     write_md(tmp.path(), "a.md", original);
@@ -231,7 +235,8 @@ fn oversized_snapshot_expansion_refuses_set_before_note_publication() {
     let mut snapshot: serde_json::Value =
         rmp_serde::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let term = "x".repeat(8192);
-    snapshot["bm25_index"] = serde_json::json!({"postings": {term: [{"doc_id":0,"term_freq":32768,"positions":(0..32768).collect::<Vec<_>>()}]}, "doc_lengths":[32768], "doc_paths":["a.md"],"avgdl":32768.0,"tokenizer_version":1});
+    let version = snapshot["bm25_index"]["tokenizer_version"].clone();
+    snapshot["bm25_index"] = serde_json::json!({"postings": {term: [{"doc_id":0,"term_freq":32768,"positions":(0..32768).collect::<Vec<_>>()}]}, "doc_lengths":[32768], "doc_marks":[{}], "doc_paths":["a.md"],"avgdl":32768.0,"tokenizer_version":version});
     std::fs::write(&path, rmp_serde::to_vec_named(&snapshot).unwrap()).unwrap();
     let output = hyalo_no_hints()
         .arg("--dir")
@@ -239,12 +244,16 @@ fn oversized_snapshot_expansion_refuses_set_before_note_publication() {
         .args(["set", "a.md", "--property", "status=done", "--index"])
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("expansion budget"));
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join("a.md")).unwrap(),
-        original
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        std::fs::read_to_string(tmp.path().join("a.md"))
+            .unwrap()
+            .contains("status: done")
     );
+    let disk = run(&tmp, &["find", "authored"]);
+    let indexed = run(&tmp, &["find", "authored", "--index"]);
+    assert_eq!(indexed["results"], disk["results"]);
+    assert_eq!(disk["results"].as_array().unwrap().len(), 1);
 }
 
 #[test]

@@ -26,6 +26,10 @@ Prefer `hyalo` CLI for operations on files in this directory:
   unknown `foo:bar` is a plain word; unbalanced `(`/`()`/bare `*` exit 1. Terms are stemmed in
   every vault language. Zero results carry `suggestions` (did-you-mean) and a corrected-query
   hint; `hyalo terms [PREFIX]` lists the stemmed dictionary with document counts.
+- **Tokenizer v4 and BM25F** (DEC-336–338, iter-304): accents fold (`résumé` = `resume`); an
+  identifier (`getUserName`, `get_user_name`) indexes its whole plus its parts, so `user` finds
+  it. Title, headings and tags/aliases outweigh body (`[search.weights]`; a tag-only term
+  matches); `"a b"~N` allows N extra words (max 64); close terms get a proximity bonus.
 - **Find the paragraph** (DEC-334): `hyalo find 'query' --granularity section --limit 5` returns
   one hit per section (`section: {heading, level, line_start, line_end, path}`); follow the read
   hint. A section must hold every positive term itself; `--sort`/`--fields`/`-e` exit 1.
@@ -353,6 +357,10 @@ Prefer `hyalo` CLI for operations on files in this directory:
   spot is **up to ~2 s** (whole-second mtimes plus a one-second tolerance), not one second. A snapshot also records how
   many files `[scan] exclude` dropped when it was built, so `summary --index` reports the same
   `excluded` figure as a disk scan (change the patterns and it is ignored — rebuild).
+- **`create-index` is incremental; reads repair in memory** (DEC-339, iter-304): unchanged
+  files (size + mtime) are reused, the rest re-scanned (`reused`/`refreshed`/`removed`/`rebuilt`);
+  `--force` rebuilds. An `--index` read re-scans drifted files in memory with a `-q`-proof note
+  and never writes the snapshot. Format-4 snapshots only — rebuild older ones.
 
 - **Suppression comments are scope-correct and typo-loud** (iter-276):
   `markdownlint-disable-next-line` protects the line *after* the comment and never its own — a

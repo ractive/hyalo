@@ -1063,7 +1063,8 @@ pub(crate) enum Commands {
             inside a word is literal ('main()'). An unbalanced parenthesis, an empty group '()' or a \
             bare '*' is a user error (exit 1, 'invalid search query').\n\
             - \"quoted phrase\": exact consecutive match after stemming (e.g. '\"javascript promises\"' \
-            matches only documents with that exact phrase)\n\
+            matches only documents with that exact phrase). Slop: '\"error handling\"~3' matches \
+            the tokens in order with at most 3 extra words between them (max 64).\n\
             - -term, -\"phrase\", -(group): exclude matching documents (e.g. 'rust -javascript'; \
             stemming applies, so '-running' also excludes 'run'). A query beginning with '-' or '(' \
             must follow '--' so it is not read as a flag: hyalo find -- '-draft notes', \
@@ -1096,7 +1097,19 @@ pub(crate) enum Commands {
             there is no dictionary-based segmenter. A query is tokenized the same way, so a CJK \
             substring query matches, but this is an approximation, not true word segmentation -- it \
             can occasionally over-match (two bigrams from unrelated parts of a document both present) \
-            but should not under-match a real substring.\n\n\
+            but should not under-match a real substring.\n\
+            TOKENIZATION (snapshot format 4, tokenizer v4): accents are folded before stemming \
+            ('résumé' = 'resume'). An identifier emits its joined whole plus its parts \
+            (getUserName, get_user_name, get-user-name -> getusername, get, user, name; digits never \
+            split), so 'user' finds it and a query identifier matches the whole OR all its parts. \
+            [search] code_blocks = \"skip\" drops fenced code blocks from the corpus, scores and \
+            snippets (default \"index\"; inline code is always indexed).\n\
+            RANKING: BM25F over four fields, [search.weights] title = 3, headings = 2, tags = 2 \
+            (frontmatter tags and aliases; a tag-only term matches), body = 1, with one combined \
+            document length. With two or more required terms, the top 200 candidates get \
+            x(1 + bonus/(1 + w)), w = extra words in the smallest window holding every term; \
+            [search] proximity_bonus = 0.5 (0 disables). Snippets prefer the line where the terms \
+            are closest. Section scores use the heading and body fields, without the bonus.\n\n\
             FILTERS: All filters are AND'd together.\n\
             - --property K=V: frontmatter property filter (supports =, !=, >, >=, <, <=, bare K for existence, !K for absence, K~=pattern or K~=/pattern/i for regex)\n\
               OPERATOR TABLE:\n\
@@ -1921,28 +1934,33 @@ Repeatable (AND).\n\
             (the vault root and every directory up to 3 levels below it; deeper\n\
             levels are skipped because a full walk of a 14k-file vault costs more\n\
             than the indexed query itself) against the snapshot's creation time\n\
-            and warn `index older than vault` when one postdates it. When that\n\
-            probe is clean, a second pass compares every indexed file's recorded\n\
-            mtime against disk and stops at the first drift, naming the file in\n\
-            the warning — this is what catches an in-place overwrite and a change\n\
-            more than 3 levels below the root, neither of which moves any\n\
-            directory's mtime. It costs one stat per indexed file and only runs on\n\
-            a vault the cheap probe found clean (measured at ~0.02 s over 14,375\n\
-            MDN files). Remaining blind spot: an edit landing in the same whole\n\
-            second as the snapshot. Re-run create-index whenever the vault may\n\
-            have changed.\n\
+            and compare every indexed file's recorded size and mtime against disk.\n\
+            A READ command repairs what drifted IN MEMORY for that run: it re-scans\n\
+            only the changed, deleted and (when a directory mtime moved) new notes,\n\
+            patches the search postings, and prints a note -q cannot silence naming\n\
+            the count and up to three files. The index file is never written by a\n\
+            read. A drifted file that cannot be scanned (unparsable frontmatter, a\n\
+            symlink leaving the vault) is left out with a warning, as a disk scan\n\
+            would. Mutating commands warn `index older than vault` instead. Remaining blind spot: an edit landing in the same whole\n\
+            second as the snapshot that keeps the file size.\n\
             EXCLUSIONS: the snapshot records how many files `[scan] exclude`\n\
             dropped when it was built, and which patterns dropped them, so\n\
             `summary --index` reports the same `excluded` figure as a disk scan.\n\
             Change the patterns and the recorded count is ignored — rebuild.\n\
-            The warning does not stop the run: stale results are still served and\n\
-            still exit 0. Re-run `create-index`, or omit `--index` to force a\n\
-            disk scan instead.\n\n\
+            INCREMENTAL: when the output already holds a format-4 snapshot of this\n\
+            vault built with the same tokenizer and [search] code_blocks, unchanged\n\
+            files (same size and mtime) keep their entries, changed and new files\n\
+            are re-scanned, removed ones dropped, and the search postings patched\n\
+            in place. A file whose mtime is not safely older than the previous\n\
+            snapshot (\"racily clean\": a same-size rewrite in the same second keeps\n\
+            its mtime) is always re-scanned. --force rebuilds from scratch. Older\n\
+            snapshots are always rebuilt.\n\n\
             PERFORMANCE: a body-text query combined with a narrow metadata filter\n\
             (e.g. `find \"query\" --property status=x`) still reads the whole vault\n\
             without an index, because BM25 relevance is ranked against full-vault\n\
             statistics. On large vaults, create an index for this workload.\n\n\
-            OUTPUT: JSON object with `path`, `files_indexed`, and `warnings`.\n\
+            OUTPUT: JSON object with `path`, `files_indexed`, `warnings`, `reused`,\n\
+            `refreshed`, `skipped`, `removed` and `rebuilt` (true for a from-scratch build).\n\
             SIDE EFFECTS: Writes a binary file (default: .hyalo-index in --dir).\n\n\
             FLAG ALIASES: on this subcommand, `--index-file PATH` (the global flag) is\n\
             accepted as a synonym for `-o / --output PATH`. If both are provided and\n\
@@ -1962,6 +1980,7 @@ Repeatable (AND).\n\
             different --dir refuses the index and falls back to a disk scan.\n\n\
             EXAMPLES:\n\
             hyalo create-index\n\
+            hyalo create-index --force                 # rebuild, ignore the old snapshot\n\
             hyalo create-index -o .hyalo-index-draft   # in-vault when dir = \".\"\n\
             hyalo create-index -o /tmp/my-index --allow-outside-vault\n\
             hyalo find --property status=draft --index"
@@ -1976,6 +1995,9 @@ Repeatable (AND).\n\
         /// Allow writing the index file outside the vault directory
         #[arg(long)]
         allow_outside_vault: bool,
+        /// Rebuild from scratch instead of reusing unchanged entries
+        #[arg(long)]
+        force: bool,
     },
     /// Delete a snapshot index file created with create-index
     #[command(

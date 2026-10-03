@@ -220,7 +220,7 @@ title: Alpha
 // ===========================================================================
 
 #[test]
-fn links_auto_index_warns_on_stale_snapshot() {
+fn links_auto_index_repairs_stale_snapshot_in_memory() {
     let tmp = TempDir::new().unwrap();
     let dir = tmp.path();
     write_md(
@@ -270,8 +270,16 @@ Some prose mentioning Target.
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("index is stale"),
-        "links auto must exercise the same staleness check: {stderr}"
+        stderr.contains("changed on disk since the index was built"),
+        "links auto must exercise the same drift-repair check: {stderr}"
+    );
+    assert!(
+        stderr.contains("source.md"),
+        "the note must name the witness: {stderr}"
+    );
+    assert!(
+        stderr.contains("repaired in memory"),
+        "the note must say the repair happened in memory: {stderr}"
     );
 }
 
