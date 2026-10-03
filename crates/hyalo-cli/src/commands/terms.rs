@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 //! `hyalo terms` — list BM25 dictionary terms (stemmed tokens) with their
-//! document frequency.
+//! document frequency: the number of files whose authored title or body
+//! contains the stem.
 //!
 //! Corpus resolution mirrors the other read commands: an `--index`/
 //! `--index-file` snapshot is used directly when its persisted BM25 index is

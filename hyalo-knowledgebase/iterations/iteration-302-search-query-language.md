@@ -126,3 +126,8 @@ terms, is what `rust OR async OR tokio` returns (117 files).
 - Running xtask gates through `./target/debug/xtask` needs an absolute
   `CARGO_MANIFEST_DIR` and `CARGO` set, or child `cargo` calls fail with
   "No such file or directory".
+
+## Follow-ups
+
+- No typed `terms()` wrapper exists in the npm/pi API yet. This matches iteration 287's scope, where `tags` and `backlinks` are also raw-only.
+- Per-language stems of one word each add a score unit (DEC-333 "Known approximation"); revisit if mixed-language ranking proves skewed.

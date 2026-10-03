@@ -10,6 +10,6 @@ export type SearchSuggestion = {
  */
 term: string,
 /**
- * Up to three close dictionary terms (stems), most frequent first.
+ * Up to three close dictionary stems, most similar first.
  */
 candidates: Array<SuggestionCandidate>, };

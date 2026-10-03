@@ -305,10 +305,15 @@ impl OutputPipeline<'_> {
                             });
                     generate_hints_with_counters(ctx, &value, total, counters)
                 });
-                let mut envelope =
+                let envelope =
                     Envelope::from_result(&value, total, &hints, self.files_from_counters.as_ref());
-                envelope.suggestions = self.search_suggestions.as_deref().filter(|s| !s.is_empty());
-                let envelope = if self.internal_report {
+                let suggestions = self.search_suggestions.as_deref().filter(|s| !s.is_empty());
+                let envelope = if let Some(suggestions) = suggestions {
+                    output_value(&crate::output::SearchEnvelope {
+                        envelope,
+                        suggestions,
+                    })
+                } else if self.internal_report {
                     let effects = report.effects.as_ref().ok_or_else(|| {
                         crate::output::UserDiagnostic::new("internal mutation report unavailable")
                     })?;

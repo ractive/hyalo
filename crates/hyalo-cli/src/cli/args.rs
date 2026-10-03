@@ -968,10 +968,14 @@ pub(crate) enum Commands {
             - \"quoted phrase\": exact consecutive match after stemming (e.g. '\"javascript promises\"' \
             matches only documents with that exact phrase)\n\
             - -term, -\"phrase\", -(group): exclude matching documents (e.g. 'rust -javascript'; \
-            stemming applies, so '-running' also excludes 'run')\n\
-            - prefix*: every dictionary term starting with the prefix. Terms are stems, so 'config*' \
-            matches 'configuration' (stem 'configur'). Capped at the 256 most frequent terms, with a \
-            warning -q cannot silence. 'hyalo terms PREFIX' lists the dictionary.\n\
+            stemming applies, so '-running' also excludes 'run'). A query beginning with '-' or '(' \
+            must follow '--' so it is not read as a flag: hyalo find -- '-draft notes', \
+            hyalo find -- '(a OR b) -c'.\n\
+            - prefix*: every dictionary term starting with the prefix. Prefixes match STEMS, so \
+            'config*' matches 'configuration' (stem 'configur'); when the prefix as typed matches no \
+            stem, its own stem is tried ('configuration*' then searches 'configur'). Capped at the 256 \
+            most frequent terms, with a warning -q cannot silence. 'hyalo terms PREFIX' lists the \
+            dictionary.\n\
             - Field terms: title:word, title:\"a phrase\", title:conf*, heading:install, tag:project \
             (same prefix rule as --tag), path:iterations/ (case-insensitive substring of the \
             vault-relative path). They combine with AND/OR/- like any term. A query of field terms \
@@ -979,9 +983,9 @@ pub(crate) enum Commands {
             ('foo:bar', URLs, 'std::fs') is a plain term.\n\
             - Every term is stemmed in each language present in the vault (frontmatter 'language' \
             plus --language/config), so a 'language: de' note matches its German inflections.\n\
-            - Zero results: query words found in no document get up to 3 close dictionary terms in \
-            the notice, a hint running the corrected query, and a top-level JSON 'suggestions' key \
-            ([{term, candidates: [{term, docs}]}]).\n\
+            - Zero results: query words found in no document get up to 3 close dictionary stems \
+            (fewest edits first) in the notice, a hint running the corrected query, a 'hyalo terms' \
+            hint, and a top-level JSON 'suggestions' key ([{term, candidates: [{term, docs}]}]).\n\
             - Combine freely: 'rust -java', 'rust OR golang', '\"error handling\" -panic'\n\n\
             LANGUAGE: The --language flag (or [search] language in .hyalo.toml, or frontmatter \
             'language' property per file) selects the Snowball stemmer for tokenization. Default: english. \
@@ -1122,7 +1126,7 @@ pub(crate) enum Commands {
             SIDE EFFECTS: None (read-only).\n\n\
             EXAMPLES:\n\
             hyalo find 'error handling'\n\
-            hyalo find '(bm25 OR stemming) -tantivy'\n\
+            hyalo find -- '(bm25 OR stemming) -tantivy'\n\
             hyalo find 'title:iteration tag:iteration link*'\n\
             hyalo find --property status=draft --tag project\n\
             hyalo find --property 'title~=/^Design/i'\n\

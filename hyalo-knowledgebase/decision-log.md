@@ -6401,15 +6401,22 @@ its own frontmatter `language`. A zero-result query said nothing useful.
   `field:value`, `( … )`). `a b OR c` = a AND (b OR c). `-` negates a term,
   phrase or group. A parenthesis inside a word (`main()`, `f(x)`) is literal.
   An unbalanced parenthesis, an empty group `()`, nesting deeper than 64 or a
-  bare `*` is a user error (exit 1, JSON error envelope). A dangling `OR` or a
-  lone `-` is ignored, as before.
+  bare `*` is a user error (exit 1, JSON error envelope). A dangling `OR`, a
+  lone `-` and an empty negated phrase `-""` are ignored (`-""` negates
+  nothing; it must not negate the next term). Consecutive negations collapse
+  iteratively, and more than 64 in a row is a user error, so no input can
+  exhaust the parser's stack. On the command line a query beginning with `-`
+  or `(` must follow `--` (clap), and every hint emits `-- '<query>'`.
 - The query compiles to a small AST (And/Or/Not/Term/Prefix/Phrase/Field)
   evaluated over postings as dense document sets. A document matches when the
   tree is true; its score sums the BM25 contributions of every positive text
   leaf it satisfies. A query with no positive leaf matches nothing (unchanged).
 - `prefix*` expands against the postings keys, i.e. the **stemmed** dictionary
   (`config*` matches `configur`, the stem of "configuration"), most frequent
-  terms first, capped at 256 with a `-q`-proof warning naming the prefix.
+  terms first, capped at 256 with a `-q`-proof warning naming the prefix. When
+  the prefix as typed matches no stem, its per-language stems and their longest
+  common prefixes with it (at least three characters) are tried instead, so a
+  whole word with a star (`configuration*`) still finds `configur`.
 - `title:`, `heading:`, `tag:`, `path:` are per-document predicates read from
   index metadata (promoted title, sections, tags, vault-relative path), never
   from the token stream. `title:`/`heading:` compare stemmed tokens (phrase and
@@ -6421,9 +6428,10 @@ its own frontmatter `language`. A zero-result query said nothing useful.
   plus the effective `--language`/config language; each term leaf is the OR of
   its deduplicated per-language stems, and snippets use the same expansion.
 - A zero-result ranked query reports, for each positive word with no postings,
-  up to three dictionary terms (Jaro-Winkler ≥ 0.85 or Levenshtein ≤ 2 within a
-  third of the length; tokens shorter than 3 never qualify), most frequent
-  first: in the text notice, as a `->` hint running the best single
+  up to three dictionary **stems** (Jaro-Winkler ≥ 0.85 or Levenshtein ≤ 2 within
+  a third of the length; tokens shorter than 3 never qualify), fewest edits
+  first (normalised Levenshtein, then Jaro-Winkler; document frequency only
+  breaks ties, so `databasse` offers `databas` before the frequent `data`): in the text notice, as a `->` hint running the best single
   substitution, and under a top-level envelope key `suggestions`. `hyalo terms
   [PREFIX]` lists the dictionary those candidates come from.
 
@@ -6438,3 +6446,10 @@ behaviour change called out in the CHANGELOG. Summing per-language and
 per-prefix-expansion contributions can rank a document matching several
 alternatives above one matching a single stem; accepted as conventional BM25
 disjunction behaviour.
+
+**Known approximation.** A word whose per-language stems differ (`running` →
+`run` in English, `running` in German) contributes one score unit per distinct
+stem a document contains; only identical stems are deduplicated. A mixed-language
+note holding both forms therefore scores higher than one holding a single form.
+Left as is for now: changing it means scoring per original word rather than per
+index term, which is a ranking change of its own.

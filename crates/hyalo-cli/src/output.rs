@@ -263,11 +263,6 @@ pub struct Envelope<'a, T> {
     pub(crate) hints: &'a [crate::hints::Hint],
     /// Named command output; arrays contain named result items.
     pub(crate) results: T,
-    /// Did-you-mean candidates for ranked-search terms with no postings,
-    /// present only on a zero-result `find PATTERN` that has some.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub(crate) suggestions: Option<&'a [SearchSuggestion]>,
     /// Total matching items before pagination, omitted for non-list commands.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
@@ -283,10 +278,21 @@ impl<'a, T: Serialize> Envelope<'a, T> {
             files_skipped_outside_vault: None,
             hints,
             results,
-            suggestions: None,
             total,
         }
     }
+}
+
+/// The success envelope of a zero-result `find PATTERN` that has did-you-mean
+/// candidates (iteration 302). Only `find` emits it; mutation reports never do.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SearchEnvelope<'a, T> {
+    #[serde(flatten)]
+    pub(crate) envelope: Envelope<'a, T>,
+    /// Did-you-mean candidates for ranked-search terms with no postings.
+    pub(crate) suggestions: &'a [SearchSuggestion],
 }
 
 /// Did-you-mean for one ranked-search query term that occurs in no document.
@@ -296,7 +302,7 @@ impl<'a, T: Serialize> Envelope<'a, T> {
 pub struct SearchSuggestion {
     /// The query word as written.
     pub(crate) term: String,
-    /// Up to three close dictionary terms (stems), most frequent first.
+    /// Up to three close dictionary stems, most similar first.
     pub(crate) candidates: Vec<SuggestionCandidate>,
 }
 

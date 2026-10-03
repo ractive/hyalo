@@ -36,6 +36,7 @@ export type { ReadArgs } from "./ReadArgs.js";
 export type { ReadResult } from "./ReadResult.js";
 export type { RecentFile } from "./RecentFile.js";
 export type { ScanReport } from "./ScanReport.js";
+export type { SearchEnvelope } from "./SearchEnvelope.js";
 export type { SearchSuggestion } from "./SearchSuggestion.js";
 export type { StatusGroup } from "./StatusGroup.js";
 export type { SuggestionCandidate } from "./SuggestionCandidate.js";

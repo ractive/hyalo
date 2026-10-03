@@ -115,7 +115,7 @@ hyalo find "rust OR golang"              # OR: either term matches
 hyalo find "rust -java"                  # NOT: exclude documents with "java"
 hyalo find '\"error handling\"'          # Phrase: exact consecutive match (after stemming)
 hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
-hyalo find '(bm25 OR stemming) -tantivy' # Groups; OR binds tighter than implicit AND
+hyalo find -- '(bm25 OR stemming) -tantivy' # Groups; OR binds tighter than implicit AND
 hyalo find 'title:iteration conf*'       # Field term + prefix over stems
 ```
 

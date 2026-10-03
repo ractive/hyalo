@@ -184,7 +184,17 @@ fn lex(query: &str) -> Vec<Lexeme> {
                     // A lone `-` (or one directly before `)`) negates nothing.
                     None => {}
                     Some(&(_, c)) if c.is_whitespace() || c == ')' => {}
-                    Some(&(_, '"' | '(')) => out.push(Lexeme::Not),
+                    // `-""` negates an empty phrase, i.e. nothing: emit no
+                    // `Not`, or it would negate whatever term comes next.
+                    Some(&(_, '"')) => {
+                        chars.next();
+                        let phrase = read_phrase(&mut chars);
+                        if !phrase.is_empty() {
+                            out.push(Lexeme::Not);
+                            out.push(Lexeme::Phrase(phrase));
+                        }
+                    }
+                    Some(&(_, '(')) => out.push(Lexeme::Not),
                     Some(_) => {
                         out.push(Lexeme::Not);
                         // A negated word is always literal: `-or` excludes "or".
@@ -315,12 +325,25 @@ impl Parser {
         })
     }
 
+    /// Consecutive `-` are counted iteratively (never recursed) and collapse
+    /// to one `Not` or none; more than [`MAX_GROUP_DEPTH`] in a row is an error.
     fn parse_unary(&mut self, depth: usize) -> Result<RawNode, QuerySyntaxError> {
-        if matches!(self.peek(), Some(Lexeme::Not)) {
+        let mut negations = 0usize;
+        while matches!(self.peek(), Some(Lexeme::Not)) {
             self.pos += 1;
-            return Ok(RawNode::Not(Box::new(self.parse_unary(depth)?)));
+            negations += 1;
+            if negations > MAX_GROUP_DEPTH {
+                return Err(QuerySyntaxError::new(format!(
+                    "more than {MAX_GROUP_DEPTH} consecutive '-' negations"
+                )));
+            }
         }
-        self.parse_primary(depth)
+        let operand = self.parse_primary(depth)?;
+        Ok(if negations % 2 == 1 {
+            RawNode::Not(Box::new(operand))
+        } else {
+            operand
+        })
     }
 
     fn parse_primary(&mut self, depth: usize) -> Result<RawNode, QuerySyntaxError> {
@@ -374,7 +397,7 @@ enum FieldValue {
     /// Alternative stemmed token sequences (one per query language, deduped).
     Sequences(Vec<Vec<String>>),
     /// Lowercase prefix tested against each stemmed token (`title:conf*`).
-    Prefix(String),
+    Prefix(Vec<String>),
     /// Literal text: a tag query or a lowercase path substring.
     Literal(String),
 }
@@ -428,7 +451,9 @@ impl FieldTerm {
                         .windows(seq.len())
                         .any(|window| window == seq.as_slice())
             }),
-            FieldValue::Prefix(prefix) => tokens.iter().any(|t| t.starts_with(prefix.as_str())),
+            FieldValue::Prefix(candidates) => tokens
+                .iter()
+                .any(|t| candidates.iter().any(|p| t.starts_with(p.as_str()))),
             FieldValue::Literal(_) => false,
         }
     }
@@ -481,8 +506,10 @@ enum Node {
     Not(Box<Node>),
     /// One query token: alternative stems, one per query language (deduped).
     Term(Vec<String>),
-    /// Lowercase prefix matched against the stemmed dictionary.
-    Prefix(String),
+    /// Lowercase prefix matched against the stemmed dictionary: the raw
+    /// prefix first, then its per-language stems and their longest common
+    /// prefixes with the raw form, tried only when the raw prefix matches nothing.
+    Prefix(Vec<String>),
     /// Alternative consecutive stem sequences, one per query language.
     Phrase(Vec<Vec<String>>),
     Field(FieldTerm),
@@ -544,6 +571,30 @@ fn positional_alternatives(text: &str, stemmers: &[&Stemmer]) -> Vec<Vec<String>
             )
         })
         .collect()
+}
+
+/// Candidate prefixes for `raw*`: the raw lowercase prefix first, then for
+/// each query language its stem and the longest common prefix of raw and
+/// stem (at least three characters). The fallbacks are used only when the raw
+/// prefix matches no dictionary stem, so `configuration*` still finds
+/// `configur` (the stem of "configuration").
+fn prefix_candidates(raw: &str, stemmers: &[&Stemmer]) -> Vec<String> {
+    let mut out = vec![raw.to_owned()];
+    for stemmer in stemmers {
+        let stem = stemmer.stem(raw).into_owned();
+        let common: String = raw
+            .chars()
+            .zip(stem.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(a, _)| a)
+            .collect();
+        for candidate in [stem, common] {
+            if candidate.chars().count() >= 3 && !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
 }
 
 fn group(nodes: Vec<Node>, make: fn(Vec<Node>) -> Node) -> Option<Node> {
@@ -616,7 +667,7 @@ impl Compiler<'_> {
                 .flat_map(|part| positional_alternatives(part, self.stemmers))
                 .map(Node::Term)
                 .collect();
-            nodes.push(Node::Prefix(last.clone()));
+            nodes.push(Node::Prefix(prefix_candidates(last, self.stemmers)));
             return Ok(group(nodes, Node::And));
         }
         let positions = positional_alternatives(text, self.stemmers);
@@ -665,7 +716,7 @@ impl Compiler<'_> {
                             "'{text}': a prefix term needs at least one letter or digit before '*'"
                         )));
                     }
-                    FieldValue::Prefix(prefix)
+                    FieldValue::Prefix(prefix_candidates(&prefix, self.stemmers))
                 } else {
                     let alternatives = sequences(&text, self.stemmers);
                     if alternatives.is_empty() {
@@ -785,9 +836,9 @@ impl CompiledQuery {
         }
     }
 
-    /// Every lowercase `prefix*` in the query, positive or negated.
-    fn prefixes(&self) -> Vec<&str> {
-        fn walk<'a>(node: &'a Node, out: &mut Vec<&'a str>) {
+    /// Every `prefix*` candidate list in the query, positive or negated.
+    fn prefixes(&self) -> Vec<&[String]> {
+        fn walk<'a>(node: &'a Node, out: &mut Vec<&'a [String]>) {
             match node {
                 Node::And(c) | Node::Or(c) => c.iter().for_each(|n| walk(n, out)),
                 Node::Not(n) => walk(n, out),
@@ -820,14 +871,14 @@ pub(super) fn operator_only(query: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 enum SnippetGroup {
     Stems(Vec<String>),
-    Prefix(String),
+    Prefix(Vec<String>),
 }
 
 impl SnippetGroup {
     fn hit(&self, token: &str) -> bool {
         match self {
             Self::Stems(stems) => stems.iter().any(|s| s == token),
-            Self::Prefix(prefix) => token.starts_with(prefix.as_str()),
+            Self::Prefix(candidates) => candidates.iter().any(|p| token.starts_with(p.as_str())),
         }
     }
 }
@@ -1049,8 +1100,8 @@ impl<'a> Evaluator<'a> {
                     .collect();
                 self.leaf(units.into_iter(), positive)
             }
-            Node::Prefix(prefix) => {
-                let expanded = self.index.expand_prefix(prefix);
+            Node::Prefix(candidates) => {
+                let expanded = self.index.expand_prefix(candidates);
                 let units: Vec<_> = expanded
                     .into_iter()
                     .map(|t| (vec![t], self.term_docs(t)))
@@ -1114,7 +1165,8 @@ pub struct TermCandidate {
 pub struct TermSuggestion {
     /// The query word as written.
     pub term: String,
-    /// Up to three closest dictionary terms, most frequent first.
+    /// Up to three closest dictionary stems, most similar first (document
+    /// frequency breaks ties).
     pub candidates: Vec<TermCandidate>,
 }
 
@@ -1138,15 +1190,36 @@ fn close_enough(query: &str, candidate: &str) -> bool {
 }
 
 impl Bm25InvertedIndex {
-    /// Dictionary terms starting with `prefix` (most frequent first, then
-    /// alphabetical), capped at [`MAX_PREFIX_EXPANSION`].
-    fn expand_prefix(&self, prefix: &str) -> Vec<&str> {
-        let mut terms: Vec<(&str, usize)> = self
-            .postings
+    /// The prefixes a `prefix*` term actually expands with: the raw prefix
+    /// when it matches any dictionary term, else every stem-derived fallback
+    /// that does (`configuration*` → `configur`).
+    fn effective_prefixes<'p>(&self, candidates: &'p [String]) -> Vec<&'p str> {
+        let matches = |p: &str| self.postings.keys().any(|t| t.starts_with(p));
+        match candidates.split_first() {
+            Some((raw, _)) if matches(raw) => vec![raw.as_str()],
+            Some((_, fallbacks)) => fallbacks
+                .iter()
+                .map(String::as_str)
+                .filter(|p| matches(p))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Every dictionary term a `prefix*` candidate list matches, uncapped.
+    fn prefix_matches(&self, candidates: &[String]) -> Vec<(&str, usize)> {
+        let prefixes = self.effective_prefixes(candidates);
+        self.postings
             .iter()
-            .filter(|(term, _)| term.starts_with(prefix))
+            .filter(|(term, _)| prefixes.iter().any(|p| term.starts_with(p)))
             .map(|(term, posts)| (term.as_str(), posts.len()))
-            .collect();
+            .collect()
+    }
+
+    /// Dictionary terms a `prefix*` term expands to (most frequent first,
+    /// then alphabetical), capped at [`MAX_PREFIX_EXPANSION`].
+    fn expand_prefix(&self, candidates: &[String]) -> Vec<&str> {
+        let mut terms = self.prefix_matches(candidates);
         terms.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         terms.truncate(MAX_PREFIX_EXPANSION);
         terms.into_iter().map(|(t, _)| t).collect()
@@ -1157,14 +1230,13 @@ impl Bm25InvertedIndex {
     #[must_use]
     pub fn capped_prefixes(&self, query: &CompiledQuery) -> Vec<(String, usize)> {
         let mut out: Vec<(String, usize)> = Vec::new();
-        for prefix in query.prefixes() {
-            let count = self
-                .postings
-                .keys()
-                .filter(|term| term.starts_with(prefix))
-                .count();
-            if count > MAX_PREFIX_EXPANSION && !out.iter().any(|(p, _)| p == prefix) {
-                out.push((prefix.to_owned(), count));
+        for candidates in query.prefixes() {
+            let Some(raw) = candidates.first() else {
+                continue;
+            };
+            let count = self.prefix_matches(candidates).len();
+            if count > MAX_PREFIX_EXPANSION && !out.iter().any(|(p, _)| p == raw) {
+                out.push((raw.clone(), count));
             }
         }
         out
@@ -1255,7 +1327,8 @@ impl Bm25InvertedIndex {
 
     /// Did-you-mean for each positive query word none of whose stems occur in
     /// the dictionary: up to three close terms (Jaro-Winkler ≥ 0.85 or
-    /// Levenshtein ≤ 2), most frequent first.
+    /// Levenshtein ≤ 2), most similar first with document frequency as the
+    /// tie-break. Candidates are dictionary stems, not surface words.
     #[must_use]
     pub fn suggest(&self, query: &CompiledQuery) -> Vec<TermSuggestion> {
         let mut out: Vec<TermSuggestion> = Vec::new();
@@ -1270,27 +1343,37 @@ impl Bm25InvertedIndex {
             let mut probes: Vec<&str> = vec![lowered.as_str()];
             probes.extend(word.stems.iter().map(String::as_str));
             let probes = dedup(probes);
-            let mut candidates: Vec<(&str, usize, f64)> = self
+            // (term, docs, edit similarity, Jaro-Winkler), best probe each.
+            let mut candidates: Vec<(&str, usize, f64, f64)> = self
                 .postings
                 .iter()
                 .filter(|(term, _)| !probes.contains(&term.as_str()))
                 .filter_map(|(term, posts)| {
-                    let similarity = probes
+                    let (edit, jw) = probes
                         .iter()
                         .filter(|p| close_enough(p, term))
-                        .map(|p| strsim::jaro_winkler(p, term))
-                        .fold(None, |best: Option<f64>, s| {
-                            Some(best.map_or(s, |b| b.max(s)))
+                        .map(|p| {
+                            (
+                                strsim::normalized_levenshtein(p, term),
+                                strsim::jaro_winkler(p, term),
+                            )
+                        })
+                        .fold(None, |best: Option<(f64, f64)>, s| {
+                            Some(best.map_or(s, |b| if s > b { s } else { b }))
                         })?;
-                    Some((term.as_str(), posts.len(), similarity))
+                    Some((term.as_str(), posts.len(), edit, jw))
                 })
                 .collect();
             if candidates.is_empty() {
                 continue;
             }
+            // Fewest edits first (normalised Levenshtein), then Jaro-Winkler;
+            // document frequency only breaks ties.
             candidates.sort_unstable_by(|a, b| {
-                b.1.cmp(&a.1)
-                    .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+                b.2.partial_cmp(&a.2)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal))
+                    .then_with(|| b.1.cmp(&a.1))
                     .then_with(|| a.0.cmp(b.0))
             });
             candidates.truncate(SUGGEST_MAX_CANDIDATES);
@@ -1298,7 +1381,7 @@ impl Bm25InvertedIndex {
                 term: word.raw.clone(),
                 candidates: candidates
                     .into_iter()
-                    .map(|(term, docs, _)| TermCandidate {
+                    .map(|(term, docs, _, _)| TermCandidate {
                         term: term.to_owned(),
                         docs,
                     })
@@ -1459,11 +1542,17 @@ mod tests {
 
     #[test]
     fn prefix_terms_and_bare_star() {
-        assert_eq!(compile("Conf*").root, Some(Node::Prefix("conf".into())));
-        assert_eq!(compile("conf**").root, Some(Node::Prefix("conf".into())));
+        assert_eq!(
+            compile("Conf*").root,
+            Some(Node::Prefix(vec!["conf".into()]))
+        );
+        assert_eq!(
+            compile("conf**").root,
+            Some(Node::Prefix(vec!["conf".into()]))
+        );
         assert_eq!(
             compile("std::f*").root,
-            Some(Node::And(vec![term("std"), Node::Prefix("f".into())]))
+            Some(Node::And(vec![term("std"), Node::Prefix(vec!["f".into()])]))
         );
         for bad in ["*", "**", "-*", "(*)", "title:*"] {
             assert!(
@@ -1494,7 +1583,10 @@ mod tests {
         }]);
         let q = compile("zeta*");
         assert_eq!(big.capped_prefixes(&q), vec![("zeta".to_owned(), 300)]);
-        assert_eq!(big.expand_prefix("zeta").len(), MAX_PREFIX_EXPANSION);
+        assert_eq!(
+            big.expand_prefix(&["zeta".to_owned()]).len(),
+            MAX_PREFIX_EXPANSION
+        );
         assert_eq!(big.score_compiled(&q).len(), 1);
     }
 
@@ -1660,15 +1752,78 @@ mod tests {
         let suggestions = index.suggest(&q);
         assert_eq!(suggestions.len(), 1, "{suggestions:?}");
         assert_eq!(suggestions[0].term, "stemmng");
-        assert_eq!(suggestions[0].candidates[0].term, "stem");
-        assert_eq!(suggestions[0].candidates[0].docs, 2);
+        // Similarity ranks first: `stemmer` (2 edits) beats the more
+        // frequent but less similar `stem`.
+        let ranked: Vec<_> = suggestions[0]
+            .candidates
+            .iter()
+            .map(|c| (c.term.as_str(), c.docs))
+            .collect();
+        assert_eq!(ranked, vec![("stemmer", 1), ("stem", 2)]);
         assert_eq!(
             corrected_query(&q, &suggestions).as_deref(),
-            Some("stem -zzz unrelated")
+            Some("stemmer -zzz unrelated")
         );
         let got = index.suggest(&compile("zzzzqqq"));
         assert!(got.is_empty(), "expected empty, got {got:?}");
         assert!(corrected_query(&compile("x"), &[]).is_none());
+    }
+
+    #[test]
+    fn empty_negated_phrase_negates_nothing() {
+        let index = corpus(&[("a.md", "snapshot index"), ("b.md", "other words")]);
+        assert_eq!(compile("-\"\" snapshot").root, compile("snapshot").root);
+        assert_eq!(hits(&index, "-\"\" snapshot"), vec!["a.md"]);
+        assert_eq!(hits(&index, "-\"\" -\"\" snapshot"), vec!["a.md"]);
+        // 30 000 empty negated phrases neither overflow the stack nor negate.
+        let many = format!("{} snapshot", "-\"\"".repeat(30_000));
+        assert_eq!(hits(&index, &many), vec!["a.md"]);
+    }
+
+    #[test]
+    fn consecutive_negations_are_bounded_and_collapse() {
+        let parse_lexemes = |n: usize| {
+            let mut lexemes = vec![Lexeme::Not; n];
+            lexemes.push(Lexeme::Word {
+                text: "x1".into(),
+                start: 0,
+                end: 2,
+            });
+            Parser { lexemes, pos: 0 }.parse_and(0)
+        };
+        let two = parse_lexemes(2).unwrap();
+        assert_eq!(
+            two,
+            vec![RawNode::Word {
+                text: "x1".into(),
+                start: 0,
+                end: 2
+            }]
+        );
+        assert!(matches!(parse_lexemes(3).unwrap()[0], RawNode::Not(_)));
+        assert!(parse_lexemes(MAX_GROUP_DEPTH).is_ok());
+        assert!(parse_lexemes(MAX_GROUP_DEPTH + 1).is_err());
+        assert!(parse_lexemes(100_000).is_err());
+        // Deep negated groups hit the parenthesis limit, not the stack.
+        let deep = format!("{}a{}", "-(".repeat(10_000), ")".repeat(10_000));
+        assert!(CompiledQuery::parse(&deep, &[StemLanguage::English]).is_err());
+    }
+
+    #[test]
+    fn whole_word_prefix_falls_back_to_its_stem() {
+        let index = corpus(&[
+            ("a.md", "configuration file"),
+            ("b.md", "happiness matters"),
+            ("c.md", "nothing"),
+        ]);
+        // `configuration` is no stem prefix (the stem is `configur`).
+        assert_eq!(hits(&index, "configuration*"), vec!["a.md"]);
+        assert_eq!(hits(&index, "happiness*"), vec!["b.md"]);
+        // The raw prefix wins whenever it matches something.
+        assert_eq!(hits(&index, "conf*"), vec!["a.md"]);
+        assert!(hits(&index, "zzzzz*").is_empty(), "no fallback hit");
+        let m = SnippetMatcher::from_compiled(&compile("configuration*"));
+        assert_eq!(m.coverage(&tokenize("configuration here", &en())), 1);
     }
 
     #[test]

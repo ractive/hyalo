@@ -257,7 +257,8 @@ fn zero_results_suggest_close_terms() {
         .map(|h| h["cmd"].as_str().unwrap())
         .collect();
     assert!(
-        cmds.iter().any(|c| c.starts_with("hyalo find tokio")),
+        cmds.iter()
+            .any(|c| c.starts_with("hyalo find") && c.ends_with("-- tokio")),
         "{cmds:?}"
     );
     assert!(
@@ -274,7 +275,7 @@ fn zero_results_suggest_close_terms() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("'toklo' occurs in no document; did you mean: tokio (2 docs)?"),
+        stderr.contains("'toklo' occurs in no document; closest indexed stems: tokio (2 docs)"),
         "{stderr}"
     );
 
@@ -283,4 +284,68 @@ fn zero_results_suggest_close_terms() {
     assert!(json.get("suggestions").is_none());
     let (json, _) = run(&tmp, &["find", "qqqqxxxx"]);
     assert!(json.get("suggestions").is_none());
+}
+
+#[test]
+fn empty_negated_phrases_negate_nothing_and_never_overflow() {
+    let tmp = vault();
+    let expected = files(&tmp, "tokio", &[]);
+    for query in [
+        "-\"\" tokio".to_owned(),
+        "-\"\" -\"\" tokio".to_owned(),
+        format!("{} tokio", "-\"\"".repeat(30_000)),
+    ] {
+        let output = hyalo_no_hints()
+            .arg("--dir")
+            .arg(tmp.path())
+            .args(["find", "--format", "json", "--", &query])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{}", query.len());
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut got: Vec<String> = json["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["file"].as_str().unwrap().to_owned())
+            .collect();
+        got.sort();
+        assert_eq!(got, expected);
+    }
+}
+
+#[test]
+fn corrected_query_hint_survives_a_leading_dash() {
+    let tmp = vault();
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--format", "json", "--", "-executor toklo"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let hint = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["cmd"].as_str().unwrap())
+        .find(|c| c.starts_with("hyalo find"))
+        .expect("corrected-query hint");
+    assert!(hint.ends_with("-- '-executor tokio'"), "{hint}");
+    // The hint runs as written.
+    let argv = super::common::shell_split(hint);
+    let rerun = hyalo_no_hints().args(&argv[1..]).output().unwrap();
+    assert!(rerun.status.success(), "{rerun:?}");
+    let json: serde_json::Value = serde_json::from_slice(&rerun.stdout).unwrap();
+    assert_eq!(json["results"][0]["file"], "notes/tokio-only.md");
+}
+
+#[test]
+fn whole_word_prefix_uses_its_stem() {
+    let tmp = vault();
+    assert_eq!(
+        files(&tmp, "configuration*", &[]),
+        vec!["notes/rust-async.md"]
+    );
 }
