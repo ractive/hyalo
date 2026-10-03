@@ -167,6 +167,12 @@ pub fn summary(
     schema: &SchemaConfig,
     lint_ignore: &[String],
     case_index: Option<&CaseInsensitiveIndex>,
+    // DEC-342 (review-round perf fix): `true` when `index` is backed by a
+    // loaded snapshot — `SnapshotIndex::load` has already replayed the
+    // build-time gitignore-drop count into `discovery::gitignore_dropped_count()`
+    // (mirroring `scan_excluded`'s DEC-303 replay), so `summary --index` must
+    // NOT pay for another `.gitignore`-disabled walk on top of it.
+    from_index: bool,
 ) -> Result<CommandOutcome> {
     use crate::commands::find::filter_index_entries;
     let scoped: Vec<_> = filter_index_entries(index.entries(), &[], globs)?;
@@ -329,17 +335,47 @@ pub fn summary(
     // A `.gitignore`-excluded `.md` file is invisible to this walk exactly
     // like a `[scan] exclude` drop is: the vault "lost" it to an exclusion
     // rule, not to a read/parse failure, so it is folded into the same
-    // `excluded` total rather than a new field (iteration 306 / F5). Best
-    // effort: a vault directory the configured `dir` cannot re-walk (e.g. a
-    // moved vault read through `--index-file`) just contributes 0 here
-    // rather than failing the whole summary.
-    let gitignore_excluded =
-        hyalo_core::discovery::count_gitignore_dropped(dir).unwrap_or_else(|error| {
-            crate::warn::note(format!(
-                "could not measure .gitignore-excluded files for this summary: {error:#}"
-            ));
-            0
-        });
+    // `excluded` total rather than a new field (iteration 306 / F5).
+    //
+    // Review-round perf fix (DEC-342): `--index` must do no disk walk at
+    // all — `SnapshotIndex::load` has already replayed the build-time count
+    // from the snapshot header into `gitignore_dropped_count()`, so trust it
+    // outright. A disk scan still pays exactly one extra walk (the
+    // `.gitignore`-disabled one), reusing the already-discovered entries as
+    // the respecting set instead of re-walking for it a second time — a
+    // vault directory the configured `dir` cannot re-walk (e.g. a moved
+    // vault read through `--index-file`, which still sets `from_index` and
+    // skips this branch) just contributes 0 here rather than failing the
+    // whole summary.
+    if !from_index {
+        // The respecting set must be every file the real walk admitted, not
+        // just the ones that went on to *parse* successfully: `index.entries()`
+        // alone excludes a file with unparsable frontmatter exactly like it
+        // excludes a gitignored one, which double-counted every "skipped"
+        // file as "gitignore-dropped" too (review-round regression caught by
+        // `iteration265_scan_exclude_and_skips`). `warn::skipped_files()` is
+        // already populated by this same scan, so folding it in costs no
+        // extra walk.
+        let respecting_rel: std::collections::HashSet<String> = index
+            .entries()
+            .iter()
+            .map(|e| e.rel_path.clone())
+            .chain(
+                hyalo_core::warn::skipped_files()
+                    .into_iter()
+                    .map(|skip| skip.path),
+            )
+            .collect();
+        match hyalo_core::discovery::count_gitignore_dropped_against(dir, &respecting_rel) {
+            Ok(dropped) => hyalo_core::discovery::note_gitignore_dropped(dropped),
+            Err(error) => {
+                crate::warn::note(format!(
+                    "could not measure .gitignore-excluded files for this summary: {error:#}"
+                ));
+            }
+        }
+    }
+    let gitignore_excluded = hyalo_core::discovery::gitignore_dropped_count();
 
     let file_counts = FileCounts {
         total: total_files,
@@ -574,8 +610,9 @@ mod tests {
             site_prefix,
             format,
             &schema,
-            &[],  // lint_ignore
-            None, // case_index
+            &[],   // lint_ignore
+            None,  // case_index
+            false, // from_index: disk scan
         )
     }
 
@@ -1049,6 +1086,7 @@ Body.
                 &schema,
                 &[],
                 None,
+                true, // from_index
             )
             .unwrap(),
         );
@@ -1152,6 +1190,7 @@ Body.
                 &schema,
                 &[],
                 None,
+                true, // from_index
             )
             .unwrap(),
         );
@@ -1369,6 +1408,7 @@ pub(crate) fn run(
             // Summary always reports orphan/dead-end counts which rely on
             // wikilink resolution, so the stem map is always needed.
             let ci = maybe_case_index(ctx.case_insensitive_mode, dir, true, resolved.as_snapshot());
+            let from_index = resolved.as_snapshot().is_some();
             summary(
                 dir,
                 resolved.as_index(),
@@ -1380,6 +1420,7 @@ pub(crate) fn run(
                 ctx.schema,
                 ctx.lint_ignore,
                 ci.as_ref(),
+                from_index,
             )
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),

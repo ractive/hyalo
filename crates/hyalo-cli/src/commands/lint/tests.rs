@@ -1580,3 +1580,86 @@ fn group_severity_is_warn_when_all_warn() {
 fn group_severity_empty_defaults_to_warn() {
     assert_eq!(group_severity(&[]), "warn");
 }
+
+// --- DEC-317 batching: one shared PerDirectory session, not one per file ---
+
+/// PR #369 review item 5: proves `lint --fix` over more than 8 files shares
+/// one `Durability::PerDirectory` session across the whole parallel pass
+/// instead of each file committing (and fsyncing) through its own —
+/// `lint_files_extended_observed`'s test-only seam reports the shared
+/// session's queued-directory count right before the single `finish()` call
+/// that flushes it. Ten files in one directory must leave exactly one
+/// directory pending, not ten (per-file sessions) and not zero (which would
+/// mean nothing was ever absorbed into the shared session at all).
+#[test]
+fn lint_fix_batches_more_than_eight_files_into_one_shared_per_directory_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    for i in 0..10 {
+        // A trailing blank line is MD047's fixable violation: autofixable,
+        // no schema needed, and guaranteed to trigger a real write per file.
+        let rel = format!("note{i}.md");
+        let path = dir.path().join(&rel);
+        std::fs::write(&path, format!("---\ntitle: Note {i}\n---\nbody\n\n")).unwrap();
+        files.push((path, rel));
+    }
+
+    let engine = hyalo_mdlint::HyaloLintEngine::create().unwrap();
+    let md_config = hyalo_mdlint::LintConfig::default();
+    let schema = SchemaConfig::default();
+    let mut snapshot: Option<hyalo_core::index::SnapshotIndex> = None;
+    let mut opts = ExtLintOptions {
+        fix: FixMode::Apply,
+        detailed: false,
+        rule_filter: Some("MD047"),
+        rule_prefix: None,
+        max_per_rule: 100,
+        max_files: 100,
+        fix_rules: &[],
+        snapshot_index: &mut snapshot,
+        index_path: None,
+        vault_dir: dir.path(),
+        strict: false,
+        okf_profile: false,
+        madr_profile: false,
+        skills_profile: false,
+        changelog_profile: false,
+        case_insensitive: false,
+        link_lint_ctx: None,
+        files_ignored: 0,
+    };
+
+    let pending = std::cell::Cell::new(None);
+    let (outcome, _counts) = lint_files_extended_observed(
+        &files,
+        &schema,
+        &engine,
+        &md_config,
+        &mut opts,
+        |pending_directories| pending.set(Some(pending_directories)),
+    )
+    .unwrap();
+    let crate::output::CommandOutcome::Success { output, .. } = outcome else {
+        panic!("expected a Success outcome");
+    };
+    assert_eq!(
+        output["total_fixed"], 10,
+        "every one of the 10 files needed the MD047 fix: {output}"
+    );
+    assert_eq!(
+        pending.get(),
+        Some(1),
+        "ten files in one directory must queue exactly one pending fence \
+         in the shared session before its single finish() — 0 would mean \
+         nothing was absorbed (a regression to independent per-file \
+         sessions), and 10 would mean no deduplication happened"
+    );
+
+    for (path, _) in &files {
+        let content = std::fs::read_to_string(path).unwrap();
+        assert!(
+            content.ends_with("body\n") && !content.ends_with("body\n\n"),
+            "{path:?} must have converged to one trailing newline: {content:?}"
+        );
+    }
+}

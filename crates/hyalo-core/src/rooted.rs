@@ -679,6 +679,19 @@ impl WriteSession {
     pub fn absorb(&mut self, mut worker: Self) {
         self.directories.append(&mut worker.directories);
     }
+    /// How many distinct directories are queued for a deferred fsync under
+    /// `Durability::PerDirectory`/`BulkRewrite` (always 0 under `PerFile`,
+    /// which fsyncs inline in `record()` and never queues).
+    ///
+    /// `pub` for the same cross-crate reason as [`worker`](Self::worker):
+    /// `hyalo-cli`'s batched `lint --fix` proves it absorbed every parallel
+    /// worker into one directory-deduplicated top-level session — not one
+    /// session per file — by checking this count before calling
+    /// [`finish`](Self::finish) (PR #369 review item 5).
+    #[must_use]
+    pub fn pending_directories(&self) -> usize {
+        self.directories.len()
+    }
     fn fault(&self, point: FaultPoint) -> Result<()> {
         if self.fault == Some(point) {
             bail!("injected {point:?} failure");

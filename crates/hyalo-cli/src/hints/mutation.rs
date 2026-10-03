@@ -183,7 +183,11 @@ pub(super) fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<H
         .unwrap_or(false);
 
     if let Some(to_path) = to_path {
-        if is_dry_run {
+        // PR #369 review item 8: a dry run that already reports the move
+        // would be skipped (single-file `--on-conflict skip` has no other
+        // outcome) has nothing to apply — offering "Apply this move" here
+        // promises a write that would just reproduce the same skip.
+        if is_dry_run && !skipped_single {
             if let Some(from_path) = data.get("from").and_then(|f| f.as_str()) {
                 // BUG (codebase review 2026-10-03 item 6): this hint used to
                 // drop `--on-conflict skip`, so applying a dry run that
@@ -200,7 +204,7 @@ pub(super) fn hints_for_mv(ctx: &HintContext, data: &serde_json::Value) -> Vec<H
                     build_command_with_file(ctx, &["mv"], from_path, extra),
                 ));
             }
-        } else if !skipped_single {
+        } else if !is_dry_run && !skipped_single {
             // A skip that already happened (no `--dry-run`) moved nothing —
             // `to_path` names the file that was already there, not a moved
             // one, so "read/verify the moved file" would inspect the wrong

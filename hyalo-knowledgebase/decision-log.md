@@ -6776,57 +6776,111 @@ xtask gates (`check-jev-assets` runs in CI's jev-helper job and `bench-scale`
 is an on-demand benchmark); no placeholder subcommands remain. Historical iteration notes that mention the removed names are left
 as written.
 
-## DEC-342: Gitignore honouring contract (2026-10-04)
+## DEC-342: Gitignore honouring contract (2026-10-04, amended 2026-10-04 — review round)
 
-**Decision.** Every vault walk honours `.gitignore` (and other VCS ignore
-files) the same way `git` itself would, in addition to `[scan] exclude` —
-this was already true of `discovery::discover_files`'s `ignore::WalkBuilder`
-configuration, but iteration 306's review (F5) found it under-enforced at two
-call sites and undocumented everywhere. The contract, now made consistent:
+**Decision.** Every vault walk honours `.gitignore`, `.ignore`,
+`.git/info/exclude` **and** git's global excludes file the same way `git`
+itself would, in addition to `[scan] exclude` — this was already true of
+`discovery::discover_files`'s `ignore::WalkBuilder` configuration, but
+iteration 306's review (F5) found it under-enforced at two call sites and
+undocumented everywhere. The contract, now made consistent:
 
-- a `.gitignore`-matched `.md` file never appears in an unscoped `find`,
-  `summary`, or any other full-vault listing, exactly like a `[scan] exclude`
-  drop;
+- a file any of those four sources excludes never appears in an unscoped
+  `find`, `summary`, or any other full-vault listing, exactly like a `[scan]
+  exclude` drop;
 - it is not a note-graph edge for `--orphan` / `--dead-end` — an inbound link
-  to it is, from a whole-vault sweep's point of view, a link to nothing;
-- `hyalo summary`'s `results.files.excluded` counts it alongside `[scan]
-  exclude` drops (`discovery::count_gitignore_dropped`, a second,
-  gitignore-disabled walk diffed against the normal one — confined to
-  `summary`, which already performs one full sweep per run; no other command
-  pays this cost) rather than undercounting silently;
+  to it is, from a whole-vault sweep's point of view, a link to nothing. This
+  makes the graph **asymmetric by design**: a named, excluded note's own
+  `--fields backlinks` still lists every file that links to it (a named path
+  is a promise, below), while from the OTHER side the same link is invisible
+  — `find --broken-links` on the linking file does not flag it, `--orphan` /
+  `--dead-end` do not count it as an edge, and HYALO006 does not see it
+  either. `MyNotes.md` (gitignored) and `other.md` (links to it) is the
+  worked example: `find --file MyNotes.md --fields backlinks` lists
+  `other.md`, but `other.md`'s own `[[MyNotes]]` is invisible to every
+  whole-vault view;
+- `hyalo summary`'s `results.files.excluded` counts every such drop
+  alongside `[scan] exclude` drops (`discovery::count_gitignore_dropped_against`)
+  rather than undercounting silently, and only `.gitignore` drops at first —
+  the review round's finding (6) is folded in below;
 - a path you **name** — `--file`, a positional argument, or `--files-from` —
   is still a promise (DEC-301) and is always returned, under every
-  `--fields` combination, even when gitignored. Before this decision,
+  `--fields` combination, even when excluded. Before this decision,
   `build_scanned_index_with`'s `needs_full_vault` branch (used whenever a
   field needs the whole-vault link graph — `--fields backlinks`, `--orphan`,
   `--dead-end`) separately *validated* a named file's existence but then
-  built the actually-scanned file list from a plain gitignore-respecting
+  built the actually-scanned file list from a plain ignore-respecting
   `discover_files` call that never consulted that validation, so the named
   file silently vanished from `results` the moment one of those fields was
   requested — `find --file MyNotes.md` worked, `find --file MyNotes.md
-  --fields backlinks` returned "No results".
+  --fields backlinks` returned "No results". `find --index --file
+  <gitignored>` never hints `hyalo create-index` to "fold it in" — that
+  fold-in never happens for a file the next `create-index` will just drop
+  again, so the hint is suppressed for this case specifically.
 
-**Why.** `.gitignore` honouring already matched DEC-277's `[scan] exclude`
+**Why.** Ignore-source honouring already matched DEC-277's `[scan] exclude`
 rationale (a vault-wide exclusion every command agrees on) and nothing in the
 codebase disputed it; the bug was two places where the *contract itself* —
 not the walk — was inconsistently applied, plus the fact that no help page or
-doc mentioned gitignore honouring at all, leaving `results.files.excluded`
-looking wrong by omission whenever a `.gitignore` was the only reason a file
-was missing.
+doc mentioned it at all, leaving `results.files.excluded` looking wrong by
+omission whenever an ignore rule was the only reason a file was missing.
 
 **Consequences.** `commands::build_scanned_index_with` now builds its
 full-vault file list first, then folds any resolved-but-undiscovered named
 file back into it before scanning — the validation and the scan use the same
-list. `discovery::count_gitignore_dropped` adds one extra vault walk to
-`summary` only (the `[scan] exclude` counter from the real walk is
-preserved via a `record_scan_exclude_stats` flag so the diagnostic walk
-cannot inflate it). `find --help`, `summary --help` (long help) and
-`docs/configuration.md` document the contract; the short `-h` pages are
-unchanged (DEC-279's existing byte ceilings still hold).
+list. `find --help`, `summary --help` (long help) and `docs/configuration.md`
+document the contract; the short `-h` pages are unchanged (DEC-279's
+existing byte ceilings still hold).
 
-**Rejected alternative.** Re-walking the vault twice on every command that
-might need the gitignore-drop count: rejected on performance grounds — only
-`summary` needs the count, and the cost is bounded to that one command.
+**Review round (2026-10-04): precision and performance.**
+
+1. *Precision (finding 6).* `discover_files_ignoring_gitignore`'s walk
+   originally cleared only `WalkBuilder::git_ignore`, leaving `.ignore`,
+   `.git/info/exclude` and the global excludes file at their (enabled)
+   default — so a file excluded only by one of those three was silently
+   never counted, contradicting this very entry's "and other VCS ignore
+   files" claim. All four toggles (`git_ignore`, `ignore`, `git_exclude`,
+   `git_global`) now move together.
+2. *Performance.* The first implementation walked the vault **twice more**
+   per `summary` call — once redundantly re-deriving the already-known
+   respecting set, once with ignoring disabled — regressing MDN's disk-scan
+   summary from 1.55 s to 2.0 s and its `--index-file` summary from 0.49 s to
+   0.93 s, the latter especially bad because avoiding a disk walk is
+   `--index`'s whole purpose. Fixed two ways:
+   - `discovery::count_gitignore_dropped_against` takes the already-known
+     respecting set instead of re-discovering it, cutting the disk-scan path
+     to exactly one extra walk (the ignore-disabled one) instead of two;
+   - `SnapshotHeader` gained `gitignore_dropped: u64` (`#[serde(default,
+     skip_serializing_if = "is_zero_u64")]`, no version bump — same
+     DEC-303 precedent `scan_excluded` set), written at `create-index` time
+     from one extra walk paid **once, at build time**, and replayed
+     unconditionally into `discovery::gitignore_dropped_count()` on load
+     (mirroring `skipped`'s BUG-24 replay, since `.gitignore` has no
+     `.hyalo.toml`-side pattern to check staleness against the way
+     `scan_excluded` does) — so `summary --index` now walks disk **zero**
+     times for this figure. `create_index.rs` computes it right after its
+     existing `discover_files` call, so the new walk there is the only
+     place in the whole codebase that pays this cost more than once per
+     build.
+   A fully single-pass computation (walk once, classify each entry against
+   the layered ignore-source stack directly) remains out of reach from the
+   `ignore` crate's public API: the type that resolves that stack
+   (`ignore::dir::Ignore`) is a private implementation detail the crate
+   deliberately does not expose, confirmed by reading its source
+   (`ignore-0.4.33/src/dir.rs`'s own doc comment: "My initial intention was
+   to expose this module as part of this crate's public API, but I think the
+   data structure's public API is too complicated").
+
+**Rejected alternatives.** Re-walking the vault twice on every `summary`
+call (the original implementation): rejected once measured against MDN
+(above). Reimplementing the `ignore` crate's layered ignore-source
+precedence ourselves to get a true single-pass computation: rejected as a
+correctness risk disproportionate to the win — a hand-rolled matcher that
+drifts from the real walk's behaviour by even one edge case (nested
+`.gitignore` precedence, `!`-negation, `.git/info/exclude` interaction) would
+silently misreport `results.files.excluded` in exactly the vaults this
+feature exists to serve, for a saving that is already one extra walk at
+`create-index` build time, not on every read.
 
 ## DEC-343: `MutationJournal::rename_entry` deleted (2026-10-04)
 

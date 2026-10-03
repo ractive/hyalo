@@ -110,3 +110,116 @@ fn summary_counts_the_gitignored_file_under_excluded() {
         "the gitignore drop should be counted like a [scan] exclude drop: {json}"
     );
 }
+
+/// DEC-342 (review-round perf fix): `summary --index` must read the
+/// gitignore-dropped count back from the snapshot header instead of paying
+/// for another `.gitignore`-disabled disk walk on every read. Proved
+/// indirectly but conclusively: delete the `.gitignore` *after*
+/// `create-index`, then run `summary --index` again. A live walk would now
+/// see `MyNotes.md` as no longer ignored and report `excluded: 0`; the
+/// snapshot-replayed count still says `1`, proving the figure came from the
+/// header `create-index` recorded, not a fresh walk.
+#[test]
+fn summary_index_replays_the_build_time_gitignore_count_without_rewalking() {
+    let tmp = vault_with_gitignored_named_file();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+
+    let create = hyalo_no_hints()
+        .args(["--dir", dir, "create-index"])
+        .output()
+        .expect("create-index should run");
+    assert!(
+        create.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // Remove the only reason MyNotes.md was ever gitignored.
+    std::fs::remove_file(tmp.path().join(".gitignore")).expect("remove .gitignore");
+
+    let json = run_json(&tmp, &["summary", "--index"]);
+    assert_eq!(
+        json["results"]["files"]["excluded"], 1,
+        "must replay the build-time count from the snapshot, not re-walk disk \
+         (a fresh walk would now see no .gitignore at all): {json}"
+    );
+}
+
+/// Review round finding (7): `find --index --file <gitignored>` used to
+/// suggest `hyalo create-index` would "fold it in" — a promise that never
+/// comes true for a file an ignore rule excludes, since the next
+/// `create-index` drops it again. The suggestion must be absent for an
+/// ignored named file and present for a genuinely new one.
+#[test]
+fn find_index_drops_the_fold_in_hint_for_an_ignored_named_file_but_keeps_it_for_a_new_one() {
+    let tmp = vault_with_gitignored_named_file();
+    let dir = tmp.path().to_str().expect("utf-8 path");
+
+    let create = hyalo_no_hints()
+        .args(["--dir", dir, "create-index"])
+        .output()
+        .expect("create-index should run");
+    assert!(
+        create.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // A genuinely new file, created after the index, is not ignored.
+    write_md(tmp.path(), "brand-new.md", "# New\n");
+
+    let ignored_output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--index", "--file", "MyNotes.md"])
+        .output()
+        .expect("hyalo find should run");
+    assert!(ignored_output.status.success());
+    let ignored_stderr = String::from_utf8_lossy(&ignored_output.stderr);
+    assert!(
+        ignored_stderr.contains("absent from the snapshot index"),
+        "the base note must still appear: {ignored_stderr}"
+    );
+    assert!(
+        !ignored_stderr.contains("fold it in"),
+        "a gitignored file will never be folded in by create-index: {ignored_stderr}"
+    );
+
+    let new_output = hyalo_no_hints()
+        .args(["--dir", dir, "find", "--index", "--file", "brand-new.md"])
+        .output()
+        .expect("hyalo find should run");
+    assert!(new_output.status.success());
+    let new_stderr = String::from_utf8_lossy(&new_output.stderr);
+    assert!(
+        new_stderr.contains("fold it in"),
+        "a genuinely new, non-ignored file should still get the create-index suggestion: {new_stderr}"
+    );
+}
+
+/// Review-round regression (caught by the broader suite, pinned here
+/// directly): a file the walk discovers but cannot *parse* (unparsable
+/// frontmatter) must count under `results.files.skipped`, never under
+/// `results.files.excluded` — `count_gitignore_dropped_against`'s respecting
+/// set originally came from `index.entries()` alone, which also excludes
+/// unparsed files, so every skip was briefly double-counted as a gitignore
+/// drop too.
+#[test]
+fn unparsable_frontmatter_is_never_counted_as_gitignore_excluded() {
+    let tmp = vault_with_gitignored_named_file();
+    // `{{date}}` is a template expression, not YAML — this file is discovered
+    // by the walk but never parses.
+    std::fs::write(
+        tmp.path().join("bad.md"),
+        "---\ntitle: Bad\ncreated: {{date}}\n---\nBody.\n",
+    )
+    .expect("write bad frontmatter");
+
+    let json = run_json(&tmp, &["summary"]);
+    assert_eq!(
+        json["results"]["files"]["skipped"], 1,
+        "bad.md's unparsable frontmatter must count as skipped: {json}"
+    );
+    assert_eq!(
+        json["results"]["files"]["excluded"], 1,
+        "only MyNotes.md (gitignored) counts as excluded — bad.md must not: {json}"
+    );
+}

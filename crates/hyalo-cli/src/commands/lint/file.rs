@@ -43,29 +43,34 @@ fn schema_violation_is_autofixable(kind: Option<&str>) -> bool {
 }
 
 /// Publish a replacement body/frontmatter for the batched `lint --fix` pass
-/// (DEC-317 follow-up, codebase review 2026-10-03 item 3).
+/// (DEC-317 follow-up, codebase review 2026-10-03 item 3; PR #369 review
+/// item 4).
 ///
-/// Unlike a plain single-file publish, this never finishes the session
-/// itself: the caller holds one top-level [`hyalo_core::rooted::WriteSession`]
-/// shared across every file in the run, and this returns the (possibly now
-/// directory-queuing) worker session back to the caller, who absorbs it into
-/// the top-level session and finishes that exactly once, after the whole
-/// parallel pass completes. Finishing per file is exactly the per-file fsync
-/// DEC-317 batching exists to avoid.
+/// Unlike a plain single-file publish, this never finishes `session` itself:
+/// the caller holds one worker session for the whole file (itself cloned
+/// from one top-level [`hyalo_core::rooted::WriteSession`] shared across
+/// every file in the run), absorbed into the top level and finished exactly
+/// once after the whole parallel pass completes. Finishing per file is
+/// exactly the per-file fsync DEC-317 batching exists to avoid.
+///
+/// `session` is taken by `&mut` rather than by value: an earlier write to
+/// this same file (e.g. the frontmatter fix) may already have queued a
+/// directory fence into it, and this call's own `?` on a failed `prepare`
+/// must not drop that queued fence along with an owned session nobody now
+/// holds. The caller keeps `session` regardless of this call's outcome.
 fn publish_exact_fix_with_worker_session(
     captured: hyalo_core::rooted::CapturedInput,
     rel_path: &str,
     replacement: &[u8],
-    mut session: hyalo_core::rooted::WriteSession,
+    session: &mut hyalo_core::rooted::WriteSession,
 ) -> Result<(
     crate::commands::apply::PathEffect,
     hyalo_core::rooted::OwnedPublication,
-    hyalo_core::rooted::WriteSession,
 )> {
     use crate::commands::apply::{EffectFailure, EffectState, PathEffect};
     let (effect, receipt) = captured
-        .prepare(replacement, &session)?
-        .commit_with_receipt(&mut session)?;
+        .prepare(replacement, session)?
+        .commit_with_receipt(session)?;
     // There is no `session.finish()` here to fold in as a second source of
     // error: finishing is deferred to the run's single top-level session, so
     // only `record()`'s own outcome (synchronous even under
@@ -84,7 +89,6 @@ fn publish_exact_fix_with_worker_session(
             category,
         },
         receipt,
-        session,
     ))
 }
 
@@ -93,20 +97,19 @@ fn publish_frontmatter_fix_with_worker_session(
     captured: hyalo_core::rooted::CapturedInput,
     rel_path: &str,
     properties: &indexmap::IndexMap<String, serde_json::Value>,
-    session: hyalo_core::rooted::WriteSession,
+    session: &mut hyalo_core::rooted::WriteSession,
 ) -> Result<(
     crate::commands::apply::PathEffect,
     Vec<u8>,
     hyalo_core::rooted::OwnedPublication,
-    hyalo_core::rooted::WriteSession,
 )> {
     let mut reader = captured.reader()?;
     let replacement =
         hyalo_core::frontmatter::render_frontmatter(&mut reader, Path::new(rel_path), properties)?;
     drop(reader);
-    let (effect, receipt, session) =
+    let (effect, receipt) =
         publish_exact_fix_with_worker_session(captured, rel_path, &replacement, session)?;
-    Ok((effect, replacement, receipt, session))
+    Ok((effect, replacement, receipt))
 }
 
 /// Whether `token` has the shape of a markdownlint rule id or alias: ASCII
@@ -271,18 +274,18 @@ fn lint_one_file_extended_with_after_frontmatter(
     // batching): every fix write in this file queues its directory fence
     // here instead of flushing immediately, and the final `PerFileLintResult`
     // hands it back to `lint_files_extended` to absorb into the top-level
-    // session, finished exactly once after the whole parallel pass. Checked
-    // out with `worker_session.take().unwrap_or_else(|| write_session.worker())`
-    // at each write site rather than a `macro_rules!` helper: macro hygiene
-    // means a macro body's `worker_session` does not resolve to this
-    // function's local of the same name.
+    // session, finished exactly once after the whole parallel pass. Threaded
+    // through each write call as `&mut worker_session` (PR #369 review item
+    // 4) rather than checked out and handed back by value: a write that
+    // fails partway must not drop a directory fence an earlier write in this
+    // same file already queued into it.
     // One rule's fix can expose a fresh violation for another rule (e.g. a
     // trimmed line changing what counts as a duplicate blank line), so a
     // single lint→fix pass over the body does not always converge. Bounds
     // the lint→fix→re-lint loop below.
     const MAX_BODY_FIX_PASSES: usize = 5;
 
-    let mut worker_session: Option<hyalo_core::rooted::WriteSession> = Some(write_session.worker());
+    let mut worker_session: hyalo_core::rooted::WriteSession = write_session.worker();
 
     // Stat before reading: oversized files are skipped rather than loaded
     // whole into memory (mirrors `scanner::scan_file_multi`'s own guard).
@@ -321,9 +324,7 @@ fn lint_one_file_extended_with_after_frontmatter(
             fix_actions: Vec::new(),
             body_fix_outcomes: Vec::new(),
             post_fix_schema_remaining: None,
-            write_session: worker_session
-                .take()
-                .unwrap_or_else(|| write_session.worker()),
+            write_session: worker_session,
         });
     }
 
@@ -372,9 +373,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
-                write_session: worker_session
-                    .take()
-                    .unwrap_or_else(|| write_session.worker()),
+                write_session: worker_session,
             });
         }
     };
@@ -410,9 +409,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
-                write_session: worker_session
-                    .take()
-                    .unwrap_or_else(|| write_session.worker()),
+                write_session: worker_session,
             });
         }
     };
@@ -453,9 +450,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                     fix_actions: Vec::new(),
                     body_fix_outcomes: Vec::new(),
                     post_fix_schema_remaining: None,
-                    write_session: worker_session
-                        .take()
-                        .unwrap_or_else(|| write_session.worker()),
+                    write_session: worker_session,
                 });
             }
             // Malformed frontmatter — report as a single error-severity
@@ -500,9 +495,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                 fix_actions: Vec::new(),
                 body_fix_outcomes: Vec::new(),
                 post_fix_schema_remaining: None,
-                write_session: worker_session
-                    .take()
-                    .unwrap_or_else(|| write_session.worker()),
+                write_session: worker_session,
             });
         }
         Err(e) => return Err(e).context(format!("reading frontmatter from {rel_path}")),
@@ -716,15 +709,12 @@ fn lint_one_file_extended_with_after_frontmatter(
                             source,
                             rel_path,
                             &mutable,
-                            worker_session
-                                .take()
-                                .unwrap_or_else(|| write_session.worker()),
+                            &mut worker_session,
                         )
                         .with_context(|| format!("writing fixed frontmatter to {rel_path}"))
                     });
                     match write_result {
-                        Ok((effect, expected, receipt, session)) => {
-                            worker_session = Some(session);
+                        Ok((effect, expected, receipt)) => {
                             body_modified = true;
                             let finalization_failed = effect.error.is_some();
                             if let Some(error) = effect.error.as_deref() {
@@ -740,9 +730,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                                 return Err(observed_lint_worker_error(
                                     &error,
                                     mutation_effects,
-                                    worker_session
-                                        .take()
-                                        .unwrap_or_else(|| write_session.worker()),
+                                    worker_session,
                                 ));
                             }
                             // Re-baseline: the write above legitimately
@@ -883,9 +871,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                     return Err(observed_lint_worker_error(
                         &error,
                         mutation_effects,
-                        worker_session
-                            .take()
-                            .unwrap_or_else(|| write_session.worker()),
+                        worker_session,
                     ));
                 }
             };
@@ -944,9 +930,7 @@ fn lint_one_file_extended_with_after_frontmatter(
             return Err(observed_lint_worker_error(
                 &error,
                 mutation_effects,
-                worker_session
-                    .take()
-                    .unwrap_or_else(|| write_session.worker()),
+                worker_session,
             ));
         }
     };
@@ -1034,9 +1018,7 @@ fn lint_one_file_extended_with_after_frontmatter(
                     return Err(observed_lint_worker_error(
                         &error,
                         mutation_effects,
-                        worker_session
-                            .take()
-                            .unwrap_or_else(|| write_session.worker()),
+                        worker_session,
                     ));
                 }
             };
@@ -1078,16 +1060,13 @@ fn lint_one_file_extended_with_after_frontmatter(
                 source,
                 rel_path,
                 new_content.as_bytes(),
-                worker_session
-                    .take()
-                    .unwrap_or_else(|| write_session.worker()),
+                &mut worker_session,
             )
-            .map(|(effect, _, session)| (effect, session))
+            .map(|(effect, _)| effect)
             .with_context(|| format!("writing fixed body to {rel_path}"))
         });
         match write_result {
-            Ok((effect, session)) => {
-                worker_session = Some(session);
+            Ok(effect) => {
                 body_modified = true;
                 if let Some(error) = effect.error.as_deref() {
                     push_fix_write_error_violation(
@@ -1451,9 +1430,7 @@ fn lint_one_file_extended_with_after_frontmatter(
         fix_actions,
         body_fix_outcomes,
         post_fix_schema_remaining,
-        write_session: worker_session
-            .take()
-            .unwrap_or_else(|| write_session.worker()),
+        write_session: worker_session,
     })
 }
 
@@ -1469,12 +1446,10 @@ mod mutation_tests {
         let root = VaultRoot::new(dir.path()).unwrap();
         let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
         std::fs::write(dir.path().join("a.md"), b"EDITOR!!\n").unwrap();
-        let Err(error) = publish_exact_fix_with_worker_session(
-            source,
-            "a.md",
-            b"fixed\n",
-            WriteSession::new(Durability::PerFile),
-        ) else {
+        let mut session = WriteSession::new(Durability::PerFile);
+        let Err(error) =
+            publish_exact_fix_with_worker_session(source, "a.md", b"fixed\n", &mut session)
+        else {
             panic!("editor change must refuse publication")
         };
         assert!(
@@ -1494,13 +1469,10 @@ mod mutation_tests {
         std::fs::write(dir.path().join("a.md"), b"original\n").unwrap();
         let root = VaultRoot::new(dir.path()).unwrap();
         let source = root.capture(&RelativeName::new("a.md").unwrap()).unwrap();
-        let (effect, _, _session) = publish_exact_fix_with_worker_session(
-            source,
-            "a.md",
-            b"fixed\n",
-            WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize),
-        )
-        .unwrap();
+        let mut session = WriteSession::with_fault(Durability::PerFile, FaultPoint::Finalize);
+        let (effect, _) =
+            publish_exact_fix_with_worker_session(source, "a.md", b"fixed\n", &mut session)
+                .unwrap();
         assert_eq!(std::fs::read(dir.path().join("a.md")).unwrap(), b"fixed\n");
         assert_eq!(
             effect.state,

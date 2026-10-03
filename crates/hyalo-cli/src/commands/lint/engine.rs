@@ -25,13 +25,36 @@ use std::collections::HashSet;
 const MAX_CONFLICT_LINES: usize = 20;
 
 /// Run the extended lint (frontmatter + body) and return the new output shape.
-#[allow(clippy::too_many_arguments)]
 pub fn lint_files_extended(
     files: &[(std::path::PathBuf, String)],
     schema: &SchemaConfig,
     md_lint_engine: &hyalo_mdlint::HyaloLintEngine,
     md_lint_config: &hyalo_mdlint::LintConfig,
     opts: &mut ExtLintOptions<'_>,
+) -> Result<(CommandOutcome, LintCounts)> {
+    lint_files_extended_observed(files, schema, md_lint_engine, md_lint_config, opts, |_| {})
+}
+
+/// [`lint_files_extended`]'s real implementation, with one test-only seam:
+/// `on_session_before_finish` is called with the shared write session's
+/// [`pending_directories`](hyalo_core::rooted::WriteSession::pending_directories)
+/// count immediately before the one `finish()` call that flushes it.
+///
+/// PR #369 review item 5: a correctness-only test (every file ends up
+/// written right) would pass just as well if `--fix` silently regressed to
+/// one independent `WriteSession` per file — this seam is what lets a test
+/// instead prove the DEC-317 mechanism itself: one shared `PerDirectory`
+/// session, absorbing every parallel worker's queued fence, finished exactly
+/// once. Kept as a real parameter rather than `#[cfg(test)]`-gated global
+/// state, which a parallel test run could race on.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lint_files_extended_observed(
+    files: &[(std::path::PathBuf, String)],
+    schema: &SchemaConfig,
+    md_lint_engine: &hyalo_mdlint::HyaloLintEngine,
+    md_lint_config: &hyalo_mdlint::LintConfig,
+    opts: &mut ExtLintOptions<'_>,
+    on_session_before_finish: impl FnOnce(usize),
 ) -> Result<(CommandOutcome, LintCounts)> {
     #[cfg(not(miri))]
     use rayon::prelude::*;
@@ -82,6 +105,18 @@ pub fn lint_files_extended(
     // Finishing happens exactly once, after every worker has run, instead of
     // each file finishing (and so fsyncing) its own session — matching the
     // same file-count threshold `PreparedChangeSet::new` and batch `mv` use.
+    //
+    // The threshold is `files.len()` — every file this lint run is scoped to
+    // (`--file`/`--glob`/`--files-from`/a full scan), not the subset that
+    // ends up actually written (PR #369 review item 5). hyalo does not know
+    // which files need a fix before linting each one, so that count is only
+    // knowable after the fact; deciding durability from it would need a
+    // second pass over the same files, which the DEC-317 fsync-count win
+    // this threshold exists for would not be worth paying I/O to compute.
+    // Every other bulk mutator with this threshold (`set`/`append`/`remove
+    // --glob`, `properties rename`, `tags rename` via `PreparedChangeSet`;
+    // batch `mv`) counts the same way: the resolved candidate set, not the
+    // files that turn out to actually change.
     let mut write_session = hyalo_core::rooted::WriteSession::new(if files.len() > 8 {
         hyalo_core::rooted::Durability::PerDirectory
     } else {
@@ -152,6 +187,7 @@ pub fn lint_files_extended(
     // `CommittedWithFinalizationError` — mirroring `PreparedChangeSet::apply_with`
     // (`commands/apply.rs`), which does the same for its own single shared
     // session.
+    on_session_before_finish(write_session.pending_directories());
     if let Err(error) = write_session.finish() {
         for effect in &mut mutation_effects {
             if effect.state == crate::commands::apply::EffectState::Committed {

@@ -32,7 +32,7 @@ iteration fixes the P1 Rust items, the P2 Rust items and the P3 hint items.
 - [x] An `enum` constraint without `values` is refused at config load
 - [x] `views` surfaces a malformed `.hyalo.toml` diagnostic instead of "unknown view"
 - [x] Hints and texts: zero-result hint, `mv --on-conflict skip` text and hint, `new --dry-run` hint, `links auto` hint, `summary --index` text layout, batch `mv` no-op reported, `lint --strict` wording, `okf.rs` module doc
-- [x] `concurrent_set_never_observed_partial` is deterministic on Windows
+- [x] `concurrent_set_never_observed_partial` no longer flakes on Windows (bounded retry of the race setup until a writer wins)
 
 ## Acceptance criteria
 

@@ -56,14 +56,18 @@ fn single_file_on_conflict_skip_has_a_proper_text_rendering() {
     );
 }
 
-/// A dry run under `--on-conflict skip` that reports a skip used to hint
-/// "Apply this move" as a bare `mv --to <dest>`, which dropped
-/// `--on-conflict skip` — so running the hinted command re-hit the same
-/// conflict under the default `error` policy and exited 1, contradicting the
-/// preview that had just reported a clean (if no-op) outcome. The hint now
-/// carries `--on-conflict skip` through.
+/// PR #369 review item 8: a dry run under `--on-conflict skip` that already
+/// reports the move would be skipped (single-file `--on-conflict skip` has
+/// no other outcome) has nothing to apply — offering "Apply this move" would
+/// promise a write that just reproduces the same skip. No such hint must be
+/// offered.
+///
+/// (A previous fix in this same area made the hint thread `--on-conflict
+/// skip` through when it WAS offered, so a rerun wouldn't exit 1 under the
+/// default `error` policy; this test replaces that one now that the hint is
+/// suppressed outright for an all-skip preview, which is the more honest fix.)
 #[test]
-fn dry_run_skip_hint_carries_on_conflict_through() {
+fn dry_run_skip_preview_offers_no_apply_hint() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "notes/a.md", "hello\n");
     write_md(tmp.path(), "archive/a.md", "existing\n");
@@ -85,41 +89,22 @@ fn dry_run_skip_hint_carries_on_conflict_through() {
         .unwrap();
     assert!(preview.status.success());
     let json: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
+    assert_eq!(
+        json["results"]["skipped"].as_array().map(Vec::len),
+        Some(1),
+        "the preview itself must report the skip: {json}"
+    );
     let hints = json["hints"].as_array().expect("hints array");
-    let apply_hint = hints
-        .iter()
-        .find(|h| h["description"] == "Apply this move")
-        .expect("an 'Apply this move' hint must be offered for a dry-run skip preview");
-    let cmd = apply_hint["cmd"].as_str().unwrap();
     assert!(
-        cmd.contains("--on-conflict") && cmd.contains("skip"),
-        "hint must thread --on-conflict skip through, got: {cmd}"
+        !hints.iter().any(|h| h["description"] == "Apply this move"),
+        "an all-skip dry-run preview has nothing to apply, got hints: {hints:?}"
     );
 
-    // Actually running the hinted command must succeed (exit 0), not
-    // re-fail under the default `error` policy.
-    // Drop the leading "hyalo" and the shell-quoted `--dir <path>` pair: the
-    // quoting is platform-specific (a Windows temp path keeps its quotes
-    // through a whitespace split) and the rerun already runs inside the vault.
-    let mut args: Vec<&str> = Vec::new();
-    let mut tokens = cmd.split_whitespace().skip(1);
-    while let Some(token) = tokens.next() {
-        if token == "--dir" {
-            tokens.next();
-            continue;
-        }
-        args.push(token);
-    }
-    let rerun = hyalo_no_hints()
-        .current_dir(tmp.path())
-        .args(&args)
-        .output()
-        .unwrap();
-    assert!(
-        rerun.status.success(),
-        "the hinted command must not fail: {} -> {}",
-        cmd,
-        String::from_utf8_lossy(&rerun.stderr)
+    // Neither file actually moved.
+    assert!(tmp.path().join("notes/a.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("archive/a.md")).unwrap(),
+        "existing\n"
     );
 }
 

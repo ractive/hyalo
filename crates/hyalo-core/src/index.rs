@@ -454,6 +454,22 @@ struct SnapshotHeader {
     /// file writes the same bytes as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     skipped: Vec<String>,
+    /// How many `.md` files `.gitignore` (or another VCS ignore source)
+    /// dropped while this snapshot was built (iteration 306 / F5, DEC-342).
+    ///
+    /// Sibling of [`Self::scan_excluded`] and recorded for the same reason: a
+    /// gitignored file never enters `entries`, so a load has no way to
+    /// recount it without the `.gitignore`-disabled walk `create-index`
+    /// already paid for once at build time — `summary --index` reads this
+    /// instead of re-walking. No version bump (follows DEC-303's precedent
+    /// for `scan_excluded`): defaulted and skipped when zero, so an older
+    /// snapshot still loads and a vault with nothing gitignored writes the
+    /// same bytes as before. Unlike `scan_excluded`, there is no
+    /// `.hyalo.toml`-side pattern to compare against staleness with
+    /// (`.gitignore` lives outside hyalo's config), so this is replayed
+    /// unconditionally on load, same as `skipped`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    gitignore_dropped: u64,
 }
 
 /// `skip_serializing_if` predicate keeping a zero count out of the wire format.
@@ -1790,6 +1806,18 @@ impl SnapshotIndex {
                 crate::warn::SkipKind::Frontmatter,
             );
         }
+        // DEC-342 (iteration 306 review): replay the build-time gitignore-drop
+        // count so `summary --index` reports the same `excluded` figure as a
+        // disk scan without an extra `.gitignore`-disabled walk on every read.
+        // Unconditional (no pattern-staleness check like `scan_excluded`'s,
+        // since `.gitignore` is not part of `.hyalo.toml`): a `.gitignore`
+        // edited since the index was built makes this as stale as any other
+        // snapshot figure until the next `create-index`.
+        if replay {
+            crate::discovery::note_gitignore_dropped(
+                usize::try_from(header.gitignore_dropped).unwrap_or(usize::MAX),
+            );
+        }
 
         let path_index: HashMap<String, usize> = entries
             .iter()
@@ -2073,6 +2101,7 @@ fn write_snapshot_with_session(
             .map(|f| f.path)
             .collect(),
         scan_exclude: crate::discovery::scan_exclude_patterns().to_vec(),
+        gitignore_dropped: crate::discovery::gitignore_dropped_count() as u64,
     };
     // When a BM25 inverted index is present, strip per-entry `bm25_tokens` to
     // avoid duplicating the same data (the inverted index already encodes it).
@@ -3857,6 +3886,7 @@ Content.
                 scan_excluded: 0,
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
+                gitignore_dropped: 0,
             },
             entries,
             graph: &graph,
@@ -4222,6 +4252,7 @@ Content.
                 scan_excluded: 0,
                 skipped: Vec::new(),
                 scan_exclude: Vec::new(),
+                gitignore_dropped: 0,
             },
             bm25_index: Some(&original),
             entries: &entries,

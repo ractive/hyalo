@@ -133,6 +133,11 @@ and this project adheres to
 
 ### Changed
 
+- **Breaking: an `enum` constraint must list its `values`.** A
+  `.hyalo.toml` with `type = "enum"` and no (or an empty) `values` list used
+  to load and then fail every value at lint time; it is now refused as
+  malformed (`hyalo config` reports `schema_error`), and `types set` refuses
+  to write one. Add the allowed values or drop the constraint.
 - **Breaking: snapshot format 4.** Indexes written by earlier versions are
   refused (the run falls back to a disk scan with a warning); rebuild them with
   `hyalo create-index`. Ranked scores and result order change: title, heading

@@ -47,6 +47,8 @@ mod types;
 // split invisible to callers -- and it is also how the submodules see each
 // other, since each one imports this parent.
 pub use config_checks::*;
+#[cfg(test)]
+use engine::lint_files_extended_observed;
 pub use engine::*;
 use file::lint_one_file_extended;
 use fix::{apply_body_fixes, find_body_line_offset, find_body_start, schema_has_completed_status};

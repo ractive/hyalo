@@ -467,15 +467,22 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
                 // them — a file sets `status=planned` but was excluded by,
                 // say, `--tag iteration` — in which case "but never to that
                 // value" is a lie the very list it is attached to disproves.
-                // Say what is actually true in each case.
-                let value_is_present = observation
+                // Say what is actually true in each case. `matched` is the
+                // observed value's OWN count — review round finding (2):
+                // `observation.files` counts every file that sets `key` to
+                // ANY value, so a vault with status=planned (4) and
+                // status=done (1) used to say "status=planned matches 5
+                // files" instead of 4.
+                let matched = observation
                     .values
                     .iter()
-                    .any(|v| v.typeable && v.rendered == value);
-                let message = if value_is_present {
+                    .find(|v| v.typeable && v.rendered == value);
+                let message = if let Some(matched) = matched {
+                    let matched_label = if matched.count == 1 { "file" } else { "files" };
                     format!(
-                        "`{key}={value}` matches {files} {files_label}, but another filter \
+                        "`{key}={value}` matches {} {matched_label}, but another filter \
                          excludes all of them; here is everything `{key}` is set to: {}{suffix}",
+                        matched.count,
                         shown.join(", ")
                     )
                 } else {
@@ -680,6 +687,23 @@ mod tests {
                     && h.description.contains("another filter")
                     && h.description.contains("planned (4)")),
             "should say the value matches but another filter excludes it: {hints:?}"
+        );
+        // Review round finding (2): the headline count must be the matched
+        // value's own count (4), not `observation.files` (5 = 4 + the
+        // unrelated "done" file) — a vault with status=planned (4) and
+        // status=done (1) must say "matches 4 files", never 5.
+        assert!(
+            hints
+                .iter()
+                .any(|h| h.description.contains("matches 4 files")),
+            "headline count must be the matched value's own count, not the total files \
+             carrying the key: {hints:?}"
+        );
+        assert!(
+            !hints
+                .iter()
+                .any(|h| h.description.contains("matches 5 files")),
+            "must not count the unrelated status=done file toward status=planned's match: {hints:?}"
         );
     }
 
