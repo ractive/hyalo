@@ -23,6 +23,18 @@ and this project adheres to
   output formats. Single-file commands no longer advertise `--glob`;
   `views set` rejects `--files-from` instead of silently discarding it.
 
+### Changed
+
+- Building hyalo from source now requires Rust 1.95 or newer, declared as
+  `rust-version` in the workspace manifest. The code is clippy-clean on
+  Rust 1.99.
+- The YAML frontmatter parser moved from serde-saphyr 0.0.23 to 1.3, with
+  the same parser limits and output. The internal `xtask` tooling moved to
+  syn 3. Other dependencies, the npm package's dev dependencies, and the CI
+  actions (`actions/checkout` v7, `actions/setup-node` v7,
+  `actions/upload-artifact` v7, `actions/download-artifact` v8) were
+  updated to their latest releases.
+
 ## [0.24.1] - 2026-09-18
 
 ### Fixed
