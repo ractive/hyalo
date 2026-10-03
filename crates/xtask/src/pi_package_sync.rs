@@ -174,8 +174,10 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
     Ok((all_ok, checked))
 }
 
-/// Check each published/embedded pi manifest against the Cargo workspace.
-/// The independently versioned Codex plugin is intentionally outside this set.
+/// Check each published/embedded pi manifest, and the Codex plugin manifest,
+/// against the Cargo workspace. The Codex plugin ships the per-release jev
+/// helper, so it follows the workspace version like every other manifest
+/// (DEC-340, amending DEC-327/DEC-331's independent plugin version).
 fn versions_match(root: &Path) -> Result<bool> {
     let cargo: toml::Value = toml::from_str(&std::fs::read_to_string(root.join("Cargo.toml"))?)
         .context("parsing workspace Cargo.toml")?;
@@ -190,6 +192,7 @@ fn versions_match(root: &Path) -> Result<bool> {
         "package.json",
         "pi-package/package.json",
         "crates/hyalo-cli/templates/pi/package.json",
+        "plugins/hyalo/.codex-plugin/plugin.json",
     ] {
         if !root.join(manifest).is_file() {
             matches = false;
@@ -358,7 +361,11 @@ mod version_tests {
             "[workspace.package]\nversion = \"0.22.0\"\n",
         )
         .unwrap();
-        for path in ["package.json", "pi-package/package.json"] {
+        for path in [
+            "package.json",
+            "pi-package/package.json",
+            "plugins/hyalo/.codex-plugin/plugin.json",
+        ] {
             let full = root.join(path);
             std::fs::create_dir_all(full.parent().unwrap()).unwrap();
             std::fs::write(full, r#"{"version":"0.22.0"}"#).unwrap();
@@ -397,6 +404,7 @@ mod version_tests {
             "package.json",
             "pi-package/package.json",
             "crates/hyalo-cli/templates/pi/package.json",
+            "plugins/hyalo/.codex-plugin/plugin.json",
         ];
         for path in manifests {
             let full = root.join(path);

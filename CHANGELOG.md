@@ -50,6 +50,9 @@ and this project adheres to
 
 ### Changed
 
+- The Codex plugin manifest now carries the hyalo version (0.24.1, was 0.1.0)
+  and is checked against the workspace version like the other manifests
+  (DEC-340).
 - **Behaviour change: ranked search `OR` now binds tighter than the implicit
   AND** (DEC-333). `find 'a b OR c'` means a AND (b OR c); it used to mean any
   of the three, because one `OR` anywhere turned every positive term into an
@@ -593,6 +596,9 @@ and this project adheres to
 
 ## [0.23.0] - 2026-09-08
 
+Published to npm only (`@ractive-ch/hyalo` and its platform packages); there
+is no `v0.23.0` git tag, GitHub release or crates.io version.
+
 ### Added
 
 - The `@ractive-ch/hyalo` npm package now includes a typed TypeScript API for
@@ -607,6 +613,14 @@ and this project adheres to
 - Ranked search checks vault containment before live snippet and fallback reads.
   Indexed searches verify the stored corpus and language metadata before reusing
   token data, preserving disk-scan ranking when the index is incompatible.
+
+## [0.22.0] - 2026-09-07
+
+### Added
+
+- npm-only release built from main at 8c05111a (workspace 0.22.0); its CLI
+  changes are listed under 0.24.0. No git tag, GitHub release or crates.io
+  version.
 
 ## [0.21.0] - 2026-08-28
 
@@ -2783,10 +2797,11 @@ already complied (`total = modified + skipped`) and are unchanged.
 [0.24.1]: https://github.com/ractive/hyalo/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/ractive/hyalo/compare/v0.21.0...v0.24.0
 [0.23.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.23.0
-[0.21.0]: TBD
-[0.20.0]: TBD
-[0.19.0]: TBD
-[0.18.0]: TBD
+[0.22.0]: https://www.npmjs.com/package/@ractive-ch/hyalo/v/0.22.0
+[0.21.0]: https://github.com/ractive/hyalo/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/ractive/hyalo/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/ractive/hyalo/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/ractive/hyalo/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/ractive/hyalo/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/ractive/hyalo/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/ractive/hyalo/compare/v0.15.0...v0.16.0

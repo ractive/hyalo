@@ -28,6 +28,9 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          # Deliberately Node 22, not the Node 24 every other job uses: 22 is
+          # the `engines` floor of npm/jev and npm/hyalo (">=22.14"), so this
+          # job proves the helper still works on the oldest supported Node.
           node-version: '22'
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -143,8 +146,10 @@ jobs:
       - name: Lint full knowledgebase
         run: hyalo lint --strict --format github
 
+  # Runs on every PR and on every push to main (no `if:`), so a direct push to
+  # main cannot skip the xtask gates or the dependency audit. `just gates`
+  # runs the same xtask gates locally, in the same order — keep both in sync.
   quality-gates:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,7 +159,11 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: '24'
+      - name: Check dependency advisories, licences, bans and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
       - name: Check feature fanout
         run: cargo run -p xtask -- check-feature-fanout
       - name: Check help drift
