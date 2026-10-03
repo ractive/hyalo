@@ -6583,3 +6583,49 @@ count because of the prefix rule; documented rather than special-cased.
   drill-down hint needs the string anyway.
 - Counting sections instead of files in section mode: one file with 12 hits
   would dominate every bucket.
+
+## DEC-340: The Codex plugin manifest follows the workspace version (2026-10-04)
+
+**Decision.** `plugins/hyalo/.codex-plugin/plugin.json` carries the Cargo
+workspace version (0.24.1 today) and is part of the manifest version gate in
+`check-pi-package-sync` (`versions_match` in `crates/xtask/src/pi_package_sync.rs`),
+next to the root, pi and vendored pi `package.json` files. This amends DEC-327
+("the plugin has its own version") and the matching sentence in DEC-331.
+
+**Why.** The plugin was pinned at 0.1.0 while shipping skills and the jev helper
+that change with every release, so the version told an installer nothing about
+what it got, and nothing forced a bump. One version for every shipped manifest
+is the rule the other packages already follow; the gate makes forgetting it a CI
+failure instead of a silent drift.
+
+**Consequences.** A release bumps one more file (listed in `docs/releasing.md`
+under "Version-sync prerequisites" and in the release skill). A plugin-only fix
+between releases cannot get its own version number; it ships with the next
+release.
+
+**Rejected alternative.** An independent plugin version bumped by hand: the
+0.1.0 history shows it is never bumped, and no gate can tell a deliberate hold
+from a forgotten bump.
+
+## DEC-341: Delete the xtask `check-behavioral-contracts` runner and the dead stubs (2026-10-04)
+
+**Decision.** Remove `check-behavioral-contracts` and the two placeholder
+commands `check-dead-primitives` / `check-todo-annotations` from xtask
+(iteration 305).
+
+**Why.** The stubs only exited 1 with "UNSUPPORTED"; nothing called them.
+`check-behavioral-contracts` re-ran six e2e module filters
+(`iteration290_foundations::` … `iteration277_graph_parity_and_write_perf::`)
+with `--test-threads=1`, all of which `cargo test --workspace` already runs on
+three OSes in CI. Its only distinct property was a zero-tests-matched guard,
+which would notice a renamed or emptied module — but the runner was wired into
+neither CI nor the justfile, so the guard never ran. Wiring it in would make it
+fail on exactly the behaviour-based renames of iteration-numbered test modules
+that [[reviews/codebase-review-2026-10-03]] recommends, while protecting
+nothing the workspace test run does not: a deleted test is caught in review,
+not by a filter list that has to be edited in the same PR.
+
+**Consequences.** `just gates` and CI's `quality-gates` run the same eleven
+xtask gates; no xtask subcommand exists that is not a gate, a sync or a
+generator. Historical iteration notes that mention the removed names are left
+as written.
