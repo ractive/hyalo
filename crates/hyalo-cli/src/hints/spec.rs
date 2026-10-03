@@ -102,6 +102,11 @@ impl FindHintSpec {
         }
     }
 
+    /// `true` when the query asked for `--granularity section`.
+    pub(crate) fn is_section_granularity(&self) -> bool {
+        self.granularity == Some(crate::cli::args::Granularity::Section)
+    }
+
     pub(crate) fn continuation(
         &self,
         ctx: &HintContext,

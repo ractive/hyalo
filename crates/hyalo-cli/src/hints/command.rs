@@ -489,6 +489,13 @@ pub(super) fn build_find_command_composing(ctx: &HintContext, extra_args: &[&str
 pub(super) fn build_find_command_with_pattern(ctx: &HintContext, new_pattern: &str) -> String {
     let mut b = HintBuilder::cmd("find");
     b.push_quoted(new_pattern);
+    // iter-303: a rewritten query keeps the answer shape it was asked in.
+    if let Some(super::spec::ResolvedHintSpec::Find(spec)) = &ctx.resolved
+        && spec.is_section_granularity()
+    {
+        b.push_raw("--granularity");
+        b.push_raw("section");
+    }
     for pf in &ctx.property_filters {
         b.push_raw("--property");
         b.push_quoted(pf);

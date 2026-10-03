@@ -7,7 +7,7 @@ pub(crate) mod run;
 mod sort;
 
 pub(crate) use facets::{
-    FacetKind, FacetSpec, MAX_FACET_BUCKETS, parse_specs as parse_facet_specs,
+    FacetCounter, FacetKind, FacetSpec, MAX_FACET_BUCKETS, parse_specs as parse_facet_specs,
 };
 pub use filter_index::{filter_index_entries, needs_body};
 
@@ -260,6 +260,9 @@ pub(crate) struct SearchReport {
     pub(crate) facets: Option<Vec<crate::output::FacetResult>>,
     /// `--granularity section` hits, in result order, for the read hints.
     pub(crate) section_reads: Vec<SectionRead>,
+    /// In section mode, how many files matched at file level (iteration 303):
+    /// lets a zero-hit answer say the words exist but never share a section.
+    pub(crate) section_file_matches: Option<u64>,
 }
 
 /// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
@@ -602,6 +605,10 @@ pub(crate) fn find_prepared(
     // very corpus that answered the file-level query, so section hits and
     // file hits never disagree about the query.
     let mut section_scorer: Option<hyalo_core::bm25::SectionScorer> = None;
+    // File granularity ranks `--section` text only. Section granularity
+    // qualifies files against their whole body, so negation stays
+    // file-level, and applies `--section` when choosing eligible sections.
+    let corpus_section_scoped = has_section_filter && !extras.section_mode;
     let bm25_score_map: Option<HashMap<String, f64>> = if let Some(query) = &compiled_query {
         'bm25: {
             // Collect entries that pass all metadata filters.
@@ -705,7 +712,7 @@ pub(crate) fn find_prepared(
             // fix) would silently keep serving results that a fresh tokenize would never
             // produce until the version check below routes to the live-scan fallback instead.
             // Score all docs, then intersect with metadata-passing candidates.
-            if !has_section_filter
+            if !corpus_section_scoped
                 && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
@@ -716,7 +723,7 @@ pub(crate) fn find_prepared(
             {
                 hyalo_core::internal_metrics::record_direct_indexed_scoring();
                 if extras.section_mode {
-                    section_scorer = Some(bm25_idx.section_scorer(query));
+                    section_scorer = Some(bm25_idx.section_scorer(query, &field_source));
                 }
                 let map: HashMap<String, f64> = score_corpus(
                     bm25_idx,
@@ -767,7 +774,7 @@ pub(crate) fn find_prepared(
             let recovery_paths: std::collections::HashSet<&str> = scoped_entries
                 .iter()
                 .filter(|entry| {
-                    !has_section_filter
+                    !corpus_section_scoped
                         && entry.bm25_tokens.is_none()
                         && cached_tokens_compatible(entry)
                 })
@@ -814,7 +821,7 @@ pub(crate) fn find_prepared(
                     //    CJK-bigram fix) carries tokens a fresh tokenize would never produce,
                     //    so trusting them would silently keep queries broken until the next
                     //    `create-index` — re-tokenize from disk instead, same as a language miss.
-                    if !has_section_filter && cached_tokens_compatible(entry) {
+                    if !corpus_section_scoped && cached_tokens_compatible(entry) {
                         // Borrowed per-entry caches need an owned corpus copy;
                         // recovered tokens are already owned and consumed directly.
                         let tokens = entry
@@ -880,7 +887,7 @@ pub(crate) fn find_prepared(
                     // that fall within the matching section scope. This preserves the
                     // expectation that "pattern + --section X" only matches files where
                     // the pattern appears inside section X, not elsewhere in the document.
-                    let body = if has_section_filter {
+                    let body = if corpus_section_scoped {
                         let scope_ranges =
                             build_section_scope(&entry.sections, section_filters, usize::MAX);
                         if scope_ranges.is_empty() {
@@ -924,7 +931,7 @@ pub(crate) fn find_prepared(
                     Ok(())
                 };
 
-                if has_section_filter {
+                if corpus_section_scoped {
                     // Section filters require per-candidate line-range slicing, and the
                     // persisted-index fast path above is skipped entirely whenever a section
                     // filter is active — so both the --index and no-index runs already build
@@ -981,11 +988,11 @@ pub(crate) fn find_prepared(
                 &corpus,
                 query,
                 &field_source,
-                |path| has_section_filter || candidate_paths.contains(path),
+                |path| corpus_section_scoped || candidate_paths.contains(path),
                 search_report,
             );
             if extras.section_mode {
-                section_scorer = Some(corpus.section_scorer(query));
+                section_scorer = Some(corpus.section_scorer(query, &field_source));
             }
 
             // Warn if the query has low discriminative power (matches most docs with low scores).
@@ -1977,6 +1984,7 @@ fn section_hits(
     }
     let mut hits = inputs.scorer.finish(files);
     let total = hits.len();
+    search_report.section_file_matches = Some(results.len() as u64);
 
     if !facet_counter.is_empty() {
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();

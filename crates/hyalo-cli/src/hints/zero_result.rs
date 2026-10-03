@@ -182,6 +182,17 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
         Some(filters) => format!("No results for {filters}"),
         None => "No results".to_owned(),
     };
+    if let Some(files) = ctx.section_file_matches.filter(|n| *n > 0) {
+        let _ = write!(
+            notice,
+            "\n{files} {} at file level, but no single section holds all terms",
+            if files == 1 {
+                "file matches"
+            } else {
+                "files match"
+            }
+        );
+    }
     for suggestion in &ctx.search_suggestions {
         let _ = write!(
             notice,
@@ -374,8 +385,20 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
             .unwrap_or_else(|| "Did you mean this query?".to_owned());
         hints.push(Hint::new(description, command));
     }
+    // 0b'. Section mode found the terms at file level but in no single
+    //      section: list those files instead (iteration 303).
+    let words_exist = ctx.section_file_matches.is_some_and(|n| n > 0);
+    if let Some(files) = ctx.section_file_matches.filter(|n| *n > 0) {
+        hints.push(super::find_continuation_hint(
+            ctx,
+            format!("List the {files} file(s) that match at file level"),
+            &["--granularity", "file"],
+        ));
+    }
     // 0c. Ranked search with nothing found: show which indexed terms exist.
+    //     Pointless when every term has postings (section mode above).
     if !ctx.has_regex_search
+        && !words_exist
         && let Some(pattern) = &ctx.body_pattern
         && let Some(prefix) = terms_hint_prefix(ctx, pattern)
     {

@@ -957,7 +957,7 @@ impl SnippetMatcher {
 
 /// Dense document set over `0..len` doc ids.
 #[derive(Debug, Clone)]
-struct DocSet {
+pub(super) struct DocSet {
     words: Vec<u64>,
     len: usize,
 }
@@ -995,7 +995,7 @@ impl DocSet {
         }
     }
 
-    fn contains(&self, id: u32) -> bool {
+    pub(super) fn contains(&self, id: u32) -> bool {
         let id = id as usize;
         id < self.len && self.words[id / 64] & (1u64 << (id % 64)) != 0
     }
@@ -1204,6 +1204,28 @@ impl Bm25InvertedIndex {
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Documents for which `node`, read with positive polarity, evaluates
+    /// true — the file-level verdict of one leaf (section scoring uses it for
+    /// field terms and negated leaves, DEC-334).
+    pub(super) fn node_docs(&self, node: &Node, fields: &dyn FieldSource) -> DocSet {
+        let mut evaluator = Evaluator {
+            index: self,
+            fields,
+            stemmers: HashMap::new(),
+            units: Vec::new(),
+        };
+        evaluator.eval(node, true)
+    }
+
+    /// Doc id of every document path.
+    pub(super) fn doc_ids(&self) -> HashMap<&str, u32> {
+        self.doc_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(id, path)| u32::try_from(id).ok().map(|id| (path.as_str(), id)))
+            .collect()
     }
 
     /// Every dictionary term a `prefix*` candidate list matches, uncapped.

@@ -207,7 +207,8 @@ impl PropertyFilter {
 ///
 /// The return type is a [`Cow`] so the common flat/map path stays borrowed;
 /// only auto-descent through a sequence allocates.
-fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option<Cow<'a, Value>> {
+#[must_use]
+pub fn resolve_prop<'a>(props: &'a IndexMap<String, Value>, key: &str) -> Option<Cow<'a, Value>> {
     if let Some(v) = props.get(key) {
         return Some(Cow::Borrowed(v));
     }

@@ -61,60 +61,130 @@ impl FacetSpec {
     }
 }
 
-/// Parse every `--facet` value, stopping at the first invalid one.
+/// Parse every `--facet` value, stopping at the first invalid one. A spec
+/// repeated (or spelled twice, `type` and `property:type`) is counted once,
+/// under its first spelling.
 ///
 /// # Errors
 /// The message of the first spec [`FacetSpec::parse`] rejects.
 pub(crate) fn parse_specs(raw: &[String]) -> Result<Vec<FacetSpec>, String> {
-    raw.iter().map(|s| FacetSpec::parse(s)).collect()
+    let mut specs: Vec<FacetSpec> = Vec::new();
+    for spec in raw {
+        let spec = FacetSpec::parse(spec)?;
+        if !specs.iter().any(|s| s.kind == spec.kind) {
+            specs.push(spec);
+        }
+    }
+    Ok(specs)
 }
 
-/// Accumulates bucket counts as matching files are confirmed.
-pub(crate) struct FacetCounter<'a> {
-    specs: &'a [FacetSpec],
-    counts: Vec<HashMap<Option<String>, u64>>,
+/// One file's contribution to a facet: the folded bucket key, the spelling
+/// it was written with, and whether `--property K=V` can replay it.
+struct Observation {
+    key: Option<String>,
+    spelling: Option<String>,
+    replayable: bool,
 }
 
-/// Render one scalar frontmatter value as a bucket key; `None` is the null bucket.
-fn scalar_bucket(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Bool(b) => Some(b.to_string()),
-        serde_json::Value::Number(n) => Some(n.to_string()),
-        // A nested list or map has no scalar spelling; its compact JSON
-        // keeps distinct values distinct.
-        other => Some(other.to_string()),
+/// Fold a string the way `--property K=V` equality compares it.
+fn fold(value: &str) -> String {
+    if value.is_ascii() {
+        value.to_ascii_lowercase()
+    } else {
+        value.to_lowercase()
     }
 }
 
-/// Distinct bucket keys one file contributes to `kind` (each counted once).
-fn file_buckets(kind: &FacetKind, entry: &IndexEntry) -> Vec<Option<String>> {
-    let mut keys: Vec<Option<String>> = match kind {
+/// One scalar frontmatter value as an observation; null is the null bucket.
+/// Strings fold case (so buckets agree with the equality filter); a nested
+/// map or list keeps its compact JSON and is never offered as a drill-down.
+fn scalar_observation(value: &serde_json::Value) -> Observation {
+    match value {
+        serde_json::Value::Null => Observation {
+            key: None,
+            spelling: None,
+            replayable: false,
+        },
+        serde_json::Value::String(s) => Observation {
+            key: Some(fold(s)),
+            spelling: Some(s.clone()),
+            replayable: true,
+        },
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => Observation {
+            key: Some(value.to_string()),
+            spelling: Some(value.to_string()),
+            replayable: true,
+        },
+        other => Observation {
+            key: Some(other.to_string()),
+            spelling: Some(other.to_string()),
+            replayable: false,
+        },
+    }
+}
+
+/// Distinct observations one file contributes to `kind` (each key once).
+fn file_observations(kind: &FacetKind, entry: &IndexEntry) -> Vec<Observation> {
+    let mut out: Vec<Observation> = match kind {
         FacetKind::Tags => {
             if entry.tags.is_empty() {
-                vec![None]
+                vec![scalar_observation(&serde_json::Value::Null)]
             } else {
-                entry.tags.iter().map(|t| Some(t.clone())).collect()
+                // Tags are compared exactly by `--tag`, so they do not fold.
+                entry
+                    .tags
+                    .iter()
+                    .map(|t| Observation {
+                        key: Some(t.clone()),
+                        spelling: Some(t.clone()),
+                        replayable: true,
+                    })
+                    .collect()
             }
         }
-        FacetKind::Property(key) => match entry.properties.get(key.as_str()) {
-            None => vec![None],
-            Some(serde_json::Value::Array(items)) if items.is_empty() => vec![None],
-            Some(serde_json::Value::Array(items)) => items.iter().map(scalar_bucket).collect(),
-            Some(value) => vec![scalar_bucket(value)],
-        },
+        FacetKind::Property(key) => {
+            match hyalo_core::filter::resolve_prop(&entry.properties, key).as_deref() {
+                None => vec![scalar_observation(&serde_json::Value::Null)],
+                Some(serde_json::Value::Array(items)) if items.is_empty() => {
+                    vec![scalar_observation(&serde_json::Value::Null)]
+                }
+                Some(serde_json::Value::Array(items)) => {
+                    items.iter().map(scalar_observation).collect()
+                }
+                Some(value) => vec![scalar_observation(value)],
+            }
+        }
         FacetKind::Dir => {
             let dir = entry
                 .rel_path
                 .split_once('/')
                 .map_or(".", |(first, _)| first);
-            vec![Some(dir.to_owned())]
+            vec![Observation {
+                key: Some(dir.to_owned()),
+                spelling: Some(dir.to_owned()),
+                replayable: true,
+            }]
         }
     };
-    keys.sort_unstable();
-    keys.dedup();
-    keys
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    out.dedup_by(|a, b| a.key == b.key);
+    out
+}
+
+/// Running totals of one bucket.
+#[derive(Default)]
+struct BucketTally {
+    count: u64,
+    /// Files per original spelling; the most common one is displayed.
+    spellings: HashMap<Option<String>, u64>,
+    replayable: bool,
+}
+
+/// Accumulates bucket counts as matching files are confirmed.
+pub(crate) struct FacetCounter<'a> {
+    specs: &'a [FacetSpec],
+    counts: Vec<HashMap<Option<String>, BucketTally>>,
+    files: u64,
 }
 
 impl<'a> FacetCounter<'a> {
@@ -122,6 +192,7 @@ impl<'a> FacetCounter<'a> {
         Self {
             specs,
             counts: specs.iter().map(|_| HashMap::new()).collect(),
+            files: 0,
         }
     }
 
@@ -132,39 +203,59 @@ impl<'a> FacetCounter<'a> {
 
     /// Count one confirmed match.
     pub(crate) fn observe(&mut self, entry: &IndexEntry) {
+        self.files += 1;
         for (spec, counts) in self.specs.iter().zip(self.counts.iter_mut()) {
-            for key in file_buckets(&spec.kind, entry) {
-                *counts.entry(key).or_insert(0) += 1;
+            for obs in file_observations(&spec.kind, entry) {
+                let tally = counts.entry(obs.key).or_default();
+                tally.count += 1;
+                tally.replayable = obs.replayable;
+                *tally.spellings.entry(obs.spelling).or_insert(0) += 1;
             }
         }
     }
 
     /// Sorted, capped buckets per facet, in the order the specs were given.
     pub(crate) fn finish(self) -> Vec<FacetResult> {
+        let files = self.files;
         self.specs
             .iter()
             .zip(self.counts)
             .map(|(spec, counts)| {
-                let mut buckets: Vec<(Option<String>, u64)> = counts.into_iter().collect();
+                let mut buckets: Vec<FacetBucket> = counts
+                    .into_values()
+                    .map(|tally| {
+                        // Most common spelling wins; ties go to the smallest.
+                        let value = tally
+                            .spellings
+                            .into_iter()
+                            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+                            .and_then(|(spelling, _)| spelling);
+                        FacetBucket {
+                            value,
+                            count: tally.count,
+                            replayable: tally.replayable,
+                        }
+                    })
+                    .collect();
                 // Count descending, then value ascending with the null bucket
                 // last among equal counts.
                 buckets.sort_unstable_by(|a, b| {
-                    b.1.cmp(&a.1).then_with(|| match (&a.0, &b.0) {
-                        (Some(x), Some(y)) => x.cmp(y),
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    })
+                    b.count
+                        .cmp(&a.count)
+                        .then_with(|| match (&a.value, &b.value) {
+                            (Some(x), Some(y)) => x.cmp(y),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => std::cmp::Ordering::Equal,
+                        })
                 });
                 let truncated = buckets.len() > MAX_FACET_BUCKETS;
                 buckets.truncate(MAX_FACET_BUCKETS);
                 FacetResult {
                     facet: spec.label.clone(),
-                    buckets: buckets
-                        .into_iter()
-                        .map(|(value, count)| FacetBucket { value, count })
-                        .collect(),
+                    buckets,
                     truncated,
+                    files,
                 }
             })
             .collect()
@@ -272,5 +363,73 @@ mod tests {
         // Equal counts sort by value text: "0", "1", "10", ...
         assert_eq!(out[0].buckets[0].value.as_deref(), Some("0"));
         assert_eq!(out[0].buckets[2].value.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn string_buckets_fold_case_like_the_equality_filter() {
+        let specs = parse_specs(&["property:s".into()]).unwrap();
+        let mut counter = FacetCounter::new(&specs);
+        for (i, v) in ["Open", "open", "open", "Done"].iter().enumerate() {
+            counter.observe(&entry(
+                &format!("f{i}.md"),
+                &[],
+                &[("s", serde_json::json!(v))],
+            ));
+        }
+        let out = counter.finish();
+        assert_eq!(values(&out[0]), vec![(Some("open"), 3), (Some("Done"), 1)]);
+        assert_eq!(out[0].files, 4);
+    }
+
+    #[test]
+    fn structured_values_are_counted_but_not_replayable() {
+        let specs = parse_specs(&["property:details".into()]).unwrap();
+        let mut counter = FacetCounter::new(&specs);
+        counter.observe(&entry(
+            "a.md",
+            &[],
+            &[("details", serde_json::json!({"owner": "ada"}))],
+        ));
+        counter.observe(&entry("b.md", &[], &[("details", serde_json::json!("x"))]));
+        let out = counter.finish();
+        let map = out[0]
+            .buckets
+            .iter()
+            .find(|b| b.value.as_deref() == Some(r#"{"owner":"ada"}"#))
+            .unwrap();
+        assert!(!map.replayable);
+        let scalar = out[0]
+            .buckets
+            .iter()
+            .find(|b| b.value.as_deref() == Some("x"))
+            .unwrap();
+        assert!(scalar.replayable);
+    }
+
+    #[test]
+    fn property_facet_resolves_dot_paths_like_the_filter() {
+        let specs = parse_specs(&["property:meta.owner".into()]).unwrap();
+        let mut counter = FacetCounter::new(&specs);
+        counter.observe(&entry(
+            "a.md",
+            &[],
+            &[("meta", serde_json::json!({"owner": "ann"}))],
+        ));
+        counter.observe(&entry("b.md", &[], &[]));
+        let out = counter.finish();
+        assert_eq!(values(&out[0]), vec![(Some("ann"), 1), (None, 1)]);
+    }
+
+    #[test]
+    fn repeated_specs_are_counted_once_under_the_first_spelling() {
+        let specs = parse_specs(&[
+            "type".into(),
+            "tags".into(),
+            "property:type".into(),
+            "tags".into(),
+        ])
+        .unwrap();
+        let labels: Vec<&str> = specs.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["type", "tags"]);
     }
 }

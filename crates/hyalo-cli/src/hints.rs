@@ -326,6 +326,9 @@ pub struct HintContext {
     /// `find --facet` counts; their largest buckets become drill-down hints
     /// (iteration 303).
     pub facets: Vec<crate::output::FacetResult>,
+    /// Files a `--granularity section` query matched at file level, when it
+    /// ran in section mode (iteration 303).
+    pub section_file_matches: Option<u64>,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -405,6 +408,7 @@ impl HintContext {
             corrected_query: None,
             section_reads: Vec::new(),
             facets: Vec::new(),
+            section_file_matches: None,
             resolved: None,
         }
     }

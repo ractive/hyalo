@@ -403,3 +403,127 @@ fn section_mode_facet_counts_files_not_sections() {
     // ...but the facet counts files with at least one hit: two, not three.
     assert_eq!(buckets(&json, 0), vec![(Some("proj"), 2)]);
 }
+
+#[test]
+fn empty_files_from_still_validates_and_reports_facets() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntags: [x]\n---\nbody\n");
+    let empty = tmp.path().join("empty.txt");
+    std::fs::write(&empty, "").unwrap();
+    let bad = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "--facet",
+            "bogus",
+            "--format",
+            "json",
+            "--files-from",
+        ])
+        .arg(&empty)
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(1), "{bad:?}");
+    let good = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "--facet",
+            "tags",
+            "--format",
+            "json",
+            "--files-from",
+        ])
+        .arg(&empty)
+        .output()
+        .unwrap();
+    assert!(good.status.success(), "{good:?}");
+    let json: serde_json::Value = serde_json::from_slice(&good.stdout).unwrap();
+    assert_eq!(json["facets"][0]["facet"], "tags", "{json}");
+    assert_eq!(json["facets"][0]["buckets"], serde_json::json!([]));
+}
+
+#[test]
+fn property_buckets_fold_case_like_the_equality_filter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ns: Open\n---\nx\n");
+    write_md(tmp.path(), "b.md", "---\ns: open\n---\nx\n");
+    write_md(tmp.path(), "c.md", "---\ns: open\n---\nx\n");
+    write_md(tmp.path(), "d.md", "---\ns: done\n---\nx\n");
+    let (json, output) = run(&tmp, &["find", "--facet", "property:s", "--format", "json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        buckets(&json, 0),
+        vec![(Some("open"), 3), (Some("done"), 1)]
+    );
+    // The drill-down returns exactly the bucket count.
+    let (drill, _) = run(&tmp, &["find", "--property", "s=open", "--format", "json"]);
+    assert_eq!(drill["total"], 3);
+}
+
+#[test]
+fn structured_property_buckets_offer_no_drilldown() {
+    let tmp = TempDir::new().unwrap();
+    for i in 0..3 {
+        write_md(
+            tmp.path(),
+            &format!("m{i}.md"),
+            "---\ndetails: {owner: ada}\n---\nx\n",
+        );
+    }
+    write_md(tmp.path(), "plain.md", "x\n");
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(["find", "--facet", "property:details", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["facets"][0]["buckets"][0]["count"], 3, "{json}");
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(!cmds.iter().any(|c| c.contains("details=")), "{cmds:?}");
+}
+
+#[test]
+fn property_facet_follows_dot_paths_like_the_filter() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\nmeta:\n  owner: ann\n---\nx\n");
+    write_md(tmp.path(), "b.md", "x\n");
+    let (json, output) = run(
+        &tmp,
+        &["find", "--facet", "property:meta.owner", "--format", "json"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(buckets(&json, 0), vec![(Some("ann"), 1), (None, 1)]);
+}
+
+#[test]
+fn repeated_facet_specs_are_reported_once() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "a.md", "---\ntype: note\n---\nx\n");
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "--facet",
+            "type",
+            "--facet",
+            "property:type",
+            "--facet",
+            "type",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["facets"].as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(json["facets"][0]["facet"], "type");
+}

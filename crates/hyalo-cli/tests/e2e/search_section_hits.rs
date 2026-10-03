@@ -539,3 +539,239 @@ fn read_hint_uses_body_relative_lines_when_heading_is_null() {
     assert!(cmd.contains("1:2"), "{cmd}");
     assert_eq!(hint["writes"], false, "{hint}");
 }
+
+fn run_hinted(tmp: &TempDir, args: &[&str]) -> (serde_json::Value, std::process::Output) {
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args(args)
+        .output()
+        .unwrap();
+    let json = serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+    (json, output)
+}
+
+fn hit_headings(json: &serde_json::Value) -> Vec<String> {
+    json["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results in {json}"))
+        .iter()
+        .map(|h| {
+            format!(
+                "{}#{}",
+                h["file"].as_str().unwrap_or_default(),
+                h["section"]["heading"].as_str().unwrap_or("null")
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn section_filter_does_not_hide_a_negated_term_elsewhere_in_the_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "neg.md", "# Keep\nalpha\n# Other\nbeta\n");
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "alpha -beta",
+            "--granularity",
+            "section",
+            "--section",
+            "Keep",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["total"], 0, "{json}");
+}
+
+#[test]
+fn double_negation_ranks_the_inner_term_per_section() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "d.md", "# Keep\nalpha\n# Other\nbeta\n");
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "--granularity",
+            "section",
+            "--format",
+            "json",
+            "--",
+            "-(-alpha)",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(hit_headings(&json), vec!["d.md#Keep".to_owned()]);
+}
+
+#[test]
+fn nested_negated_group_matches_either_term_per_section() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "d.md",
+        "# Keep\nalpha\n# Other\nbeta\n# Third\ngamma\n",
+    );
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "--granularity",
+            "section",
+            "--format",
+            "json",
+            "--",
+            "-(-alpha -beta)",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let mut headings = hit_headings(&json);
+    headings.sort();
+    assert_eq!(
+        headings,
+        vec!["d.md#Keep".to_owned(), "d.md#Other".to_owned()]
+    );
+}
+
+#[test]
+fn field_term_inside_or_holds_for_every_section_of_its_file() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "split.md",
+        "---\ntitle: Split\n---\n# One\napple\n# Two\nbanana\n",
+    );
+    write_md(tmp.path(), "nohead.md", "kiwi words\n");
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "title:Split OR kiwi",
+            "--granularity",
+            "section",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    let mut headings = hit_headings(&json);
+    headings.sort();
+    assert_eq!(
+        headings,
+        vec![
+            "nohead.md#null".to_owned(),
+            "split.md#One".to_owned(),
+            "split.md#Two".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn oversized_trailing_line_extends_the_last_section() {
+    let tmp = TempDir::new().unwrap();
+    let long = "x".repeat(1024 * 1024 + 16);
+    write_md(tmp.path(), "big.md", &format!("# Only\nalpha\n{long}\n"));
+    let (json, output) = run(
+        &tmp,
+        &[
+            "find",
+            "alpha",
+            "--granularity",
+            "section",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["results"][0]["section"]["line_end"], 3, "{json}");
+}
+
+#[test]
+fn terms_in_different_sections_explain_the_empty_answer() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "s.md", "# One\napple\n# Two\nbanana\n");
+    let output = hyalo()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "apple banana",
+            "--granularity",
+            "section",
+            "--format",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        all.contains("1 file matches at file level, but no single section holds all terms"),
+        "{all}"
+    );
+    assert!(
+        all.contains("'apple OR banana' --granularity section"),
+        "{all}"
+    );
+    assert!(all.contains("--granularity file"), "{all}");
+    assert!(!all.contains("hyalo terms"), "{all}");
+}
+
+#[test]
+fn filenames_only_lists_each_file_once_in_section_mode() {
+    let tmp = TempDir::new().unwrap();
+    write_md(tmp.path(), "s.md", "# One\napple\n# Two\napple again\n");
+    let output = hyalo_no_hints()
+        .arg("--dir")
+        .arg(tmp.path())
+        .args([
+            "find",
+            "apple",
+            "--granularity",
+            "section",
+            "--filenames-only",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).lines().count(), 1);
+}
+
+#[test]
+fn section_mode_drilldown_compares_buckets_with_the_file_count() {
+    let tmp = TempDir::new().unwrap();
+    write_md(
+        tmp.path(),
+        "a.md",
+        "---\ntags: [x]\n---\n# One\napple\n# Two\napple\n",
+    );
+    let (json, output) = run_hinted(
+        &tmp,
+        &[
+            "find",
+            "apple",
+            "--granularity",
+            "section",
+            "--facet",
+            "tags",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(json["total"], 2);
+    let cmds: Vec<&str> = json["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|h| h["cmd"].as_str())
+        .collect();
+    assert!(!cmds.iter().any(|c| c.contains("--tag x")), "{cmds:?}");
+}

@@ -268,11 +268,16 @@ impl OutputPipeline<'_> {
                     return Ok(rendered);
                 }
                 if self.projection != crate::prepared::Projection::Standard {
+                    // iter-303: section hits repeat a file once per section;
+                    // a path list names each file once, first occurrence first.
+                    let mut seen: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
                     for file in value
                         .as_array()
                         .into_iter()
                         .flatten()
                         .filter_map(|item| item.get("file").and_then(serde_json::Value::as_str))
+                        .filter(|file| seen.insert(file))
                     {
                         if self.projection == crate::prepared::Projection::Filenames0 {
                             rendered.stdout.extend_from_slice(file.as_bytes());

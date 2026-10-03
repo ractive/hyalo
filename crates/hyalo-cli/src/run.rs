@@ -356,6 +356,56 @@ fn empty_result_for_command(cmd: &Commands) -> CommandOutcome {
     }
 }
 
+/// `find` checks that must hold even when `--files-from` resolved to zero
+/// files (iteration 303): an invalid `--facet` spec or section-mode argument
+/// is still a user error, and valid facets are reported with empty buckets.
+/// Returns the error outcome, or `None` to continue with the empty result.
+fn find_empty_selection_preflight(
+    cmd: &Commands,
+    ctx: &mut crate::dispatch::CommandContext<'_>,
+) -> Option<CommandOutcome> {
+    let Commands::Find(args) = cmd else {
+        return None;
+    };
+    let filters = &args.filters;
+    if filters.granularity == Some(crate::cli::args::Granularity::Section)
+        && let Some(message) = crate::commands::find::run::section_mode_conflict(
+            args.pattern.as_deref(),
+            filters.regexp.is_some(),
+            filters.sort.as_deref(),
+            filters.reverse,
+            !filters.fields.is_empty(),
+        )
+    {
+        return Some(CommandOutcome::UserError(crate::output::user_diagnostic(
+            ctx.effective_format,
+            message,
+            None,
+            Some("see SEARCH MODES in `hyalo find --help`"),
+            None,
+        )));
+    }
+    if filters.facet.is_empty() {
+        return None;
+    }
+    match crate::commands::find::parse_facet_specs(&filters.facet) {
+        Ok(specs) => {
+            ctx.find_search = Some(crate::commands::find::SearchReport {
+                facets: Some(crate::commands::find::FacetCounter::new(&specs).finish()),
+                ..Default::default()
+            });
+            None
+        }
+        Err(message) => Some(CommandOutcome::UserError(crate::output::user_diagnostic(
+            ctx.effective_format,
+            &message,
+            None,
+            Some("see FACETS in `hyalo find --help`"),
+            None,
+        ))),
+    }
+}
+
 /// Pre-dispatch `--files-from` resolution for commands that accept it.
 ///
 /// Delegates to [`crate::commands::inputs::resolve_files_from_to_rel_paths`]
@@ -2385,7 +2435,17 @@ fn run_inner() -> Result<(), AppError> {
     let summary_kb_dir_note = matches!(cli.command, Commands::Summary(_)) && format == Format::Text;
 
     let dispatch_start = Instant::now();
-    let result = if files_from_empty {
+    // iter-303: an empty `--files-from` list never reaches find dispatch, so
+    // its facet specs and section-mode arguments are validated here, and the
+    // requested facets are reported with empty buckets (no vault scan).
+    let find_preflight = if files_from_empty {
+        find_empty_selection_preflight(&cli.command, &mut ctx)
+    } else {
+        None
+    };
+    let result = if let Some(outcome) = find_preflight {
+        Ok(outcome)
+    } else if files_from_empty {
         // Produce the appropriate empty payload for the command type.
         let empty = empty_result_for_command(&cli.command);
         let empty = if output_plan.internal_report() {
@@ -2452,6 +2512,7 @@ fn run_inner() -> Result<(), AppError> {
         }
         hctx.corrected_query = report.corrected_query;
         hctx.section_reads = report.section_reads;
+        hctx.section_file_matches = report.section_file_matches;
         if let Some(facets) = &facets {
             hctx.facets.clone_from(facets);
         }

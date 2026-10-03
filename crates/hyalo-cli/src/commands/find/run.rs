@@ -304,7 +304,7 @@ pub(crate) fn run(
 /// Why `--granularity section` cannot run with these arguments, or `None`
 /// (iteration 303, DEC-334). Section hits rank sections of a ranked search,
 /// so they need a non-blank PATTERN, and their order and shape are fixed.
-fn section_mode_conflict(
+pub(crate) fn section_mode_conflict(
     pattern: Option<&str>,
     has_regexp: bool,
     sort: Option<&str>,

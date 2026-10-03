@@ -684,11 +684,13 @@ pub(crate) struct FindFilters {
     /// {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
     /// are flat (a heading runs to the next heading of any level; text before the first
     /// heading is a section with heading null and level 0). A section is a hit only when it
-    /// satisfies the query's positive terms on its own; negations and field terms
-    /// (title:/heading:/tag:/path:) apply to the whole file. Scores use the corpus IDF and
-    /// section-length normalisation. --limit counts sections and --section restricts which
-    /// sections are eligible. Requires PATTERN with at least one text term; --regexp, --sort,
-    /// --reverse and --fields are rejected in section mode (exit 1).
+    /// satisfies the query's positive words and phrases on its own; negated terms and field
+    /// terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
+    /// sections. Files qualify against their whole body, so --section only restricts which
+    /// sections are eligible. Scores use the corpus IDF and section-length normalisation;
+    /// --limit counts sections and --filenames-only lists each file once. Requires PATTERN
+    /// with at least one text term; --regexp, --sort, --reverse and --fields are rejected in
+    /// section mode (exit 1).
     #[arg(
         long,
         value_enum,
@@ -702,13 +704,15 @@ pub(crate) struct FindFilters {
     ///
     /// Facet counts over the FULL match set, computed before --limit, emitted as a top-level
     /// `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
-    /// exact tag (no prefix buckets); `property:K` counts files per scalar value of
-    /// frontmatter K (each element of a list counts, a missing or null value counts under a
-    /// `null` bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
+    /// exact tag (no prefix buckets); `property:K` counts files per value of frontmatter K,
+    /// resolved like `--property` (dot-paths included) and folded the same way its `K=V`
+    /// equality folds case, so `Open` and `open` share a bucket shown in the most common
+    /// spelling (each element of a list counts, a missing or null value counts under a `null`
+    /// bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
     /// directory ("." for files at the vault root). Buckets sort by count (desc) then value and
-    /// are capped at 50 per facet (`truncated: true`). In --granularity section mode the
-    /// counts are files with at least one section hit. Works with every query, --jq and
-    /// --count; an unknown spec is a user error (exit 1).
+    /// are capped at 50 per facet (`truncated: true`). A repeated spec is reported once. In
+    /// --granularity section mode the counts are files with at least one section hit. Works
+    /// with every query, --jq and --count; an unknown spec is a user error (exit 1).
     #[arg(long = "facet", value_name = "SPEC", help_heading = "Output")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub facet: Vec<String>,
@@ -1023,8 +1027,12 @@ pub(crate) enum Commands {
             the heading path (e.g. [\"Design\", \"Storage\"]). Sections are flat: a heading runs to the \
             line before the next heading of any level, and text before the first heading is a section \
             with heading null and level 0. A section is a hit only when it satisfies the query's \
-            positive terms by itself (every AND term, and each OR group, inside that section); \
-            negations and field terms decide which FILES qualify and are not re-checked per section. \
+            positive words and phrases by itself (every AND term, and each OR group, inside that \
+            section). Negated terms and field terms are decided once per file against its whole body \
+            and hold for every section of it: '-(-a)' ranks sections holding a, 'kiwi OR title:x' hits \
+            every section of a file titled x. --section only restricts which sections are eligible. \
+            When the words occur in a file but never share a section, the empty answer says so and \
+            hints the same query at file granularity. --filenames-only lists each file once. \
             Scores use the corpus IDF with section-length normalisation (average over the scored \
             sections). Hits sort by score, then file, then line; --limit counts sections; --section \
             restricts which sections are eligible; facets count files with a hit. PATTERN needs at \
@@ -1035,10 +1043,12 @@ pub(crate) enum Commands {
             computed before --limit, for any find query (ranked, filtered, --broken-links, ...). The \
             envelope gains a top-level `facets` key: [{facet, buckets: [{value, count}], truncated}]. \
             Specs: `tags` (exact tags; 'project/backend' is its own bucket, never folded into \
-            'project'), `property:K` (each scalar value of frontmatter K; every element of a list \
-            counts; a missing or null value counts under value null; numbers and booleans are \
-            stringified), `type` (alias of property:type), `dir` (top-level directory, '.' for the \
-            vault root). Buckets sort by count (desc) then value, at most 50 per facet with \
+            'project'), `property:K` (each value of frontmatter K, resolved like --property including \
+            dot-paths and case-folded like its K=V equality, shown in the most common spelling; every \
+            element of a list counts; a missing or null value counts under value null; numbers and \
+            booleans are stringified; a nested map gets a bucket but no drill-down hint), `type` \
+            (alias of property:type), `dir` (top-level directory, '.' for the vault root). A repeated \
+            spec is reported once. Buckets sort by count (desc) then value, at most 50 per facet with \
             `truncated: true` when more existed. Text output prints one block per facet after the \
             results; hints drill into the 3 largest buckets of each facet (--tag, --property K=V, \
             --glob 'dir/**'). --count still prints only the total; --jq sees `.facets`. An unknown \

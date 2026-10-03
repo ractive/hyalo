@@ -31,7 +31,7 @@ fn property_value_replays(value: &str) -> bool {
 /// every match narrows nothing and is skipped, as is a bucket that no
 /// filter can address exactly (the null bucket, `.` for the vault root, a
 /// directory under an existing `--file`/`--glob` scope) is skipped.
-pub(super) fn facet_drilldown_hints(ctx: &HintContext, total: Option<u64>) -> Vec<Hint> {
+pub(super) fn facet_drilldown_hints(ctx: &HintContext) -> Vec<Hint> {
     let mut hints = Vec::new();
     for facet in &ctx.facets {
         let kind = crate::commands::find::FacetSpec::parse(&facet.facet).ok();
@@ -42,8 +42,9 @@ pub(super) fn facet_drilldown_hints(ctx: &HintContext, total: Option<u64>) -> Ve
             let Some(value) = bucket.value.as_deref() else {
                 continue;
             };
-            // A bucket holding every match would re-run the same answer.
-            if total == Some(bucket.count) {
+            // A bucket holding every counted file would re-run the same
+            // answer (compared with the file count, not the section count).
+            if bucket.count == facet.files {
                 continue;
             }
             let hint = match &kind {
@@ -51,14 +52,15 @@ pub(super) fn facet_drilldown_hints(ctx: &HintContext, total: Option<u64>) -> Ve
                     format!("Drill into tag {value} ({} files)", bucket.count),
                     build_find_command_composing(ctx, &["--tag", value]),
                 )),
-                crate::commands::find::FacetKind::Property(key) => property_value_replays(value)
-                    .then(|| {
+                crate::commands::find::FacetKind::Property(key) => {
+                    (bucket.replayable && property_value_replays(value)).then(|| {
                         let filter = format!("{key}={value}");
                         Hint::new(
                             format!("Drill into {key} = {value} ({} files)", bucket.count),
                             build_find_command_composing(ctx, &["--property", &filter]),
                         )
-                    }),
+                    })
+                }
                 crate::commands::find::FacetKind::Dir => (value != "."
                     && ctx.file_targets.is_empty()
                     && ctx.glob.is_empty())
@@ -301,7 +303,7 @@ pub(super) fn hints_for_find(
                 &["--limit", "0"],
             ));
         }
-        hints.extend(facet_drilldown_hints(ctx, total));
+        hints.extend(facet_drilldown_hints(ctx));
         return hints;
     }
 
@@ -564,7 +566,7 @@ pub(super) fn hints_for_find(
     // iter-303 (DEC-335): facet drill-downs. Kept within the regular budget
     // by truncating first, so the facets always get their own slots (the
     // global cap grows by FACET_HINT_BUCKETS per facet).
-    let facet_hints = facet_drilldown_hints(ctx, total);
+    let facet_hints = facet_drilldown_hints(ctx);
     if !facet_hints.is_empty() {
         hints.truncate(MAX_HINTS);
         hints.extend(facet_hints);

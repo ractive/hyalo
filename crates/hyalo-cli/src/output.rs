@@ -314,6 +314,11 @@ pub struct FacetResult {
     pub(crate) buckets: Vec<FacetBucket>,
     /// `true` when more than 50 distinct values existed and the rest were cut.
     pub(crate) truncated: bool,
+    /// Files counted (the match set; in section mode, files with a hit).
+    /// Internal: the hint layer skips a drill-down that would keep them all.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub(crate) files: u64,
 }
 
 /// One facet value and the number of matching files that carry it.
@@ -326,6 +331,11 @@ pub struct FacetBucket {
     pub(crate) value: Option<String>,
     /// Matching files in this bucket.
     pub(crate) count: u64,
+    /// Internal: `--property K=V` can select exactly this bucket (a scalar,
+    /// not a nested map or list).
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub(crate) replayable: bool,
 }
 
 /// One result of `find PATTERN --granularity section` (DEC-334).
