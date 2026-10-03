@@ -489,6 +489,29 @@ pub(crate) struct Cli {
     pub command: Commands,
 }
 
+/// Result granularity of a ranked `find` (iteration 303, DEC-334).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Granularity {
+    /// One result per file (the default).
+    #[default]
+    File,
+    /// One result per matching section.
+    Section,
+}
+
 /// All filter arguments for `hyalo find`, extracted so they can be serialized as views.
 #[derive(Debug, Clone, Default, clap::Args, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -532,7 +555,7 @@ pub(crate) struct FindFilters {
     )]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub properties: Vec<String>,
-    /// Tag, exact or prefix ('project' matches 'project/backend'); repeatable (AND)
+    /// Tag, exact or prefix ('a' matches 'a/b'); repeatable (AND)
     ///
     /// Tag filter: exact or prefix match (e.g. 'project' matches 'project/backend' but not
     /// 'projects'). Repeatable (AND).
@@ -603,7 +626,7 @@ pub(crate) struct FindFilters {
     #[cfg_attr(not(test), serde(skip))]
     #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
     pub files_from: Option<String>,
-    /// all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks — exact projection
+    /// all|file|modified|size|lines|title|properties|properties-typed|tags|sections|tasks|links|backlinks (exact)
     ///
     /// Without --fields: file, modified, size, lines, title, properties, tags. With --fields:
     /// exactly the named fields plus file (filters add what they need).
@@ -655,6 +678,44 @@ pub(crate) struct FindFilters {
     #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort: Option<String>,
+    /// file|section: rank files or sections
+    ///
+    /// `section` turns a ranked PATTERN search into one result per matching SECTION:
+    /// {file, section: {heading, level, line_start, line_end, path}, score, matches}. Sections
+    /// are flat (a heading runs to the next heading of any level; text before the first
+    /// heading is a section with heading null and level 0). A section is a hit only when it
+    /// satisfies the query's positive words and phrases on its own; negated terms and field
+    /// terms (title:/heading:/tag:/path:) are decided once per file and hold for all its
+    /// sections. Files qualify against their whole body, so --section only restricts which
+    /// sections are eligible. Scores use the corpus IDF and section-length normalisation;
+    /// --limit counts sections and --filenames-only lists each file once. Requires PATTERN
+    /// with at least one text term; --regexp, --sort, --reverse and --fields are rejected in
+    /// section mode (exit 1).
+    #[arg(
+        long,
+        value_enum,
+        value_name = "MODE",
+        hide_possible_values = true,
+        help_heading = "Output"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub granularity: Option<Granularity>,
+    /// Count per tags|property:K|type|dir; repeatable
+    ///
+    /// Facet counts over the FULL match set, computed before --limit, emitted as a top-level
+    /// `facets` key: [{facet, buckets: [{value, count}], truncated}]. `tags` counts files per
+    /// exact tag (no prefix buckets); `property:K` counts files per value of frontmatter K,
+    /// resolved like `--property` (dot-paths included) and folded the same way its `K=V`
+    /// equality folds case, so `Open` and `open` share a bucket shown in the most common
+    /// spelling (each element of a list counts, a missing or null value counts under a `null`
+    /// bucket); `type` is an alias of `property:type`; `dir` counts files per top-level
+    /// directory ("." for files at the vault root). Buckets sort by count (desc) then value and
+    /// are capped at 50 per facet (`truncated: true`). A repeated spec is reported once. In
+    /// --granularity section mode the counts are files with at least one section hit. Works
+    /// with every query, --jq and --count; an unknown spec is a user error (exit 1).
+    #[arg(long = "facet", value_name = "SPEC", help_heading = "Output")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub facet: Vec<String>,
     /// Reverse the sort order [alias: --desc]
     ///
     /// Reverse the sort order (ascending becomes descending and vice versa). Alias: --desc.
@@ -696,14 +757,14 @@ pub(crate) struct FindFilters {
     #[arg(long, help_heading = "Output")]
     #[serde(skip_serializing_if = "is_false")]
     pub strict: bool,
-    /// Only orphan files: no inbound and no outbound links (auto-includes links and backlinks)
+    /// Only orphan files: no inbound or outbound links (adds links, backlinks)
     ///
     /// Deciding orphanhood needs both directions of the graph, so both fields come back
     /// whether or not --fields names them.
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "is_false")]
     pub orphan: bool,
-    /// Only dead-end files: inbound links but no outbound links (auto-includes links and backlinks)
+    /// Only dead-end files: inbound but no outbound links (adds links, backlinks)
     ///
     /// Deciding dead-endedness needs both directions of the graph, so both fields come back
     /// whether or not --fields names them.
@@ -718,7 +779,7 @@ pub(crate) struct FindFilters {
     #[arg(long, help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// BM25 Snowball stemmer language (default: english) [alias: --stemmer]
+    /// BM25 stemmer language (default: english) [alias: --stemmer]
     ///
     /// Stemmer language for BM25 body search (also --stemmer). Selects Snowball stemmer for BM25
     /// tokenization — NOT markdown code-block language.
@@ -730,7 +791,7 @@ pub(crate) struct FindFilters {
     #[arg(long, alias = "stemmer", value_name = "LANG", help_heading = "Filters")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Print matching paths only, one per line — no envelope, no hints
+    /// Print matching paths only, one per line, no hints
     ///
     /// Print only the file path of each matching entry, one per line — no JSON,
     /// no envelope, no count, no hints. grep `-l` precedent: the agent/
@@ -751,7 +812,7 @@ pub(crate) struct FindFilters {
     )]
     #[serde(skip_serializing_if = "is_false")]
     pub filenames_only: bool,
-    /// Like --filenames-only but NUL-separated, for `xargs -0`
+    /// NUL-separated --filenames-only, for `xargs -0`
     ///
     /// NUL-delimited sibling of `--filenames-only` (iter-238): each matching
     /// file path is printed terminated by a NUL byte instead of a newline,
@@ -826,6 +887,10 @@ impl FindFilters {
         if overlay.language.is_some() {
             self.language.clone_from(&overlay.language);
         }
+        if overlay.granularity.is_some() {
+            self.granularity = overlay.granularity;
+        }
+        self.facet.extend(overlay.facet.iter().cloned());
         // --filenames-only / --filenames0 are output-shaping bools (like
         // --strict): the overlay can turn them on, never off. A view may carry
         // one, and a CLI flag turns on on top of any view. clap rejects the
@@ -955,7 +1020,39 @@ pub(crate) enum Commands {
             words to their root: 'running' matches \
             documents containing 'run', 'runner', 'running', etc.\n\
             - --regexp/-e REGEX: regex body text search (case-insensitive by default; unranked; \
-            results include all per-line 'matches' and no 'score'). Mutually exclusive with PATTERN.\n\n\
+            results include all per-line 'matches' and no 'score'). Mutually exclusive with PATTERN.\n\
+            - PATTERN --granularity section: one result per matching SECTION instead of per file — \
+            the way to find the paragraph, not just the file. Each item is {file, section: {heading, \
+            level, line_start, line_end, path}, score, matches}; lines are file-absolute and `path` is \
+            the heading path (e.g. [\"Design\", \"Storage\"]). Sections are flat: a heading runs to the \
+            line before the next heading of any level, and text before the first heading is a section \
+            with heading null and level 0. A section is a hit only when it satisfies the query's \
+            positive words and phrases by itself (every AND term, and each OR group, inside that \
+            section). Negated terms and field terms are decided once per file against its whole body \
+            and hold for every section of it: '-(-a)' ranks sections holding a, 'kiwi OR title:x' hits \
+            every section of a file titled x. --section only restricts which sections are eligible. \
+            When the words occur in a file but never share a section, the empty answer says so and \
+            hints the same query at file granularity. --filenames-only lists each file once. \
+            Scores use the corpus IDF with section-length normalisation (average over the scored \
+            sections). Hits sort by score, then file, then line; --limit counts sections; --section \
+            restricts which sections are eligible; facets count files with a hit. PATTERN needs at \
+            least one word or phrase, and --regexp, --sort, --reverse and --fields are rejected (exit \
+            1). Each hit's hint reads it back: `hyalo read <file> --section '<heading>'`, or \
+            `--lines A:B` when the heading is null or not unique. Same answer with and without --index.\n\n\
+            FACETS (--facet SPEC, repeatable): per-value file counts over the FULL match set, \
+            computed before --limit, for any find query (ranked, filtered, --broken-links, ...). The \
+            envelope gains a top-level `facets` key: [{facet, buckets: [{value, count}], truncated}]. \
+            Specs: `tags` (exact tags; 'project/backend' is its own bucket, never folded into \
+            'project'), `property:K` (each value of frontmatter K, resolved like --property including \
+            dot-paths and case-folded like its K=V equality, shown in the most common spelling; every \
+            element of a list counts; a missing or null value counts under value null; numbers and \
+            booleans are stringified; a nested map gets a bucket but no drill-down hint), `type` \
+            (alias of property:type), `dir` (top-level directory, '.' for the vault root). A repeated \
+            spec is reported once. Buckets sort by count (desc) then value, at most 50 per facet with \
+            `truncated: true` when more existed. Text output prints one block per facet after the \
+            results; hints drill into the 3 largest buckets of each facet (--tag, --property K=V, \
+            --glob 'dir/**'). --count still prints only the total; --jq sees `.facets`. An unknown \
+            spec exits 1.\n\n\
             QUERY SYNTAX (for PATTERN):\n\
             - Multiple words: implicit AND — all terms required (e.g. 'rust programming' returns \
             only documents containing both words). The AND keyword is accepted but optional.\n\
@@ -1128,6 +1225,9 @@ pub(crate) enum Commands {
             hyalo find 'error handling'\n\
             hyalo find -- '(bm25 OR stemming) -tantivy'\n\
             hyalo find 'title:iteration tag:iteration link*'\n\
+            hyalo find 'snapshot index' --granularity section --limit 5   # the best sections, not files\n\
+            hyalo find --tag iteration --facet property:status --facet dir   # distribution of a match set\n\
+            hyalo find 'bm25' --facet tags --jq '.facets[0].buckets[:5]'\n\
             hyalo find --property status=draft --tag project\n\
             hyalo find --property 'title~=/^Design/i'\n\
             hyalo find --property aliases=null            # present, but the value is a YAML null\n\

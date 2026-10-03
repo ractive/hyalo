@@ -346,11 +346,13 @@ pub struct Bm25Match {
 // ---------------------------------------------------------------------------
 
 mod query;
+mod sections;
 
 pub use query::{
     CompiledQuery, FieldDocument, FieldKind, FieldSource, FieldTerm, MAX_PREFIX_EXPANSION,
     NoFields, QuerySyntaxError, TermCandidate, TermSuggestion, corrected_query,
 };
+pub use sections::{FileSections, SectionHit, SectionScorer, SectionSpan};
 
 /// Positive leaves compiled once for ranked body snippets. Shares scoring's
 /// compiled query, so operators, negation, phrases, prefixes, per-language

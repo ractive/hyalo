@@ -500,7 +500,7 @@ impl FieldTerm {
 
 /// A node of the compiled query.
 #[derive(Debug, Clone, PartialEq)]
-enum Node {
+pub(super) enum Node {
     And(Vec<Node>),
     Or(Vec<Node>),
     Not(Box<Node>),
@@ -530,7 +530,7 @@ struct QueryWord {
 /// One normalized query shared by indexed scoring, disk fallback and snippets.
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
-    root: Option<Node>,
+    pub(super) root: Option<Node>,
     words: Vec<QueryWord>,
     source: String,
 }
@@ -957,7 +957,7 @@ impl SnippetMatcher {
 
 /// Dense document set over `0..len` doc ids.
 #[derive(Debug, Clone)]
-struct DocSet {
+pub(super) struct DocSet {
     words: Vec<u64>,
     len: usize,
 }
@@ -995,7 +995,7 @@ impl DocSet {
         }
     }
 
-    fn contains(&self, id: u32) -> bool {
+    pub(super) fn contains(&self, id: u32) -> bool {
         let id = id as usize;
         id < self.len && self.words[id / 64] & (1u64 << (id % 64)) != 0
     }
@@ -1206,6 +1206,28 @@ impl Bm25InvertedIndex {
         }
     }
 
+    /// Documents for which `node`, read with positive polarity, evaluates
+    /// true — the file-level verdict of one leaf (section scoring uses it for
+    /// field terms and negated leaves, DEC-334).
+    pub(super) fn node_docs(&self, node: &Node, fields: &dyn FieldSource) -> DocSet {
+        let mut evaluator = Evaluator {
+            index: self,
+            fields,
+            stemmers: HashMap::new(),
+            units: Vec::new(),
+        };
+        evaluator.eval(node, true)
+    }
+
+    /// Doc id of every document path.
+    pub(super) fn doc_ids(&self) -> HashMap<&str, u32> {
+        self.doc_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(id, path)| u32::try_from(id).ok().map(|id| (path.as_str(), id)))
+            .collect()
+    }
+
     /// Every dictionary term a `prefix*` candidate list matches, uncapped.
     fn prefix_matches(&self, candidates: &[String]) -> Vec<(&str, usize)> {
         let prefixes = self.effective_prefixes(candidates);
@@ -1218,7 +1240,7 @@ impl Bm25InvertedIndex {
 
     /// Dictionary terms a `prefix*` term expands to (most frequent first,
     /// then alphabetical), capped at [`MAX_PREFIX_EXPANSION`].
-    fn expand_prefix(&self, candidates: &[String]) -> Vec<&str> {
+    pub(super) fn expand_prefix(&self, candidates: &[String]) -> Vec<&str> {
         let mut terms = self.prefix_matches(candidates);
         terms.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         terms.truncate(MAX_PREFIX_EXPANSION);

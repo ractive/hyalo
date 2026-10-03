@@ -283,8 +283,10 @@ impl<'a, T: Serialize> Envelope<'a, T> {
     }
 }
 
-/// The success envelope of a zero-result `find PATTERN` that has did-you-mean
-/// candidates (iteration 302). Only `find` emits it; mutation reports never do.
+/// The success envelope of a `find` that carries search side results: did-you-mean
+/// candidates of a zero-result ranked query (iteration 302) and/or facet counts
+/// (iteration 303). Only `find` emits it; mutation reports never do. Each key is
+/// present only when it has content, so a plain `find` keeps the standard shape.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
@@ -292,7 +294,84 @@ pub struct SearchEnvelope<'a, T> {
     #[serde(flatten)]
     pub(crate) envelope: Envelope<'a, T>,
     /// Did-you-mean candidates for ranked-search terms with no postings.
-    pub(crate) suggestions: &'a [SearchSuggestion],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) suggestions: Option<&'a [SearchSuggestion]>,
+    /// Per-value file counts over the full match set, one entry per `--facet`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) facets: Option<&'a [FacetResult]>,
+}
+
+/// Counts for one `--facet SPEC` over the full match set (DEC-335).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct FacetResult {
+    /// The spec as written: `tags`, `property:<KEY>`, `type` or `dir`.
+    pub(crate) facet: String,
+    /// Buckets by count (descending) then value, at most 50.
+    pub(crate) buckets: Vec<FacetBucket>,
+    /// `true` when more than 50 distinct values existed and the rest were cut.
+    pub(crate) truncated: bool,
+    /// Files counted (the match set; in section mode, files with a hit).
+    /// Internal: the hint layer skips a drill-down that would keep them all.
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub(crate) files: u64,
+}
+
+/// One facet value and the number of matching files that carry it.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct FacetBucket {
+    /// The tag, property value (stringified scalar) or top-level directory;
+    /// `null` for files without the property (or without tags).
+    pub(crate) value: Option<String>,
+    /// Matching files in this bucket.
+    pub(crate) count: u64,
+    /// Internal: `--property K=V` can select exactly this bucket (a scalar,
+    /// not a nested map or list).
+    #[serde(skip)]
+    #[cfg_attr(test, ts(skip))]
+    pub(crate) replayable: bool,
+}
+
+/// One result of `find PATTERN --granularity section` (DEC-334).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SectionHitObject {
+    /// Vault-relative path of the file holding the section.
+    pub(crate) file: String,
+    /// Where the section sits in the file.
+    pub(crate) section: SectionLocation,
+    /// BM25 score of the section alone (corpus IDF, section-length normalised).
+    pub(crate) score: f64,
+    /// Up to three snippet lines from inside the section (`ContentMatch` shape).
+    #[cfg_attr(
+        test,
+        ts(type = "Array<{ line: number, section: string, text: string }>")
+    )]
+    pub(crate) matches: Vec<hyalo_core::types::ContentMatch>,
+}
+
+/// A flat section: its heading line through the line before the next heading.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SectionLocation {
+    /// Heading text, or `null` for the text before the first heading.
+    pub(crate) heading: Option<String>,
+    /// ATX heading level (1-6), 0 for the pre-heading preamble.
+    pub(crate) level: u8,
+    /// First line (the heading line), 1-based and file-absolute.
+    pub(crate) line_start: u64,
+    /// Last line, inclusive, 1-based and file-absolute.
+    pub(crate) line_end: u64,
+    /// Heading path from the outline, ending with this heading.
+    pub(crate) path: Vec<String>,
 }
 
 /// Did-you-mean for one ranked-search query term that occurs in no document.
@@ -504,8 +583,66 @@ pub fn format_prebuilt_envelope(
         Format::Text => {
             let mut cache = JaqFilterCache::new();
             let mut text = format_results_as_text(results_value, total, &mut cache);
+            append_facet_block(&mut text, envelope);
             append_hint_lines(&mut text, hints);
             sanitize_control_chars(&text)
+        }
+    }
+}
+
+/// Append `find --facet` counts after the results (iteration 303): one block
+/// per facet, `value  count` rows aligned, the null bucket shown as `(none)`.
+fn append_facet_block(text: &mut String, envelope: &serde_json::Value) {
+    let Some(facets) = envelope.get("facets").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for facet in facets {
+        let name = facet
+            .get("facet")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let rows: Vec<(String, u64)> = facet
+            .get("buckets")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|b| {
+                let value = b
+                    .get("value")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| "(none)".to_owned(), str::to_owned);
+                let count = b
+                    .get("count")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                (value, count)
+            })
+            .collect();
+        if !text.is_empty() {
+            text.push_str("\n\n");
+        }
+        let _ = write!(text, "facet {name}:");
+        if rows.is_empty() {
+            text.push_str("\n  (no matches)");
+        }
+        let width = rows
+            .iter()
+            .map(|(v, _)| v.chars().count())
+            .max()
+            .unwrap_or(0);
+        for (value, count) in &rows {
+            let _ = write!(text, "\n  {value:<width$}  {count}");
+        }
+        if facet
+            .get("truncated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            let _ = write!(
+                text,
+                "\n  (showing the {} largest buckets)",
+                crate::commands::find::MAX_FACET_BUCKETS
+            );
         }
     }
 }

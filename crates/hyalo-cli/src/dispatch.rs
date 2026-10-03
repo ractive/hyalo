@@ -282,10 +282,12 @@ pub(crate) struct CommandContext<'a> {
     /// to guess that the text lives in bodies. `None` for every other command
     /// and for any empty `find` without a property regex filter.
     pub zero_result_body_search: Option<crate::hints::BodySearchSuggestion>,
-    /// Did-you-mean suggestions and the corrected query from a ranked `find`
-    /// that matched nothing (iteration 302). `run.rs` hoists the suggestions
-    /// into the envelope and the corrected query into the hint context.
-    pub zero_result_search: Option<crate::commands::find::SearchReport>,
+    /// Search side results of a `find`: did-you-mean suggestions and the
+    /// corrected query of a zero-result ranked query (iteration 302), facet
+    /// counts and section-hit read targets (iteration 303). `run.rs` hoists
+    /// suggestions and facets into the envelope and the rest into the hint
+    /// context. `None` for every other command.
+    pub find_search: Option<crate::commands::find::SearchReport>,
 }
 
 /// Resolve the effective limit for a list command.

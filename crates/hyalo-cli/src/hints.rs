@@ -320,6 +320,15 @@ pub struct HintContext {
     pub search_suggestions: Vec<crate::output::SearchSuggestion>,
     /// The ranked query with its best single-term correction applied.
     pub corrected_query: Option<String>,
+    /// `find --granularity section` hits in result order, with the `read`
+    /// selector that addresses each one (iteration 303).
+    pub(crate) section_reads: Vec<crate::commands::find::SectionRead>,
+    /// `find --facet` counts; their largest buckets become drill-down hints
+    /// (iteration 303).
+    pub facets: Vec<crate::output::FacetResult>,
+    /// Files a `--granularity section` query matched at file level, when it
+    /// ran in section mode (iteration 303).
+    pub section_file_matches: Option<u64>,
     /// Complete family-specific operation after config/view/files-from
     /// resolution. Scope-preserving continuations consume this instead of
     /// reconstructing requests from the partial presentation fields above.
@@ -397,6 +406,9 @@ impl HintContext {
             body_search_suggestion: None,
             search_suggestions: Vec::new(),
             corrected_query: None,
+            section_reads: Vec::new(),
+            facets: Vec::new(),
+            section_file_matches: None,
             resolved: None,
         }
     }
@@ -513,7 +525,14 @@ pub fn generate_hints_with_counters(
     // a follow-up suggestion.
     let mut ff_hints = files_from_hints(counters);
     ff_hints.append(&mut hints);
-    ff_hints.into_iter().take(MAX_HINTS).collect()
+    // iter-303 (DEC-335): every requested facet adds room for the drill-down
+    // into its three largest buckets on top of the usual budget.
+    let cap = if matches!(ctx.source, HintSource::Find) {
+        MAX_HINTS + find::FACET_HINT_BUCKETS * ctx.facets.len()
+    } else {
+        MAX_HINTS
+    };
+    ff_hints.into_iter().take(cap).collect()
 }
 
 /// Return an index-suggestion hint when the command was slow and no index is active.

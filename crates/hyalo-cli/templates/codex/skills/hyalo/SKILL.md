@@ -57,6 +57,10 @@ The query language: implicit AND, `OR` binding tighter (`a b OR c` = a AND (b OR
 `( … )` groups, `-` negation, `prefix*` over stems, and `title:`/`heading:`/`tag:`/`path:`
 field terms (field-only queries score 0, no snippets). A zero-result query carries
 `suggestions`; `hyalo terms [PREFIX]` lists the stemmed dictionary.
+`--granularity section` ranks sections instead of files (`hyalo find 'query' --granularity
+section --limit 5`, then follow the read hint); `--facet tags|property:K|type|dir` adds
+`facets` file counts over the full match set (`hyalo find --tag X --facet property:status
+--facet dir`).
 
 Pass `--format text` for compact reading or `--format json` for structured output.
 JSON is an envelope; results live in `.results`. `--jq` operates on that envelope

@@ -4,6 +4,8 @@
 //! (deep-review hotspot). A file split only: every item keeps the visibility it
 //! had in the one module, so `output::...` paths and behaviour are unchanged.
 
+use std::fmt::Write as _;
+
 use super::{
     JaqFilterCache, apply_jq_filter, build_file_object_filter, format_generator_output_text,
     format_lint_fix_output_text, format_lint_output_text, format_lint_rules_list_text,
@@ -33,6 +35,19 @@ pub(super) fn format_value_as_text(
                     .map(format_type_list_entry_text)
                     .collect::<Vec<_>>()
                     .join("\n\n");
+            }
+            // `find --granularity section` hits (iteration 303):
+            // `file#heading (lines A-B)  score`, snippets indented below.
+            let is_section_hits = arr
+                .first()
+                .and_then(|v| v.as_object())
+                .is_some_and(|m| key_signature(m) == "file,matches,score,section");
+            if is_section_hits {
+                return arr
+                    .iter()
+                    .map(format_section_hit_text)
+                    .collect::<Vec<_>>()
+                    .join("\n");
             }
             // `terms` listing: aligned `<term>  <docs>` rows (iteration 302).
             let is_term_list = arr
@@ -188,6 +203,56 @@ pub(super) fn format_value_as_text(
         }
         other => format_scalar(other, cache),
     }
+}
+
+/// One section hit: `file#heading (lines A-B)  score`, then `  line N: text`
+/// per snippet. The preamble (heading null) prints without the `#heading`.
+fn format_section_hit_text(hit: &serde_json::Value) -> String {
+    let file = hit
+        .get("file")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let section = hit.get("section");
+    let field = |key: &str| {
+        section
+            .and_then(|s| s.get(key))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let heading = section
+        .and_then(|s| s.get("heading"))
+        .and_then(serde_json::Value::as_str);
+    let score = hit
+        .get("score")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let mut out = match heading {
+        Some(heading) => format!("{file}#{heading}"),
+        None => file.to_owned(),
+    };
+    let _ = write!(
+        out,
+        " (lines {}-{})  {score:.2}",
+        field("line_start"),
+        field("line_end")
+    );
+    for m in hit
+        .get("matches")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let line = m
+            .get("line")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let text = m
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let _ = write!(out, "\n  line {line}: {}", text.trim());
+    }
+    out
 }
 
 /// Generic key: value rendering for unknown object shapes.

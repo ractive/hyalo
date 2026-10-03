@@ -1,10 +1,14 @@
 #![allow(clippy::missing_errors_doc)]
 
 mod build;
+mod facets;
 mod filter_index;
 pub(crate) mod run;
 mod sort;
 
+pub(crate) use facets::{
+    FacetCounter, FacetKind, FacetSpec, MAX_FACET_BUCKETS, parse_specs as parse_facet_specs,
+};
 pub use filter_index::{filter_index_entries, needs_body};
 
 use anyhow::{Context, Result};
@@ -211,8 +215,38 @@ pub fn find(
         language,
         config_language,
         case_index,
+        &FindExtras::default(),
         &mut SearchReport::default(),
     )
+}
+
+/// Iteration 303 options that change the shape of a `find` answer rather
+/// than which files match: section-granular hits (DEC-334) and facet counts
+/// (DEC-335). `Default` is the classic per-file answer with no facets.
+#[derive(Debug, Default)]
+pub(crate) struct FindExtras<'a> {
+    /// One result per matching section instead of per file. The caller has
+    /// already checked that a ranked PATTERN is present.
+    pub(crate) section_mode: bool,
+    /// Parsed `--facet` specs; empty when none was requested.
+    pub(crate) facets: &'a [FacetSpec],
+}
+
+/// How the hint layer addresses one section hit with `hyalo read`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SectionSelector {
+    /// `read --section '<heading>'`: the heading selects exactly one outline heading.
+    Heading(String),
+    /// `read --lines A:B` (body-relative): the preamble, or a heading that
+    /// `--section` could not address unambiguously.
+    Lines(usize, usize),
+}
+
+/// One section hit as the hint layer needs it, in result order.
+#[derive(Debug, Clone)]
+pub(crate) struct SectionRead {
+    pub(crate) file: String,
+    pub(crate) selector: SectionSelector,
 }
 
 /// Ranked-search side results reported next to the `find` payload
@@ -222,6 +256,13 @@ pub fn find(
 pub(crate) struct SearchReport {
     pub(crate) suggestions: Vec<hyalo_core::bm25::TermSuggestion>,
     pub(crate) corrected_query: Option<String>,
+    /// `--facet` counts over the full match set (iteration 303).
+    pub(crate) facets: Option<Vec<crate::output::FacetResult>>,
+    /// `--granularity section` hits, in result order, for the read hints.
+    pub(crate) section_reads: Vec<SectionRead>,
+    /// In section mode, how many files matched at file level (iteration 303):
+    /// lets a zero-hit answer say the words exist but never share a section.
+    pub(crate) section_file_matches: Option<u64>,
 }
 
 /// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
@@ -306,6 +347,7 @@ pub(crate) fn find_prepared(
     language: Option<&str>,
     config_language: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    extras: &FindExtras<'_>,
     search_report: &mut SearchReport,
 ) -> Result<CommandOutcome> {
     let files = selection.names();
@@ -526,6 +568,18 @@ pub(crate) fn find_prepared(
                 }
             }
             match hyalo_core::bm25::CompiledQuery::parse(pattern, &languages) {
+                Ok(query) if extras.section_mode && !query.has_text_terms() => {
+                    return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+                        format,
+                        "--granularity section needs a text term in PATTERN",
+                        None,
+                        Some(
+                            "field terms (title:, heading:, tag:, path:) and negations apply to \
+                             whole files; add a word or phrase to rank sections by",
+                        ),
+                        None,
+                    )));
+                }
                 Ok(query) => Some(query),
                 Err(error) => {
                     return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
@@ -547,6 +601,14 @@ pub(crate) fn find_prepared(
         language,
         config_language,
     };
+    // DEC-334: section scoring borrows the IDF and prefix expansion of the
+    // very corpus that answered the file-level query, so section hits and
+    // file hits never disagree about the query.
+    let mut section_scorer: Option<hyalo_core::bm25::SectionScorer> = None;
+    // File granularity ranks `--section` text only. Section granularity
+    // qualifies files against their whole body, so negation stays
+    // file-level, and applies `--section` when choosing eligible sections.
+    let corpus_section_scoped = has_section_filter && !extras.section_mode;
     let bm25_score_map: Option<HashMap<String, f64>> = if let Some(query) = &compiled_query {
         'bm25: {
             // Collect entries that pass all metadata filters.
@@ -650,7 +712,7 @@ pub(crate) fn find_prepared(
             // fix) would silently keep serving results that a fresh tokenize would never
             // produce until the version check below routes to the live-scan fallback instead.
             // Score all docs, then intersect with metadata-passing candidates.
-            if !has_section_filter
+            if !corpus_section_scoped
                 && scoped_entries.len() == index.entries().len()
                 && let Some(bm25_idx) = index.bm25_index()
                 && bm25_idx.tokenizer_version() == TOKENIZER_VERSION
@@ -660,6 +722,9 @@ pub(crate) fn find_prepared(
                     .all(|path| index.get(path).is_some_and(cached_language_matches))
             {
                 hyalo_core::internal_metrics::record_direct_indexed_scoring();
+                if extras.section_mode {
+                    section_scorer = Some(bm25_idx.section_scorer(query, &field_source));
+                }
                 let map: HashMap<String, f64> = score_corpus(
                     bm25_idx,
                     query,
@@ -709,7 +774,7 @@ pub(crate) fn find_prepared(
             let recovery_paths: std::collections::HashSet<&str> = scoped_entries
                 .iter()
                 .filter(|entry| {
-                    !has_section_filter
+                    !corpus_section_scoped
                         && entry.bm25_tokens.is_none()
                         && cached_tokens_compatible(entry)
                 })
@@ -756,7 +821,7 @@ pub(crate) fn find_prepared(
                     //    CJK-bigram fix) carries tokens a fresh tokenize would never produce,
                     //    so trusting them would silently keep queries broken until the next
                     //    `create-index` — re-tokenize from disk instead, same as a language miss.
-                    if !has_section_filter && cached_tokens_compatible(entry) {
+                    if !corpus_section_scoped && cached_tokens_compatible(entry) {
                         // Borrowed per-entry caches need an owned corpus copy;
                         // recovered tokens are already owned and consumed directly.
                         let tokens = entry
@@ -822,7 +887,7 @@ pub(crate) fn find_prepared(
                     // that fall within the matching section scope. This preserves the
                     // expectation that "pattern + --section X" only matches files where
                     // the pattern appears inside section X, not elsewhere in the document.
-                    let body = if has_section_filter {
+                    let body = if corpus_section_scoped {
                         let scope_ranges =
                             build_section_scope(&entry.sections, section_filters, usize::MAX);
                         if scope_ranges.is_empty() {
@@ -866,7 +931,7 @@ pub(crate) fn find_prepared(
                     Ok(())
                 };
 
-                if has_section_filter {
+                if corpus_section_scoped {
                     // Section filters require per-candidate line-range slicing, and the
                     // persisted-index fast path above is skipped entirely whenever a section
                     // filter is active — so both the --index and no-index runs already build
@@ -923,9 +988,12 @@ pub(crate) fn find_prepared(
                 &corpus,
                 query,
                 &field_source,
-                |path| has_section_filter || candidate_paths.contains(path),
+                |path| corpus_section_scoped || candidate_paths.contains(path),
                 search_report,
             );
+            if extras.section_mode {
+                section_scorer = Some(corpus.section_scorer(query, &field_source));
+            }
 
             // Warn if the query has low discriminative power (matches most docs with low scores).
             // Use candidate count as denominator so the heuristic is based on the
@@ -981,6 +1049,11 @@ pub(crate) fn find_prepared(
 
     let mut results: Vec<FileObject> = Vec::new();
     let mut total_matching: usize = 0;
+    // DEC-335: facets count every confirmed match, including the ones the
+    // pre-sorted `--limit` fast path never materialises. In section mode the
+    // counting waits until the section hits are known.
+    let mut facet_counter = facets::FacetCounter::new(extras.facets);
+    let count_facets_here = !facet_counter.is_empty() && !extras.section_mode;
     // Distinct JSON types of the `--sort property:<key>` key, recorded for
     // matches the pre-sorted `--limit` fast path never builds a result for
     // (iter-274, UX-4).
@@ -1154,6 +1227,9 @@ pub(crate) fn find_prepared(
             // vault whose `priority` mixes `9` and `"10"` was silent on a
             // narrow limit and loud on a wide one, for one identical ordering.
             record_sort_property_type(&mut sort_property_types, effective_sort_ref, entry);
+            if count_facets_here {
+                facet_counter.observe(entry);
+            }
             continue;
         }
 
@@ -1553,6 +1629,9 @@ pub(crate) fn find_prepared(
             }
         }
 
+        if count_facets_here {
+            facet_counter.observe(entry);
+        }
         if presorted {
             total_matching += 1;
         }
@@ -1665,6 +1744,37 @@ pub(crate) fn find_prepared(
         }
     }
 
+    if extras.section_mode
+        && let Some(scorer) = &section_scorer
+    {
+        let outcome = section_hits(
+            &SectionHitInputs {
+                index,
+                dir,
+                scorer,
+                section_filters,
+                language,
+                config_language,
+                limit,
+                format,
+            },
+            &results,
+            &mut facet_counter,
+            search_report,
+        )?;
+        if !extras.facets.is_empty() {
+            search_report.facets = Some(facet_counter.finish());
+        }
+        if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
+            fuzzy_suggest_tags(index, tag_filters);
+            fuzzy_suggest_property_keys(index, property_filters);
+        }
+        return Ok(outcome);
+    }
+    if !extras.facets.is_empty() {
+        search_report.facets = Some(facet_counter.finish());
+    }
+
     // --- Limit ---
     // When presorted, total_matching already holds the accurate count and
     // results are already capped — skip truncation.
@@ -1772,6 +1882,166 @@ pub(crate) fn find_prepared(
     let json_output = serde_json::Value::Array(json_array);
     Ok(CommandOutcome::success_with_total(
         json_output,
+        total as u64,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Iteration 303: section-granular hits (DEC-334)
+// ---------------------------------------------------------------------------
+
+/// Everything [`section_hits`] reads besides the file-level results.
+struct SectionHitInputs<'a> {
+    index: &'a dyn VaultIndex,
+    dir: &'a Path,
+    scorer: &'a hyalo_core::bm25::SectionScorer,
+    section_filters: &'a [SectionFilter],
+    language: Option<&'a str>,
+    config_language: Option<&'a str>,
+    limit: Option<usize>,
+    format: Format,
+}
+
+/// How `hyalo read` addresses `heading` in a file with `outline`: by
+/// `--section` when that selects exactly this one heading, else `None`
+/// (substring matching would widen it, or the text parses as a level pin or
+/// a regex).
+fn unique_section_selector(outline: &[OutlineSection], heading: &str) -> Option<String> {
+    let filter = SectionFilter::parse(heading).ok()?;
+    let mut matching = outline.iter().filter(|s| {
+        s.heading
+            .as_deref()
+            .is_some_and(|text| filter.matches(s.level, text))
+    });
+    let first = matching.next()?;
+    (matching.next().is_none() && first.heading.as_deref() == Some(heading))
+        .then(|| heading.to_owned())
+}
+
+/// Turn the file-level matches into ranked section hits: read every matched
+/// file once (in parallel), score its eligible sections against the corpus,
+/// then sort, count and cut at `--limit`.
+fn section_hits(
+    inputs: &SectionHitInputs<'_>,
+    results: &[FileObject],
+    facet_counter: &mut facets::FacetCounter<'_>,
+    search_report: &mut SearchReport,
+) -> Result<CommandOutcome> {
+    use rayon::prelude::*;
+    let has_section_filter = !inputs.section_filters.is_empty();
+    // VaultIndex need not be Sync: gather entry references before the
+    // parallel reads, exactly as the snippet pass does.
+    let selected: Vec<(&str, &hyalo_core::index::IndexEntry)> = results
+        .iter()
+        .filter_map(|obj| {
+            inputs
+                .index
+                .get(&obj.file)
+                .map(|entry| (obj.file.as_str(), entry))
+        })
+        .collect();
+    let (dir, scorer, section_filters) = (inputs.dir, inputs.scorer, inputs.section_filters);
+    let (language, config_language) = (inputs.language, inputs.config_language);
+    let collected: Vec<Result<(String, hyalo_core::bm25::FileSections)>> = selected
+        .par_iter()
+        .map(|(file, entry)| {
+            let scope = has_section_filter
+                .then(|| build_section_scope(&entry.sections, section_filters, usize::MAX));
+            let doc_language = resolve_language(
+                entry
+                    .properties
+                    .get("language")
+                    .and_then(serde_json::Value::as_str),
+                language,
+                config_language,
+            );
+            let sections = scorer
+                .collect(dir, file, doc_language, &entry.sections, scope.as_deref())
+                .with_context(|| format!("reading sections of {file}"))?;
+            Ok(((*file).to_owned(), sections))
+        })
+        .collect();
+    let mut files = Vec::with_capacity(collected.len());
+    let mut body_offsets: HashMap<String, usize> = HashMap::new();
+    // Report the first failure in result order, independent of scheduling.
+    for outcome in collected {
+        match outcome {
+            Ok((file, sections)) => {
+                body_offsets.insert(file.clone(), sections.body_offset());
+                files.push((file, sections));
+            }
+            Err(error) => {
+                return match error.downcast::<discovery::FileResolveError>() {
+                    Ok(error) => Ok(super::resolve_error_to_outcome(
+                        error,
+                        inputs.format,
+                        inputs.dir,
+                    )),
+                    Err(error) => Err(error),
+                };
+            }
+        }
+    }
+    let mut hits = inputs.scorer.finish(files);
+    let total = hits.len();
+    search_report.section_file_matches = Some(results.len() as u64);
+
+    if !facet_counter.is_empty() {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (file, _) in &hits {
+            if seen.insert(file.as_str())
+                && let Some(entry) = inputs.index.get(file)
+            {
+                facet_counter.observe(entry);
+            }
+        }
+    }
+
+    if let Some(n) = inputs.limit {
+        hits.truncate(n);
+    }
+
+    let mut items: Vec<serde_json::Value> = Vec::with_capacity(hits.len());
+    for (file, hit) in hits {
+        let offset = body_offsets.get(&file).copied().unwrap_or(0);
+        let outline = inputs
+            .index
+            .get(&file)
+            .map_or(&[][..], |entry| entry.sections.as_slice());
+        let selector = hit
+            .span
+            .heading
+            .as_deref()
+            .and_then(|heading| unique_section_selector(outline, heading))
+            .map_or_else(
+                || {
+                    SectionSelector::Lines(
+                        hit.span.line_start.saturating_sub(offset).max(1),
+                        hit.span.line_end.saturating_sub(offset).max(1),
+                    )
+                },
+                SectionSelector::Heading,
+            );
+        search_report.section_reads.push(SectionRead {
+            file: file.clone(),
+            selector,
+        });
+        let object = crate::output::SectionHitObject {
+            file,
+            section: crate::output::SectionLocation {
+                heading: hit.span.heading,
+                level: hit.span.level,
+                line_start: hit.span.line_start as u64,
+                line_end: hit.span.line_end as u64,
+                path: hit.span.path,
+            },
+            score: hit.score,
+            matches: hit.matches,
+        };
+        items.push(serde_json::to_value(object).context("failed to serialize section hit")?);
+    }
+    Ok(CommandOutcome::success_with_total(
+        serde_json::Value::Array(items),
         total as u64,
     ))
 }
