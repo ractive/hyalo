@@ -39,7 +39,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
         if ENABLED.load(Ordering::Relaxed) {
             let size = layout.size() as u64;
-            let _ = LIVE_BYTES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+            let _ = LIVE_BYTES.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
                 Some(live.saturating_sub(size))
             });
         }
@@ -52,7 +52,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
         let replacement = unsafe { System.realloc(pointer, old, new_size) };
         if !replacement.is_null() && ENABLED.load(Ordering::Relaxed) {
             let size = old.size() as u64;
-            let _ = LIVE_BYTES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+            let _ = LIVE_BYTES.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
                 Some(live.saturating_sub(size))
             });
             record_allocation(new_size);

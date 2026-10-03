@@ -583,21 +583,21 @@ tags:
     fn extract_tags_missing_key() {
         let props = make_props("title: Note\n");
         let tags = extract_tags(&props);
-        assert!(tags.is_empty());
+        assert!(tags.is_empty(), "expected empty, got {tags:?}");
     }
 
     #[test]
     fn extract_tags_empty_list() {
         let props = make_props("tags: []\n");
         let tags = extract_tags(&props);
-        assert!(tags.is_empty());
+        assert!(tags.is_empty(), "expected empty, got {tags:?}");
     }
 
     #[test]
     fn extract_tags_null() {
         let props = make_props("tags: ~\n");
         let tags = extract_tags(&props);
-        assert!(tags.is_empty());
+        assert!(tags.is_empty(), "expected empty, got {tags:?}");
     }
 
     // --- tags_list command ---

@@ -2413,7 +2413,11 @@ mod iso_tests {
         let vault = dir.path().to_string_lossy().to_string();
         SnapshotIndex::save(&build.index, &snap_path, &vault, None, None).unwrap();
         let index = SnapshotIndex::load(&snap_path).unwrap().unwrap();
-        assert!(files_modified_since_snapshot(&index, dir.path()).is_empty());
+        assert!(
+            files_modified_since_snapshot(&index, dir.path()).is_empty(),
+            "expected empty, got {:?}",
+            files_modified_since_snapshot(&index, dir.path())
+        );
         // Same-second touch: within tolerance, not stale.
         std::fs::write(&file, "---\ntitle: a\n---\n\nbody v2\n").unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -3070,7 +3074,11 @@ Plain prose ends here.
         SnapshotIndex::save(&build.index, &snap_path, "/vault", None, None).unwrap();
         let snap = SnapshotIndex::load(&snap_path).unwrap().unwrap();
 
-        assert!(files_missing_from_snapshot(&snap, tmp.path()).is_empty());
+        assert!(
+            files_missing_from_snapshot(&snap, tmp.path()).is_empty(),
+            "expected empty, got {:?}",
+            files_missing_from_snapshot(&snap, tmp.path())
+        );
 
         fs::write(tmp.path().join("c.md"), "---\ntitle: C\n---\n\n# C\n").unwrap();
         let missing = files_missing_from_snapshot(&snap, tmp.path());
@@ -3360,7 +3368,7 @@ Content.
         // Body fields are empty
         assert!(a.sections.is_empty());
         assert!(a.tasks.is_empty());
-        assert!(a.links.is_empty());
+        assert!(a.links.is_empty(), "expected empty, got {:?}", a.links);
 
         // Link graph is empty
         assert!(idx.link_graph().backlinks("a").is_empty());

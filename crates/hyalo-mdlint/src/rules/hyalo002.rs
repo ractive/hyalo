@@ -131,19 +131,19 @@ mod tests {
             false, // schema_has_completed = false
             Some("completed"),
         );
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]
     fn noop_when_status_not_completed() {
         let violations = check("- [ ] Open task\n", true, Some("in-progress"));
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]
     fn noop_when_no_status() {
         let violations = check("- [ ] Open task\n", true, None);
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]
@@ -183,13 +183,13 @@ mod tests {
     #[test]
     fn no_violation_when_all_tasks_checked() {
         let violations = check("- [x] Done\n- [x] Also done\n", true, Some("completed"));
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]
     fn no_violation_when_no_tasks() {
         let violations = check("# Title\n\nSome body text.\n", true, Some("completed"));
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]

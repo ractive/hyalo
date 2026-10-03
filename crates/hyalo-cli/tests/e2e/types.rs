@@ -52,7 +52,11 @@ fn types_list_empty() {
     );
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["total"], 0);
-    assert!(json["results"].as_array().unwrap().is_empty());
+    assert!(
+        json["results"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        json["results"].as_array().unwrap()
+    );
 }
 
 #[test]

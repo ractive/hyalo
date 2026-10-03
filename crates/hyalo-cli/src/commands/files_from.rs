@@ -317,7 +317,7 @@ mod tests {
         // We test via a temp file because `load` requires a real path.
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let result = load(tmp.path().to_str().unwrap()).unwrap();
-        assert!(result.is_empty());
+        assert!(result.is_empty(), "expected empty, got {result:?}");
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
     fn resolve_missing_file_counts() {
         let tmp = tempfile::tempdir().unwrap();
         let r = resolve(tmp.path(), &["nonexistent.md".to_owned()], ".").unwrap();
-        assert!(r.files.is_empty());
+        assert!(r.files.is_empty(), "expected empty, got {:?}", r.files);
         assert_eq!(r.counters.files_missing, 1);
     }
 
@@ -408,7 +408,7 @@ mod tests {
         std::fs::write(path, "").unwrap();
 
         let r = resolve(tmp.path(), &["readme.txt".to_owned()], ".").unwrap();
-        assert!(r.files.is_empty());
+        assert!(r.files.is_empty(), "expected empty, got {:?}", r.files);
         assert_eq!(r.counters.files_skipped_non_md, 1);
     }
 
@@ -416,7 +416,7 @@ mod tests {
     fn resolve_parent_traversal_counts_as_outside_vault() {
         let tmp = tempfile::tempdir().unwrap();
         let r = resolve(tmp.path(), &["../outside.md".to_owned()], ".").unwrap();
-        assert!(r.files.is_empty());
+        assert!(r.files.is_empty(), "expected empty, got {:?}", r.files);
         assert_eq!(r.counters.files_skipped_outside_vault, 1);
     }
 
@@ -441,7 +441,7 @@ mod tests {
         let r = resolve(tmp.path(), &[outside], ".").unwrap();
         // Either outside-vault OR missing; absolute outside-vault is always skipped first.
         assert!(r.counters.files_skipped_outside_vault > 0 || r.counters.files_missing > 0);
-        assert!(r.files.is_empty());
+        assert!(r.files.is_empty(), "expected empty, got {:?}", r.files);
     }
 
     #[test]
@@ -561,7 +561,7 @@ mod tests {
 
         // Entry "kb/note.md" with configured_dir "." — no stripping, counts as missing.
         let r = resolve(vault.path(), &["kb/note.md".to_owned()], ".").unwrap();
-        assert!(r.files.is_empty());
+        assert!(r.files.is_empty(), "expected empty, got {:?}", r.files);
         assert_eq!(r.counters.files_missing, 1);
     }
 

@@ -106,6 +106,7 @@ pub fn as_budget_error(err: &anyhow::Error) -> Option<&FrontmatterBudgetError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::IndexMap;
     use parse::{
         Document, LineEnding, detect_list_indent_style, friendly_parse_error, opening_delimiter,
         read_frontmatter_from_reader,
@@ -659,7 +660,7 @@ Body.
     #[test]
     fn infer_value_list_empty() {
         match parse_value("[]", None).unwrap() {
-            Value::Array(items) => assert!(items.is_empty()),
+            Value::Array(items) => assert!(items.is_empty(), "expected empty, got {items:?}"),
             other => panic!("expected empty sequence, got {other:?}"),
         }
     }
@@ -1752,5 +1753,69 @@ Body.
             Some(&Value::String("kept \t".into()))
         );
         assert_eq!(reparsed.body(), "body\n");
+    }
+
+    // ---- serde-saphyr behaviour pins -------------------------------------
+    //
+    // These guard user-visible parsing of frontmatter against parser
+    // upgrades. serde-saphyr 1.x breaks the first two (leading-zero decimals
+    // become floats; non-finite floats are a parse error by default), which
+    // is why the workspace holds it at 0.0.23.
+
+    fn parse_props(yaml: &str) -> IndexMap<String, Value> {
+        let content = format!("---\n{yaml}---\nbody\n");
+        Document::parse(&content).unwrap().properties().clone()
+    }
+
+    #[test]
+    fn leading_zero_decimals_stay_integers() {
+        let props = parse_props("zip: 01234\na: 007\nb: 08\nc: 00\nd: -017\nlist: [01, 02, 10]\n");
+        assert_eq!(props["zip"], serde_json::json!(1234));
+        assert_eq!(props["a"], serde_json::json!(7));
+        assert_eq!(props["b"], serde_json::json!(8));
+        assert_eq!(props["c"], serde_json::json!(0));
+        assert_eq!(props["d"], serde_json::json!(-17));
+        assert_eq!(props["list"], serde_json::json!([1, 2, 10]));
+        for key in ["zip", "a", "b", "c", "d"] {
+            assert!(
+                props[key].is_i64() || props[key].is_u64(),
+                "{key} must stay an integer, got {:?}",
+                props[key]
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_floats_parse_as_strings() {
+        // Non-finite floats (including an f64-overflowing literal) keep the
+        // file parsable and surface as their canonical YAML spelling.
+        let props = parse_props("a: .nan\nb: .inf\nc: -.Inf\nd: 1e999\n");
+        assert_eq!(props["a"], Value::String(".nan".into()));
+        assert_eq!(props["b"], Value::String(".inf".into()));
+        assert_eq!(props["c"], Value::String("-.inf".into()));
+        assert_eq!(props["d"], Value::String(".inf".into()));
+    }
+
+    #[test]
+    fn list_after_many_comment_lines_parses() {
+        let mut yaml = String::from("tags:\n");
+        for i in 0..40 {
+            writeln!(yaml, "  # comment {i}").unwrap();
+        }
+        yaml.push_str("  - one\n  - two\n");
+        let props = parse_props(&yaml);
+        assert_eq!(props["tags"], serde_json::json!(["one", "two"]));
+    }
+
+    #[test]
+    fn hash_in_string_value_round_trips() {
+        let props = IndexMap::from([("k".to_owned(), Value::String("a#b".into()))]);
+        let yaml = emit_properties(&props).unwrap();
+        let reparsed = parse_props(&yaml);
+        assert_eq!(
+            reparsed["k"],
+            Value::String("a#b".into()),
+            "emitted: {yaml}"
+        );
     }
 }

@@ -617,9 +617,21 @@ mod tests {
         assert!(!syntax.visible_line(2).unwrap().contains("[]"));
         assert!(!syntax.visible_line(5).unwrap().contains("# Hidden"));
         assert!(syntax.visible_line(5).unwrap().contains("visible"));
-        assert!(syntax.visible_line(6).unwrap().trim().is_empty());
-        assert!(syntax.visible_line(7).unwrap().trim().is_empty());
-        assert!(syntax.visible_line(8).unwrap().trim().is_empty());
+        assert!(
+            syntax.visible_line(6).unwrap().trim().is_empty(),
+            "expected empty, got {:?}",
+            syntax.visible_line(6).unwrap().trim()
+        );
+        assert!(
+            syntax.visible_line(7).unwrap().trim().is_empty(),
+            "expected empty, got {:?}",
+            syntax.visible_line(7).unwrap().trim()
+        );
+        assert!(
+            syntax.visible_line(8).unwrap().trim().is_empty(),
+            "expected empty, got {:?}",
+            syntax.visible_line(8).unwrap().trim()
+        );
         assert_eq!(syntax.visible_line(9).unwrap(), "# Visible");
     }
 
@@ -635,8 +647,16 @@ mod tests {
     fn inline_percent_hides_html_openers_and_directives() {
         let body = "%% <!-- markdownlint-disable MD019 --> %%\n[[old]]\n";
         let syntax = BodySyntax::new(body);
-        assert!(syntax.html_comments().is_empty());
-        assert!(syntax.visible_line(1).unwrap().trim().is_empty());
+        assert!(
+            syntax.html_comments().is_empty(),
+            "expected empty, got {:?}",
+            syntax.html_comments()
+        );
+        assert!(
+            syntax.visible_line(1).unwrap().trim().is_empty(),
+            "expected empty, got {:?}",
+            syntax.visible_line(1).unwrap().trim()
+        );
         assert_eq!(syntax.visible_line(2), Some("[[old]]"));
     }
 
@@ -679,7 +699,11 @@ mod tests {
             let syntax = BodySyntax::new(body);
             let line = body.lines().count();
             assert!(syntax.line_is_indented_code(line), "{body:?}");
-            assert!(syntax.visible_line(line).unwrap().trim().is_empty());
+            assert!(
+                syntax.visible_line(line).unwrap().trim().is_empty(),
+                "expected empty, got {:?}",
+                syntax.visible_line(line).unwrap().trim()
+            );
         }
 
         let ordered =

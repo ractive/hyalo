@@ -181,7 +181,11 @@ fn broken_authored_frontmatter_never_uses_old_named_search_tokens() {
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert!(
+        output.stdout.is_empty(),
+        "expected empty, got {:?}",
+        output.stdout
+    );
     assert!(String::from_utf8_lossy(&output.stderr).contains("unparseable frontmatter"));
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("a.md")).unwrap(),
@@ -427,7 +431,11 @@ fn boolean_sections_and_projections_cover_disk_fallback_and_named_refresh() {
         "c.md",
     ];
     let disk = run(&tmp, &args);
-    assert!(names(&disk).is_empty());
+    assert!(
+        names(&disk).is_empty(),
+        "expected empty, got {:?}",
+        names(&disk)
+    );
     let mut indexed = args.to_vec();
     indexed.push("--index");
     assert_eq!(run(&tmp, &indexed)["results"], disk["results"]);

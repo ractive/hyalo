@@ -352,7 +352,7 @@ tags:
             unwrap_output(run_properties_summary(tmp.path(), None, Format::Json).unwrap());
         assert!(ok);
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
-        assert!(!parsed.is_empty());
+        assert!(!parsed.is_empty(), "expected non-empty: parsed");
         let names: Vec<&str> = parsed.iter().map(|v| v["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"title"));
         assert!(names.contains(&"status"));

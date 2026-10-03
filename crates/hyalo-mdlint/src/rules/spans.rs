@@ -466,7 +466,11 @@ mod tests {
     #[test]
     fn inline_code_comment_example_is_not_a_directive() {
         let s = spans("`<!-- markdownlint-disable MD019 -->`\n#   real violation\n");
-        assert!(s.directive_tokens().is_empty());
+        assert!(
+            s.directive_tokens().is_empty(),
+            "expected empty, got {:?}",
+            s.directive_tokens()
+        );
         assert!(!s.rule_disabled_at(2, |token| token.eq_ignore_ascii_case("MD019")));
     }
 
@@ -475,7 +479,9 @@ mod tests {
         assert!(
             spans("<!-- markdownlint-disable -->\nx\n")
                 .directive_tokens()
-                .is_empty()
+                .is_empty(),
+            "expected empty, got {:?}",
+            spans("<!-- markdownlint-disable -->\nx\n").directive_tokens()
         );
     }
 }

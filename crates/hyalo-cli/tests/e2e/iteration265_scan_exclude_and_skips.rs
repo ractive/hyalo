@@ -235,7 +235,11 @@ fn scan_exclude_is_honoured_by_every_discovering_command() {
 
     // Nothing under Templates/ can be reached by name through a glob either.
     let globbed = json(tmp.path(), &["find", "--glob", "Templates/*.md"]);
-    assert!(globbed["results"].as_array().unwrap().is_empty());
+    assert!(
+        globbed["results"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        globbed["results"].as_array().unwrap()
+    );
 }
 
 /// The excluded files are gone *before* they can be parsed, so their YAML

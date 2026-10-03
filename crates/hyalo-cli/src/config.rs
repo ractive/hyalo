@@ -2370,7 +2370,11 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert!(resolved.lint_ignore.is_empty());
+        assert!(
+            resolved.lint_ignore.is_empty(),
+            "expected empty, got {:?}",
+            resolved.lint_ignore
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -2400,7 +2404,11 @@ site_prefix = "docs"
         let dir = make_temp();
         fs::write(dir.path().join(".hyalo.toml"), "dir = \".\"\n").unwrap();
         let resolved = load_config_from(dir.path());
-        assert!(resolved.okf_ignore.is_empty());
+        assert!(
+            resolved.okf_ignore.is_empty(),
+            "expected empty, got {:?}",
+            resolved.okf_ignore
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -2499,8 +2507,16 @@ site_prefix = "docs"
         .unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert!(resolved.auto_link_exclude_titles.is_empty());
-        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(
+            resolved.auto_link_exclude_titles.is_empty(),
+            "expected empty, got {:?}",
+            resolved.auto_link_exclude_titles
+        );
+        assert!(
+            resolved.auto_link_exclude_target_globs.is_empty(),
+            "expected empty, got {:?}",
+            resolved.auto_link_exclude_target_globs
+        );
         assert!(resolved.auto_link_first_only);
     }
 
@@ -2529,8 +2545,16 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "[links]\n").unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert!(resolved.auto_link_exclude_titles.is_empty());
-        assert!(resolved.auto_link_exclude_target_globs.is_empty());
+        assert!(
+            resolved.auto_link_exclude_titles.is_empty(),
+            "expected empty, got {:?}",
+            resolved.auto_link_exclude_titles
+        );
+        assert!(
+            resolved.auto_link_exclude_target_globs.is_empty(),
+            "expected empty, got {:?}",
+            resolved.auto_link_exclude_target_globs
+        );
         assert!(!resolved.auto_link_first_only);
     }
 
@@ -2551,7 +2575,11 @@ site_prefix = "docs"
         crate::warn::reset_for_test();
         crate::warn::init(false);
         let resolved = load_config_from(dir.path());
-        assert!(resolved.auto_link_exclude_titles.is_empty());
+        assert!(
+            resolved.auto_link_exclude_titles.is_empty(),
+            "expected empty, got {:?}",
+            resolved.auto_link_exclude_titles
+        );
         assert_eq!(resolved.dir, PathBuf::from("vault"));
         assert!(
             resolved.malformed.is_some(),
@@ -2781,7 +2809,11 @@ site_prefix = "docs"
         fs::write(dir.path().join(".hyalo.toml"), "dir = \"notes\"\n").unwrap();
 
         let resolved = load_config_from(dir.path());
-        assert!(resolved.lint_profiles.is_empty());
+        assert!(
+            resolved.lint_profiles.is_empty(),
+            "expected empty, got {:?}",
+            resolved.lint_profiles
+        );
     }
 
     #[test]

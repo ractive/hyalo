@@ -128,7 +128,11 @@ fn the_gate_still_gates() {
     let tmp = TempDir::new().unwrap();
     write_md(tmp.path(), "Notes/CompletelyUnrelated.md", "x\n");
     write_md(tmp.path(), "src.md", "see [[xyz-abc-notexist]]\n");
-    assert!(fuzzy_plans(&tmp).is_empty());
+    assert!(
+        fuzzy_plans(&tmp).is_empty(),
+        "expected empty, got {:?}",
+        fuzzy_plans(&tmp)
+    );
 
     let tmp2 = TempDir::new().unwrap();
     write_md(tmp2.path(), "Notes/CatMuse.md", "x\n");

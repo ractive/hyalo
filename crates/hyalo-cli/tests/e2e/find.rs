@@ -1680,8 +1680,11 @@ fn find_fields_properties_typed_json() {
 
     // Each element has name, type, value keys
     for item in typed {
-        assert!(!item.name.is_empty());
-        assert!(!item.prop_type.is_empty());
+        assert!(!item.name.is_empty(), "expected non-empty: item.name");
+        assert!(
+            !item.prop_type.is_empty(),
+            "expected non-empty: item.prop_type"
+        );
         assert!(!item.value.is_null());
     }
 
