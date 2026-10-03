@@ -6631,3 +6631,59 @@ not by a filter list that has to be edited in the same PR.
 xtask gates (`check-jev-assets` runs in CI's jev-helper job and `bench-scale`
 is an on-demand benchmark); no placeholder subcommands remain. Historical iteration notes that mention the removed names are left
 as written.
+
+## DEC-342: Gitignore honouring contract (2026-10-04)
+
+**Decision.** Every vault walk honours `.gitignore` (and other VCS ignore
+files) the same way `git` itself would, in addition to `[scan] exclude` —
+this was already true of `discovery::discover_files`'s `ignore::WalkBuilder`
+configuration, but iteration 306's review (F5) found it under-enforced at two
+call sites and undocumented everywhere. The contract, now made consistent:
+
+- a `.gitignore`-matched `.md` file never appears in an unscoped `find`,
+  `summary`, or any other full-vault listing, exactly like a `[scan] exclude`
+  drop;
+- it is not a note-graph edge for `--orphan` / `--dead-end` — an inbound link
+  to it is, from a whole-vault sweep's point of view, a link to nothing;
+- `hyalo summary`'s `results.files.excluded` counts it alongside `[scan]
+  exclude` drops (`discovery::count_gitignore_dropped`, a second,
+  gitignore-disabled walk diffed against the normal one — confined to
+  `summary`, which already performs one full sweep per run; no other command
+  pays this cost) rather than undercounting silently;
+- a path you **name** — `--file`, a positional argument, or `--files-from` —
+  is still a promise (DEC-301) and is always returned, under every
+  `--fields` combination, even when gitignored. Before this decision,
+  `build_scanned_index_with`'s `needs_full_vault` branch (used whenever a
+  field needs the whole-vault link graph — `--fields backlinks`, `--orphan`,
+  `--dead-end`) separately *validated* a named file's existence but then
+  built the actually-scanned file list from a plain gitignore-respecting
+  `discover_files` call that never consulted that validation, so the named
+  file silently vanished from `results` the moment one of those fields was
+  requested — `find --file MyNotes.md` worked, `find --file MyNotes.md
+  --fields backlinks` returned "No results".
+
+**Why.** `.gitignore` honouring already matched DEC-277's `[scan] exclude`
+rationale (a vault-wide exclusion every command agrees on) and nothing in the
+codebase disputed it; the bug was two places where the *contract itself* —
+not the walk — was inconsistently applied, plus the fact that no help page or
+doc mentioned gitignore honouring at all, leaving `results.files.excluded`
+looking wrong by omission whenever a `.gitignore` was the only reason a file
+was missing.
+
+**Consequences.** `commands::build_scanned_index_with` now builds its
+full-vault file list first, then folds any resolved-but-undiscovered named
+file back into it before scanning — the validation and the scan use the same
+list. `discovery::count_gitignore_dropped` adds one extra vault walk to
+`summary` only (the `[scan] exclude` counter from the real walk is
+preserved via a `record_scan_exclude_stats` flag so the diagnostic walk
+cannot inflate it). `find --help`, `summary --help` (long help) and
+`docs/configuration.md` document the contract; the short `-h` pages are
+unchanged (DEC-279's existing byte ceilings still hold).
+
+**Rejected alternative.** Re-walking the vault twice on every command that
+might need the gitignore-drop count: rejected on performance grounds — only
+`summary` needs the count, and the cost is bounded to that one command.
+
+## DEC-343: `MutationJournal::rename_entry` deleted (2026-10-04)
+
+**Decision.** `MutationJournal::rename_entry` deleted: no caller and it discarded update-only refreshes.
