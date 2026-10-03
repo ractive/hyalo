@@ -59,7 +59,39 @@ pub(crate) fn run(
         filenames_only: _,
         filenames0: _,
         files_from: _, // resolved in run.rs before dispatch
+        granularity,
+        facet,
     } = filters_raw;
+    let facet_specs = match super::parse_facet_specs(&facet) {
+        Ok(specs) => specs,
+        Err(message) => {
+            return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+                effective_format,
+                &message,
+                None,
+                Some("see FACETS in `hyalo find --help`"),
+                None,
+            )));
+        }
+    };
+    let section_mode = granularity == Some(crate::cli::args::Granularity::Section);
+    if section_mode
+        && let Some(message) = section_mode_conflict(
+            pattern.as_deref(),
+            regexp.is_some(),
+            sort.as_deref(),
+            reverse,
+            !fields.is_empty(),
+        )
+    {
+        return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+            effective_format,
+            message,
+            None,
+            Some("see SEARCH MODES in `hyalo find --help`"),
+            None,
+        )));
+    }
     if orphan && dead_end {
         crate::warn::warn(
             "--orphan and --dead-end are mutually exclusive (no file can be both); results will always be empty",
@@ -228,11 +260,13 @@ pub(crate) fn run(
                 language.as_deref(),
                 ctx.config_language,
                 ci.as_ref(),
+                &super::FindExtras {
+                    section_mode,
+                    facets: &facet_specs,
+                },
                 &mut search_report,
             )?;
-            if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
-                ctx.zero_result_search = Some(search_report);
-            }
+            ctx.find_search = Some(search_report);
             // UX-2 (dogfood pre3): `--strict` gives any `find` query
             // (most commonly `--broken-links`) a CI-gateable exit code.
             // Pure policy function, unit-tested in-process (ARCH-1 proof).
@@ -265,6 +299,41 @@ pub(crate) fn run(
         }
         IndexResolution::Outcome(outcome) => Ok(outcome),
     }
+}
+
+/// Why `--granularity section` cannot run with these arguments, or `None`
+/// (iteration 303, DEC-334). Section hits rank sections of a ranked search,
+/// so they need a non-blank PATTERN, and their order and shape are fixed.
+fn section_mode_conflict(
+    pattern: Option<&str>,
+    has_regexp: bool,
+    sort: Option<&str>,
+    reverse: bool,
+    has_fields: bool,
+) -> Option<&'static str> {
+    if has_regexp {
+        return Some(
+            "--granularity section ranks a PATTERN search; it cannot be used with --regexp",
+        );
+    }
+    if pattern.is_none_or(|p| p.trim().is_empty()) {
+        return Some("--granularity section requires a ranked PATTERN");
+    }
+    if sort.is_some_and(|s| s.trim() != "score") {
+        return Some(
+            "--granularity section always sorts by score, then file, then line; --sort is not supported",
+        );
+    }
+    if reverse {
+        return Some("--granularity section always sorts by score; --reverse is not supported");
+    }
+    if has_fields {
+        return Some(
+            "--granularity section results carry file, section, score and matches only; \
+             --fields is not supported",
+        );
+    }
+    None
 }
 
 /// Files the zero-result body probe will open before giving up (iter-258).

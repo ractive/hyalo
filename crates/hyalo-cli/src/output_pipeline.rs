@@ -42,6 +42,9 @@ pub(crate) struct OutputPipeline<'a> {
     /// Zero-result ranked-search did-you-mean, hoisted to the envelope's
     /// top-level `suggestions` key (iteration 302).
     pub search_suggestions: Option<Vec<crate::output::SearchSuggestion>>,
+    /// `find --facet` counts, hoisted to the envelope's top-level `facets`
+    /// key (iteration 303). `None` when no facet was requested.
+    pub facets: Option<Vec<crate::output::FacetResult>>,
 }
 
 impl OutputPipeline<'_> {
@@ -57,6 +60,7 @@ impl OutputPipeline<'_> {
             files_from_counters: None,
             github_path_prefix: String::new(),
             search_suggestions: None,
+            facets: None,
         }
     }
 
@@ -308,10 +312,12 @@ impl OutputPipeline<'_> {
                 let envelope =
                     Envelope::from_result(&value, total, &hints, self.files_from_counters.as_ref());
                 let suggestions = self.search_suggestions.as_deref().filter(|s| !s.is_empty());
-                let envelope = if let Some(suggestions) = suggestions {
+                let facets = self.facets.as_deref();
+                let envelope = if suggestions.is_some() || facets.is_some() {
                     output_value(&crate::output::SearchEnvelope {
                         envelope,
                         suggestions,
+                        facets,
                     })
                 } else if self.internal_report {
                     let effects = report.effects.as_ref().ok_or_else(|| {
@@ -556,6 +562,7 @@ mod tests {
             files_from_counters: Some(counters),
             github_path_prefix: String::new(),
             search_suggestions: None,
+            facets: None,
         }
     }
 
@@ -611,6 +618,7 @@ mod tests {
             files_from_counters: None,
             github_path_prefix: String::new(),
             search_suggestions: None,
+            facets: None,
         };
         assert_eq!(pipeline.skip_summary(), None);
     }

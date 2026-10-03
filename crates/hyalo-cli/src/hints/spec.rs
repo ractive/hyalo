@@ -63,6 +63,8 @@ pub(crate) struct FindHintSpec {
     title: Option<String>,
     language: Option<String>,
     strict: bool,
+    granularity: Option<crate::cli::args::Granularity>,
+    facets: Vec<String>,
 }
 
 impl FindHintSpec {
@@ -95,6 +97,8 @@ impl FindHintSpec {
                 .clone()
                 .or_else(|| effective_language.map(str::to_owned)),
             strict: args.filters.strict,
+            granularity: args.filters.granularity,
+            facets: args.filters.facet.clone(),
         }
     }
 
@@ -157,6 +161,14 @@ impl FindHintSpec {
         }
         if self.strict {
             builder = builder.flag("--strict");
+        }
+        if !overrides("--granularity")
+            && self.granularity == Some(crate::cli::args::Granularity::Section)
+        {
+            builder = builder.flag_value("--granularity", "section");
+        }
+        for facet in &self.facets {
+            builder = builder.flag_value("--facet", facet);
         }
         for arg in extra {
             builder = builder.raw(*arg);

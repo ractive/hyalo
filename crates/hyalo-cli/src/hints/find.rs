@@ -10,6 +10,95 @@ use super::{
     build_find_command_with_pattern, find_continuation_hint, status_priority,
 };
 
+/// Largest buckets of each `--facet` that get a drill-down hint (DEC-335).
+pub(super) const FACET_HINT_BUCKETS: usize = 3;
+
+/// A bucket value that can be written back as `--property K=V` and mean
+/// exactly that value: no second `=`, no operator-like prefix, and not one of
+/// the literals `K=null` / `K=[]` give a special meaning.
+fn property_value_replays(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && !value.contains('=')
+        && !value.starts_with('~')
+        && value != "null"
+        && value != "[]"
+}
+
+/// Drill-down hints for the largest buckets of every requested facet
+/// (iteration 303, DEC-335). Each hint re-runs the same query with one more
+/// filter: `--tag`, `--property K=V` or `--glob 'dir/**'`. A bucket holding
+/// every match narrows nothing and is skipped, as is a bucket that no
+/// filter can address exactly (the null bucket, `.` for the vault root, a
+/// directory under an existing `--file`/`--glob` scope) is skipped.
+pub(super) fn facet_drilldown_hints(ctx: &HintContext, total: Option<u64>) -> Vec<Hint> {
+    let mut hints = Vec::new();
+    for facet in &ctx.facets {
+        let kind = crate::commands::find::FacetSpec::parse(&facet.facet).ok();
+        let Some(kind) = kind.map(|spec| spec.kind) else {
+            continue;
+        };
+        for bucket in facet.buckets.iter().take(FACET_HINT_BUCKETS) {
+            let Some(value) = bucket.value.as_deref() else {
+                continue;
+            };
+            // A bucket holding every match would re-run the same answer.
+            if total == Some(bucket.count) {
+                continue;
+            }
+            let hint = match &kind {
+                crate::commands::find::FacetKind::Tags => Some(Hint::new(
+                    format!("Drill into tag {value} ({} files)", bucket.count),
+                    build_find_command_composing(ctx, &["--tag", value]),
+                )),
+                crate::commands::find::FacetKind::Property(key) => property_value_replays(value)
+                    .then(|| {
+                        let filter = format!("{key}={value}");
+                        Hint::new(
+                            format!("Drill into {key} = {value} ({} files)", bucket.count),
+                            build_find_command_composing(ctx, &["--property", &filter]),
+                        )
+                    }),
+                crate::commands::find::FacetKind::Dir => (value != "."
+                    && ctx.file_targets.is_empty()
+                    && ctx.glob.is_empty())
+                .then(|| {
+                    let glob = format!("{value}/**");
+                    Hint::new(
+                        format!("Drill into directory {value} ({} files)", bucket.count),
+                        build_find_command_composing(ctx, &["--glob", &glob]),
+                    )
+                }),
+            };
+            hints.extend(hint);
+        }
+    }
+    hints
+}
+
+/// `hyalo read` hints for the top section hits (iteration 303, DEC-334):
+/// `--section '<heading>'` when that heading selects exactly one outline
+/// heading, else the hit's body-relative `--lines A:B`.
+fn section_read_hints(ctx: &HintContext) -> Vec<Hint> {
+    ctx.section_reads
+        .iter()
+        .take(MAX_HINTS)
+        .map(|read| match &read.selector {
+            crate::commands::find::SectionSelector::Heading(heading) => Hint::new(
+                format!("Read section '{heading}' of {}", read.file),
+                build_command_with_file(ctx, &["read"], &read.file, &["--section", heading]),
+            ),
+            crate::commands::find::SectionSelector::Lines(start, end) => {
+                let range = format!("{start}:{end}");
+                Hint::new(
+                    format!("Read lines {start}-{end} of {}", read.file),
+                    build_command_with_file(ctx, &["read"], &read.file, &["--lines", &range]),
+                )
+            }
+        })
+        .collect()
+}
+
 /// Largest untruncated result set for which `find` still offers
 /// `--fields all` (iter-252). Above a handful of files, the full shape is the
 /// payload the compact default exists to avoid, so the hint stays quiet.
@@ -194,6 +283,25 @@ pub(super) fn hints_for_find(
         }
         hints.extend(super::zero_result::zero_result_hints(ctx));
         hints.truncate(super::zero_result::MAX_ZERO_RESULT_HINTS);
+        return hints;
+    }
+
+    // iter-303: a section-granular answer is a list of places to read, not
+    // of files to inspect — offer the reads, then the facet drill-downs.
+    if !ctx.section_reads.is_empty() {
+        let mut hints = section_read_hints(ctx);
+        if !ctx.has_limit
+            && let Some(t) = total
+            && (results.len() as u64) < t
+        {
+            hints.truncate(MAX_HINTS - 1);
+            hints.push(find_continuation_hint(
+                ctx,
+                format!("Show all {t} section hits (no limit)"),
+                &["--limit", "0"],
+            ));
+        }
+        hints.extend(facet_drilldown_hints(ctx, total));
         return hints;
     }
 
@@ -451,6 +559,16 @@ pub(super) fn hints_for_find(
         if remaining > 0 {
             hints.push(view_hint);
         }
+    }
+
+    // iter-303 (DEC-335): facet drill-downs. Kept within the regular budget
+    // by truncating first, so the facets always get their own slots (the
+    // global cap grows by FACET_HINT_BUCKETS per facet).
+    let facet_hints = facet_drilldown_hints(ctx, total);
+    if !facet_hints.is_empty() {
+        hints.truncate(MAX_HINTS);
+        hints.extend(facet_hints);
+        return hints;
     }
 
     // Body search → regex suggestion is intentionally omitted.

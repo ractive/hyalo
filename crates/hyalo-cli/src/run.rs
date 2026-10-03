@@ -2364,7 +2364,7 @@ fn run_inner() -> Result<(), AppError> {
         file_list_from_files_from: files_from_counters.is_some(),
         zero_result_values: std::collections::BTreeMap::new(),
         zero_result_body_search: None,
-        zero_result_search: None,
+        find_search: None,
     };
 
     // When --files-from resolved to zero files (all entries filtered/missing),
@@ -2432,7 +2432,7 @@ fn run_inner() -> Result<(), AppError> {
     }
     // iter-302: a ranked `find` that matched nothing reports did-you-mean
     // candidates in the envelope (always) and a corrected query as a hint.
-    let search_report = ctx.zero_result_search.take();
+    let mut search_report = ctx.find_search.take();
     let search_suggestions: Option<Vec<crate::output::SearchSuggestion>> =
         search_report.as_ref().map(|report| {
             report
@@ -2441,11 +2441,20 @@ fn run_inner() -> Result<(), AppError> {
                 .map(crate::output::SearchSuggestion::from_core)
                 .collect()
         });
+    // iter-303: facet counts ride in the envelope; the hint layer offers a
+    // drill-down for the largest buckets and a read for each section hit.
+    let facets = search_report
+        .as_mut()
+        .and_then(|report| report.facets.take());
     if let (Some(hctx), Some(report)) = (hint_ctx.as_mut(), search_report) {
         if let Some(suggestions) = &search_suggestions {
             hctx.search_suggestions.clone_from(suggestions);
         }
         hctx.corrected_query = report.corrected_query;
+        hctx.section_reads = report.section_reads;
+        if let Some(facets) = &facets {
+            hctx.facets.clone_from(facets);
+        }
     }
 
     let pipeline = OutputPipeline {
@@ -2459,6 +2468,7 @@ fn run_inner() -> Result<(), AppError> {
         files_from_counters: output_plan.counters().cloned(),
         github_path_prefix,
         search_suggestions,
+        facets,
     };
     let code = pipeline.finalize(result);
     // Commands like `lint` may override the exit code even on success output.
