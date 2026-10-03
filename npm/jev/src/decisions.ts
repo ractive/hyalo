@@ -1,5 +1,5 @@
 import type { Questions } from "@typesafe-ai/sdk";
-import { MODEL, type Binding, insist, object, keys } from "./protocol.ts";
+import { MODEL, type Binding, insist, object } from "./protocol.ts";
 
 export interface Decision { field: "type" | "folder" | "tag"; status: "suggestion" | "defer" | "no-change"; value?: string; confidence?: number; probability?: number; reason?: string }
 function probability(value: unknown): number {
@@ -7,22 +7,21 @@ function probability(value: unknown): number {
   return value;
 }
 export function decisions(value: unknown, questions: Questions, bindings: Record<string, Binding>) {
-  const response = object(value); keys(response, ["model", "answers", "usage"]);
+  // Known fields are validated strictly; additive provider fields are ignored
+  // so an API envelope change does not need a helper release.
+  const response = object(value);
   insist(response.model === MODEL, "unexpected response model");
   const answers = object(response.answers), usage = object(response.usage);
-  keys(usage, ["input_tokens", "output_tokens"]);
   for (const field of ["input_tokens", "output_tokens"]) insist(Number.isSafeInteger(usage[field]) && (usage[field] as number) >= 0, "invalid usage");
   insist(Object.keys(answers).length === Object.keys(questions).length && Object.keys(questions).every(id => Object.hasOwn(answers, id)), "answer IDs differ from request");
   const results: Decision[] = Object.entries(questions).map(([id, q]) => {
     const answer = object(answers[id]), binding = bindings[id];
     insist(binding && answer.type === q.type, "answer type differs from request");
     if (q.type === "noul") {
-      keys(answer, ["type", "noul"]);
       const p = probability(answer.noul);
       return { field: binding.field, value: binding.value, probability: p, status: p >= .9 ? "suggestion" : p <= .1 ? "no-change" : "defer", ...(p > .1 && p < .9 ? { reason: "uncertain" } : {}) };
     }
     insist(q.type === "choice", "unsupported question type");
-    keys(answer, ["type", "choice", "confidence", "probabilities"]);
     const probabilities = object(answer.probabilities), choices = Object.keys(q.criteria);
     insist(Object.keys(probabilities).length === choices.length && choices.every(c => Object.hasOwn(probabilities, c)), "probability labels differ from request");
     const values = choices.map(c => probability(probabilities[c]));

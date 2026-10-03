@@ -25,11 +25,12 @@ pub fn run(sync: bool) -> Result<bool> {
         ("scripts/jev.mjs", &script),
         ("references/jev.md", &reference),
     ] {
+        // The crate embeds these assets from `templates/jev/` alone (DEC-344);
+        // the pi/codex template trees carry no copy, and their mirror gates
+        // skip `hyalo-tidy/{scripts,references}` accordingly.
         for base in [
             "plugins/hyalo/skills/hyalo-tidy",
             "pi-package/skills/hyalo-tidy",
-            "crates/hyalo-cli/templates/codex/skills/hyalo-tidy",
-            "crates/hyalo-cli/templates/pi/skills/hyalo-tidy",
         ] {
             let path = root.join(base).join(name);
             if sync {

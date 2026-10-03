@@ -52,6 +52,9 @@ fn sync_and_check_pi(root: &Path, sync: bool) -> Result<(bool, usize)> {
             for entry in entries.filter_map(|e| e.ok()) {
                 let skill_dir = entry.path();
                 for file in skill_files(&skill_dir)? {
+                    if owned_by_jev_assets(file.strip_prefix(&skills_dir)?) {
+                        continue;
+                    }
                     let target = vendored.join(file.strip_prefix(&pi_package)?);
                     pairs.push((file, target));
                 }
@@ -213,10 +216,11 @@ fn versions_match(root: &Path) -> Result<bool> {
     Ok(matches)
 }
 
-/// The vendored files the gate is responsible for: `skills/*/SKILL.md`,
-/// `extensions/*.ts`, `lib/*.js`, and `package.json` under `templates/pi/` — the same
-/// selection as the forward pass, so the two directions cannot disagree on
-/// scope. A missing directory yields an empty list.
+/// The vendored files the gate is responsible for: every file under
+/// `skills/` except the Jev assets `check-jev-assets` owns, `extensions/*.ts`,
+/// `lib/*.js`, and `package.json` under `templates/pi/` — the same selection as
+/// the forward pass, so the two directions cannot disagree on scope. A missing
+/// directory yields an empty list.
 fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
     let read = |dir: &Path| -> Result<Vec<PathBuf>> {
@@ -226,7 +230,12 @@ fn vendored_files(vendored: &Path) -> Result<Vec<PathBuf>> {
             Err(e) => Err(e).with_context(|| format!("reading {dir:?}")),
         }
     };
-    found.extend(skill_files(&vendored.join("skills"))?);
+    let skills = vendored.join("skills");
+    for file in skill_files(&skills)? {
+        if !owned_by_jev_assets(file.strip_prefix(&skills)?) {
+            found.push(file);
+        }
+    }
     for path in read(&vendored.join("extensions"))? {
         if path.extension().and_then(|e| e.to_str()) == Some("ts") {
             found.push(path);
@@ -255,6 +264,17 @@ fn display_rel(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .into_owned()
+}
+
+/// The Jev helper's `scripts/` and `references/` under `hyalo-tidy` are owned
+/// by `check-jev-assets`: the crate embeds them from `templates/jev/` alone, so
+/// neither mirror carries a copy under `templates/pi/` (DEC-344).
+pub(crate) fn owned_by_jev_assets(relative: &Path) -> bool {
+    let mut components = relative.components().map(|c| c.as_os_str());
+    components.next().is_some_and(|skill| skill == "hyalo-tidy")
+        && components
+            .next()
+            .is_some_and(|dir| dir == "scripts" || dir == "references")
 }
 
 fn skill_files(path: &Path) -> Result<Vec<PathBuf>> {
@@ -309,8 +329,10 @@ mod tests {
         fs::write(v.join("skills/hyalo/notes.txt"), "resource").expect("write");
         fs::create_dir_all(v.join("skills/hyalo-tidy/scripts")).expect("mkdir");
         fs::create_dir_all(v.join("skills/hyalo-tidy/references")).expect("mkdir");
+        // Owned by check-jev-assets, so out of this gate's scope in both directions.
         fs::write(v.join("skills/hyalo-tidy/scripts/jev.mjs"), "runtime").expect("write");
         fs::write(v.join("skills/hyalo-tidy/references/jev.md"), "reference").expect("write");
+        fs::write(v.join("skills/hyalo-tidy/SKILL.md"), "tidy").expect("write");
         fs::write(v.join("extensions/hyalo.ts"), "t").expect("write");
         fs::write(v.join("lib/hyalo-api.js"), "j").expect("write");
         fs::write(v.join("lib/hyalo-api.d.ts"), "d").expect("write");
@@ -325,13 +347,23 @@ mod tests {
             v.join("package.json"),
             v.join("skills/hyalo/SKILL.md"),
             v.join("skills/hyalo/notes.txt"),
-            v.join("skills/hyalo-tidy/scripts/jev.mjs"),
-            v.join("skills/hyalo-tidy/references/jev.md"),
+            v.join("skills/hyalo-tidy/SKILL.md"),
         ];
         expected.sort();
         assert_eq!(found, expected);
         // A missing tree is empty, not an error.
         assert!(vendored_files(&v.join("nope")).expect("walk").is_empty());
+    }
+
+    #[test]
+    fn jev_assets_are_scoped_by_skill_and_directory() {
+        assert!(owned_by_jev_assets(Path::new("hyalo-tidy/scripts/jev.mjs")));
+        assert!(owned_by_jev_assets(Path::new(
+            "hyalo-tidy/references/jev.md"
+        )));
+        assert!(!owned_by_jev_assets(Path::new("hyalo-tidy/SKILL.md")));
+        assert!(!owned_by_jev_assets(Path::new("hyalo/scripts/other.mjs")));
+        assert!(!owned_by_jev_assets(Path::new("scripts/jev.mjs")));
     }
 
     #[test]
