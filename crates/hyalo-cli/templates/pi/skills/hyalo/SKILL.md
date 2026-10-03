@@ -114,6 +114,7 @@ hyalo find "rust programming"            # AND: both terms required (implicit)
 hyalo find "rust OR golang"              # OR: either term matches
 hyalo find "rust -java"                  # NOT: exclude documents with "java"
 hyalo find '\"error handling\"'          # Phrase: exact consecutive match (after stemming)
+hyalo find '\"error handling\"~3'        # Slop: at most 3 extra words between (max 64)
 hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
 hyalo find -- '(bm25 OR stemming) -tantivy' # Groups; OR binds tighter than implicit AND
 hyalo find 'title:iteration conf*'       # Field term + prefix over stems
@@ -123,6 +124,8 @@ hyalo find 'title:iteration conf*'       # Field term + prefix over stems
 `title:`, `heading:`, `tag:` and `path:` field terms combine like words; a field-only query
 scores 0 without snippets, and an unknown `foo:bar` is a plain word. Zero results carry a
 `suggestions` key; `hyalo terms [PREFIX]` lists the stemmed dictionary.
+Accents fold (`résumé` = `resume`) and identifiers index whole plus parts (`getUserName`
+is found by `user`). Title, headings and tags/aliases outweigh body; close terms rank higher.
 
 Find the paragraph: `hyalo find 'query' --granularity section --limit 5` returns one hit per
 matching section (`section: {heading, level, line_start, line_end, path}`); follow its read
@@ -197,6 +200,9 @@ hyalo set note.md --property status=completed --index --format text
 # Drop when done
 hyalo drop-index
 ```
+
+Re-running `create-index` reuses unchanged files (`--force` rebuilds). An `--index` read of a
+drifted snapshot re-scans the drifted files in memory and notes it; it never writes the file.
 
 ## File Movement with Link Rewriting
 

@@ -22,6 +22,17 @@ exclude_target_globs = ["templates/*"]                # pages hyalo links auto n
 first_only = true                                     # link only the first mention per file
 warn_common_titles = true                             # note when a candidate title looks noisy
 
+[search]
+language = "german"                                   # default stemmer for body search (default: english)
+code_blocks = "skip"                                  # "index" (default) or "skip" fenced code blocks
+proximity_bonus = 0.5                                 # boost for query terms that sit close together (0 disables)
+
+[search.weights]
+title = 3.0                                           # BM25F field weights (defaults shown)
+headings = 2.0
+tags = 2.0
+body = 1.0
+
 [schema.default]
 required = ["title"]
 
@@ -347,6 +358,49 @@ truth:
 | **0.8 (default)** | **2,253** | **15** | **99.3%** |
 | 0.9 | 312 | 0 | 100% |
 
+## Search ranking (`[search]`)
+
+`hyalo find "<query>"` ranks with BM25F over four fields (DEC-336–338). The
+`[search]` section tunes it:
+
+```toml
+[search]
+language = "english"     # default Snowball stemmer
+code_blocks = "index"    # or "skip"
+proximity_bonus = 0.5    # 0 disables
+
+[search.weights]
+title = 3.0              # the promoted title
+headings = 2.0           # outline heading lines
+tags = 2.0               # frontmatter tags and aliases
+body = 1.0               # everything else
+```
+
+- **`language`** (default `english`) — the stemmer used when a note has no
+  `language` frontmatter property and no `--language` flag is passed
+  (precedence: frontmatter > `--language` > config > english). Accents are
+  folded before stemming, so `résumé` matches `resume` in every language.
+- **`code_blocks`** (default `"index"`) — `"skip"` drops every line of a
+  fenced code block from the corpus, section scores and snippets; inline code
+  is always indexed.
+- **`[search.weights]`** — a term's frequency in each field is multiplied by
+  that field's weight before BM25 saturation, against one combined document
+  length. Tags enter the corpus here, so a term that appears only in `tags` or
+  `aliases` now matches the note.
+- **`proximity_bonus`** (default `0.5`) — with two or more required terms, the
+  top 200 candidates are multiplied by `1 + bonus / (1 + w)`, where `w` is the
+  number of extra words in the smallest window holding every term. Snippets
+  likewise prefer the line where the terms sit closest.
+
+An invalid value (an unknown `code_blocks` string, a negative or non-finite
+number) prints a warning and keeps the default. Weights and the bonus apply at
+query time, so changing them needs no rebuild. `code_blocks` changes the
+tokens themselves: the snapshot index records the setting it was built with
+and is not used for search under a different one (hyalo falls back to a live
+scan) until you rerun `hyalo create-index`. `hyalo config` reports the
+effective values under `results.search` (`language`, `code_blocks`,
+`weights.{title,headings,tags,body}`, `proximity_bonus`).
+
 ## Agent integration (`[pi]`)
 
 Hyalo ships a pi coding-agent extension (`hyalo init --pi`) that registers a
@@ -437,5 +491,18 @@ hyalo drop-index            # clean up
 ```
 
 Mutations with `--index` patch the index in-place, keeping it current for subsequent queries — and hyalo suggests creating an index automatically once a vault grows past ~500 files.
+
+`create-index` is incremental (DEC-339): when the output already holds a current
+snapshot of this vault, files with unchanged size and mtime keep their entries,
+changed and new files are re-scanned, removed ones are dropped, and the search
+postings are patched. `--force` rebuilds from scratch — the remedy for an edit
+made within the same second that kept the file size. The JSON result reports
+`reused`, `refreshed`, `removed` and `rebuilt`. A snapshot written by an older
+binary (format < 4) is refused and must be rebuilt.
+
+A read with `--index` against a snapshot that has drifted re-scans just the
+drifted files in memory and prints a `-q`-proof note naming how many (and up to
+three of them); the snapshot file itself is never written by a read — run
+`create-index` to persist the repair.
 
 Every command documents its flags and semantics in detail: `hyalo <cmd> --help`.

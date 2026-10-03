@@ -6583,3 +6583,127 @@ count because of the prefix rule; documented rather than special-cased.
   drill-down hint needs the string anyway.
 - Counting sections instead of files in section mode: one file with 12 hits
   would dominate every bucket.
+
+## DEC-336: Tokenizer v4: diacritic folding, identifier parts, code-block setting (2026-10-03)
+
+**Context.** `résumé` and `resume` were different terms, `getUserName` was one
+opaque token that a search for `user` never reached, and code samples weighed
+as much as prose with no way to opt out.
+
+**Decision** (iteration 304, [[iterations/iteration-304-snapshot-v4-search]]).
+
+- A word is a run of letters, digits and combining marks; a single `_` or `-`
+  between two such characters joins the run.
+- Words without CJK are NFKD-decomposed and stripped of combining marks before
+  lowercasing and stemming. CJK words keep the v2 bigram pipeline, so Hangul is
+  never decomposed into jamo. Snowball German and French fold umlauts
+  themselves; folding first changes none of their outputs for `Häuser`.
+- A word splits at `_`, `-`, a lowercase-to-uppercase boundary and an
+  uppercase run followed by a capitalised lowercase run of two or more
+  (`HTMLParser`, but not `APIs`). Digits never split. A word with two or more
+  parts emits the joined whole first, then each part, each at its own
+  position: `getUserName` → `getusernam get user name`. Queries and documents
+  share the pipeline, so phrases stay exact.
+- A query identifier compiles to `whole OR (all parts)`: exact uses rank first
+  through the whole's IDF, prose spellings (`error handling` for
+  `error-handling`) keep matching through the parts.
+- `[search] code_blocks = "index" | "skip"` (default `index`). `skip` drops
+  every line of a fenced block, delimiters included, from the corpus, section
+  scoring and snippets; inline code is always indexed. The persisted index
+  records the setting and is not served under a different one.
+- `TOKENIZER_VERSION` 4.
+
+**Consequences.** Hyphenated prose words add one token each, so document
+lengths grow slightly. A phrase that ends at an identifier's first part
+(`"x foo"` against `x foo-bar`) no longer matches, because the whole sits
+between them; slop (DEC-338) recovers it.
+
+**Rejected alternatives.**
+
+- Emitting the whole at the same position as its first part: duplicate
+  positions break token reconstruction from postings.
+- Whole only for camelCase and parts only for snake/kebab: the same identifier
+  in two spellings would not find each other.
+- `deunicode` transliteration (already in the tree): it rewrites CJK into
+  Latin, which would break the bigram index.
+
+## DEC-337: BM25F field weighting with one combined length (2026-10-03)
+
+**Context.** A term in a note's title scored exactly like the same term in a
+footnote, and tags never entered the corpus at all.
+
+**Decision** (iteration 304).
+
+- Fields: `title` (the promoted title the corpus already used), `headings`
+  (tokens on outline heading lines), `tags` (frontmatter tags plus `aliases`)
+  and `body` (everything else).
+- The positional stream stays title + body, so phrase semantics do not change;
+  tag tokens are positionless. A posting keeps `term_freq` and `positions` and
+  adds `title_tf`, `heading_tf` and `tag_tf`, omitted from the wire format
+  when zero; body tf is the remainder. Per-document `doc_marks` (title length,
+  heading runs, tag count) make the forward index reconstructible.
+- `tf_w = Σ weight_f × tf_f`; score `= Σ IDF × tf_w (k1+1) / (tf_w + k1 (1 - b
+  + b |d|/avgdl))` with one combined, unweighted length (stream plus tag
+  tokens). The simpler choice: per-field length normalisation needs per-field
+  averages for no measured gain on this corpus.
+- `[search.weights] title = 3.0, headings = 2.0, tags = 2.0, body = 1.0`,
+  applied at query time (no rebuild when they change). Invalid values warn and
+  keep the default. `title:`/`heading:`/`tag:` stay predicates.
+- Section mode scores the section's heading line in `headings` and its other
+  lines in `body`; title and tags do not apply to a section.
+
+**Consequences.** A tag-only term now matches the note. All scores change.
+
+## DEC-338: Phrase slop and a proximity bonus (2026-10-03)
+
+**Decision** (iteration 304).
+
+- `"a b"~N` matches when the phrase tokens appear in order with at most N
+  extra positions between the first and the last; N is clamped to 64 and `~`
+  without digits means 0. Field phrases (`title:"a b"~2`) accept it too.
+- With two or more required text groups (the positive, purely textual
+  children of the top-level AND), the top 200 candidates by score are
+  multiplied by `1 + bonus / (1 + w)`, where `w` is the extra positions of the
+  smallest window holding a stream occurrence of every group. A document that
+  satisfies a group only through tags gets no bonus. `[search]
+  proximity_bonus = 0.5`; 0 disables it.
+- Snippets rank lines by distinct query tokens, then by that window, then by
+  line order.
+- Section scores carry no proximity bonus: the section collector streams
+  lines and keeps no positions.
+
+**Consequences.** The cap of 200 means a document just below the cut cannot
+overtake through the bonus; the bonus is at most 1.5× by default.
+
+## DEC-339: Incremental index and in-memory stale repair (2026-10-03)
+
+**Context.** Every `create-index` re-tokenized the whole vault, and an
+`--index` read of a stale snapshot either warned and served stale answers or
+paid a full disk scan.
+
+**Decision** (iteration 304).
+
+- `Bm25InvertedIndex::apply_updates` removes every replaced or removed
+  document's postings in one pass over the posting lists, compacts doc ids and
+  appends the new documents. Scores equal a full rebuild bit for bit; only the
+  internal id order differs. The old document's postings are located by doc
+  id, not from stored tokens, because the snapshot keeps stripping per-entry
+  tokens (the postings are the forward index).
+- `create-index` loads the previous snapshot silently when it has the current
+  format, was built for this vault and site prefix, and carries a current
+  BM25 section (tokenizer and `code_blocks`). Files with the same size and
+  mtime and, when tokenized, the same effective language keep their entries;
+  others are re-scanned; postings are patched. `--force` rebuilds. `results`
+  gains `reused`, `refreshed`, `removed`, `rebuilt`. A same-second edit that
+  keeps the size is not seen; `--force` is the remedy.
+- A read command with a snapshot computes the drift (size changed, mtime past
+  the tolerance, file gone, and new notes when a directory mtime moved),
+  re-scans only those files in memory and patches the postings. A `-q`-proof
+  note names the count and up to three files and suggests `create-index`. The
+  snapshot file is never written by a read. When a drifted file cannot be
+  re-scanned, nothing changes: the stale warning prints and the snapshot
+  answers, with every body read keeping its containment checks.
+- `SNAPSHOT_FORMAT_VERSION` 4; older snapshots are refused as before.
+
+**Consequences.** A read against a stale snapshot pays one stat per entry and
+decodes the BM25 section even when it does not search.

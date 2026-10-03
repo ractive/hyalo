@@ -241,6 +241,50 @@ type ScanReport = {
 };
 
 /**
+ * Effective `[search.weights]` (DEC-337).
+ */
+type SearchWeightsReport = {
+    /**
+     * Weight of a title occurrence.
+     */
+    title: number;
+    /**
+     * Weight of a heading-line occurrence.
+     */
+    headings: number;
+    /**
+     * Weight of a tag or alias occurrence.
+     */
+    tags: number;
+    /**
+     * Weight of any other body occurrence.
+     */
+    body: number;
+};
+
+/**
+ * Effective `[search]` settings, as `hyalo config` reports them (iter-304).
+ */
+type SearchReport = {
+    /**
+     * `[search] language`, or null when unset (English is the fallback).
+     */
+    language: string | null;
+    /**
+     * `[search] code_blocks`: `"index"` or `"skip"` (DEC-336).
+     */
+    code_blocks: string;
+    /**
+     * `[search.weights]`: BM25F field weights (DEC-337).
+     */
+    weights: SearchWeightsReport;
+    /**
+     * `[search] proximity_bonus` (DEC-338); 0 disables the bonus.
+     */
+    proximity_bonus: number;
+};
+
+/**
  * Serialized ConfigResult command contract.
  */
 type ConfigResult = {
@@ -344,6 +388,10 @@ type ConfigResult = {
      * Effective pi setting.
      */
     pi: ConfigPiResult;
+    /**
+     * Effective `[search]` settings.
+     */
+    search: SearchReport;
 };
 
 /**

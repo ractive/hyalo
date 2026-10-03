@@ -41,6 +41,28 @@ and this project adheres to
   Property buckets resolve dot-paths and fold case like `--property K=V`.
   Text mode prints a block per facet, hints drill into the largest buckets,
   and `--jq` sees `.facets`.
+- Search tokenizer v4 (DEC-336): accents fold before stemming (`résumé`
+  finds `resume`); an identifier written as `getUserName`, `get_user_name` or
+  `get-user-name` is indexed as its whole plus its parts, so `user` finds it,
+  and prose spellings (`error handling`) still match `error-handling`.
+  `[search] code_blocks = "skip"` leaves fenced code blocks out of search,
+  section scores and snippets (default `"index"`).
+- BM25F field weighting (DEC-337): `[search.weights]` `title = 3.0`,
+  `headings = 2.0`, `tags = 2.0` (frontmatter tags and aliases), `body = 1.0`,
+  applied at query time. Invalid values warn and keep the default.
+- Phrase slop `"a b"~N` (in order, at most N extra words, max 64) and a
+  proximity bonus for documents whose query terms sit close together
+  (`[search] proximity_bonus = 0.5`, 0 disables; top 200 candidates).
+  Snippets prefer the line where the terms are closest (DEC-338).
+- Incremental `create-index` (DEC-339): files with unchanged size and mtime
+  keep their entries and search postings are patched instead of rebuilt.
+  `--force` rebuilds from scratch; the result reports `reused`, `refreshed`,
+  `removed` and `rebuilt`.
+- An `--index` read against a drifted snapshot re-scans only the drifted files
+  in memory and prints a `-q`-proof note naming how many (and up to three);
+  the snapshot file is never written by a read (DEC-339).
+- `hyalo config` reports `results.search` (`language`, `code_blocks`,
+  `weights`, `proximity_bonus`).
 
 ### Fixed
 
@@ -50,6 +72,13 @@ and this project adheres to
 
 ### Changed
 
+- **Breaking: snapshot format 4.** Indexes written by earlier versions are
+  refused (the run falls back to a disk scan with a warning); rebuild them with
+  `hyalo create-index`. Ranked scores and result order change: title, heading
+  and tag hits now outweigh body hits, close terms get a bonus, hyphenated and
+  camelCase/snake_case words add their parts as tokens (so a phrase that ended
+  at an identifier's first part may need `~N`), and a term found only in a
+  note's tags or aliases now matches it (DEC-336–339).
 - **Behaviour change: ranked search `OR` now binds tighter than the implicit
   AND** (DEC-333). `find 'a b OR c'` means a AND (b OR c); it used to mean any
   of the three, because one `OR` anywhere turned every positive term into an
