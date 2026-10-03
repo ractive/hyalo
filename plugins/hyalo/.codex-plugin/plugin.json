@@ -1,6 +1,6 @@
 {
   "name": "hyalo",
-  "version": "0.1.0",
+  "version": "0.24.1",
   "description": "Search, maintain, and lint markdown knowledgebases with the Hyalo CLI.",
   "author": {
     "name": "ractive",

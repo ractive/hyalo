@@ -1,0 +1,57 @@
+# Dependabot version updates (iteration 305).
+#
+# Every update PR goes through ci.yml, so the quality gates (including
+# `cargo deny check`) and the jev-helper job judge it like any other PR.
+# Majors arrive as individual PRs; minor/patch updates are grouped per
+# ecosystem to keep the PR count low.
+#
+# - github-actions: third-party actions are SHA-pinned with a `# vX.Y.Z`
+#   comment; Dependabot updates both. First-party reusable workflows
+#   (ractive/release-workflows, ractive/setup-hyalo) are pinned by tag by design
+#   (see docs/releasing.md, "Pinning policy"), so their bumps are ignored here.
+# - npm/jev uses bun's text lockfile (bun.lock), which Dependabot supports
+#   through the `bun` ecosystem. Its bundle is embedded in the skill
+#   distributions, so a jev update PR fails `check-jev-assets` until
+#   `just sync-jev-assets` is run on the branch — that is intended.
+# - The fuzz/ crate's separate Cargo.lock is not covered; it tracks the
+#   workspace manually.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: ractive/release-workflows
+      - dependency-name: ractive/setup-hyalo
+    groups:
+      github-actions:
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Held at 0.0.23 on purpose (see the comment in Cargo.toml): newer
+      # releases change how user frontmatter parses.
+      - dependency-name: serde-saphyr
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /npm/hyalo
+    schedule:
+      interval: weekly
+    groups:
+      npm-hyalo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: /npm/jev
+    schedule:
+      interval: weekly
+    groups:
+      npm-jev:
+        update-types: [minor, patch]

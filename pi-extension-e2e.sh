@@ -58,6 +58,8 @@ echo "live model: provider=$PI_PROVIDER model=$PI_MODEL thinking=$PI_THINKING pi
 [[ -f "$TEMPLATE" ]] || fail "template not found: $TEMPLATE"
 [[ -f "$RUNTIME" ]] || fail "API runtime not found beside template: $RUNTIME"
 [[ -f "${RUNTIME%.js}.d.ts" ]] || fail "API declaration not found beside runtime"
+ESBUILD="$REPO_ROOT/npm/hyalo/node_modules/.bin/esbuild"
+[[ -x "$ESBUILD" ]] || fail "esbuild not found at $ESBUILD — run: npm --prefix npm/hyalo ci --ignore-scripts"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hyalo-pi-check.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -132,7 +134,7 @@ if (Value.Check(tools.get("hyalo_task")!.parameters as never, { file: "note.md",
   throw new Error("hyalo_task: invalid enum accepted");
 }
 EOF
-"$REPO_ROOT/npm/hyalo/node_modules/.bin/esbuild" "$WORK/validate-entry.ts" \
+"$ESBUILD" "$WORK/validate-entry.ts" \
     --bundle --platform=node --format=esm --outfile="$WORK/validate-entry.mjs" >/dev/null
 node "$WORK/validate-entry.mjs" || fail "real TypeBox schemas rejected expected fixtures"
 echo "type-check and real TypeBox validation OK"
