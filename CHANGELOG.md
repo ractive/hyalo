@@ -69,6 +69,39 @@ and this project adheres to
 
 ### Fixed
 
+- Batch `mv` no longer panics on a filename containing a 4-byte emoji.
+- A path-form wikilink with a dotted stem (`[[sub/rel-1.2]]`) resolves to
+  `sub/rel-1.2.md`; `find --broken-links`, HYALO006, `summary`, `links fix`
+  and `backlinks` agree on it.
+- A gitignored file named with `--file` is returned under every `--fields`,
+  including `backlinks` and `all`; `summary` counts gitignored notes under
+  `results.files.excluded`, and `find`/`summary` help document gitignore
+  honouring (DEC-342).
+- The 8 GiB staging-budget refusal and a failed index deletion in
+  `drop-index` are reported through the JSON error envelope with exit 1.
+- `lint --fix` and `types set --default` batch their directory fsyncs again
+  when they touch more than eight files (DEC-317).
+- `hyalo init` keeps CRLF line endings in an existing `CLAUDE.md`.
+- `-q` silences the list-collapse note of `set` and the skip notes of `lint`
+  and `find`.
+- Stale-index detection works on Windows: the process-liveness probe no
+  longer reports every pid as alive.
+- An `enum` constraint without `values` is refused when `.hyalo.toml` loads
+  instead of failing every value at lint time.
+- `find --view` under a malformed `.hyalo.toml` reports the parse error
+  instead of "unknown view".
+- Hints: the zero-result hint no longer says a value is never used while
+  listing it; `mv --on-conflict skip` has a text rendering and keeps the
+  flag in its hint; `new --dry-run` no longer hints linting a file it did
+  not write; the `links auto` hint drops a redundant `--first-only` /
+  `--no-first-only`.
+- `summary --index --format text` uses the same compact layout as
+  `summary`.
+- Batch `mv` reports a source that is already at its destination as a
+  skipped no-op instead of omitting it.
+- `lint --strict` help lists every promoted rule (schema warnings and
+  HYALO003/004/006/007/008).
+
 - Command help now advertises only supported selectors, global options, and
   output formats. Single-file commands no longer advertise `--glob`;
   `views set` rejects `--files-from` instead of silently discarding it.

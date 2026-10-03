@@ -558,7 +558,8 @@ What follows is only what those pages do not say — the behaviour that surprise
   `musical` (the match needs a `/` boundary). `results.renamed_tags` lists every tag it
   actually touched with its file count.
 - **`lint` exits 1 when errors are found**, which is what makes it usable as a CI gate;
-  `--strict` promotes missing-type and undeclared-property warnings to errors.
+  `--strict` promotes schema warnings and HYALO003/004/006/007/008 (dates, title
+  shape, broken links and anchors) to errors.
 - **Every link carries a `kind`** (`--fields links`): `wikilink`, `embed` (`![[…]]`),
   `markdown`, `external` (any `scheme:` URI — `https:`, `obsidian://`, `mailto:`, `file://`)
   or `attachment` (resolved to a non-`.md` vault file: an image, a PDF, an Obsidian `.base`).
@@ -742,8 +743,10 @@ When two fixes want the same bytes one is deferred and reported as a conflict;
 Use `hyalo lint --help` for narrowing flags (`--rule`, `--rule-prefix`, `--detailed`, `--max-per-rule`, `--fix-rule`, etc.). The snapshot index does **not** accelerate the body pass.
 
 **Strict mode:** `hyalo lint --strict` (or `[lint] strict = true` in `.hyalo.toml`)
-promotes the "no `type` property" and "undeclared property in frontmatter" warnings to
-errors, so lint exits non-zero on those cases. Useful in CI and `/hyalo-tidy` to fail
+promotes the "no `type` property" and "undeclared property in frontmatter" warnings and
+HYALO003/004/006/007/008 (date formats, a non-scalar title, broken link targets and
+anchors) to errors, unless a rule's severity is configured, so lint exits non-zero on
+those cases. Useful in CI and `/hyalo-tidy` to fail
 fast on schema drift.
 
 **GitHub PR annotations:** `hyalo lint --strict --format github` (lint-only) emits
@@ -864,6 +867,9 @@ same vault, and `--index` reads drop them too (no rebuild needed after changing 
 Naming an excluded file explicitly (`--file Templates/x.md`) is **refused** with the matching
 glob, never silently skipped. `hyalo config` reports the effective list under
 `results.scan.exclude`.
+Discovery also honours `.gitignore` the way Git does (DEC-342): a gitignored note is absent
+from unscoped reads and counted under `summary`'s `results.files.excluded`, but a path you
+name (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 
 **A broken `.hyalo.toml` fails a gate:** `lint`, `find --strict` and `views run` exit 1 when the
 config does not parse, because their exit code is a verdict and a verdict computed without the

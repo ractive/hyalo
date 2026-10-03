@@ -84,6 +84,9 @@ Prefer `hyalo` CLI for operations on files in this directory:
   `[schema] exempt`) still apply within what survives. An explicitly named excluded file
   (`--file Templates/x.md`) is **refused**, naming the glob, rather than silently skipped.
   `hyalo config` reports the effective list as `results.scan.exclude`.
+- **`.gitignore` is honoured like Git** (DEC-342): a gitignored note is absent from every
+  unscoped read and counted under `summary`'s `results.files.excluded`; a path you name
+  (`--file`, positional, `--files-from`) is still returned under every `--fields`.
 - **Unusable files are summarised, not spelled out** (DEC-278, iter-265): a file whose YAML
   frontmatter will not parse is skipped and counted, and the run ends with one stderr line —
   `warning: skipped N files with unparsable frontmatter (run hyalo lint --rule HYALO005 for
@@ -227,7 +230,7 @@ Prefer `hyalo` CLI for operations on files in this directory:
   now keep `broken_anchor` and `suggested_fragment`, so the four ways of selecting one file
   return identical link JSON. And `lint --rule X` reports rule X only — a frontmatter parse
   error is HYALO005's finding and is otherwise a counted skip.
-- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes missing-type and undeclared-property warnings to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
+- **Lint markdown + frontmatter**: `hyalo lint`, `hyalo lint --strict` (promotes schema warnings and HYALO003/004/006/007/008 to errors), `hyalo lint --rule HYALO001 --detailed`, `hyalo lint --fix --dry-run`, `hyalo lint --fix`
 - **`SCHEMA` is a selectable rule** (iter-274): `hyalo lint --rule SCHEMA` (or `--rule-prefix
   SCHEMA`) runs the frontmatter/schema pass alone — the id its findings are already reported
   under, and the one `summary`'s schema hint points at. `lint-rules list`/`show` carry a
