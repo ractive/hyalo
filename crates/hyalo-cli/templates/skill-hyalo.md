@@ -58,6 +58,7 @@ hyalo find "rust OR golang"              # OR: either term matches
 hyalo find "rust -java"                  # NOT: exclude documents with "java"
 hyalo find '"error handling"'            # Phrase: exact consecutive match (after stemming)
 hyalo find '"error handling" -panic'     # Phrase + negation combined
+hyalo find '"error handling"~3'          # Slop: in order, at most 3 extra words between (max 64)
 hyalo find "rust OR golang -obsolete"    # Mixed: either rust or golang, not obsolete
 hyalo find "rust async OR tokio"         # OR binds tighter: rust AND (async OR tokio)
 hyalo find -- '(bm25 OR stemming) -tantivy' # Groups nest; -( … ) negates a group
@@ -73,6 +74,10 @@ prefixes), `tag:` (the `--tag` prefix rule), `path:` (case-insensitive substring
 field-only query returns files sorted by path with `score: 0` and no snippets, and an
 unknown `foo:bar` is a plain word. Unbalanced `(`, empty `()` or bare `*` exit 1
 (`invalid search query`). Terms are stemmed in every language present in the vault.
+Accents fold (`résumé` = `resume`); an identifier (`getUserName`, `get_user_name`,
+`get-user-name`) indexes its whole plus its parts, so `user` finds it. Ranking is BM25F:
+title, headings and tags/aliases outweigh body (a tag-only term matches), and terms that sit
+close together get a proximity bonus (`[search]` / `[search.weights]` in `.hyalo.toml`).
 A zero-result query names close dictionary terms for words no document contains, hints
 the corrected query, and carries a top-level `suggestions: [{term, candidates: [{term,
 docs}]}]` key. `hyalo terms [PREFIX]` lists `{term, docs}` (`--limit`, default 50, 0 =
@@ -1040,3 +1045,9 @@ on disk, but after each mutation they patch the in-memory index entry and save t
 back — keeping it current for subsequent queries. This is safe as long as **no external tool
 modifies files in the vault** while the index is active. If only hyalo touches the files,
 the index stays consistent across interleaved reads and writes.
+
+Re-running `hyalo create-index` is incremental: unchanged files (same size and mtime) are
+reused, only changed/new/removed ones are re-scanned (`reused`, `refreshed`, `removed`,
+`rebuilt` in the result); `--force` rebuilds from scratch. An `--index` read of a drifted
+snapshot re-scans just the drifted files in memory and says so on stderr — it never writes
+the snapshot, so run `create-index` to persist. Snapshots older than format 4 are refused.

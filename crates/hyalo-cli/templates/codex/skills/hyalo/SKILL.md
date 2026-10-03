@@ -57,6 +57,8 @@ The query language: implicit AND, `OR` binding tighter (`a b OR c` = a AND (b OR
 `( … )` groups, `-` negation, `prefix*` over stems, and `title:`/`heading:`/`tag:`/`path:`
 field terms (field-only queries score 0, no snippets). A zero-result query carries
 `suggestions`; `hyalo terms [PREFIX]` lists the stemmed dictionary.
+`"a b"~N` allows N extra words between phrase tokens. Accents fold, identifiers match by
+whole or parts, and title/headings/tags outweigh body.
 `--granularity section` ranks sections instead of files (`hyalo find 'query' --granularity
 section --limit 5`, then follow the read hint); `--facet tags|property:K|type|dir` adds
 `facets` file counts over the full match set (`hyalo find --tag X --facet property:status
@@ -81,7 +83,8 @@ Lint the changed files before handoff. This is an instruction, not an automatic 
 For an audit, inspect and report. When repairs are requested, apply only those in scope.
 Preview bulk or link repairs with the command's dry-run mechanism before applying them.
 Avoid snapshot indexing for a small one-off query. For repeated work on a large vault,
-`create-index` and `--index` help; rebuild after external edits and drop the index
+`create-index` and `--index` help; re-running `create-index` reuses unchanged files
+(`--force` rebuilds), and an `--index` read repairs drift in memory only. Drop the index
 when done. Never ignore an index staleness warning.
 
 Profile skills describe OKF, MADR, Agent Skills, and changelog conventions. Use only

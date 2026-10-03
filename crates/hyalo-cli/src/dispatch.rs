@@ -758,6 +758,7 @@ fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<C
         Commands::CreateIndex {
             output,
             allow_outside_vault,
+            force,
         } => create_index_commands::create_index(
             dir,
             site_prefix,
@@ -765,6 +766,7 @@ fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<C
             effective_format,
             allow_outside_vault,
             ctx.config_language,
+            force,
         ),
         Commands::DropIndex {
             path,
