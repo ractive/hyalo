@@ -53,6 +53,7 @@ type = "list"
 | `string`  | Any string; optional `pattern` (regex) |
 | `date`    | ISO 8601 date (YYYY-MM-DD) |
 | `datetime` | ISO 8601 naive local datetime (YYYY-MM-DDThh:mm:ss); no `Z`/offset/fractional seconds |
+| `datetime-tz` | RFC 3339 timezone-aware datetime (YYYY-MM-DDThh:mm:ss with `Z` or `±hh:mm`); a naive value fails |
 | `number`  | Integer or float |
 | `boolean` | true/false |
 | `list`    | YAML sequence |
@@ -151,6 +152,20 @@ Files without a `type` property are validated against `schema.default` only.
 
 ## Running `hyalo lint`
 
+### Frontmatter value rules
+
+Besides the schema pass, three native rules check frontmatter values. All warn
+by default and are promoted to errors by `--strict` unless a severity is
+configured explicitly:
+
+- `HYALO003` — a well-known date key (`date`, `created`, `modified`, `updated`,
+  any case) holding a string that is not an ISO 8601 date (YYYY-MM-DD). It needs
+  no schema.
+- `HYALO004` — a schema-declared `datetime` or `datetime-tz` property whose
+  value is not a valid datetime of that kind.
+- `HYALO007` — a `title` that is a list or a map, so it cannot promote to the
+  `title` field.
+
 ### File targets and heading anchors
 
 `HYALO006` checks whether a link target resolves. `HYALO008` checks its heading
@@ -180,7 +195,7 @@ destinations are deferred with a reason. See
 hyalo lint
 
 # Lint a single file
-hyalo lint iterations/iteration-101-bm25.md
+hyalo lint iterations/done/iteration-101-bm25-ranked-search.md
 
 # Lint with a glob
 hyalo lint --glob "iterations/*.md"
@@ -194,7 +209,7 @@ hyalo lint --format json
 ### Output (text)
 
 ```text
-iterations/iteration-101-bm25.md:
+iterations/done/iteration-101-bm25-ranked-search.md:
   error  missing required property "foo" (type: iteration)
   error  property "status" value "planed" not in [planned, in-progress, completed, ...] (did you mean "planned"?)
 
@@ -244,7 +259,7 @@ hyalo lint --fix --dry-run
 hyalo lint --fix
 
 # Fix a single file
-hyalo lint --fix iterations/iteration-101-bm25.md
+hyalo lint --fix iterations/done/iteration-101-bm25-ranked-search.md
 ```
 
 **Note:** `--dry-run` requires `--fix` — it has no effect on a plain `hyalo lint` (which is already read-only).
