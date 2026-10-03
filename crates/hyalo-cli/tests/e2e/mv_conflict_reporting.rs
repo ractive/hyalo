@@ -98,7 +98,18 @@ fn dry_run_skip_hint_carries_on_conflict_through() {
 
     // Actually running the hinted command must succeed (exit 0), not
     // re-fail under the default `error` policy.
-    let args: Vec<&str> = cmd.split_whitespace().skip(1).collect(); // drop leading "hyalo"
+    // Drop the leading "hyalo" and the shell-quoted `--dir <path>` pair: the
+    // quoting is platform-specific (a Windows temp path keeps its quotes
+    // through a whitespace split) and the rerun already runs inside the vault.
+    let mut args: Vec<&str> = Vec::new();
+    let mut tokens = cmd.split_whitespace().skip(1);
+    while let Some(token) = tokens.next() {
+        if token == "--dir" {
+            tokens.next();
+            continue;
+        }
+        args.push(token);
+    }
     let rerun = hyalo_no_hints()
         .current_dir(tmp.path())
         .args(&args)
