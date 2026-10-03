@@ -130,6 +130,7 @@ pub enum HintSource {
     },
     New {
         file: String,
+        dry_run: bool,
     },
     /// `hyalo okf index` — suggest validating conformance (and applying on drift).
     OkfIndex,
@@ -285,6 +286,12 @@ pub struct HintContext {
     pub read_narrowed: bool,
     // Mutation context
     pub dry_run: bool,
+    /// `mv --on-conflict skip` was passed (codebase review 2026-10-03 item 6).
+    /// Threaded into the "Apply this move" hint for a dry-run that reported a
+    /// skip, so running the hinted command reproduces the same skip instead
+    /// of hitting the same conflict again under the default `error` policy
+    /// and exiting 1.
+    pub mv_on_conflict_skip: bool,
     // Index context
     pub index_path: Option<String>,
     // Links-auto context (for replaying the exact preview scope in hints)
@@ -393,6 +400,7 @@ impl HintContext {
             task_selector: None,
             read_narrowed: false,
             dry_run: false,
+            mv_on_conflict_skip: false,
             index_path: None,
             auto_link_file: None,
             auto_link_min_length: None,
@@ -502,7 +510,7 @@ pub fn generate_hints_with_counters(
         HintSource::ViewsList => hints_for_views_list(ctx, data),
         HintSource::LintRulesList => hints_for_lint_rules_list(ctx, data),
         HintSource::LintRulesShow => hints_for_lint_rules_show(ctx, data),
-        HintSource::New { file } => hints_for_new(ctx, file),
+        HintSource::New { file, dry_run } => hints_for_new(ctx, file, *dry_run),
         HintSource::OkfIndex => hints_for_okf_index(ctx, data),
         HintSource::OkfLog => hints_for_okf_log(ctx),
     };

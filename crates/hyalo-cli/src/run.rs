@@ -986,7 +986,8 @@ fn run_inner() -> Result<(), AppError> {
                     if parent_is_views {
                         // Load views from the config resolved so far (use CWD as fallback).
                         let config_dir_for_views = config.config_dir.clone();
-                        let known_views = crate::commands::views::load_views(&config_dir_for_views);
+                        let known_views =
+                            crate::commands::views::load_views_lenient(&config_dir_for_views);
                         if known_views.contains_key(invalid) {
                             eprintln!("{e}\n  hint: did you mean 'hyalo views run {invalid}'?\n");
                             return Err(AppError::Exit(2));
@@ -1489,7 +1490,30 @@ fn run_inner() -> Result<(), AppError> {
         ..
     }) = &mut cli.command
     {
-        let views = crate::commands::views::load_views(&config_dir);
+        let views = match crate::commands::views::load_views(&config_dir) {
+            Ok(views) => views,
+            // The config itself is unusable, so no view name could ever
+            // resolve here — say that, instead of falling through to the
+            // empty-map path below and reporting "unknown view", which
+            // hides the real cause and sends the user chasing a typo that
+            // doesn't exist (DEC-290 consistency with the `.malformed`
+            // refusal above for `lint`/`find --strict`/`views run`).
+            Err(diagnostic) => {
+                return Err(AppError::User(crate::output::format_error(
+                    format,
+                    &format!(
+                        "refusing to resolve view '{view_name}': {}/.hyalo.toml is unusable: \
+                         {diagnostic}",
+                        config_dir.display()
+                    ),
+                    None,
+                    Some(
+                        "Fix the config file, or pass --dir to target a vault whose config parses.",
+                    ),
+                    None,
+                )));
+            }
+        };
         if let Some(base) = views.get(view_name) {
             let overlay = std::mem::take(filters);
             *filters = base.clone();
@@ -1792,6 +1816,7 @@ fn run_inner() -> Result<(), AppError> {
                 file,
                 dry_run,
                 apply,
+                on_conflict,
                 ..
             } => {
                 let mut ctx = HintContext::from_common(HintSource::Mv, &common);
@@ -1799,6 +1824,7 @@ fn run_inner() -> Result<(), AppError> {
                     ctx.file_targets = vec![f.clone()];
                 }
                 ctx.dry_run = *dry_run || !apply;
+                ctx.mv_on_conflict_skip = on_conflict.is_skip();
                 Some(ctx)
             }
             Commands::Task { action } => {
@@ -1925,8 +1951,11 @@ fn run_inner() -> Result<(), AppError> {
                     &common,
                 ))
             }
-            Commands::New { file, .. } => Some(HintContext::from_common(
-                HintSource::New { file: file.clone() },
+            Commands::New { file, dry_run, .. } => Some(HintContext::from_common(
+                HintSource::New {
+                    file: file.clone(),
+                    dry_run: *dry_run,
+                },
                 &common,
             )),
             Commands::Okf { action } => {

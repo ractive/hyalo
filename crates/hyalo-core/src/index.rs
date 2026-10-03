@@ -2007,8 +2007,10 @@ impl VaultIndex for SnapshotIndex {
 /// Check whether a PID corresponds to a running process.
 ///
 /// On Unix this uses `kill(pid, 0)` (signal 0 is a no-op that only tests
-/// existence). On all other platforms we conservatively assume the PID is
-/// alive so that we never falsely claim a running process is stale.
+/// existence). On Windows this opens the process with
+/// `PROCESS_QUERY_LIMITED_INFORMATION` and checks its exit code. On any other
+/// platform we conservatively assume the PID is alive so that we never
+/// falsely claim a running process is stale.
 fn is_pid_alive(pid: u32) -> bool {
     // pid 0 means "my own process group" for kill() on Unix, not a specific
     // process.  A crafted snapshot with pid=0 would always pass the liveness
@@ -2043,8 +2045,53 @@ fn is_pid_alive(pid: u32) -> bool {
             errno != libc::ESRCH
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_ACCESS_DENIED, HANDLE, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        // SAFETY: `PROCESS_QUERY_LIMITED_INFORMATION` requests query-only
+        // rights (no control over the target process), `pid` is a plain u32
+        // with no aliasing concerns, and the returned handle is checked for
+        // null before any further use.
+        let handle: HANDLE = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if handle.is_null() {
+            // ERROR_ACCESS_DENIED means the process exists but we lack
+            // permission to query it — still alive (mirrors the Unix EPERM
+            // branch above). Any other error (e.g. ERROR_INVALID_PARAMETER
+            // for a PID with no such process) means dead.
+            let last_error = std::io::Error::last_os_error()
+                .raw_os_error()
+                .map(i32::cast_unsigned);
+            return last_error == Some(ERROR_ACCESS_DENIED);
+        }
+
+        let mut exit_code: u32 = 0;
+        // SAFETY: `handle` was just returned non-null by `OpenProcess` above
+        // and is closed exactly once below; `exit_code` is a valid, unique
+        // local the call writes into.
+        let got_exit_code = unsafe { GetExitCodeProcess(handle, &raw mut exit_code) };
+        // SAFETY: `handle` is owned solely by this function and this is its
+        // single, final close.
+        unsafe {
+            CloseHandle(handle);
+        }
+
+        if got_exit_code == 0 {
+            // Could not query the exit code — conservative default is alive.
+            return true;
+        }
+        exit_code == STILL_ACTIVE as u32
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Neither liveness probe above is available on this platform —
+        // conservatively assume alive so a stale-index sweep never removes a
+        // snapshot that's still owned by a running process.
         let _ = pid;
         true
     }
@@ -4014,6 +4061,32 @@ Content.
         assert!(
             !is_pid_alive(0),
             "pid 0 must not be treated as an alive process"
+        );
+    }
+
+    /// The Windows `OpenProcess` + `GetExitCodeProcess` probe reports the
+    /// current process alive and a spawned-then-waited child dead.
+    #[cfg(windows)]
+    #[test]
+    fn is_pid_alive_windows_probe_distinguishes_live_and_exited() {
+        let current = std::process::id();
+        assert!(
+            is_pid_alive(current),
+            "the running process's own pid must read as alive"
+        );
+
+        // `cmd /C exit 0` starts, exits immediately, and `wait()` blocks
+        // until it has, so by the time we check, the pid is definitely gone.
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("failed to spawn child process");
+        let child_pid = child.id();
+        child.wait().expect("failed to wait for child process");
+
+        assert!(
+            !is_pid_alive(child_pid),
+            "a waited-for, exited child pid must read as dead"
         );
     }
 

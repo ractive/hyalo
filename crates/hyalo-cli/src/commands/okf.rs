@@ -14,9 +14,11 @@
 //!   scope-selectable `log.md` (directory-local per SPEC §7), newest first.
 //!
 //! Both default to `--dry-run` and mutate only with `--apply`, matching the
-//! `links fix` / `links auto` house convention. In dry-run, [`run_index`] exits
-//! non-zero when the on-disk `index.md` files differ from the generated output,
-//! so it doubles as a CI drift check (`hyalo okf index --dry-run`).
+//! `links fix` / `links auto` house convention. A dry run always exits 0 like
+//! every other dry run (DEC-307): [`run_index`] reports drift in
+//! `results.changed` instead, so a CI drift check gates on the payload —
+//! `hyalo okf index --dry-run --format json --jq '.results.changed'` — not
+//! the exit code.
 
 use anyhow::{Context, Result};
 use hyalo_core::discovery;

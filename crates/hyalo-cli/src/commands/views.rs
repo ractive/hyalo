@@ -15,26 +15,30 @@ fn resolve_toml_path(dir: &Path) -> PathBuf {
 }
 
 /// Load all views from `.hyalo.toml` within `dir`.
-/// Returns an empty map if the file doesn't exist or has no views.
-pub(crate) fn load_views(dir: &Path) -> HashMap<String, FindFilters> {
+///
+/// Returns an empty map if the file doesn't exist or has no `[views]` table.
+/// Returns `Err` with a diagnostic when `.hyalo.toml` itself could not be
+/// read or does not parse as TOML — unlike a single malformed *view* entry
+/// (which is skipped with a warning, since the rest of the file is still
+/// usable), a malformed *file* means every view in it is unknown, and a
+/// caller resolving a specific view by name must say so rather than let the
+/// empty map read as "no such view" (DEC-290 consistency: a command that
+/// depends on this view actually existing should refuse with the real cause,
+/// the way `lint`/`find --strict`/`views run` already refuse to run against
+/// an unusable config).
+pub(crate) fn load_views(dir: &Path) -> Result<HashMap<String, FindFilters>, String> {
     let toml_path = resolve_toml_path(dir);
     let contents = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(e) => {
-            crate::warn::warn(format!("could not read .hyalo.toml for views: {e}"));
-            return HashMap::new();
+            return Err(format!("could not read .hyalo.toml for views: {e}"));
         }
     };
-    let table: toml::Table = match toml::from_str(&contents) {
-        Ok(t) => t,
-        Err(e) => {
-            crate::warn::warn(format!("malformed .hyalo.toml: {e}"));
-            return HashMap::new();
-        }
-    };
+    let table: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("malformed .hyalo.toml: {e}"))?;
     let Some(toml::Value::Table(views_table)) = table.get("views") else {
-        return HashMap::new();
+        return Ok(HashMap::new());
     };
     let mut views = HashMap::new();
     for (name, value) in views_table {
@@ -47,12 +51,25 @@ pub(crate) fn load_views(dir: &Path) -> HashMap<String, FindFilters> {
             }
         }
     }
-    views
+    Ok(views)
+}
+
+/// Load views for a context that should degrade gracefully on a malformed
+/// `.hyalo.toml` — the file is unusable, but that's not fatal here, so this
+/// warns (same text `load_views` used to emit itself) and treats it as "no
+/// known views" rather than refusing outright. Used by read-only, non-gate
+/// call sites (`views list`, the clap misspelling hint) per the same
+/// warn-and-continue policy every other read keeps under DEC-290.
+pub(crate) fn load_views_lenient(dir: &Path) -> HashMap<String, FindFilters> {
+    load_views(dir).unwrap_or_else(|diagnostic| {
+        crate::warn::warn(diagnostic);
+        HashMap::new()
+    })
 }
 
 /// List all saved views.
 pub(crate) fn list_views(dir: &Path, _format: Format) -> Result<CommandOutcome> {
-    let views = load_views(dir);
+    let views = load_views_lenient(dir);
     let mut items: Vec<ViewResult> = Vec::new();
     let mut sorted_keys: Vec<&String> = views.keys().collect();
     sorted_keys.sort();
@@ -231,7 +248,7 @@ mod tests {
 
         set_view(dir, "iter-view", &filters, Format::Json).unwrap();
 
-        let views = load_views(dir);
+        let views = load_views(dir).unwrap();
         assert!(
             views.contains_key("iter-view"),
             "expected view not found after load"
@@ -248,7 +265,7 @@ mod tests {
         let outcome = remove_view(dir, "done-view", Format::Json).unwrap();
         assert!(matches!(outcome, CommandOutcome::Success { .. }));
 
-        let views = load_views(dir);
+        let views = load_views(dir).unwrap();
         assert!(
             !views.contains_key("done-view"),
             "view should be gone after remove"
@@ -267,7 +284,7 @@ mod tests {
         )
         .unwrap();
 
-        let views = load_views(dir);
+        let views = load_views(dir).unwrap();
         let orphan_view = views.get("orphans").expect("orphans view missing");
         assert!(orphan_view.orphan, "view should have orphan = true");
         assert!(
