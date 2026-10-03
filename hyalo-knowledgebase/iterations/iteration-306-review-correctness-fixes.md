@@ -3,7 +3,7 @@ title: "Iteration 306: review follow-ups — correctness"
 type: iteration
 date: 2026-10-04
 tags: [iteration, review, correctness, cli]
-status: in-progress
+status: completed
 branch: iter-306/review-correctness-fixes
 ---
 
@@ -41,4 +41,4 @@ iteration fixes the P1 Rust items, the P2 Rust items and the P3 hint items.
 - [x] CHANGELOG `[Unreleased]` lists each fix under "Fixed"
 - [x] Help texts, `.claude/CLAUDE.md` claims and templates agree with the binary
 - [x] fmt, clippy `-D warnings`, `cargo test --workspace`, `just gates`, `cargo deny check` and `hyalo lint --strict` are green
-- [ ] CI green on Linux, macOS and Windows
+- [x] CI green on Linux, macOS and Windows
