@@ -35,7 +35,7 @@ jobs:
     if: >-
       github.event_name != 'workflow_dispatch' ||
       !inputs.prepare_npm_main_bootstrap
-    uses: ractive/release-workflows/.github/workflows/release.yml@v0.2.0
+    uses: ractive/release-workflows/.github/workflows/release.yml@v0.2.1
     secrets: inherit
     with:
       bin-name: hyalo
