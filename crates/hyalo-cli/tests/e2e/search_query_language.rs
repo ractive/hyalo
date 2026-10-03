@@ -293,7 +293,9 @@ fn empty_negated_phrases_negate_nothing_and_never_overflow() {
     for query in [
         "-\"\" tokio".to_owned(),
         "-\"\" -\"\" tokio".to_owned(),
-        format!("{} tokio", "-\"\"".repeat(30_000)),
+        // 9 000 repetitions (~27 KB) stay under Windows' 32 767-character
+        // command line; the core unit test covers 30 000 in-process.
+        format!("{} tokio", "-\"\"".repeat(9_000)),
     ] {
         let output = hyalo_no_hints()
             .arg("--dir")
