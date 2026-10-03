@@ -1106,7 +1106,11 @@ mod tests {
         let recovered = index.reconstruct_selected_tokens(&selected).unwrap();
         assert_eq!(recovered.len(), 2);
         assert_eq!(recovered["selected.md"], ["beta", "alpha", "beta"]);
-        assert!(recovered["empty.md"].is_empty());
+        assert!(
+            recovered["empty.md"].is_empty(),
+            "expected empty, got {:?}",
+            recovered["empty.md"]
+        );
         assert!(!recovered.contains_key("excluded.md"));
         assert!(!recovered.contains_key("missing.md"));
         assert!(

@@ -121,7 +121,7 @@ fn summary_hints_json_has_data_and_hints() {
 
     // Hints must be an array of {description, cmd} objects
     let hints = parsed["hints"].as_array().unwrap();
-    assert!(!hints.is_empty());
+    assert!(!hints.is_empty(), "expected non-empty: hints");
     for hint in hints {
         assert!(
             hint["cmd"].as_str().unwrap().starts_with("hyalo"),

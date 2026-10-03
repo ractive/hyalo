@@ -449,7 +449,11 @@ mod tests {
 
     #[test]
     fn unclosed_brackets_are_not_links() {
-        assert!(targets("note: \"[[not closed\"\n").is_empty());
+        assert!(
+            targets("note: \"[[not closed\"\n").is_empty(),
+            "expected empty, got {:?}",
+            targets("note: \"[[not closed\"\n")
+        );
     }
 
     /// iter-272 BOUND-2 (BUG-15): a YAML flow list written without spaces
@@ -479,13 +483,25 @@ mod tests {
 
     #[test]
     fn non_string_values_are_ignored() {
-        assert!(targets("count: 3\ndone: true\nempty:\n").is_empty());
+        assert!(
+            targets("count: 3\ndone: true\nempty:\n").is_empty(),
+            "expected empty, got {:?}",
+            targets("count: 3\ndone: true\nempty:\n")
+        );
     }
 
     #[test]
     fn comments_are_not_scanned() {
-        assert!(targets("# see [[Ghost]]\ntitle: A\n").is_empty());
-        assert!(targets("title: A  # see [[Ghost]]\n").is_empty());
+        assert!(
+            targets("# see [[Ghost]]\ntitle: A\n").is_empty(),
+            "expected empty, got {:?}",
+            targets("# see [[Ghost]]\ntitle: A\n")
+        );
+        assert!(
+            targets("title: A  # see [[Ghost]]\n").is_empty(),
+            "expected empty, got {:?}",
+            targets("title: A  # see [[Ghost]]\n")
+        );
     }
 
     #[test]
@@ -512,7 +528,11 @@ mod tests {
 
     #[test]
     fn empty_allow_list_scans_nothing() {
-        assert!(links("related: \"[[One]]\"\n", Some(&[])).is_empty());
+        assert!(
+            links("related: \"[[One]]\"\n", Some(&[])).is_empty(),
+            "expected empty, got {:?}",
+            links("related: \"[[One]]\"\n", Some(&[]))
+        );
     }
 
     #[test]
@@ -568,7 +588,11 @@ mod tests {
 
     #[test]
     fn markdown_links_in_frontmatter_are_not_collected() {
-        assert!(targets("source: \"[label](other.md)\"\n").is_empty());
+        assert!(
+            targets("source: \"[label](other.md)\"\n").is_empty(),
+            "expected empty, got {:?}",
+            targets("source: \"[label](other.md)\"\n")
+        );
     }
 
     #[test]

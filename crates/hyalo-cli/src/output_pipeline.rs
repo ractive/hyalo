@@ -522,7 +522,7 @@ mod tests {
             pipeline.finalize_to(Ok(committed_outcome()), &mut out, &mut err),
             2
         );
-        assert!(out.is_empty());
+        assert!(out.is_empty(), "expected empty, got {out:?}");
         let error: serde_json::Value = serde_json::from_slice(&err).unwrap();
         assert_eq!(error["effects"]["paths"][0]["file"], "a.md");
         err.clear();

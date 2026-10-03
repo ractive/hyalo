@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn no_violation_for_proper_task() {
         let violations = check("- [ ] Task one\n- [x] Done\n");
-        assert!(violations.is_empty());
+        assert!(violations.is_empty(), "expected empty, got {violations:?}");
     }
 
     #[test]

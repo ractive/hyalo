@@ -1157,7 +1157,11 @@ mod tests {
         match outcome {
             CommandOutcome::Success { output, total, .. } => {
                 let v: serde_json::Value = serde_json::from_value(output).unwrap();
-                assert!(v.as_array().unwrap().is_empty());
+                assert!(
+                    v.as_array().unwrap().is_empty(),
+                    "expected empty, got {:?}",
+                    v.as_array().unwrap()
+                );
                 assert_eq!(total, Some(0));
             }
             other => panic!("expected Success, got {other:?}"),

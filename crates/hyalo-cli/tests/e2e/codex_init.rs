@@ -297,7 +297,11 @@ fn codex_guidance_uses_the_project_root_or_configured_vault() {
         assert_eq!(found["results"].as_array().unwrap().len(), 1);
     }
     let outside = ok(&root.join("src"), &["find", "--property", "status=planned"]);
-    assert!(outside["results"].as_array().unwrap().is_empty());
+    assert!(
+        outside["results"].as_array().unwrap().is_empty(),
+        "expected empty, got {:?}",
+        outside["results"].as_array().unwrap()
+    );
     let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
     assert!(agents.contains(
         "Run commands from the project root containing .hyalo.toml or inside the configured vault."

@@ -402,7 +402,10 @@ required = [\"type\", \"status\"]
         let okf = lookup("okf").unwrap();
         assert_eq!(okf.skills.len(), 1);
         assert_eq!(okf.skills[0].0, "okf");
-        assert!(!okf.skills[0].1.is_empty());
+        assert!(
+            !okf.skills[0].1.is_empty(),
+            "expected non-empty: okf.skills[0].1"
+        );
     }
 
     #[test]
@@ -443,7 +446,10 @@ required = [\"type\", \"status\"]
         let madr = lookup("madr").unwrap();
         assert_eq!(madr.skills.len(), 1);
         assert_eq!(madr.skills[0].0, "madr");
-        assert!(!madr.skills[0].1.is_empty());
+        assert!(
+            !madr.skills[0].1.is_empty(),
+            "expected non-empty: madr.skills[0].1"
+        );
     }
 
     #[test]
@@ -492,7 +498,10 @@ required = [\"type\", \"status\"]
         let cl = lookup("changelog").unwrap();
         assert_eq!(cl.skills.len(), 1);
         assert_eq!(cl.skills[0].0, "changelog");
-        assert!(!cl.skills[0].1.is_empty());
+        assert!(
+            !cl.skills[0].1.is_empty(),
+            "expected non-empty: cl.skills[0].1"
+        );
     }
 
     #[test]

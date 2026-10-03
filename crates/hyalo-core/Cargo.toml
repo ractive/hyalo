@@ -3,6 +3,7 @@ name = "hyalo-core"
 description = "Core library for hyalo — frontmatter parsing, querying, and mutation for Markdown files"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "../../README.md"

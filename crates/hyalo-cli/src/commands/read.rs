@@ -815,7 +815,7 @@ mod tests {
             end: Some(5),
         };
         let result = apply_range(&lines, &range);
-        assert!(result.is_empty());
+        assert!(result.is_empty(), "expected empty, got {result:?}");
     }
 
     #[test]
@@ -893,7 +893,7 @@ mod tests {
         let lines: Vec<String> = vec!["## Problems".into(), "text".into()];
         let filter = SectionFilter::parse("Design").unwrap();
         let sections = extract_sections(&lines, &filter);
-        assert!(sections.is_empty());
+        assert!(sections.is_empty(), "expected empty, got {sections:?}");
     }
 
     #[test]

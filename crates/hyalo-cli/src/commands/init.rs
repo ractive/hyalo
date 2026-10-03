@@ -2849,7 +2849,11 @@ mod tests {
             .unwrap_err();
         assert!(failure.error.to_string().contains("not a regular file"));
         assert!(!root.path().join(".hyalo.toml").exists());
-        assert!(failure.report.effects().paths.is_empty());
+        assert!(
+            failure.report.effects().paths.is_empty(),
+            "expected empty, got {:?}",
+            failure.report.effects().paths
+        );
     }
 
     #[test]
@@ -2863,7 +2867,11 @@ mod tests {
         let failure = run_deinit_observed(Some("."), root.path()).unwrap_err();
         assert!(failure.error.to_string().contains("not a regular file"));
         assert_eq!(fs::read(&preserved).unwrap(), before);
-        assert!(failure.report.effects().paths.is_empty());
+        assert!(
+            failure.report.effects().paths.is_empty(),
+            "expected empty, got {:?}",
+            failure.report.effects().paths
+        );
     }
 
     #[test]

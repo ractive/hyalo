@@ -1242,7 +1242,7 @@ mod tests {
             ],
         )];
         let (map, ambiguous) = build_title_inventory(&entries, 2, &[], &[]).unwrap();
-        assert!(ambiguous.is_empty());
+        assert!(ambiguous.is_empty(), "expected empty, got {ambiguous:?}");
         // Stem
         assert!(map.contains_key("sprint-planning"), "stem missing");
         // Title
@@ -2487,7 +2487,7 @@ mod tests {
             !map.contains_key("sprint"),
             "without exclusion, sprint should be ambiguous"
         );
-        assert!(!ambiguous.is_empty());
+        assert!(!ambiguous.is_empty(), "expected non-empty: ambiguous");
 
         // With exclusion: templates/* removed, only planning/sprint.md remains — no ambiguity.
         let (map, ambiguous) =
