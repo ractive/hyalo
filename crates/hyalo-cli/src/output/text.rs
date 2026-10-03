@@ -34,6 +34,32 @@ pub(super) fn format_value_as_text(
                     .collect::<Vec<_>>()
                     .join("\n\n");
             }
+            // `terms` listing: aligned `<term>  <docs>` rows (iteration 302).
+            let is_term_list = arr
+                .first()
+                .and_then(|v| v.as_object())
+                .is_some_and(|m| key_signature(m) == "docs,term");
+            if is_term_list {
+                let rows: Vec<(&str, u64)> = arr
+                    .iter()
+                    .filter_map(|v| Some((v.get("term")?.as_str()?, v.get("docs")?.as_u64()?)))
+                    .collect();
+                let width = rows
+                    .iter()
+                    .map(|(t, _)| t.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                return rows
+                    .iter()
+                    .map(|(term, docs)| {
+                        format!(
+                            "{term:<width$}  {docs} doc{}",
+                            if *docs == 1 { "" } else { "s" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
             // LintRules list: array of rule entries with id, effective_enabled, etc.
             let is_lint_rules = arr.first().and_then(|v| v.as_object()).is_some_and(|m| {
                 m.contains_key("id")

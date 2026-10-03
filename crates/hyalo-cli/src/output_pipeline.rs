@@ -39,6 +39,9 @@ pub(crate) struct OutputPipeline<'a> {
     /// resolves annotations against the repo root. Empty when the vault dir is
     /// the CWD. Only consulted when `user_format == Format::Github`.
     pub github_path_prefix: String,
+    /// Zero-result ranked-search did-you-mean, hoisted to the envelope's
+    /// top-level `suggestions` key (iteration 302).
+    pub search_suggestions: Option<Vec<crate::output::SearchSuggestion>>,
 }
 
 impl OutputPipeline<'_> {
@@ -53,6 +56,7 @@ impl OutputPipeline<'_> {
             internal_report: false,
             files_from_counters: None,
             github_path_prefix: String::new(),
+            search_suggestions: None,
         }
     }
 
@@ -301,8 +305,9 @@ impl OutputPipeline<'_> {
                             });
                     generate_hints_with_counters(ctx, &value, total, counters)
                 });
-                let envelope =
+                let mut envelope =
                     Envelope::from_result(&value, total, &hints, self.files_from_counters.as_ref());
+                envelope.suggestions = self.search_suggestions.as_deref().filter(|s| !s.is_empty());
                 let envelope = if self.internal_report {
                     let effects = report.effects.as_ref().ok_or_else(|| {
                         crate::output::UserDiagnostic::new("internal mutation report unavailable")
@@ -545,6 +550,7 @@ mod tests {
             internal_report: false,
             files_from_counters: Some(counters),
             github_path_prefix: String::new(),
+            search_suggestions: None,
         }
     }
 
@@ -599,6 +605,7 @@ mod tests {
             internal_report: false,
             files_from_counters: None,
             github_path_prefix: String::new(),
+            search_suggestions: None,
         };
         assert_eq!(pipeline.skip_summary(), None);
     }

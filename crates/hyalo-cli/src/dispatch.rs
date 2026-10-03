@@ -10,7 +10,7 @@ use crate::commands::{
     lint_rules as lint_rules_commands, madr as madr_commands, mv as mv_commands,
     okf as okf_commands, properties, read as read_commands, remove as remove_commands,
     set as set_commands, summary as summary_commands, tags as tag_commands, tasks as task_commands,
-    types as types_commands, views as views_commands,
+    terms as terms_commands, types as types_commands, views as views_commands,
 };
 use crate::output::{CommandOutcome, Format};
 use hyalo_core::filter;
@@ -282,6 +282,10 @@ pub(crate) struct CommandContext<'a> {
     /// to guess that the text lives in bodies. `None` for every other command
     /// and for any empty `find` without a property regex filter.
     pub zero_result_body_search: Option<crate::hints::BodySearchSuggestion>,
+    /// Did-you-mean suggestions and the corrected query from a ranked `find`
+    /// that matched nothing (iteration 302). `run.rs` hoists the suggestions
+    /// into the envelope and the corrected query into the hint context.
+    pub zero_result_search: Option<crate::commands::find::SearchReport>,
 }
 
 /// Resolve the effective limit for a list command.
@@ -623,6 +627,12 @@ fn dispatch_command(command: Commands, ctx: &mut CommandContext<'_>) -> Result<C
             // ARCH-1 (iter-225): the arm body now lives in `commands::tags::run`.
             tag_commands::run(ctx, bare_glob, bare_limit, action)
         }
+        Commands::Terms {
+            prefix,
+            glob,
+            limit,
+            index_flags: _, // consumed in run.rs before dispatch
+        } => terms_commands::run(ctx, prefix.as_deref(), &glob, limit),
         Commands::Summary(SummaryArgs {
             glob,
             recent,

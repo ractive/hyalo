@@ -42,6 +42,7 @@ const SUBCOMMANDS: &[&[&str]] = &[
     &["append"],
     &["summary"],
     &["backlinks"],
+    &["terms"],
     &["task"],
     &["properties"],
     &["tags"],

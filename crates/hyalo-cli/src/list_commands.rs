@@ -27,6 +27,7 @@ pub(crate) const LIST_COMMANDS: &[&str] = &[
     "tags summary",
     "properties summary",
     "backlinks",
+    "terms",
     "types list",
     "views list",
     "lint-rules list",
@@ -50,6 +51,7 @@ pub(crate) const LIMITED_COMMANDS: &[&str] = &[
     "tags summary",
     "properties summary",
     "backlinks",
+    "terms",
 ];
 
 /// Render [`LIMITED_COMMANDS`] as a comma-separated phrase for help text.

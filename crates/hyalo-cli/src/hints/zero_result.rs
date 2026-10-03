@@ -27,6 +27,7 @@
 //! the filtered keys on the empty path costs no extra I/O.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use super::{Hint, HintBuilder, HintContext, HintSource, ObservedProperty};
 
@@ -177,10 +178,43 @@ pub(crate) fn zero_result_notice(ctx: &HintContext) -> String {
     {
         return "No types configured".to_owned();
     }
-    match filter_echo(ctx) {
+    let mut notice = match filter_echo(ctx) {
         Some(filters) => format!("No results for {filters}"),
         None => "No results".to_owned(),
+    };
+    for suggestion in &ctx.search_suggestions {
+        let _ = write!(
+            notice,
+            "\n'{}' occurs in no document; did you mean: {}?",
+            suggestion.term,
+            suggestion.describe_candidates()
+        );
     }
+    notice
+}
+
+/// Prefix for the zero-result `hyalo terms` hint: the first three letters of
+/// the first suggested (or, failing that, first plain) query word.
+fn terms_hint_prefix(ctx: &HintContext, pattern: &str) -> Option<String> {
+    let word = ctx
+        .search_suggestions
+        .first()
+        .map(|s| s.term.as_str())
+        .or_else(|| {
+            pattern.split_whitespace().find(|w| {
+                !w.starts_with('-')
+                    && !w.contains(':')
+                    && !w.eq_ignore_ascii_case("or")
+                    && !w.eq_ignore_ascii_case("and")
+            })
+        })?;
+    let prefix: String = word
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(3)
+        .collect::<String>()
+        .to_lowercase();
+    (!prefix.is_empty()).then_some(prefix)
 }
 
 /// The `K` and `V` of every `--property K=V` equality filter on the query.
@@ -294,6 +328,44 @@ pub(super) fn zero_result_hints(ctx: &HintContext) -> Vec<Hint> {
             HintBuilder::cmd("find")
                 .flag_value("-e", &suggestion.pattern)
                 .finish(ctx),
+        ));
+    }
+
+    // 0b. Ranked search: a query term occurs in no document, and a close
+    //     dictionary term does (iteration 302). The hint is the same query
+    //     with the best single substitution applied.
+    if let (Some(corrected), Some(pattern)) = (&ctx.corrected_query, &ctx.body_pattern) {
+        let mut b = HintBuilder::cmd("find");
+        for f in &filters {
+            for (n, token) in f.argv.iter().enumerate() {
+                if n == 0 && token.starts_with("--") {
+                    b.push_raw(token);
+                } else if f.rank == 0 && token == pattern {
+                    b.push_quoted(corrected);
+                } else {
+                    b.push_quoted(token);
+                }
+            }
+        }
+        let description = ctx
+            .search_suggestions
+            .first()
+            .and_then(|s| {
+                s.candidates
+                    .first()
+                    .map(|c| format!("Did you mean '{}' instead of '{}'?", c.term, s.term))
+            })
+            .unwrap_or_else(|| "Did you mean this query?".to_owned());
+        hints.push(Hint::new(description, b.finish(ctx)));
+    }
+    // 0c. Ranked search with nothing found: show which indexed terms exist.
+    if !ctx.has_regex_search
+        && let Some(pattern) = &ctx.body_pattern
+        && let Some(prefix) = terms_hint_prefix(ctx, pattern)
+    {
+        hints.push(Hint::new(
+            format!("List indexed terms starting with '{prefix}'"),
+            HintBuilder::cmd("terms").arg(&prefix).finish(ctx),
         ));
     }
 

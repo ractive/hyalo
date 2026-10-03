@@ -289,6 +289,9 @@ const HELP_LONG_TEMPLATE: &str = "COMMAND REFERENCE:
     hyalo backlinks FILE [-n/--limit N]
     hyalo backlinks -f/--file F [...]                             Flag form; FILE positional is equivalent
 
+  Terms (list BM25 dictionary terms with document frequency, read-only):
+    hyalo terms [PREFIX] [-g/--glob G] [-n/--limit N]
+
   Links (link operations):
     hyalo links fix [--apply] [--apply-fuzzy] [--min-confidence F] [--case-insensitive]
                     [--expand-short-form] [--threshold T] [-g/--glob G] [--ignore-target S ...]   Detect and fix broken links (default: dry-run)

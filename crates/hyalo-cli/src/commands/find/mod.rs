@@ -211,7 +211,74 @@ pub fn find(
         language,
         config_language,
         case_index,
+        &mut SearchReport::default(),
     )
+}
+
+/// Ranked-search side results reported next to the `find` payload
+/// (iteration 302): did-you-mean suggestions for a zero-result query and the
+/// corrected query the hint layer offers.
+#[derive(Debug, Default)]
+pub(crate) struct SearchReport {
+    pub(crate) suggestions: Vec<hyalo_core::bm25::TermSuggestion>,
+    pub(crate) corrected_query: Option<String>,
+}
+
+/// Field-term metadata (`title:`, `heading:`, `tag:`) read from index entries.
+struct IndexFieldSource<'a> {
+    index: &'a dyn VaultIndex,
+    language: Option<&'a str>,
+    config_language: Option<&'a str>,
+}
+
+impl hyalo_core::bm25::FieldSource for IndexFieldSource<'_> {
+    fn field_document(&self, rel_path: &str) -> Option<hyalo_core::bm25::FieldDocument<'_>> {
+        let entry = self.index.get(rel_path)?;
+        let title = match extract_title(&entry.properties, Some(&entry.sections), &entry.rel_path) {
+            serde_json::Value::String(title) => std::borrow::Cow::Owned(title),
+            _ => std::borrow::Cow::Borrowed(""),
+        };
+        let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+        Some(hyalo_core::bm25::FieldDocument {
+            title,
+            headings: entry
+                .sections
+                .iter()
+                .filter_map(|s| s.heading.as_deref())
+                .collect(),
+            tags: &entry.tags,
+            language: resolve_language(fm_lang, self.language, self.config_language),
+        })
+    }
+}
+
+/// Score `query` against `corpus` and, when nothing survives the candidate
+/// filter, record did-you-mean suggestions. Warns (`-q`-proof) for every
+/// prefix whose expansion was capped.
+fn score_corpus(
+    corpus: &Bm25InvertedIndex,
+    query: &hyalo_core::bm25::CompiledQuery,
+    fields: &IndexFieldSource<'_>,
+    keep: impl Fn(&str) -> bool,
+    report: &mut SearchReport,
+) -> Vec<hyalo_core::bm25::Bm25Match> {
+    for (prefix, count) in corpus.capped_prefixes(query) {
+        crate::warn::warn_always(format!(
+            "prefix '{prefix}*' matches {count} terms; only the {} most frequent are searched \
+             -- use a longer prefix",
+            hyalo_core::bm25::MAX_PREFIX_EXPANSION
+        ));
+    }
+    let scored: Vec<_> = corpus
+        .score_with_fields(query, fields)
+        .into_iter()
+        .filter(|m| keep(&m.rel_path))
+        .collect();
+    if scored.is_empty() {
+        report.suggestions = corpus.suggest(query);
+        report.corrected_query = hyalo_core::bm25::corrected_query(query, &report.suggestions);
+    }
+    scored
 }
 
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
@@ -239,6 +306,7 @@ pub(crate) fn find_prepared(
     language: Option<&str>,
     config_language: Option<&str>,
     case_index: Option<&CaseInsensitiveIndex>,
+    search_report: &mut SearchReport,
 ) -> Result<CommandOutcome> {
     let files = selection.names();
     let files_arg = files.as_slice();
@@ -443,12 +511,42 @@ pub(crate) fn find_prepared(
 
     // For BM25 search we run metadata filters first (no I/O), then do a single
     // I/O pass to read bodies and build the corpus.
-    let compiled_query = pattern.filter(|_| has_bm25_search).map(|pattern| {
-        hyalo_core::bm25::CompiledQuery::new(
-            pattern,
-            resolve_language(None, language, config_language),
-        )
-    });
+    // Compile once per stemming language present in the scoped corpus plus the
+    // effective query language (iteration 302): each term matches any of its
+    // per-language stems, so a `language: de` note is found by its German form.
+    let compiled_query = match pattern.filter(|_| has_bm25_search) {
+        None => None,
+        Some(pattern) => {
+            let mut languages = vec![resolve_language(None, language, config_language)];
+            for entry in &scoped_entries {
+                let fm_lang = entry.properties.get("language").and_then(|v| v.as_str());
+                let lang = resolve_language(fm_lang, language, config_language);
+                if !languages.contains(&lang) {
+                    languages.push(lang);
+                }
+            }
+            match hyalo_core::bm25::CompiledQuery::parse(pattern, &languages) {
+                Ok(query) => Some(query),
+                Err(error) => {
+                    return Ok(CommandOutcome::UserError(crate::output::user_diagnostic(
+                        format,
+                        &format!("invalid search query: {error}"),
+                        None,
+                        Some(
+                            "quote text to search it literally (e.g. '\"a)\"'); \
+                             see QUERY SYNTAX in `hyalo find --help`",
+                        ),
+                        None,
+                    )));
+                }
+            }
+        }
+    };
+    let field_source = IndexFieldSource {
+        index,
+        language,
+        config_language,
+    };
     let bm25_score_map: Option<HashMap<String, f64>> = if let Some(query) = &compiled_query {
         'bm25: {
             // Collect entries that pass all metadata filters.
@@ -562,12 +660,16 @@ pub(crate) fn find_prepared(
                     .all(|path| index.get(path).is_some_and(cached_language_matches))
             {
                 hyalo_core::internal_metrics::record_direct_indexed_scoring();
-                let all_scored = bm25_idx.score_compiled(query);
-                let map: HashMap<String, f64> = all_scored
-                    .into_iter()
-                    .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
-                    .map(|m| (m.rel_path, m.score))
-                    .collect();
+                let map: HashMap<String, f64> = score_corpus(
+                    bm25_idx,
+                    query,
+                    &field_source,
+                    |path| candidate_paths.contains(path),
+                    search_report,
+                )
+                .into_iter()
+                .map(|m| (m.rel_path, m.score))
+                .collect();
                 // Check after filtering to candidates — use candidate count as
                 // denominator so the heuristic matches the slow path and doesn't
                 // false-positive when metadata filters narrow the result set.
@@ -578,7 +680,8 @@ pub(crate) fn find_prepared(
                         score: s,
                     })
                     .collect();
-                if is_low_discriminative(&filtered, candidate_paths.len()) {
+                if query.has_text_terms() && is_low_discriminative(&filtered, candidate_paths.len())
+                {
                     crate::warn::warn(
                         "BM25 search: query matched most documents with low scores — \
                          try more specific search terms",
@@ -795,14 +898,12 @@ pub(crate) fn find_prepared(
             // entries come from the same source (all pre-tokenized or all from disk),
             // so the mixed case only arises during a rolling index upgrade where some
             // entries were indexed before BM25 support was added.
-            let scored_corpus = if doc_inputs.is_empty() {
+            let corpus = if doc_inputs.is_empty() {
                 // All entries were pre-tokenized — fast path.
-                let corpus = Bm25InvertedIndex::build_from_tokens(pre_tok_inputs);
-                corpus.score_compiled(query)
+                Bm25InvertedIndex::build_from_tokens(pre_tok_inputs)
             } else if pre_tok_inputs.is_empty() {
                 // All entries need file reads — original slow path.
-                let corpus = Bm25InvertedIndex::build(doc_inputs);
-                corpus.score_compiled(query)
+                Bm25InvertedIndex::build(doc_inputs)
             } else {
                 // Mixed: some entries have pre-tokenized data from the index, others were
                 // read from disk. Tokenize the disk-read entries and combine into a single
@@ -811,28 +912,26 @@ pub(crate) fn find_prepared(
                 for doc in doc_inputs {
                     all_pre_tok.push(tokenize_document(doc));
                 }
-                let corpus = Bm25InvertedIndex::build_from_tokens(all_pre_tok);
-                corpus.score_compiled(query)
+                Bm25InvertedIndex::build_from_tokens(all_pre_tok)
             };
 
-            // When no section filter is active, `scored_corpus` was scored against the
-            // full scoped corpus — intersect with metadata-passing candidates here,
-            // mirroring the persisted-index fast path above. When a section filter is
-            // active, `scored_corpus` already only contains candidates.
-            let scored: Vec<hyalo_core::bm25::Bm25Match> = if has_section_filter {
-                scored_corpus
-            } else {
-                scored_corpus
-                    .into_iter()
-                    .filter(|m| candidate_paths.contains(m.rel_path.as_str()))
-                    .collect()
-            };
+            // When no section filter is active, the corpus spans the full scoped
+            // corpus — intersect with metadata-passing candidates here, mirroring
+            // the persisted-index fast path above. When a section filter is
+            // active, the corpus already only contains candidates.
+            let scored = score_corpus(
+                &corpus,
+                query,
+                &field_source,
+                |path| has_section_filter || candidate_paths.contains(path),
+                search_report,
+            );
 
             // Warn if the query has low discriminative power (matches most docs with low scores).
             // Use candidate count as denominator so the heuristic is based on the
             // result set actually returned to the user, not the full scoped corpus.
             let total_corpus_docs = candidates.len();
-            if is_low_discriminative(&scored, total_corpus_docs) {
+            if query.has_text_terms() && is_low_discriminative(&scored, total_corpus_docs) {
                 crate::warn::warn(
                     "BM25 search: query matched most documents with low scores — \
                      try more specific search terms",

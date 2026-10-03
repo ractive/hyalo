@@ -29,6 +29,7 @@ pub mod set;
 pub mod summary;
 pub mod tags;
 pub mod tasks;
+pub mod terms;
 pub mod types;
 pub mod views;
 

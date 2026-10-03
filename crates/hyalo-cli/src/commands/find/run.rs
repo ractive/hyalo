@@ -203,6 +203,7 @@ pub(crate) fn run(
             // JSON is untouched — every link is still reported, with its own
             // `path` / `broken_anchor` verdict.
             crate::output::set_broken_links_only(broken_links);
+            let mut search_report = super::SearchReport::default();
             let mut outcome = find_prepared(
                 resolved.as_index(),
                 dir,
@@ -227,7 +228,11 @@ pub(crate) fn run(
                 language.as_deref(),
                 ctx.config_language,
                 ci.as_ref(),
+                &mut search_report,
             )?;
+            if matches!(outcome, CommandOutcome::Success { total: Some(0), .. }) {
+                ctx.zero_result_search = Some(search_report);
+            }
             // UX-2 (dogfood pre3): `--strict` gives any `find` query
             // (most commonly `--broken-links`) a CI-gateable exit code.
             // Pure policy function, unit-tested in-process (ARCH-1 proof).

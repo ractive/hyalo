@@ -263,6 +263,11 @@ pub struct Envelope<'a, T> {
     pub(crate) hints: &'a [crate::hints::Hint],
     /// Named command output; arrays contain named result items.
     pub(crate) results: T,
+    /// Did-you-mean candidates for ranked-search terms with no postings,
+    /// present only on a zero-result `find PATTERN` that has some.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub(crate) suggestions: Option<&'a [SearchSuggestion]>,
     /// Total matching items before pagination, omitted for non-list commands.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
@@ -278,8 +283,63 @@ impl<'a, T: Serialize> Envelope<'a, T> {
             files_skipped_outside_vault: None,
             hints,
             results,
+            suggestions: None,
             total,
         }
+    }
+}
+
+/// Did-you-mean for one ranked-search query term that occurs in no document.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SearchSuggestion {
+    /// The query word as written.
+    pub(crate) term: String,
+    /// Up to three close dictionary terms (stems), most frequent first.
+    pub(crate) candidates: Vec<SuggestionCandidate>,
+}
+
+/// A dictionary term offered as a correction, with its document frequency.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SuggestionCandidate {
+    /// The stemmed dictionary term.
+    pub(crate) term: String,
+    /// Number of documents containing it.
+    pub(crate) docs: u64,
+}
+
+impl SearchSuggestion {
+    pub(crate) fn from_core(suggestion: &hyalo_core::bm25::TermSuggestion) -> Self {
+        Self {
+            term: suggestion.term.clone(),
+            candidates: suggestion
+                .candidates
+                .iter()
+                .map(|c| SuggestionCandidate {
+                    term: c.term.clone(),
+                    docs: c.docs as u64,
+                })
+                .collect(),
+        }
+    }
+
+    /// `stem (2 docs), stemmer (1 doc)`.
+    pub(crate) fn describe_candidates(&self) -> String {
+        self.candidates
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} ({} doc{})",
+                    c.term,
+                    c.docs,
+                    if c.docs == 1 { "" } else { "s" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
